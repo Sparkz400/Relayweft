@@ -505,6 +505,9 @@ func (m *Model) nodeEvent(n *node, e event.Event) {
 	}
 	text := e.Text
 	if e.Kind == event.Done {
+		if strings.TrimSpace(text) == "" {
+			text = statusWord(n.status)
+		}
 		if e.OK {
 			text = m.th.G.OK + " " + text
 		} else {

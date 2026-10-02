@@ -219,7 +219,7 @@ func SummaryLine(s string) string {
 		if i := strings.Index(s, key); i >= 0 {
 			rest := strings.TrimLeft(s[i+len(key):], " :")
 			if strings.HasPrefix(rest, `"`) {
-				if j := strings.Index(rest[1:], `"`); j >= 0 {
+				if j := strings.Index(rest[1:], `"`); j > 0 {
 					return rest[1 : j+1]
 				}
 			}
@@ -229,6 +229,9 @@ func SummaryLine(s string) string {
 		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#*>- "))
 		if line == "" || strings.HasPrefix(line, "```") {
 			continue
+		}
+		if strings.HasPrefix(line, "{") {
+			return "" // bare JSON without a summary field: nothing readable
 		}
 		return line
 	}

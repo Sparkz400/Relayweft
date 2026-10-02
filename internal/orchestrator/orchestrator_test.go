@@ -160,6 +160,9 @@ func gitRepo(t *testing.T) string {
 		}
 	}
 	run("init", "-q", "-b", "main")
+	// Tests compare exact bytes; CI's Windows git defaults to autocrlf=true.
+	// The CRLF path has its own test that turns it on explicitly.
+	run("config", "core.autocrlf", "false")
 	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("base\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored/\n"), 0o644)
