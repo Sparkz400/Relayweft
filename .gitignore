@@ -1,0 +1,9 @@
+# build output
+/sy
+/sy.exe
+/dist/
+*.test
+*.out
+
+# local sessions / scratch
+.switchyard/

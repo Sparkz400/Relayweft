@@ -1,0 +1,115 @@
+# Switchyard configuration.
+#
+# Every model for every job lives here. You can also change them at runtime:
+#   - in the TUI press `m` (model picker) and `s` inside it to save,
+#   - or type `/route worker claude:sonnet:high` at the prompt,
+#   - or pass `--route worker=claude:sonnet:high` on the command line.
+#
+# `sy models --refresh` re-reads the Codex model catalog from `codex debug models`.
+
+# Each role has a route on BOTH providers. `prefer` picks which one is used:
+#   codex | claude  - always that provider (unless it is at its usage limit)
+#   other           - the opposite provider of the planner (used for review)
+#   auto            - whichever provider has used fewer tokens this session
+# If the preferred provider is at its usage limit, the role's route on the other
+# provider is used automatically. Leave `effort` empty to use the CLI default.
+roles:
+  planner:
+    prefer: codex
+    codex: {model: gpt-6.1-sol, effort: high}
+    claude: {model: opus, effort: high}
+  worker:
+    prefer: codex
+    codex: {model: gpt-6.1-sol, effort: medium}
+    claude: {model: sonnet, effort: medium}
+  worker_high:
+    prefer: codex
+    codex: {model: gpt-6.1-sol, effort: xhigh}
+    claude: {model: opus, effort: high}
+  explorer:
+    prefer: claude
+    codex: {model: gpt-6-luna, effort: low}
+    claude: {model: haiku, effort: ""}
+  researcher:
+    prefer: claude
+    codex: {model: gpt-6-luna, effort: low}
+    claude: {model: haiku, effort: ""}
+  reviewer:
+    prefer: other
+    codex: {model: gpt-6.1-sol, effort: xhigh}
+    claude: {model: opus, effort: high}
+  judge:
+    prefer: claude
+    codex: {model: gpt-6-luna, effort: low}
+    claude: {model: haiku, effort: low}
+
+providers:
+  codex:
+    disabled: false                # true = never route to Codex
+    command: codex                 # resolved with PATH/PATHEXT, so codex.cmd works on Windows
+    tested_version: "codex-cli 0.160.0"
+    write_sandbox: workspace-write # sandbox for writing agents (read-only agents always use read-only)
+    extra_args: []                 # appended to every `codex exec` call
+    limit_cooldown: 1h             # how long a provider stays "at limit" if no reset time is known
+    efforts: [low, medium, high, xhigh, max, ultra]
+    models:                        # the catalog shown in the model picker (you can also type any id)
+      - {id: gpt-6.1-sol, label: GPT-6.1-Sol, tier: strong}
+      - {id: gpt-6-astra, label: GPT-6-Astra, tier: strong}
+      - {id: gpt-6-sol, label: GPT-6-Sol, tier: strong}
+      - {id: gpt-6-luna, label: GPT-6-Luna, tier: fast}
+      - {id: gpt-5.6-sol, label: GPT-5.6-Sol, tier: standard}
+      - {id: gpt-5.6-terra, label: GPT-5.6-Terra, tier: standard}
+      - {id: gpt-5.6-luna, label: GPT-5.6-Luna, tier: fast}
+      - {id: gpt-5.5, label: GPT-5.5, tier: standard}
+  claude:
+    disabled: false
+    command: claude
+    tested_version: "2.1.287 (Claude Code)"
+    write_permission_mode: acceptEdits # acceptEdits | auto | bypassPermissions | dontAsk
+    write_allowed_tools: []            # e.g. ["Bash(go test *)", "Bash(npm test *)"] so workers can run tests
+    extra_args: []
+    limit_cooldown: 1h
+    efforts: [low, medium, high, xhigh, max]
+    models:
+      - {id: fable, label: Fable (latest), tier: strong}
+      - {id: opus, label: Opus (latest), tier: strong}
+      - {id: sonnet, label: Sonnet (latest), tier: standard}
+      - {id: haiku, label: Haiku (latest), tier: fast}
+      - {id: claude-fable-5-1, label: Fable 5.1, tier: strong}
+      - {id: claude-opus-5-5, label: Opus 5.5, tier: strong}
+      - {id: claude-sonnet-5-5, label: Sonnet 5.5, tier: standard}
+      - {id: claude-haiku-4-5, label: Haiku 4.5, tier: fast}
+
+routing:
+  max_files_before_high: 5         # rule 5: more files than this -> worker_high
+  sensitive_paths: [auth, login, password, secret, payment, billing, migration, migrations, crypto, security]
+  judge: false                     # rule-less cases ask the judge model (costs a little quota)
+  judge_below_confidence: 0.65
+
+orchestrator:
+  max_threads: 3                   # parallel agents at once
+  parallel: true
+  worktrees: true                  # each parallel writing agent gets its own git worktree
+  review_before_plan: true
+  review_on_repeat_error: true
+  review_before_done: true
+  max_plan_revisions: 1
+  max_fix_rounds: 1
+  max_attempts: 3                  # per subtask, not counting limit fallbacks
+  agent_timeout: 30m
+  small_task_words: 12             # tasks shorter than this skip planning and run as one worker step
+
+# Text that means "usage limit reached" (case-insensitive regular expressions).
+limit_patterns:
+  - "usage limit"
+  - "hit your (usage )?limit"
+  - "rate.?limit"
+  - "limit (reached|exceeded)"
+  - "quota"
+  - "too many requests"
+  - "\\b429\\b"
+  - "purchase more credits"
+  - "out of (credits|extra usage)"
+
+theme: auto       # auto | unicode | ascii (ascii is used automatically on legacy conhost)
+log_dir: ""       # empty = <user config dir>/switchyard/sessions

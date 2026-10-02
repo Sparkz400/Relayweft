@@ -1,0 +1,7 @@
+{"id":"0","msg":{"type":"task_started"}}
+{"id":"0","msg":{"type":"agent_reasoning","text":"Looking at files"}}
+{"id":"0","msg":{"type":"exec_command_begin","call_id":"c1","command":["bash","-lc","ls"],"cwd":"/work"}}
+{"id":"0","msg":{"type":"patch_apply_begin","call_id":"c2","auto_approved":true,"changes":{"main.go":{"update":{"unified_diff":""}}}}}
+{"id":"0","msg":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":50,"reasoning_output_tokens":10}}}}
+{"id":"0","msg":{"type":"agent_message","message":"Done."}}
+{"id":"0","msg":{"type":"task_complete","last_agent_message":"Done."}}
