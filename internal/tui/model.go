@@ -170,6 +170,9 @@ func New(o Options) *Model {
 		in.Prompt = "> "
 	}
 	in.CharLimit = 4000
+	if o.Theme.ASCII {
+		ellipsis = "..."
+	}
 	in.Focus()
 	m := &Model{
 		opt: o, orc: o.Orc, store: o.Orc.Store(), th: o.Theme,

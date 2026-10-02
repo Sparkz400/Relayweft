@@ -14,12 +14,15 @@ import (
 	"github.com/sparkz400/switchyard/internal/sessionlog"
 )
 
+// ellipsis is "…" or "..." for the ASCII theme (set by New).
+var ellipsis = "…"
+
 // fit truncates (ANSI-aware) and pads s to exactly w cells.
 func fit(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	s = ansi.Truncate(s, w, "…")
+	s = ansi.Truncate(s, w, ellipsis)
 	if pad := w - lipgloss.Width(s); pad > 0 {
 		s += strings.Repeat(" ", pad)
 	}
@@ -171,7 +174,24 @@ func (m *Model) viewHeader(W int) string {
 	r := strings.Join(right, th.fg(th.Faint).Render("  "+th.G.V+"  ")) + " "
 	gap := W - lipgloss.Width(left) - lipgloss.Width(r)
 	if gap < 1 {
-		return fit(left, W)
+		// Narrow: provider state without bars.
+		var short []string
+		for _, p := range event.Providers {
+			pv := m.provs[p]
+			info := sessionlog.Human(pv.tokens.Total())
+			if pv.quota != nil {
+				info = fmt.Sprintf("%.0f%%", pv.quota.Utilization*100)
+			}
+			if now.Before(pv.until) {
+				info = th.bold(th.FailColor).Render("LIMIT")
+			}
+			short = append(short, th.fg(th.ProviderColor(p)).Render(p)+" "+info)
+		}
+		r = strings.Join(short, " ") + " "
+		gap = W - lipgloss.Width(left) - lipgloss.Width(r)
+		if gap < 1 {
+			return fit(left, W)
+		}
 	}
 	return left + strings.Repeat(" ", gap) + r
 }
@@ -230,18 +250,18 @@ func (m *Model) viewPrompt(W int) string {
 // bodyNeed is the smallest height that shows the whole tree (compact boxes,
 // one router line).
 func (m *Model) bodyNeed(W int) int {
-	cw := W
+	cw, extra := W, 1 // narrow layouts add a reviewer line
 	if W >= 96 {
-		cw = W - min(36, W/4) - 1
+		cw, extra = W-min(36, W/4)-1, 0
 	}
 	n := len(m.order)
 	if n == 0 {
-		return 4 + 1 + 4 + 1 + 3
+		return extra + 4 + 1 + 4 + 1 + 3
 	}
 	bw := max(22, min(34, (cw-(n-1))/n))
 	perRow := max(1, (cw+1)/(bw+1))
 	rows := (n + perRow - 1) / perRow
-	return 4 + 1 + 4 + 1 + 5*rows + 1 + 3
+	return extra + 4 + 1 + 4 + 1 + 5*rows + 1 + 3
 }
 
 func (m *Model) viewBody(W, H int) string {
@@ -253,12 +273,34 @@ func (m *Model) viewBody(W, H int) string {
 	if revW > 0 {
 		cw--
 	}
-	center := m.viewCenter(cw, H)
 	if revW == 0 {
-		return center
+		return m.reviewerLine(W) + "\n" + m.viewCenter(cw, H-1)
 	}
+	center := m.viewCenter(cw, H)
 	rev := m.viewReviewer(revW, H)
 	return lipgloss.JoinHorizontal(lipgloss.Top, rev, " ", center)
+}
+
+// reviewerLine is the one-line reviewer summary used on narrow terminals.
+func (m *Model) reviewerLine(W int) string {
+	th := m.th
+	r := m.reviewer
+	s := th.bold(th.Reviewer).Render(" "+th.G.Role+" REVIEWER ") + m.statusGlyph(r.status) + " " + m.route(r.provider, r.model)
+	for _, cp := range r.checkpoints {
+		g := th.fg(th.OKColor).Render(th.G.OK)
+		if !cp.ok {
+			g = th.fg(th.Warn).Render(th.G.Fail)
+		}
+		s += " " + g + th.fg(th.Muted).Render(cp.name)
+	}
+	if n := len(r.checkpoints); n > 0 {
+		text := r.checkpoints[n-1].text
+		if i := strings.Index(text, ":"); i >= 0 {
+			text = text[i+1:]
+		}
+		s += th.fg(th.Muted).Render(" · " + oneLine(text, 0))
+	}
+	return fit(s, W)
 }
 
 func (m *Model) viewReviewer(w, h int) string {
