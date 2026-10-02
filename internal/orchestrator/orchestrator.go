@@ -638,6 +638,9 @@ func (o *Orchestrator) mergeEvent(t *task, stepID string, ok bool, text string) 
 
 var reNumbers = regexp.MustCompile(`\d+`)
 
+// reAuth matches CLI errors that mean "not logged in".
+var reAuth = regexp.MustCompile(`(?i)(not logged in|please (log|sign) ?in|log ?in required|unauthori[sz]ed|\b401\b|authentication (failed|required)|token (has )?expired|codex login)`)
+
 // errorSignature normalizes an error so "the same error twice" ignores
 // timestamps, line numbers and durations.
 func errorSignature(s string) string {
@@ -760,6 +763,14 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	res := rn.Run(actx, spec, o.emit)
 	o.opts.Tracker.AddUsage(d.Provider, res.Tokens)
 	t.addTokens(res.Tokens)
+	why := "at usage limit"
+	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && (reAuth.MatchString(res.Err.Error()) || strings.Contains(res.Err.Error(), "not found on PATH")) {
+		// A CLI that is logged out or missing is as unusable as one at its
+		// limit: route around it for the rest of the session.
+		res.LimitHit = true
+		res.ResetAt = time.Now().Add(12 * time.Hour)
+		why = "unavailable (" + clip(res.Err.Error(), 120) + "; run `sy doctor`)"
+	}
 	if res.LimitHit {
 		until := res.ResetAt
 		if until.IsZero() || until.Before(time.Now()) {
@@ -767,7 +778,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 		}
 		o.opts.Tracker.MarkLimited(d.Provider, until)
 		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err)})
-		o.emit(event.Event{Kind: event.ProviderState, Provider: d.Provider, Until: until, Text: fmt.Sprintf("%s at usage limit until %s", d.Provider, until.Format("15:04"))})
+		o.emit(event.Event{Kind: event.ProviderState, Provider: d.Provider, Until: until, Text: fmt.Sprintf("%s %s until %s; /limit %s reset to retry", d.Provider, why, until.Format("15:04"), d.Provider)})
 	}
 	tk := res.Tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Attempt: attempt,

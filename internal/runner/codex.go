@@ -138,6 +138,10 @@ func (p *codexParser) Line(line []byte) []event.Event {
 		if l.Error != nil && msg == "" {
 			msg = l.Error.Message
 		}
+		if transient(msg) {
+			// Codex reports its own retries as "error" events; the run goes on.
+			return []event.Event{{Kind: event.Thinking, Text: "retrying: " + msg}}
+		}
 		p.fatal = msg
 		return []event.Event{{Kind: event.Error, Text: msg}}
 	case "item.started", "item.updated", "item.completed":
@@ -198,13 +202,21 @@ func (p *codexParser) item(phase string, it *codexItem) []event.Event {
 			return []event.Event{{Kind: event.Thinking, Text: strings.TrimSpace(b.String())}}
 		}
 	case "error":
+		// Item-level errors are warnings (e.g. "Falling back from WebSockets
+		// to HTTPS transport"); real failures arrive as turn.failed.
 		msg := it.Message
 		if msg == "" {
 			msg = it.Text
 		}
-		return []event.Event{{Kind: event.Error, Text: msg}}
+		return []event.Event{{Kind: event.Thinking, Text: "warning: " + msg}}
 	}
 	return nil
+}
+
+// transient reports Codex's self-healing retry messages.
+func transient(msg string) bool {
+	m := strings.ToLower(strings.TrimSpace(msg))
+	return strings.HasPrefix(m, "reconnecting") || strings.HasPrefix(m, "falling back from websockets")
 }
 
 // legacy handles the pre-0.40 {"id":..,"msg":{...}} event protocol.

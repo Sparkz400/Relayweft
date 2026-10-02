@@ -312,3 +312,18 @@ func TestFakeScenario(t *testing.T) {
 		t.Fatalf("fake plan = %+v", res)
 	}
 }
+
+// Recorded from codex-cli 0.160.0 behind a failing proxy (retries are
+// reported as "error" events), with a successful ending appended.
+func TestCodexReconnectsAreNotErrors(t *testing.T) {
+	p := &codexParser{}
+	evs := feed(t, p, "codex_reconnect.jsonl")
+	if n := kinds(evs)[event.Error]; n != 0 {
+		t.Fatalf("retries reported as %d errors", n)
+	}
+	var r Result
+	p.Finish(&r)
+	if r.Err != nil || r.Final != "hi" {
+		t.Fatalf("result = %+v", r)
+	}
+}

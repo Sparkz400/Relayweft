@@ -473,3 +473,28 @@ func TestErrorSignature(t *testing.T) {
 		t.Error("different errors share a signature")
 	}
 }
+
+func TestLoggedOutProviderIsRoutedAround(t *testing.T) {
+	var mu sync.Mutex
+	var used []string
+	mk := func(p string) runner.Runner {
+		return scripted{p, func(s runner.Spec) runner.Result {
+			mu.Lock()
+			used = append(used, p)
+			mu.Unlock()
+			if p == event.Codex {
+				return runner.Result{Err: errString("codex exited: Not logged in. Run codex login")}
+			}
+			return runner.Result{Final: "ok"}
+		}}
+	}
+	set := runner.Set{event.Codex: mk(event.Codex), event.Claude: mk(event.Claude)}
+	o, _ := newOrc(t, "", set, func(c *config.Config) { c.Orchestrator.ReviewBeforeDone = false })
+	res := o.Run(context.Background(), "fix it")
+	if !res.OK {
+		t.Fatalf("%+v", res)
+	}
+	if strings.Join(used, ",") != "codex,claude" {
+		t.Errorf("used = %v (codex should be tried once, then avoided)", used)
+	}
+}
