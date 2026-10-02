@@ -129,3 +129,19 @@ func TestJudge(t *testing.T) {
 		t.Error("garbage parsed")
 	}
 }
+
+func TestPlannerPreferOtherDoesNotRecurse(t *testing.T) {
+	cfg := config.Default()
+	for _, role := range event.Roles {
+		rc := cfg.Roles[role]
+		rc.Prefer = config.PreferOther
+		cfg.Roles[role] = rc
+	}
+	r := &Router{Cfg: func() *config.Config { return cfg }}
+	if d := r.Preview(event.RolePlanner, ""); d.Provider != event.Claude {
+		t.Errorf("planner prefer other without a main provider: %+v", d)
+	}
+	if d := r.Route(Step{Kind: KindReview}); d.Provider == "" {
+		t.Error("no provider")
+	}
+}

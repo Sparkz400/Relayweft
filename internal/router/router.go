@@ -178,9 +178,11 @@ func (r *Router) preferred(cfg *config.Config, s Step, rc config.RoleCfg) string
 	case config.PreferOther:
 		main := s.MainProvider
 		if main == "" {
-			main = r.preferred(cfg, Step{}, cfg.Roles[event.RolePlanner])
-			if main == "" || cfg.Roles[event.RolePlanner].Prefer == config.PreferOther {
-				main = event.Codex
+			// Before the planner ran: assume the planner's fixed provider,
+			// else Codex. Never recurse (planner may itself be "other").
+			main = event.Codex
+			if p := cfg.Roles[event.RolePlanner].Prefer; p == config.PreferCodex || p == config.PreferClaude {
+				main = p
 			}
 		}
 		return event.Other(main)

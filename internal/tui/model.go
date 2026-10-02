@@ -153,6 +153,8 @@ type Model struct {
 	cancelTask context.CancelFunc
 	taskDone   chan struct{}
 	quitArmed  time.Time
+	killArmed  string
+	killAt     time.Time
 	notice     string
 	noticeAt   time.Time
 	dirty      bool // config changed since last save
@@ -710,7 +712,7 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Tree focus: single-key commands.
 	ids := m.focusable()
 	switch k.String() {
-	case "tab", "right", "down", "j":
+	case "tab", "right", "down":
 		// -1 means "no agent selected": the log shows everything.
 		m.selected++
 		if m.selected >= len(ids) {
@@ -742,11 +744,17 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "k":
 		id := m.selectedAgent()
-		if id == "" {
+		switch {
+		case id == "":
 			m.flashNotice("select an agent with tab first, then press k")
-		} else if !m.orc.Kill(id) {
+		case m.killArmed != id || time.Since(m.killAt) > 3*time.Second:
+			m.killArmed, m.killAt = id, time.Now()
+			m.flashNotice("press k again to kill " + id)
+		case !m.orc.Kill(id):
+			m.killArmed = ""
 			m.flashNotice("nothing running on " + id + " to kill")
-		} else {
+		default:
+			m.killArmed = ""
 			m.flashNotice("killed " + id)
 		}
 	case "x":

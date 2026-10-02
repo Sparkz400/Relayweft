@@ -498,3 +498,28 @@ func TestLoggedOutProviderIsRoutedAround(t *testing.T) {
 		t.Errorf("used = %v (codex should be tried once, then avoided)", used)
 	}
 }
+
+func TestParsePlanUniqueAndReservedIDs(t *testing.T) {
+	p, err := ParsePlan(`{"subtasks":[{"id":"t2","prompt":"a"},{"id":"t2","prompt":"b"},{"id":"main","prompt":"c"},{"id":"reviewer","prompt":"d"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, st := range p.Subtasks {
+		if seen[st.ID] || st.ID == AgentMain || st.ID == AgentReviewer || st.ID == AgentJudge {
+			t.Fatalf("bad id %q in %+v", st.ID, p.Subtasks)
+		}
+		seen[st.ID] = true
+	}
+}
+
+func TestCommitAllIgnoresSigningConfig(t *testing.T) {
+	dir := gitRepo(t)
+	g := git{dir}
+	g.out("config", "commit.gpgsign", "true")
+	g.out("config", "gpg.program", "definitely-not-gpg")
+	os.WriteFile(filepath.Join(dir, "x.txt"), []byte("x"), 0o644)
+	if _, changed, err := g.commitAll("test"); err != nil || !changed {
+		t.Fatalf("commit with gpgsign=true: changed=%v err=%v", changed, err)
+	}
+}

@@ -143,10 +143,17 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		stderr.Write([]byte("\nread stdout: " + err.Error()))
+		// Keep draining so the CLI never blocks on a full pipe.
+		io.Copy(io.Discard, stdout)
 	}
 	waitErr := cmd.Wait()
 	p.Finish(&res)
 	res.Duration = time.Since(start)
+	if res.LimitHit && res.Err == nil && waitErr == nil && strings.TrimSpace(res.Final) != "" {
+		// A limit message mid-stream that the CLI recovered from (it still
+		// finished with an answer) is not a limit hit.
+		res.LimitHit, res.ResetAt = false, time.Time{}
+	}
 
 	switch {
 	case ctx.Err() != nil:

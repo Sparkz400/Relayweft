@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -33,6 +34,10 @@ import (
 type git struct{ dir string }
 
 func (g git) run(env []string, stdin []byte, args ...string) (string, error) {
+	if runtime.GOOS == "windows" {
+		// Worktrees live under %LOCALAPPDATA%; deep repos exceed MAX_PATH.
+		args = append([]string{"-c", "core.longpaths=true"}, args...)
+	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = g.dir
 	if len(env) > 0 {
@@ -159,7 +164,9 @@ func (g git) commitAll(msg string) (commit string, changed bool, err error) {
 		"GIT_AUTHOR_NAME=Switchyard", "GIT_AUTHOR_EMAIL=switchyard@localhost",
 		"GIT_COMMITTER_NAME=Switchyard", "GIT_COMMITTER_EMAIL=switchyard@localhost",
 	}
-	if _, err := g.run(env, nil, "commit", "-q", "--no-verify", "-m", msg); err != nil {
+	// No signing (would prompt or fail for GPG/SSH-signing users) and no hooks:
+	// these commits are internal plumbing, never pushed.
+	if _, err := g.run(env, nil, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", msg); err != nil {
 		return "", false, err
 	}
 	head, err := g.out("rev-parse", "HEAD")
@@ -220,6 +227,21 @@ func (g git) applyDiff(from, to string) error {
 			write = append(write, path)
 		}
 	}
+	// Merge the files the user touched first, in memory, so a conflict
+	// leaves the working tree exactly as it was.
+	var conflicts []string
+	merged := map[string]string{}
+	for _, p := range touched {
+		out, err := g.mergeFile(from, to, p)
+		if err != nil {
+			conflicts = append(conflicts, p)
+			continue
+		}
+		merged[p] = out
+	}
+	if len(conflicts) > 0 {
+		return fmt.Errorf("you changed %s while agents were working and the edits overlap", strings.Join(conflicts, ", "))
+	}
 	if len(write) > 0 {
 		args := append([]string{"restore", "--source=" + to, "--worktree", "--"}, write...)
 		if _, err := g.run(nil, nil, args...); err != nil {
@@ -231,14 +253,10 @@ func (g git) applyDiff(from, to string) error {
 			return err
 		}
 	}
-	var conflicts []string
-	for _, p := range touched {
-		if err := g.mergeFile(from, to, p); err != nil {
-			conflicts = append(conflicts, p)
+	for p, content := range merged {
+		if err := os.WriteFile(filepath.Join(g.dir, filepath.FromSlash(p)), []byte(content), 0o644); err != nil {
+			return err
 		}
-	}
-	if len(conflicts) > 0 {
-		return fmt.Errorf("you changed %s while agents were working and the edits overlap", strings.Join(conflicts, ", "))
 	}
 	return nil
 }
@@ -246,30 +264,30 @@ func (g git) applyDiff(from, to string) error {
 // mergeFile 3-way merges one file the user edited while an agent changed it:
 // base = the file at `from`, theirs = the file at `to`, ours = the working
 // tree. Blobs are read with --filters so line endings match the checkout.
-// The file is only written when the merge is clean.
-func (g git) mergeFile(from, to, path string) error {
+// It returns the merged content; an error means the edits conflict.
+func (g git) mergeFile(from, to, path string) (string, error) {
 	full := filepath.Join(g.dir, filepath.FromSlash(path))
 	theirs, err := g.run(nil, nil, "cat-file", "--filters", to+":"+path)
 	if err != nil {
-		return err // deleted by the agent but edited by the user: conflict
+		return "", err // deleted by the agent but edited by the user: conflict
 	}
 	base, _ := g.run(nil, nil, "cat-file", "--filters", from+":"+path)
 	tmp, err := os.MkdirTemp("", "sy-merge-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer os.RemoveAll(tmp)
 	bp, tp := filepath.Join(tmp, "base"), filepath.Join(tmp, "theirs")
 	os.WriteFile(bp, []byte(base), 0o644)
 	os.WriteFile(tp, []byte(theirs), 0o644)
 	if _, err := os.Stat(full); err != nil {
-		return err
+		return "", err
 	}
 	merged, err := g.run(nil, nil, "merge-file", "-p", full, bp, tp)
 	if err != nil {
-		return err // exit status > 0 means conflicts
+		return "", err // exit status > 0 means conflicts
 	}
-	return os.WriteFile(full, []byte(merged), 0o644)
+	return merged, nil
 }
 
 // unchangedSince reports whether the working-tree file at path still has the

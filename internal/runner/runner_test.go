@@ -98,8 +98,8 @@ func TestCodexParser(t *testing.T) {
 	if k[event.ToolCall] != 4 { // 2 commands, 1 mcp, 1 search
 		t.Errorf("want 4 tool calls, got %d", k[event.ToolCall])
 	}
-	if k[event.Usage] != 1 {
-		t.Errorf("want 1 usage event, got %d", k[event.Usage])
+	if k[event.Usage] != 0 {
+		t.Errorf("usage must only be reported once, by Exec: got %d", k[event.Usage])
 	}
 	var r Result
 	p.Finish(&r)
@@ -151,7 +151,7 @@ func TestCodexParserLimitMessage(t *testing.T) {
 func TestArgs(t *testing.T) {
 	cfg := config.Default()
 	cx := CodexArgs(cfg.Providers[event.Codex], Spec{Model: "gpt-6.1-sol", Effort: "high", Dir: "/w"})
-	want := "exec --json --color never --skip-git-repo-check -m gpt-6.1-sol -c model_reasoning_effort=high --sandbox workspace-write -C /w -"
+	want := "exec --json --color never --skip-git-repo-check -m gpt-6.1-sol -c model_reasoning_effort=high --sandbox workspace-write -"
 	if got := strings.Join(cx, " "); got != want {
 		t.Errorf("codex args\n got %s\nwant %s", got, want)
 	}
@@ -325,5 +325,26 @@ func TestCodexReconnectsAreNotErrors(t *testing.T) {
 	p.Finish(&r)
 	if r.Err != nil || r.Final != "hi" {
 		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestMidStreamLimitThenSuccessIsNotALimit(t *testing.T) {
+	cmd, _, _ := fakeCLI(t, "codex_midstream_429.jsonl", 0, "")
+	cfg := config.Default()
+	pc := cfg.Providers[event.Codex]
+	pc.Command = cmd
+	var c collector
+	res := NewCodex(pc, limits.NewDetector(cfg.LimitPatterns)).Run(context.Background(), Spec{AgentID: "m"}, c.emit)
+	if res.LimitHit || !res.OK() || res.Final != "Finished anyway." {
+		t.Fatalf("recovered run must succeed without a limit: %+v", res)
+	}
+	usage := 0
+	for _, e := range c.evs {
+		if e.Kind == event.Usage {
+			usage++
+		}
+	}
+	if usage != 1 {
+		t.Errorf("usage events = %d, want exactly 1", usage)
 	}
 }

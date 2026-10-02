@@ -38,10 +38,9 @@ func CodexArgs(cfg config.ProviderCfg, s Spec) []string {
 	if s.ReadOnly {
 		sandbox = "read-only"
 	}
+	// No -C: the working directory is set on the process, and a quoted path
+	// argument breaks cmd.exe quoting of npm .cmd shims on Windows.
 	args = append(args, "--sandbox", sandbox)
-	if s.Dir != "" {
-		args = append(args, "-C", s.Dir)
-	}
 	args = append(args, cfg.ExtraArgs...)
 	return append(args, "-")
 }
@@ -119,8 +118,7 @@ func (p *codexParser) Line(line []byte) []event.Event {
 				Input: l.Usage.InputTokens, Cached: l.Usage.CachedInputTokens,
 				Output: l.Usage.OutputTokens, Reasoning: l.Usage.ReasoningOutputTokens,
 			}
-			p.tokens = p.tokens.Add(u)
-			return []event.Event{{Kind: event.Usage, Tokens: u}}
+			p.tokens = p.tokens.Add(u) // reported once by Exec at the end
 		}
 		return nil
 	case "turn.failed", "thread.failed":
@@ -216,7 +214,12 @@ func (p *codexParser) item(phase string, it *codexItem) []event.Event {
 // transient reports Codex's self-healing retry messages.
 func transient(msg string) bool {
 	m := strings.ToLower(strings.TrimSpace(msg))
-	return strings.HasPrefix(m, "reconnecting") || strings.HasPrefix(m, "falling back from websockets")
+	for _, p := range []string{"reconnecting", "falling back from websockets", "stream disconnected - retrying", "stream connection failed; waiting to retry"} {
+		if strings.HasPrefix(m, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // legacy handles the pre-0.40 {"id":..,"msg":{...}} event protocol.

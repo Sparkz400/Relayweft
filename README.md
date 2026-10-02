@@ -107,7 +107,7 @@ There are four ways to change any of this, at any time:
 | Key | Action |
 |---|---|
 | `tab` / `shift+tab` | select the next / previous agent (its own log is shown); cycling past the last one returns to "all" |
-| `k` | kill the selected agent |
+| `k` `k` | kill the selected agent (press twice) |
 | `p` | pause / resume dispatching (running agents finish, no new agent starts) |
 | `x` | cancel the whole task |
 | `l` | toggle the full-screen log (`pgup`/`pgdn` scroll) |

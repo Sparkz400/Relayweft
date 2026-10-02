@@ -229,7 +229,7 @@ func (m *Model) viewKeys(W int) string {
 	case m.focus == focusPrompt:
 		keys = "enter run · tab/esc agents · ctrl+o models · /help commands · ctrl+c quit"
 	default:
-		keys = "tab select agent · k kill · p pause · x cancel task · l full log · m models · enter prompt · q quit"
+		keys = "tab select agent · k k kill · p pause · x cancel task · l full log · m models · enter prompt · q quit"
 	}
 	return fit(" "+m.th.fg(m.th.Muted).Render(keys), W)
 }

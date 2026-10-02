@@ -3,8 +3,11 @@
 package proc
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -12,22 +15,53 @@ import (
 )
 
 func prepare(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP,
+	attr := &syscall.SysProcAttr{
+		// CREATE_NO_WINDOW: agents never share sy's console, so they cannot
+		// retitle the tab or change the console mode under the TUI. All
+		// stdio is piped, so nothing is lost.
+		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW,
 		HideWindow:    true,
 	}
+	if ext := strings.ToLower(filepath.Ext(cmd.Path)); ext == ".cmd" || ext == ".bat" {
+		// npm installs CLIs as .cmd shims. Letting CreateProcess run them
+		// implicitly breaks when both the shim path and an argument are
+		// quoted (cmd strips the outer quotes; Go issue #15566), e.g. a
+		// user name with a space. Run cmd.exe explicitly with /s, which
+		// keeps everything between the outer quotes verbatim.
+		comspec := os.Getenv("ComSpec")
+		if comspec == "" {
+			comspec = filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
+		}
+		parts := []string{`"` + cmd.Path + `"`}
+		for _, a := range cmd.Args[1:] {
+			parts = append(parts, CmdQuote(a))
+		}
+		attr.CmdLine = syscall.EscapeArg(comspec) + ` /d /s /c "` + strings.Join(parts, " ") + `"`
+		cmd.Path = comspec
+	}
+	cmd.SysProcAttr = attr
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
 		}
 		// taskkill /T walks the tree (cmd.exe shim -> node -> tools).
 		kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid))
-		kill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		kill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 		if err := kill.Run(); err != nil {
 			return cmd.Process.Kill()
 		}
 		return nil
 	}
+}
+
+// CmdQuote quotes an argument for a cmd.exe command line: anything with
+// spaces or cmd metacharacters is wrapped in double quotes (embedded quotes
+// doubled), which also protects & | < > ^ ( ) from cmd.
+func CmdQuote(a string) string {
+	if a != "" && !strings.ContainsAny(a, " \t\"&|<>^()%!,;=") {
+		return a
+	}
+	return `"` + strings.ReplaceAll(a, `"`, `""`) + `"`
 }
 
 var job windows.Handle

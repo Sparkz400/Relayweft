@@ -84,8 +84,15 @@ func TestApplyDiffUserConflictIsNotClobbered(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "file.txt") {
 		t.Fatalf("want a conflict naming file.txt, got %v", err)
 	}
-	if got := read(t, filepath.Join(dir, "file.txt")); strings.Contains(got, "AGENT") && !strings.Contains(got, "USER") {
-		t.Errorf("user edit lost: %q", got)
+	if got := read(t, filepath.Join(dir, "file.txt")); got != "a\nUSER\nc\n" {
+		t.Errorf("user's file changed: %q", got)
+	}
+	// Nothing else from the conflicting change may be half-applied.
+	if _, err := os.Stat(filepath.Join(dir, "new.txt")); !os.IsNotExist(err) {
+		t.Error("new.txt was written although the change conflicted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "shared.txt")); err != nil {
+		t.Error("shared.txt was deleted although the change conflicted")
 	}
 }
 

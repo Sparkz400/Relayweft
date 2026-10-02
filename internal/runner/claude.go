@@ -38,6 +38,9 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 	if s.Effort != "" {
 		args = append(args, "--effort", s.Effort)
 	}
+	// extra_args go before --tools/--allowedTools, which are variadic and
+	// would swallow anything after them.
+	args = append(args, cfg.ExtraArgs...)
 	if s.ReadOnly {
 		// dontAsk denies anything not allowed; --tools removes the write tools entirely.
 		args = append(args, "--permission-mode", "dontAsk", "--tools", ReadOnlyTools)
@@ -48,7 +51,6 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 		}
 		args = append(args, "--permission-mode", mode)
 	}
-	args = append(args, cfg.ExtraArgs...)
 	if !s.ReadOnly && len(cfg.WriteAllowedTools) > 0 {
 		// Variadic flag: keep it last so it cannot swallow other arguments.
 		args = append(args, "--allowedTools", strings.Join(cfg.WriteAllowedTools, ","))

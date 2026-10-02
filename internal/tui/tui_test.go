@@ -225,6 +225,14 @@ func TestTabCyclesAndKillNeedsSelection(t *testing.T) {
 	if m.selectedAgent() != orchestrator.AgentMain {
 		t.Errorf("selected = %q", m.selectedAgent())
 	}
+	m.Update(key("k"))
+	if !strings.Contains(m.notice, "press k again") {
+		t.Errorf("first k must only arm the kill: %q", m.notice)
+	}
+	m.Update(key("k"))
+	if !strings.Contains(m.notice, "nothing running") {
+		t.Errorf("second k should try to kill: %q", m.notice)
+	}
 	m.Update(key("enter"))
 	if m.focus != focusPrompt {
 		t.Error("enter did not return to the prompt")

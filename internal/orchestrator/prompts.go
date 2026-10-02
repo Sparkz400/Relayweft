@@ -69,12 +69,13 @@ func ParsePlan(reply string) (Plan, error) {
 	if len(p.Subtasks) > maxSubtasks {
 		p.Subtasks = p.Subtasks[:maxSubtasks]
 	}
-	seen := map[string]bool{}
+	// The fixed agent ids are reserved so a subtask never collides with them.
+	seen := map[string]bool{"main": true, "reviewer": true, "judge": true}
 	for i := range p.Subtasks {
 		st := &p.Subtasks[i]
 		st.ID = slug(st.ID)
-		if st.ID == "" || seen[st.ID] {
-			st.ID = fmt.Sprintf("t%d", i+1)
+		for n := i + 1; st.ID == "" || seen[st.ID]; n++ {
+			st.ID = fmt.Sprintf("t%d", n)
 		}
 		seen[st.ID] = true
 		switch strings.ToLower(string(st.Kind)) {

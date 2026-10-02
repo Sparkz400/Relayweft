@@ -52,8 +52,9 @@ type Orchestrator struct {
 
 	mu      sync.Mutex
 	paused  bool
-	pauseCh chan struct{} // closed when unpaused
-	cancels map[string]context.CancelFunc
+	pauseCh chan struct{}                         // closed when unpaused
+	cancels map[string]map[int]context.CancelFunc // agent id -> run seq -> cancel
+	runSeq  int
 	running bool
 	taskSeq int
 }
@@ -66,7 +67,7 @@ func New(o Options) *Orchestrator {
 	if o.Tracker == nil {
 		o.Tracker = limits.NewTracker()
 	}
-	orc := &Orchestrator{opts: o, cancels: map[string]context.CancelFunc{}, pauseCh: make(chan struct{})}
+	orc := &Orchestrator{opts: o, cancels: map[string]map[int]context.CancelFunc{}, pauseCh: make(chan struct{})}
 	close(orc.pauseCh)
 	orc.router = &router.Router{Cfg: o.Store.Get, State: o.Tracker, ForceProvider: o.ForceProvider}
 	return orc
@@ -123,15 +124,19 @@ func (o *Orchestrator) waitUnpaused(ctx context.Context) error {
 	}
 }
 
-// Kill stops one running agent. It returns false if no such agent runs.
+// Kill stops every running run of an agent id (the reviewer can run more
+// than once in parallel). It returns false if nothing with that id runs.
 func (o *Orchestrator) Kill(agentID string) bool {
 	o.mu.Lock()
-	cancel, ok := o.cancels[agentID]
-	o.mu.Unlock()
-	if ok {
-		cancel()
+	var fns []context.CancelFunc
+	for _, c := range o.cancels[agentID] {
+		fns = append(fns, c)
 	}
-	return ok
+	o.mu.Unlock()
+	for _, c := range fns {
+		c()
+	}
+	return len(fns) > 0
 }
 
 // RunningAgents lists the ids of agents currently running.
@@ -139,8 +144,10 @@ func (o *Orchestrator) RunningAgents() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	out := make([]string, 0, len(o.cancels))
-	for id := range o.cancels {
-		out = append(out, id)
+	for id, runs := range o.cancels {
+		if len(runs) > 0 {
+			out = append(out, id)
+		}
 	}
 	return out
 }
@@ -199,6 +206,7 @@ type task struct {
 	kept     []string
 	notes    []string
 	wtBase   string
+	writeSem chan struct{}
 }
 
 func (t *task) addTokens(u event.TokenUsage) {
@@ -218,10 +226,13 @@ func (o *Orchestrator) Run(ctx context.Context, text string) TaskResult {
 	o.taskSeq++
 	seq := o.taskSeq
 	o.mu.Unlock()
-	defer func() {
-		o.mu.Lock()
-		o.running = false
-		o.mu.Unlock()
+	finished := false
+	defer func() { // panics only; the normal path clears it before TaskDone
+		if !finished {
+			o.mu.Lock()
+			o.running = false
+			o.mu.Unlock()
+		}
 	}()
 
 	began := time.Now()
@@ -241,6 +252,12 @@ func (o *Orchestrator) Run(ctx context.Context, text string) TaskResult {
 	tk := t.tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTaskEnd, TaskID: t.id, Task: text, Mode: o.opts.Mode,
 		OK: sessionlog.Bool(res.OK), Text: res.Summary, Tokens: &tk, DurationMS: res.Duration.Milliseconds()})
+	// Clear the running flag before announcing the end, so a task submitted
+	// right after TaskDone is never refused.
+	o.mu.Lock()
+	o.running = false
+	o.mu.Unlock()
+	finished = true
 	o.emit(event.Event{Kind: event.Phase, Text: "done"})
 	o.emit(event.Event{Kind: event.TaskDone, OK: res.OK, Text: res.Summary, Tokens: tk})
 	return res
@@ -472,7 +489,9 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 	done := map[string]bool{}
 	started := map[string]bool{}
 	sem := make(chan struct{}, threads)
-	writeSem := make(chan struct{}, 1) // writers in the main tree run one at a time
+	t.writeSem = make(chan struct{}, 1) // writers in the main tree run one at a time
+	writeSem := t.writeSem
+	inflight := 0
 	var wg sync.WaitGroup
 	wake := make(chan struct{}, len(p.Subtasks)+1)
 
@@ -498,6 +517,19 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				started[st.ID] = true
 			}
 		}
+		if len(ready) == 0 && inflight == 0 {
+			// Nothing can ever start (should not happen after ParsePlan's
+			// normalization, but never hang on a bad plan).
+			for _, st := range p.Subtasks {
+				if !done[st.ID] {
+					results[st.ID] = stepResult{err: "could not be scheduled"}
+					done[st.ID] = true
+				}
+			}
+			mu.Unlock()
+			break
+		}
+		inflight += len(ready)
 		mu.Unlock()
 		if ctx.Err() != nil {
 			break
@@ -507,7 +539,12 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				defer func() { wake <- struct{}{} }()
+				defer func() {
+					mu.Lock()
+					inflight--
+					mu.Unlock()
+					wake <- struct{}{}
+				}()
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():
@@ -567,6 +604,12 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	path := filepath.Join(t.wtBase, st.ID)
 	if err := g.addWorktree(path, base); err != nil {
 		o.logf("worktree for %s failed (%v); running in the main tree", st.ID, err)
+		select { // one writer at a time in the main tree
+		case t.writeSem <- struct{}{}:
+			defer func() { <-t.writeSem }()
+		case <-ctx.Done():
+			return stepResult{err: "cancelled"}
+		}
 		return o.runStep(ctx, t, st, deps, o.opts.Dir, "")
 	}
 	defer g.removeWorktree(path)
@@ -623,7 +666,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 }
 
 func (o *Orchestrator) keepBranch(t *task, stepID, commit string) string {
-	branch := fmt.Sprintf("sy/%s/%s", o.opts.Log.Session(), stepID)
+	branch := fmt.Sprintf("sy/%s/%s/%s", o.opts.Log.Session(), t.id, stepID)
 	if _, err := (git{t.root}).out("branch", "-f", branch, commit); err != nil {
 		return commit[:min(12, len(commit))]
 	}
@@ -746,11 +789,19 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 
 	actx, cancel := context.WithCancel(ctx)
 	o.mu.Lock()
-	o.cancels[agentID] = cancel
+	o.runSeq++
+	run := o.runSeq
+	if o.cancels[agentID] == nil {
+		o.cancels[agentID] = map[int]context.CancelFunc{}
+	}
+	o.cancels[agentID][run] = cancel
 	o.mu.Unlock()
 	defer func() {
 		o.mu.Lock()
-		delete(o.cancels, agentID)
+		delete(o.cancels[agentID], run)
+		if len(o.cancels[agentID]) == 0 {
+			delete(o.cancels, agentID)
+		}
 		o.mu.Unlock()
 		cancel()
 	}()
