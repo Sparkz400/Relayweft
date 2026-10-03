@@ -244,3 +244,22 @@ If Switchyard isn't clearly better on at least two of three, tune the router bef
 | Merge conflicts between worktrees | Split subtasks by file ownership; reviewer checks merged diff |
 | Limit messages hard to detect | Collect real limit-hit outputs into fixtures; fall back on exit codes |
 | Terms of service | Only drive the official CLIs with their normal login; never extract or reuse tokens |
+
+---
+
+## 11. Status and v1 decisions
+
+All milestones M0–M8 are implemented. The README covers usage. The open questions were decided as follows:
+
+| Question | Decision |
+|---|---|
+| Model choice | Every role has a route on **both** providers plus `prefer: codex/claude/other/auto`. It can be changed live in the TUI (model picker `m`, `/route`, `/prefer`), with flags (`--route`, `--prefer`, `--provider`), or in `switchyard.yaml`. The Codex catalog is read from `codex debug models` (`sy models --refresh`). |
+| Prompt delivery | Prompts go to both CLIs via stdin, which avoids `cmd.exe` quoting of multi-line prompts through npm `.cmd` shims. |
+| Worktree merge strategy | Snapshot the working tree as a commit using a temporary index (the user's index, HEAD and branch are untouched). Run a detached worktree per writing agent at the current integration commit. Merge with `git merge-tree --write-tree` (git ≥ 2.38). Write changed files back with `git restore --source` (CRLF-safe); files the user edited meanwhile are 3-way merged with `git merge-file`. On a conflict, keep the agent's commit on `sy/<session>/<step>` and tell the reviewer. |
+| Usage-limit detection | Claude's `rate_limit_event` (status `rejected`), regex `limit_patterns` on error text, stderr and exit codes. The reset time is parsed from the message, else `limit_cooldown`. The header shows Claude's live quota utilization. |
+| Legacy conhost | Detected when no `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI`, ... is set on Windows; the ASCII theme is used. `--ascii`/`--unicode` override it. |
+| Killing agent trees | Unix: process groups. Windows: `taskkill /T /F` per agent, plus a kill-on-close job object around `sy` itself so nothing outlives it. |
+| Pause | Holds dispatching of new agents. Running agents finish (suspending a CLI mid-request risks API timeouts). |
+| Small tasks | Fewer than `small_task_words` (12) words skips the planner and parallelism. |
+| Read-only safety | Codex `--sandbox read-only`. Claude `--permission-mode dontAsk --tools Read,Grep,Glob,WebSearch,WebFetch`. |
+| Token accounting | "Tokens" in the UI and stats are fresh tokens (uncached input + output). Cached reads are shown separately in `sy stats`. |

@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"x"}
+{"type":"turn.started"}
+{"type":"error","message":"429 Too Many Requests: rate limit, retrying"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Finished anyway."}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":2}}
