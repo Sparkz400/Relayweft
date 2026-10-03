@@ -1,0 +1,479 @@
+package sessionlog
+
+import (
+	"fmt"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/sparkz400/switchyard/internal/event"
+)
+
+// Suggestion is one data-backed change to the routing config, for `sy tune`.
+type Suggestion struct {
+	Severity string // "high", "medium" or "info"
+	Title    string
+	Detail   string   // the evidence, with numbers
+	Commands []string // TUI slash commands that apply it, e.g. "/route worker claude:sonnet:high"
+}
+
+// Severities, most urgent first.
+const (
+	SevHigh   = "high"
+	SevMedium = "medium"
+	SevInfo   = "info"
+)
+
+// Thresholds. A suggestion needs enough samples that one bad afternoon does
+// not rewrite the config; the rates are where a change is clearly worth it.
+const (
+	minRuns          = 5    // samples per group before any rate is trusted
+	minJudged        = 10   // judged decisions before judging the judge
+	failRateHigh     = 0.30 // route failure rate worth acting on
+	escalateRate     = 0.20 // share of a role's steps that needed error-repeats
+	minEscalations   = 3
+	rejectRate       = 0.40 // final reviews rejected
+	minLimitSwitches = 5    // limit-fallback/quota-preempt away from one provider
+	cheapTokens      = 30_000
+)
+
+// cheapRoles are the roles that are fine on either provider, so they are
+// the first to move when one provider keeps running out of quota.
+var cheapRoles = []string{event.RoleExplorer, event.RoleResearcher, event.RoleJudge}
+
+// cheapModel is the fast-tier route per provider, matching default.yaml.
+var cheapModel = map[string]string{event.Codex: "gpt-6-luna:low", event.Claude: "haiku"}
+
+// efforts is the effort ladder per provider. It stops below the
+// premium levels (codex max/ultra) because a tuning hint should not quietly
+// multiply quota use.
+var efforts = map[string][]string{
+	event.Codex:  {"low", "medium", "high", "xhigh"},
+	event.Claude: {"low", "medium", "high", "xhigh", "max"},
+}
+
+// Suggest reads the logs and proposes routing changes. Each heuristic is
+// independent; results are sorted by severity.
+func Suggest(recs []Record, f Filter) []Suggestion {
+	var kept []Record
+	for _, r := range recs {
+		if f.keep(r) {
+			kept = append(kept, r)
+		}
+	}
+	var out []Suggestion
+	for _, h := range []func([]Record) []Suggestion{
+		routedVsSingle, failingRoutes, escalations, finalReviews, limitPressure, judgeAdvice, cheaperReadOnly,
+	} {
+		out = append(out, h(kept)...)
+	}
+	rank := map[string]int{SevHigh: 0, SevMedium: 1, SevInfo: 2}
+	sort.SliceStable(out, func(i, j int) bool { return rank[out[i].Severity] < rank[out[j].Severity] })
+	return out
+}
+
+// failed reports whether an agent run counts as a failure. Limit hits are
+// excluded: they say nothing about the route's quality.
+func failed(r Record) bool { return r.OK == nil || !*r.OK }
+
+func pct(a, b int) float64 {
+	if b == 0 {
+		return 0
+	}
+	return float64(a) / float64(b)
+}
+
+// nextEffort is one step up the provider's ladder, "high" for the CLI
+// default, or "" when already at the top.
+func nextEffort(provider, effort string) string {
+	ladder := efforts[provider]
+	if effort == "" {
+		return "high"
+	}
+	for i, e := range ladder {
+		if e == effort && i+1 < len(ladder) {
+			return ladder[i+1]
+		}
+	}
+	return ""
+}
+
+func routeSpec(provider, model, effort string) string {
+	s := provider + ":" + model
+	if effort != "" {
+		s += ":" + effort
+	}
+	return s
+}
+
+// counter tracks the most common value, for "where does this role usually run".
+type counter map[string]int
+
+func (c counter) top() string {
+	best, n := "", 0
+	for k, v := range c {
+		if v > n || (v == n && k < best) {
+			best, n = k, v
+		}
+	}
+	return best
+}
+
+// failingRoutes flags role+provider+model combinations that fail often.
+func failingRoutes(recs []Record) []Suggestion {
+	type agg struct {
+		role, prov, model string
+		runs, fails       int
+		effort            counter
+	}
+	groups := map[string]*agg{}
+	var keys []string
+	for _, r := range recs {
+		if r.Type != TypeAgentEnd || r.LimitHit || r.Role == "" {
+			continue
+		}
+		k := r.Role + "|" + r.Provider + "|" + r.Model
+		g := groups[k]
+		if g == nil {
+			g = &agg{role: r.Role, prov: r.Provider, model: r.Model, effort: counter{}}
+			groups[k] = g
+			keys = append(keys, k)
+		}
+		g.runs++
+		g.effort[r.Effort]++
+		if failed(r) {
+			g.fails++
+		}
+	}
+	sort.Strings(keys)
+	var out []Suggestion
+	for _, k := range keys {
+		g := groups[k]
+		rate := pct(g.fails, g.runs)
+		if g.runs < minRuns || rate < failRateHigh {
+			continue
+		}
+		sev := SevMedium
+		if rate >= 0.5 {
+			sev = SevHigh
+		}
+		var cmds []string
+		if e := nextEffort(g.prov, g.effort.top()); e != "" {
+			cmds = append(cmds, fmt.Sprintf("/route %s %s", g.role, routeSpec(g.prov, g.model, e)))
+		}
+		cmds = append(cmds, fmt.Sprintf("/prefer %s %s", g.role, event.Other(g.prov)))
+		out = append(out, Suggestion{
+			Severity: sev,
+			Title:    fmt.Sprintf("%s on %s:%s fails often", g.role, g.prov, g.model),
+			Detail: fmt.Sprintf("%d of %d runs failed (%.0f%%, limit hits excluded). Raise the effort or move %s to %s.",
+				g.fails, g.runs, rate*100, g.role, event.Other(g.prov)),
+			Commands: cmds,
+		})
+	}
+	return out
+}
+
+var escalateRe = regexp.MustCompile(`same error twice: (\S+) -> (\S+)`)
+
+// escalations flags roles whose steps keep hitting the same error twice and
+// get bumped up the ladder: the first attempt is wasted every time.
+func escalations(recs []Record) []Suggestion {
+	steps := map[string]int{}      // first-attempt decisions per role
+	esc := map[string]int{}        // error-repeats escalations away from a role
+	prov := map[string]counter{}   // where each role usually runs
+	routes := map[string]counter{} // full route per role
+	for _, r := range recs {
+		if r.Type != TypeDecision || r.Role == "" {
+			continue
+		}
+		if m := escalateRe.FindStringSubmatch(r.Reason); m != nil {
+			esc[m[1]]++
+			continue
+		}
+		if r.Attempt > 1 {
+			continue
+		}
+		steps[r.Role]++
+		if prov[r.Role] == nil {
+			prov[r.Role], routes[r.Role] = counter{}, counter{}
+		}
+		if !r.Fallback {
+			prov[r.Role][r.Provider]++
+		}
+		routes[r.Role][routeSpec(r.Provider, r.Model, r.Effort)]++
+	}
+	roles := make([]string, 0, len(esc))
+	for role := range esc {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	var out []Suggestion
+	for _, role := range roles {
+		n, total := esc[role], steps[role]
+		rate := pct(n, total)
+		if total < minRuns || n < minEscalations || rate < escalateRate {
+			continue
+		}
+		var cmds []string
+		if role == event.RoleWorker {
+			if hi := routes[event.RoleWorkerHigh].top(); hi != "" {
+				cmds = append(cmds, fmt.Sprintf("/route %s %s", role, hi))
+			}
+		}
+		if p := prov[role].top(); p != "" {
+			cmds = append(cmds, fmt.Sprintf("/prefer %s %s", role, event.Other(p)))
+		}
+		out = append(out, Suggestion{
+			Severity: SevMedium,
+			Title:    fmt.Sprintf("%s steps often escalate after repeated errors", role),
+			Detail: fmt.Sprintf("%d of %d %s steps hit the same error twice and were escalated (%.0f%%). Start them on the stronger route (worker_high) or the other provider.",
+				n, total, role, rate*100),
+			Commands: cmds,
+		})
+	}
+	return out
+}
+
+// finalReviews flags a high rejection rate at the final review: the work
+// reaches review unfinished, so either the worker is too weak or it needs
+// more fix rounds.
+func finalReviews(recs []Record) []Suggestion {
+	n, rejected := 0, 0
+	worker := counter{}
+	for _, r := range recs {
+		switch {
+		case r.Type == TypeReview && r.Step == "final":
+			n++
+			if failed(r) {
+				rejected++
+			}
+		case r.Type == TypeAgentEnd && r.Role == event.RoleWorker && !r.LimitHit:
+			worker[r.Provider+"|"+r.Model+"|"+r.Effort]++
+		}
+	}
+	rate := pct(rejected, n)
+	if n < minRuns || rate < rejectRate {
+		return nil
+	}
+	sev := SevMedium
+	if rate >= 0.6 {
+		sev = SevHigh
+	}
+	var cmds []string
+	if w := worker.top(); w != "" {
+		p := strings.SplitN(w, "|", 3)
+		if e := nextEffort(p[0], p[2]); e != "" {
+			cmds = append(cmds, fmt.Sprintf("/route worker %s", routeSpec(p[0], p[1], e)))
+		}
+	}
+	return []Suggestion{{
+		Severity: sev,
+		Title:    "final reviews reject a lot of work",
+		Detail: fmt.Sprintf("%d of %d final reviews requested changes (%.0f%%). Use a stronger worker route, or raise orchestrator.max_fix_rounds in switchyard.yaml so rejected work gets another fix round.",
+			rejected, n, rate*100),
+		Commands: cmds,
+	}}
+}
+
+// limitPressure flags a provider that keeps running out: the cheap roles
+// still preferring it should move to the other provider so the scarce quota
+// goes to the work that needs it.
+func limitPressure(recs []Record) []Suggestion {
+	away := map[string]int{}        // switches away from a provider
+	cheapOn := map[string]counter{} // cheap role -> preferred provider (non-fallback decisions)
+	for _, r := range recs {
+		if r.Type != TypeDecision {
+			continue
+		}
+		if r.Rule == "limit-fallback" || r.Rule == "quota-preempt" {
+			away[event.Other(r.Provider)]++
+			continue
+		}
+		for _, c := range cheapRoles {
+			if r.Role == c && !r.Fallback {
+				if cheapOn[c] == nil {
+					cheapOn[c] = counter{}
+				}
+				cheapOn[c][r.Provider]++
+			}
+		}
+	}
+	var out []Suggestion
+	for _, from := range []string{event.Codex, event.Claude} {
+		n := away[from]
+		if n < minLimitSwitches {
+			continue
+		}
+		to := event.Other(from)
+		var cmds, moved []string
+		for _, c := range cheapRoles {
+			if cheapOn[c].top() == from {
+				cmds = append(cmds, fmt.Sprintf("/prefer %s %s", c, to))
+				moved = append(moved, c)
+			}
+		}
+		if len(cmds) == 0 {
+			continue
+		}
+		out = append(out, Suggestion{
+			Severity: SevMedium,
+			Title:    fmt.Sprintf("%s keeps running out of quota", from),
+			Detail: fmt.Sprintf("%d steps were moved away from %s by limit-fallback/quota-preempt. Moving the cheap roles (%s) to %s saves %s's quota for planning and coding.",
+				n, from, strings.Join(moved, ", "), to, from),
+			Commands: cmds,
+		})
+	}
+	return out
+}
+
+// isCheapModel reports whether a model is already fast-tier, by name, since
+// the log does not carry the config's tiers.
+func isCheapModel(model string) bool {
+	m := strings.ToLower(model)
+	for _, w := range []string{"haiku", "luna", "mini", "nano", "flash"} {
+		if strings.Contains(m, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// cheaperReadOnly flags read-only roles that always succeed with little
+// context on a strong model: a fast model would do the same for less.
+func cheaperReadOnly(recs []Record) []Suggestion {
+	type agg struct {
+		role, prov, model string
+		runs, fails       int
+		tokens            int64
+	}
+	groups := map[string]*agg{}
+	var keys []string
+	for _, r := range recs {
+		if r.Type != TypeAgentEnd || r.LimitHit || (r.Role != event.RoleExplorer && r.Role != event.RoleResearcher) {
+			continue
+		}
+		k := r.Role + "|" + r.Provider + "|" + r.Model
+		g := groups[k]
+		if g == nil {
+			g = &agg{role: r.Role, prov: r.Provider, model: r.Model}
+			groups[k] = g
+			keys = append(keys, k)
+		}
+		g.runs++
+		if failed(r) {
+			g.fails++
+		}
+		if r.Tokens != nil {
+			g.tokens += r.Tokens.Total()
+		}
+	}
+	sort.Strings(keys)
+	var out []Suggestion
+	for _, k := range keys {
+		g := groups[k]
+		cheap, ok := cheapModel[g.prov]
+		if g.runs < minRuns || g.fails > 0 || isCheapModel(g.model) || !ok {
+			continue
+		}
+		avg := g.tokens / int64(g.runs)
+		if avg >= cheapTokens {
+			continue
+		}
+		out = append(out, Suggestion{
+			Severity: SevInfo,
+			Title:    fmt.Sprintf("%s could use a cheaper model than %s", g.role, g.model),
+			Detail: fmt.Sprintf("%d %s runs on %s:%s, none failed, avg %s fresh tokens. A fast model is likely enough.",
+				g.runs, g.role, g.prov, g.model, human(avg)),
+			Commands: []string{fmt.Sprintf("/route %s %s:%s", g.role, g.prov, cheap)},
+		})
+	}
+	return out
+}
+
+// judgeAdvice compares steps the judge routed with steps the default rule
+// routed. It links each agent_end to the decision for the same step attempt.
+func judgeAdvice(recs []Record) []Suggestion {
+	key := func(r Record) string { return fmt.Sprintf("%s|%s|%s|%d", r.Session, r.TaskID, r.Step, r.Attempt) }
+	dec := map[string]Record{}
+	var jRuns, jFails, dRuns, dFails int
+	for _, r := range recs {
+		switch r.Type {
+		case TypeDecision:
+			dec[key(r)] = r
+		case TypeAgentEnd:
+			d, ok := dec[key(r)]
+			if !ok || r.LimitHit {
+				continue
+			}
+			switch {
+			case d.Judged || d.Rule == "judge":
+				jRuns++
+				if failed(r) {
+					jFails++
+				}
+			case d.Rule == "default" && d.Role == event.RoleWorker:
+				dRuns++
+				if failed(r) {
+					dFails++
+				}
+			}
+		}
+	}
+	dRate, jRate := pct(dFails, dRuns), pct(jFails, jRuns)
+	switch {
+	case jRuns == 0 && dRuns >= minRuns && dRate >= failRateHigh:
+		return []Suggestion{{
+			Severity: SevMedium,
+			Title:    "turn on the judge for unclear worker steps",
+			Detail: fmt.Sprintf("%d of %d default-rule worker steps failed (%.0f%%) and the judge never ran. It can send hard steps to worker_high and simple ones to explorer.",
+				dFails, dRuns, dRate*100),
+			Commands: []string{"/judge on"},
+		}}
+	case jRuns >= minJudged && dRuns >= minRuns && jRate >= dRate:
+		return []Suggestion{{
+			Severity: SevInfo,
+			Title:    "the judge does not improve routing",
+			Detail: fmt.Sprintf("judged steps failed %d of %d (%.0f%%), default-rule worker steps %d of %d (%.0f%%). Turning it off saves a model call per unclear step.",
+				jFails, jRuns, jRate*100, dFails, dRuns, dRate*100),
+			Commands: []string{"/judge off"},
+		}}
+	}
+	return nil
+}
+
+// routedVsSingle compares whole-task success of routed runs against the
+// single-agent baseline. Routing that loses to one agent is the first thing
+// to fix.
+func routedVsSingle(recs []Record) []Suggestion {
+	mode := map[string]string{}
+	tasks, ok := map[string]int{}, map[string]int{}
+	for _, r := range recs {
+		switch r.Type {
+		case TypeTask:
+			mode[r.Session+"/"+r.TaskID] = r.Mode
+		case TypeTaskEnd:
+			m := r.Mode
+			if m == "" {
+				m = mode[r.Session+"/"+r.TaskID]
+			}
+			tasks[m]++
+			if !failed(r) {
+				ok[m]++
+			}
+		}
+	}
+	rt, st := tasks["routed"], tasks["single"]
+	if rt < minRuns || st < minRuns {
+		return nil
+	}
+	rr, sr := pct(ok["routed"], rt), pct(ok["single"], st)
+	if rr >= sr {
+		return nil
+	}
+	return []Suggestion{{
+		Severity: SevHigh,
+		Title:    "routed tasks succeed less often than the single-agent baseline",
+		Detail: fmt.Sprintf("routed: %d of %d ok (%.0f%%), single: %d of %d ok (%.0f%%). Check the failing routes below, or compare with `sy stats`.",
+			ok["routed"], rt, rr*100, ok["single"], st, sr*100),
+	}}
+}
