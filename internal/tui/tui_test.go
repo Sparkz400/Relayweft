@@ -18,18 +18,30 @@ import (
 
 func newModel(t *testing.T, ascii bool) (*Model, *orchestrator.Orchestrator, chan event.Event) {
 	t.Helper()
+	return newModelWith(t, ascii, nil)
+}
+
+// newModelWith builds a model on fake runners; ap (may be nil) is wired
+// into both the orchestrator and the TUI, as cmd/sy does.
+func newModelWith(t *testing.T, ascii bool, ap *Approver) (*Model, *orchestrator.Orchestrator, chan event.Event) {
+	t.Helper()
+	isolateState(t)
 	ch := make(chan event.Event, 4096)
 	store := config.NewStore(config.Default(), filepath.Join(t.TempDir(), "switchyard.yaml"))
 	fake := runner.NewFakeSet(0)
-	orc := orchestrator.New(orchestrator.Options{
+	opts := orchestrator.Options{
 		Dir: t.TempDir(), Store: store, Runners: func(*config.Config) runner.Set { return fake },
 		Tracker: limits.NewTracker(), Events: ch, NoGit: true, Mode: "demo",
-	})
+	}
+	if ap != nil {
+		opts.Approver = ap
+	}
+	orc := orchestrator.New(opts)
 	mode := "unicode"
 	if ascii {
 		mode = "ascii"
 	}
-	m := New(Options{Orc: orc, Events: ch, Dir: "/work/project", Theme: NewTheme(mode), Version: "test"})
+	m := New(Options{Orc: orc, Events: ch, Dir: "/work/project", Theme: NewTheme(mode), Version: "test", Approver: ap})
 	return m, orc, ch
 }
 
