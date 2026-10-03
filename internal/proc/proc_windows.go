@@ -3,6 +3,7 @@
 package proc
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +20,7 @@ func prepare(cmd *exec.Cmd) {
 		// CREATE_NO_WINDOW: agents never share sy's console, so they cannot
 		// retitle the tab or change the console mode under the TUI. All
 		// stdio is piped, so nothing is lost.
-		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW,
+		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW | priorityFlag(),
 		HideWindow:    true,
 	}
 	if ext := strings.ToLower(filepath.Ext(cmd.Path)); ext == ".cmd" || ext == ".bat" {
@@ -53,6 +54,24 @@ func prepare(cmd *exec.Cmd) {
 		return nil
 	}
 }
+
+// belowNormal is BELOW_NORMAL_PRIORITY_CLASS. A child of a below-normal
+// process inherits the class, so the whole agent tree stays below normal.
+const belowNormal = 0x00004000
+
+func priorityFlag() uint32 {
+	if lowPriority.Load() {
+		return belowNormal
+	}
+	return 0
+}
+
+func background(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW | priorityFlag()}
+}
+
+// lower is a no-op: the priority class is set at creation.
+func lower(int) {}
 
 // CmdQuote quotes an argument for a cmd.exe command line: anything with
 // spaces or cmd metacharacters is wrapped in double quotes (embedded quotes
@@ -93,4 +112,17 @@ func guard() error {
 	}
 	job = h // intentionally never closed: closing it is what kills the children
 	return nil
+}
+
+// Shell runs a command line through cmd.exe exactly as typed (/s keeps
+// everything between the outer quotes verbatim).
+func Shell(ctx context.Context, line string) *exec.Cmd {
+	comspec := os.Getenv("ComSpec")
+	if comspec == "" {
+		comspec = filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
+	}
+	cmd := exec.CommandContext(ctx, comspec)
+	Prepare(cmd)
+	cmd.SysProcAttr.CmdLine = syscall.EscapeArg(comspec) + ` /d /s /c "` + line + `"`
+	return cmd
 }

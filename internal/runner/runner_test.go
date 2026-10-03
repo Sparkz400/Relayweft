@@ -386,3 +386,36 @@ func TestCancelWithOrphanHoldingStdout(t *testing.T) {
 		t.Fatal("cancel hung on an orphan holding stdout")
 	}
 }
+
+func TestClaudeQuotaUsesFullestWindow(t *testing.T) {
+	p := &claudeParser{}
+	evs := p.Line([]byte(`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":100,"rateLimitType":"five_hour","utilization":0.2,"unifiedWindows":{"five_hour":{"utilization":0.2,"resetsAt":100},"seven_day":{"utilization":0.91,"resetsAt":2000000000}}}}`))
+	if len(evs) != 1 || evs[0].Quota == nil {
+		t.Fatalf("events = %+v", evs)
+	}
+	q := evs[0].Quota
+	if q.Utilization != 0.91 || q.Window != "seven_day" || q.ResetsAt.Unix() != 2000000000 || q.Windows["five_hour"] != 0.2 {
+		t.Errorf("quota = %+v", q)
+	}
+}
+
+func TestCodexRateLimitsBecomeQuota(t *testing.T) {
+	p := &codexParser{}
+	evs := p.Line([]byte(`{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":1},"rate_limits":{"primary":{"used_percent":42.5,"window_minutes":300,"resets_at":2000000000},"secondary":{"used_percent":88,"window_minutes":10080,"resets_in_seconds":3600}}}`))
+	var q *event.QuotaInfo
+	for _, e := range evs {
+		if e.Kind == event.Quota {
+			q = e.Quota
+		}
+	}
+	if q == nil {
+		t.Fatalf("no quota event in %+v", evs)
+	}
+	if q.Utilization != 0.88 || q.Window != "7d" || q.Windows["5h"] != 0.425 {
+		t.Errorf("quota = %+v", q)
+	}
+	// Lines without rate limits stay cheap and quota-free.
+	if evs := p.Line([]byte(`{"type":"turn.started"}`)); len(evs) != 0 {
+		t.Errorf("unexpected events %+v", evs)
+	}
+}

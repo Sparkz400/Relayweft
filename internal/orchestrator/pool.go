@@ -9,8 +9,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/switchyard/internal/sysload"
 )
 
 // Worktree pool:
@@ -36,8 +39,14 @@ var cacheDir = os.UserCacheDir
 
 // repoCache is Switchyard's cache directory for a repo: outside the repo, so
 // `git status` in the user's tree stays clean.
+// It is keyed by the repository's shared git directory, so every worktree
+// of a repo (the main tree, the bench workspace) shares one pool.
 func repoCache(root string) string {
-	h := sha1.Sum([]byte(canonPath(root)))
+	key := root
+	if common, err := (git{root}).out("rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && common != "" {
+		key = common
+	}
+	h := sha1.Sum([]byte(canonPath(key)))
 	base, err := cacheDir()
 	if err != nil {
 		base = os.TempDir()
@@ -71,6 +80,7 @@ func acquireSlot(root, commit string) (*slot, error) {
 			unlock()
 			return nil, err
 		}
+		touch(path)
 		return &slot{path: path, unlock: unlock}, nil
 	}
 	return nil, fmt.Errorf("all %d pool worktrees are in use", maxPoolSlots)
@@ -87,9 +97,40 @@ func prepareSlot(root, path, commit string) error {
 			}
 		}
 	}
+	if err := checkDisk(filepath.Dir(path)); err != nil {
+		return err
+	}
 	g := git{root}
 	g.removeWorktree(path)
 	return g.addWorktree(path, commit)
+}
+
+// minFreeDisk is the free space below which no new pool worktree is created
+// (orchestrator.min_free_disk_gb; 0 = no check).
+var minFreeDisk atomic.Uint64
+
+// errLowDisk makes the caller fall back to the main tree.
+type errLowDisk struct{ free, min uint64 }
+
+func (e errLowDisk) Error() string {
+	return fmt.Sprintf("only %s free on the pool's disk (minimum %s): not creating another worktree", humanBytes(e.free), humanBytes(e.min))
+}
+
+func checkDisk(dir string) error {
+	min := minFreeDisk.Load()
+	if min == 0 {
+		return nil
+	}
+	if free, ok := sysload.DiskFree(dir); ok && free < min {
+		return errLowDisk{free, min}
+	}
+	return nil
+}
+
+// touch records a slot's last use (the lock file's mtime) for pruning.
+func touch(path string) {
+	now := time.Now()
+	os.Chtimes(path+".lock", now, now)
 }
 
 // prewarmPool creates the first n slots at commit if they are missing, so
@@ -107,6 +148,11 @@ func prewarmPool(root, commit string, n int) {
 			continue
 		}
 		if !isWorktreeOf(root, path) {
+			if checkDisk(dir) != nil {
+				unlock()
+				return
+			}
+			touch(path)
 			g := git{root}
 			g.removeWorktree(path)
 			if g.addWorktree(path, commit) == nil {
@@ -213,3 +259,165 @@ func PerfTips(dir string) (files int, tips []string) {
 	}
 	return files, tips
 }
+
+// PoolInfo describes one repo's worktree pool.
+type PoolInfo struct {
+	Dir      string    // the pool directory
+	Repo     string    // the repository it belongs to ("" if unknown)
+	Slots    int       // worktrees in the pool
+	Bytes    uint64    // disk used
+	LastUsed time.Time // most recent use of any slot
+}
+
+func worktreesBase() string {
+	base, err := cacheDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "switchyard", "worktrees")
+}
+
+// Pools lists every repo's pool with its size. Walking big pools takes a
+// moment, so callers run it off the UI thread.
+func Pools() []PoolInfo {
+	repos, _ := os.ReadDir(worktreesBase())
+	var out []PoolInfo
+	for _, r := range repos {
+		pd := filepath.Join(worktreesBase(), r.Name(), "pool")
+		slots, err := os.ReadDir(pd)
+		if err != nil {
+			continue
+		}
+		info := PoolInfo{Dir: pd}
+		for _, s := range slots {
+			if !s.IsDir() {
+				continue
+			}
+			path := filepath.Join(pd, s.Name())
+			info.Slots++
+			info.Bytes += dirSize(path)
+			if t := lastUse(path); t.After(info.LastUsed) {
+				info.LastUsed = t
+			}
+			if info.Repo == "" {
+				info.Repo = slotRepo(path)
+			}
+		}
+		if info.Slots > 0 {
+			out = append(out, info)
+		}
+	}
+	return out
+}
+
+// PoolSize returns the disk used by the pool of the repo at root.
+func PoolSize(root string) uint64 { return dirSize(poolDir(root)) }
+
+func lastUse(slot string) time.Time {
+	if st, err := os.Stat(slot + ".lock"); err == nil {
+		return st.ModTime()
+	}
+	if st, err := os.Stat(slot); err == nil {
+		return st.ModTime()
+	}
+	return time.Time{}
+}
+
+func dirSize(dir string) uint64 {
+	var n uint64
+	filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.Type().IsRegular() {
+			if fi, err := d.Info(); err == nil {
+				n += uint64(fi.Size())
+			}
+		}
+		return nil
+	})
+	return n
+}
+
+// slotGitDir reads a worktree's .git file ("gitdir: <repo>/.git/worktrees/x").
+func slotGitDir(slot string) string {
+	b, err := os.ReadFile(filepath.Join(slot, ".git"))
+	if err != nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(b))
+	if !strings.HasPrefix(s, "gitdir:") {
+		return ""
+	}
+	return filepath.FromSlash(strings.TrimSpace(strings.TrimPrefix(s, "gitdir:")))
+}
+
+// slotRepo is the working directory of the repository a slot belongs to.
+func slotRepo(slot string) string {
+	gd := slotGitDir(slot)
+	if gd == "" {
+		return ""
+	}
+	common := filepath.Dir(filepath.Dir(gd)) // <repo>/.git
+	if filepath.Base(common) == ".git" {
+		return filepath.Dir(common)
+	}
+	return common
+}
+
+// PrunePools removes pool worktrees not used for maxIdle (and not in use),
+// across all repos, and returns how many and how much disk was freed.
+func PrunePools(maxIdle time.Duration) (removed int, freed uint64) {
+	if maxIdle <= 0 {
+		return 0, 0
+	}
+	repos, _ := os.ReadDir(worktreesBase())
+	for _, r := range repos {
+		pd := filepath.Join(worktreesBase(), r.Name(), "pool")
+		slots, err := os.ReadDir(pd)
+		if err != nil {
+			continue
+		}
+		for _, s := range slots {
+			if !s.IsDir() {
+				continue
+			}
+			path := filepath.Join(pd, s.Name())
+			if time.Since(lastUse(path)) < maxIdle {
+				continue
+			}
+			unlock, ok := proc.TryLock(path + ".lock")
+			if !ok {
+				continue // in use right now
+			}
+			size := dirSize(path)
+			gd := slotGitDir(path)
+			if err := os.RemoveAll(path); err == nil {
+				removed++
+				freed += size
+				if gd != "" {
+					// Drop the repo's worktree record for the deleted slot.
+					git{"."}.out("--git-dir="+filepath.Dir(filepath.Dir(gd)), "worktree", "prune")
+				}
+			}
+			unlock()
+			os.Remove(path + ".lock")
+		}
+		os.Remove(pd)
+		os.Remove(filepath.Dir(pd))
+	}
+	return removed, freed
+}
+
+func humanBytes(n uint64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.0f MB", float64(n)/(1<<20))
+	}
+	return fmt.Sprintf("%d KB", n>>10)
+}
+
+// HumanBytes formats a byte count (exported for sy doctor).
+func HumanBytes(n uint64) string { return humanBytes(n) }

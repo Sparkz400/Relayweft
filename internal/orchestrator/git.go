@@ -11,6 +11,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/sparkz400/switchyard/internal/diag"
+	"github.com/sparkz400/switchyard/internal/proc"
 )
 
 // Worktree strategy (decided for v1):
@@ -32,10 +36,15 @@ import (
 
 type git struct{ dir string }
 
+// checkoutWorkers caps git's parallel checkout: half the cores, at most 4.
+// One worker per core (checkout.workers=0) on several pool slots at once,
+// plus antivirus scanning every new file, can saturate a whole machine.
+func checkoutWorkers() int { return max(1, min(4, runtime.NumCPU()/2)) }
+
 func (g git) run(env []string, stdin []byte, args ...string) (string, error) {
-	// Parallel checkout (one worker per core) for worktree creation, slot
-	// resets and restores into the main tree; git ignores it elsewhere.
-	args = append([]string{"-c", "checkout.workers=0"}, args...)
+	// Parallel checkout for worktree creation, slot resets and restores into
+	// the main tree; git ignores it elsewhere.
+	args = append([]string{"-c", "checkout.workers=" + strconv.Itoa(checkoutWorkers())}, args...)
 	if runtime.GOOS == "windows" {
 		// Worktrees live under %LOCALAPPDATA%; deep repos exceed MAX_PATH.
 		args = append([]string{"-c", "core.longpaths=true"}, args...)
@@ -50,14 +59,39 @@ func (g git) run(env []string, stdin []byte, args ...string) (string, error) {
 	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
+	proc.Background(cmd)
+	start := time.Now()
+	err := cmd.Start()
+	if err == nil {
+		proc.Started(cmd)
+		err = cmd.Wait()
+	}
+	took := time.Since(start)
+	if err != nil {
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
 			msg = strings.TrimSpace(out.String())
 		}
+		diag.Logf("git %s (in %s) failed after %s: %v: %s", gitArgs(args), g.dir, took.Round(time.Millisecond), err, clip(msg, 500))
 		return out.String(), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
 	}
+	if took > 300*time.Millisecond {
+		diag.Logf("git %s (in %s) took %s", gitArgs(args), g.dir, took.Round(time.Millisecond))
+	}
 	return out.String(), nil
+}
+
+// gitArgs shortens an argument list for the debug log.
+func gitArgs(args []string) string {
+	var keep []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-c" && i+1 < len(args) {
+			i++ // skip the -c key=value prefixes
+			continue
+		}
+		keep = append(keep, args[i])
+	}
+	return clip(strings.Join(keep, " "), 300)
 }
 
 func (g git) out(args ...string) (string, error) {

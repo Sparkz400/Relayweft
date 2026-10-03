@@ -114,10 +114,14 @@ type claudeUsage struct {
 }
 
 type claudeRateInfo struct {
-	Status        string  `json:"status"`
-	ResetsAt      int64   `json:"resetsAt"`
-	RateLimitType string  `json:"rateLimitType"`
-	Utilization   float64 `json:"utilization"`
+	Status         string  `json:"status"`
+	ResetsAt       int64   `json:"resetsAt"`
+	RateLimitType  string  `json:"rateLimitType"`
+	Utilization    float64 `json:"utilization"`
+	UnifiedWindows map[string]struct {
+		Utilization float64 `json:"utilization"`
+		ResetsAt    int64   `json:"resetsAt"`
+	} `json:"unifiedWindows"`
 }
 
 var editTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
@@ -145,6 +149,19 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 			q := &event.QuotaInfo{Utilization: ri.Utilization, Window: ri.RateLimitType, Status: ri.Status}
 			if ri.ResetsAt > 0 {
 				q.ResetsAt = time.Unix(ri.ResetsAt, 0)
+			}
+			// Report the fullest window (5h or 7d): that is the one about to bite.
+			for name, w := range ri.UnifiedWindows {
+				if q.Windows == nil {
+					q.Windows = map[string]float64{}
+				}
+				q.Windows[name] = w.Utilization
+				if w.Utilization > q.Utilization || (q.Window == "" && w.Utilization >= q.Utilization) {
+					q.Utilization, q.Window = w.Utilization, name
+					if w.ResetsAt > 0 {
+						q.ResetsAt = time.Unix(w.ResetsAt, 0)
+					}
+				}
 			}
 			out := []event.Event{{Kind: event.Quota, Quota: q}}
 			if ri.Status == "rejected" {

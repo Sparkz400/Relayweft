@@ -47,11 +47,15 @@ type Step struct {
 type State interface {
 	Limited(provider string) bool
 	Share(provider string) float64
+	// Utilization is the provider-reported share of its usage limit in use
+	// (0..1); ok is false when the provider has not reported one.
+	Utilization(provider string) (float64, bool)
 }
 
 // Rule names (also used in the session log and the stats).
 const (
 	RuleLimit       = "limit-fallback"
+	RuleQuota       = "quota-preempt"
 	RuleReview      = "review-checkpoint"
 	RulePlan        = "plan"
 	RuleReadOnly    = "read-only"
@@ -94,7 +98,13 @@ func (r *Router) Route(s Step) event.Decision {
 	cfg := r.Cfg()
 	role, rule, reason, conf := r.classify(cfg, s)
 	d := r.resolve(cfg, s, role)
-	d.StepID, d.StepTitle, d.Rule, d.Reason, d.Confidence = s.ID, s.Title, rule, reason, conf
+	d.StepID, d.StepTitle, d.Confidence = s.ID, s.Title, conf
+	if d.Rule == RuleQuota {
+		d.Reason = fmt.Sprintf("%s (%s: %s)", d.Reason, rule, reason)
+		d.Confidence = 1
+		return d
+	}
+	d.Rule, d.Reason = rule, reason
 	return Finalize(d)
 }
 
@@ -159,9 +169,22 @@ func (r *Router) resolve(cfg *config.Config, s Step, role string) event.Decision
 		pref = event.Other(pref)
 		d.Provider = pref
 	}
-	if r.State != nil && r.State.Limited(pref) && usable(event.Other(pref)) && !r.State.Limited(event.Other(pref)) {
-		d.Provider = event.Other(pref)
+	other := event.Other(pref)
+	if r.State != nil && r.State.Limited(pref) && usable(other) && !r.State.Limited(other) {
+		d.Provider = other
 		d.Fallback = true
+	} else if thr := cfg.Routing.SwitchAtUtilization; thr > 0 && r.State != nil && r.ForceProvider == "" &&
+		usable(other) && !r.State.Limited(other) {
+		// Switch before the limit hits, not after: once a provider reports
+		// it is nearly out, send work to the other one if that has more room.
+		if u, ok := r.State.Utilization(pref); ok && u >= thr {
+			if ou, ok2 := r.State.Utilization(other); !ok2 || ou < u {
+				d.Provider = other
+				d.Fallback = true
+				d.Rule = RuleQuota
+				d.Reason = fmt.Sprintf("%s at %.0f%% of its limit (>= %.0f%%) -> %s", pref, u*100, thr*100, other)
+			}
+		}
 	}
 	route := rc.For(d.Provider)
 	d.Model, d.Effort = route.Model, route.Effort
@@ -201,7 +224,7 @@ func (r *Router) preferred(cfg *config.Config, s Step, rc config.RoleCfg) string
 // Finalize applies rule 1 bookkeeping: when the decision fell back because
 // of a limit, the rule shown is the limit rule (the role is kept).
 func Finalize(d event.Decision) event.Decision {
-	if d.Fallback {
+	if d.Fallback && d.Rule != RuleQuota {
 		d.Reason = fmt.Sprintf("%s at limit -> %s (%s: %s)", event.Other(d.Provider), d.Provider, d.Rule, d.Reason)
 		d.Rule = RuleLimit
 		d.Confidence = 1

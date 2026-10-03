@@ -109,6 +109,7 @@ type RoutingCfg struct {
 	SensitivePaths       []string `yaml:"sensitive_paths"`
 	Judge                bool     `yaml:"judge"`
 	JudgeBelowConfidence float64  `yaml:"judge_below_confidence"`
+	SwitchAtUtilization  float64  `yaml:"switch_at_utilization"`
 }
 
 // OrchestratorCfg tunes the task lifecycle.
@@ -125,6 +126,13 @@ type OrchestratorCfg struct {
 	MaxAttempts         int      `yaml:"max_attempts"`
 	AgentTimeout        Duration `yaml:"agent_timeout"`
 	SmallTaskWords      int      `yaml:"small_task_words"`
+	LowPriority         bool     `yaml:"low_priority"`
+	MaxCPUPercent       int      `yaml:"max_cpu_percent"`
+	MinFreeMemoryMB     int      `yaml:"min_free_memory_mb"`
+	BusyMaxWait         Duration `yaml:"busy_max_wait"`
+	MinFreeDiskGB       float64  `yaml:"min_free_disk_gb"`
+	PoolWarnGB          float64  `yaml:"pool_warn_gb"`
+	PoolMaxIdle         Duration `yaml:"pool_max_idle"`
 }
 
 // Config is the whole file.

@@ -1,10 +1,12 @@
 package runner
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
@@ -106,9 +108,17 @@ func (p *codexParser) Line(line []byte) []event.Event {
 		}
 		return nil
 	}
-	if len(l.Msg) > 0 && l.Type == "" {
-		return p.legacy(l.Msg)
+	var extra []event.Event
+	if q := findRateLimits(line); q != nil {
+		extra = append(extra, event.Event{Kind: event.Quota, Quota: q})
 	}
+	if len(l.Msg) > 0 && l.Type == "" {
+		return append(extra, p.legacy(l.Msg)...)
+	}
+	return append(extra, p.typed(l)...)
+}
+
+func (p *codexParser) typed(l codexLine) []event.Event {
 	switch l.Type {
 	case "thread.started", "turn.started":
 		return nil
@@ -279,4 +289,81 @@ func (p *codexParser) Finish(r *Result) {
 	if p.fatal != "" && p.final == "" {
 		r.Err = errors.New(p.fatal)
 	}
+}
+
+// findRateLimits looks for Codex's rate_limits object anywhere in a JSON
+// line: {"rate_limits":{"primary":{"used_percent":42.0,"window_minutes":300,
+// "resets_at":1791003600},"secondary":{...}}}. Codex tracks these
+// internally; when a version reports them in its JSON output, Switchyard uses
+// them like Claude's quota events.
+func findRateLimits(line []byte) *event.QuotaInfo {
+	if !bytes.Contains(line, []byte(`"rate_limits"`)) {
+		return nil
+	}
+	var v any
+	if json.Unmarshal(line, &v) != nil {
+		return nil
+	}
+	rl := findKey(v, "rate_limits", 5)
+	m, ok := rl.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var q *event.QuotaInfo
+	for _, name := range []string{"primary", "secondary"} {
+		w, ok := m[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		pct, ok := w["used_percent"].(float64)
+		if !ok {
+			continue
+		}
+		label := name
+		if mins, ok := w["window_minutes"].(float64); ok && mins > 0 {
+			if mins >= 1440 {
+				label = fmt.Sprintf("%.0fd", mins/1440)
+			} else {
+				label = fmt.Sprintf("%.0fh", mins/60)
+			}
+		}
+		if q == nil {
+			q = &event.QuotaInfo{Windows: map[string]float64{}}
+		}
+		u := pct / 100
+		q.Windows[label] = u
+		if u >= q.Utilization {
+			q.Utilization, q.Window = u, label
+			if at, ok := w["resets_at"].(float64); ok && at > 0 {
+				q.ResetsAt = time.Unix(int64(at), 0)
+			} else if in, ok := w["resets_in_seconds"].(float64); ok && in > 0 {
+				q.ResetsAt = time.Now().Add(time.Duration(in) * time.Second)
+			}
+		}
+	}
+	return q
+}
+
+func findKey(v any, key string, depth int) any {
+	if depth < 0 {
+		return nil
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		if x, ok := t[key]; ok {
+			return x
+		}
+		for _, x := range t {
+			if r := findKey(x, key, depth-1); r != nil {
+				return r
+			}
+		}
+	case []any:
+		for _, x := range t {
+			if r := findKey(x, key, depth-1); r != nil {
+				return r
+			}
+		}
+	}
+	return nil
 }

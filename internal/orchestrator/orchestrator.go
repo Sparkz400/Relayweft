@@ -9,16 +9,20 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
+	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/limits"
+	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/router"
 	"github.com/sparkz400/switchyard/internal/runner"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/switchyard/internal/sysload"
 )
 
 // Fixed agent ids shown in the tree.
@@ -42,7 +46,14 @@ type Options struct {
 	NoGit bool
 	// Mode is recorded in the session log ("routed" or "demo").
 	Mode string
+	// Load reports how busy the machine is (default: a live sampler).
+	Load func() sysload.Sample
+	// Bench labels task records with a `sy bench` task name.
+	Bench string
 }
+
+// busyPoll is how often a held agent re-checks the machine load.
+var busyPoll = time.Second
 
 // Orchestrator runs tasks. One task runs at a time.
 type Orchestrator struct {
@@ -54,6 +65,7 @@ type Orchestrator struct {
 	pauseCh chan struct{}                         // closed when unpaused
 	cancels map[string]map[int]context.CancelFunc // agent id -> run seq -> cancel
 	runSeq  int
+	active  int // agents past the load gate (guarded by mu)
 	running bool
 	taskSeq int
 	tipped  bool // the big-repo git settings hint was shown
@@ -70,6 +82,10 @@ func New(o Options) *Orchestrator {
 	orc := &Orchestrator{opts: o, cancels: map[string]map[int]context.CancelFunc{}, pauseCh: make(chan struct{})}
 	close(orc.pauseCh)
 	orc.router = &router.Router{Cfg: o.Store.Get, State: o.Tracker, ForceProvider: o.ForceProvider}
+	if orc.opts.Load == nil {
+		s := sysload.NewSampler(2 * time.Second)
+		orc.opts.Load = s.Get
+	}
 	return orc
 }
 
@@ -160,6 +176,12 @@ func (o *Orchestrator) emit(e event.Event) {
 		if e.Quota != nil {
 			o.opts.Tracker.SetQuota(e.Provider, *e.Quota)
 		}
+	case event.Route:
+		if d := e.Decision; d != nil {
+			diag.Logf("route agent=%s step=%s -> %s role=%s rule=%s conf=%.2f fallback=%v: %s", e.AgentID, d.StepID, d.Label(), d.Role, d.Rule, d.Confidence, d.Fallback, d.Reason)
+		}
+	case event.Phase, event.Error, event.LimitHit, event.Merge, event.Checkpoint, event.TaskStart, event.TaskDone, event.ProviderState, event.Log:
+		diag.Logf("%s agent=%s ok=%v: %s", e.Kind, e.AgentID, e.OK, clip(e.Text, 600))
 	}
 	if o.opts.Events != nil {
 		o.opts.Events <- e
@@ -177,6 +199,8 @@ type TaskResult struct {
 	Duration time.Duration
 	Tokens   event.TokenUsage
 	Kept     []string // branches kept because of merge conflicts
+	Cost     event.TaskCost
+	UndoKey  string // for `sy undo` ("" when not in a git repo)
 }
 
 // stepResult is the outcome of one subtask.
@@ -210,6 +234,11 @@ type task struct {
 	pool     string        // pool directory when worktrees are in use
 	lfs      bool          // worktrees hold LFS pointer files, not the real content
 	writeSem chan struct{}
+	poolSize uint64 // measured after the prewarm
+	key      string // undo key: <session>-<task id>
+
+	perProv     map[string]event.TokenUsage // guarded by tokensMu
+	quotaBefore map[string]float64
 }
 
 // worktreesAllowed reports whether writers may use pooled worktrees in this
@@ -240,14 +269,75 @@ func (o *Orchestrator) worktreesAllowed(t *task) bool {
 	return true
 }
 
-func (t *task) addTokens(u event.TokenUsage) {
+func (t *task) addTokens(provider string, u event.TokenUsage) {
 	t.tokensMu.Lock()
+	defer t.tokensMu.Unlock()
 	t.tokens = t.tokens.Add(u)
-	t.tokensMu.Unlock()
+	if t.perProv == nil {
+		t.perProv = map[string]event.TokenUsage{}
+	}
+	t.perProv[provider] = t.perProv[provider].Add(u)
 }
 
-// Run executes a task end to end.
-func (o *Orchestrator) Run(ctx context.Context, text string) TaskResult {
+// quotaNow reads every provider's reported limit usage.
+func (o *Orchestrator) quotaNow() map[string]float64 {
+	m := map[string]float64{}
+	for _, p := range event.Providers {
+		if u, ok := o.opts.Tracker.Utilization(p); ok {
+			m[p] = u
+		}
+	}
+	return m
+}
+
+// cost summarizes what the task used.
+func (o *Orchestrator) cost(t *task) event.TaskCost {
+	t.tokensMu.Lock()
+	defer t.tokensMu.Unlock()
+	c := event.TaskCost{PerProvider: map[string]event.TokenUsage{}, QuotaBefore: t.quotaBefore, QuotaAfter: o.quotaNow()}
+	for p, u := range t.perProv {
+		c.PerProvider[p] = u
+		c.CostUSD += u.CostUSD
+	}
+	return c
+}
+
+// snapshotBefore records the working tree before a task for `sy undo`.
+func (o *Orchestrator) snapshotBefore(t *task) {
+	if o.opts.NoGit || !isRepo(o.opts.Dir) {
+		return
+	}
+	root, err := repoRoot(o.opts.Dir)
+	if err != nil {
+		return
+	}
+	t.root = root
+	o.logf("snapshotting the working tree (git add -A on a temporary index)")
+	snap, err := (git{root}).snapshot(subject("switchyard before: ", t.text))
+	if err != nil {
+		o.logf("git snapshot failed, worktrees and undo disabled: %v", err)
+		return
+	}
+	t.useGit = true
+	t.snapshot, t.start = snap, snap
+	git{root}.recordSnapshot(t.key, "before", snap)
+}
+
+// snapshotAfter records the end state (also after a cancel or failure).
+func (o *Orchestrator) snapshotAfter(t *task) {
+	if !t.useGit || t.start == "" {
+		return
+	}
+	g := git{t.root}
+	if snap, err := g.snapshot(subject("switchyard after: ", t.text)); err == nil {
+		g.recordSnapshot(t.key, "after", snap)
+		trimUndo(t.root)
+	}
+}
+
+// Run executes a task end to end. A panic inside the task is written to a
+// crash log and ends the task as failed instead of taking sy down.
+func (o *Orchestrator) Run(ctx context.Context, text string) (result TaskResult) {
 	o.mu.Lock()
 	if o.running {
 		o.mu.Unlock()
@@ -259,30 +349,49 @@ func (o *Orchestrator) Run(ctx context.Context, text string) TaskResult {
 	o.mu.Unlock()
 	finished := false
 	defer func() { // panics only; the normal path clears it before TaskDone
+		r := recover()
 		if !finished {
 			o.mu.Lock()
 			o.running = false
 			o.mu.Unlock()
 		}
+		if r != nil {
+			path := diag.Crash("task", r, debug.Stack())
+			result = TaskResult{Summary: "internal error, Switchyard bug: details in " + path + " (sy bugreport)"}
+			if !finished {
+				o.emit(event.Event{Kind: event.Phase, Text: "done"})
+				o.emit(event.Event{Kind: event.TaskDone, Text: result.Summary})
+			}
+		}
 	}()
 
 	began := time.Now()
 	cfg := o.opts.Store.Get()
+	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
+	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
 	t := &task{id: fmt.Sprintf("task-%d", seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
+	t.key = o.opts.Log.Session() + "-" + t.id
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
 
+	t.quotaBefore = o.quotaNow()
 	res := o.run(ctx, t)
+	o.snapshotAfter(t)
 	res.Duration = time.Since(began)
 	res.Tokens = t.tokens
 	res.Kept = t.kept
+	res.Cost = o.cost(t)
+	if t.useGit {
+		res.UndoKey = t.key
+	}
 	if ctx.Err() != nil {
 		res.OK = false
 		res.Summary = "cancelled: " + res.Summary
 	}
 	tk := t.tokens
+	cost := res.Cost
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTaskEnd, TaskID: t.id, Task: text, Mode: o.opts.Mode,
-		OK: sessionlog.Bool(res.OK), Text: res.Summary, Tokens: &tk, DurationMS: res.Duration.Milliseconds()})
+		OK: sessionlog.Bool(res.OK), Text: res.Summary, Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Cost: &cost, Bench: o.opts.Bench})
 	// Clear the running flag before announcing the end, so a task submitted
 	// right after TaskDone is never refused.
 	o.mu.Lock()
@@ -290,7 +399,7 @@ func (o *Orchestrator) Run(ctx context.Context, text string) TaskResult {
 	o.mu.Unlock()
 	finished = true
 	o.emit(event.Event{Kind: event.Phase, Text: "done"})
-	o.emit(event.Event{Kind: event.TaskDone, OK: res.OK, Text: res.Summary, Tokens: tk})
+	o.emit(event.Event{Kind: event.TaskDone, OK: res.OK, Text: res.Summary, Tokens: tk, Cost: &cost})
 	return res
 }
 
@@ -299,19 +408,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	oc := cfg.Orchestrator
 
 	// Git setup.
-	if !o.opts.NoGit && isRepo(o.opts.Dir) {
-		if root, err := repoRoot(o.opts.Dir); err == nil {
-			t.root = root
-			t.useGit = true
-			o.logf("snapshotting the working tree (git add -A on a temporary index)")
-			if snap, err := (git{root}).snapshot("switchyard start snapshot"); err == nil {
-				t.snapshot, t.start = snap, snap
-			} else {
-				o.logf("git snapshot failed, worktrees disabled: %v", err)
-				t.useGit = false
-			}
-		}
-	}
+	o.snapshotBefore(t)
 	t.wtOK = o.worktreesAllowed(t)
 
 	// 1. Plan.
@@ -331,7 +428,12 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 			warm := make(chan struct{})
 			t.warm = warm
 			root, snap, n := t.root, t.snapshot, oc.MaxThreads
-			go func() { defer close(warm); prewarmPool(root, snap, n) }()
+			go func() {
+				defer close(warm)
+				defer diag.Recover("pool prewarm", nil)
+				prewarmPool(root, snap, n)
+				t.poolSize = PoolSize(root) // read after <-warm only
+			}()
 		}
 		p, ok := o.plan(ctx, t, "", nil)
 		if ctx.Err() != nil {
@@ -445,7 +547,7 @@ func looksRead(s string) bool { return reReadTask.MatchString(s) }
 // step, so a chatty planner never blocks progress.
 func (o *Orchestrator) plan(ctx context.Context, t *task, advice string, prev *Plan) (Plan, bool) {
 	step := router.Step{ID: "plan", Title: "Plan the task", Kind: router.KindPlan, Prompt: t.text}
-	d, res := o.runAgent(ctx, t, step, AgentMain, "", o.opts.Dir, planPrompt(t.text, advice, prev), 1)
+	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev))
 	t.mainProv = d.Provider
 	if !res.OK() {
 		msg := "planner failed"
@@ -471,10 +573,22 @@ func (o *Orchestrator) plan(ctx context.Context, t *task, advice string, prev *P
 	return p, true
 }
 
+// runOnce runs a planner or reviewer in the main tree. If its provider hits
+// its limit or turns out to be unavailable, it is retried once: the router
+// then sees the provider as limited and picks the other one.
+func (o *Orchestrator) runOnce(ctx context.Context, t *task, step router.Step, agentID, parent, prompt string) (event.Decision, runner.Result) {
+	d, res := o.runAgent(ctx, t, step, agentID, parent, o.opts.Dir, prompt, 1)
+	if res.LimitHit && !res.Killed && ctx.Err() == nil && !(o.opts.Tracker.Limited(event.Codex) && o.opts.Tracker.Limited(event.Claude)) {
+		o.logf("%s: %s unavailable, retrying on %s", agentID, d.Provider, event.Other(d.Provider))
+		d, res = o.runAgent(ctx, t, step, agentID, parent, o.opts.Dir, prompt, 2)
+	}
+	return d, res
+}
+
 // review runs the reviewer and reports its verdict.
 func (o *Orchestrator) review(ctx context.Context, t *task, checkpoint, prompt string) (Verdict, bool) {
 	step := router.Step{ID: "review-" + checkpoint, Title: checkpoint + " review", Kind: router.KindReview, MainProvider: t.mainProv}
-	d, res := o.runAgent(ctx, t, step, AgentReviewer, AgentMain, o.opts.Dir, prompt, 1)
+	d, res := o.runOnce(ctx, t, step, AgentReviewer, AgentMain, prompt)
 	if !res.OK() {
 		o.logf("reviewer unavailable for %s checkpoint: %v", checkpoint, res.Err)
 		return Verdict{}, false
@@ -516,6 +630,10 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 		if t.warm != nil {
 			select {
 			case <-t.warm:
+				if warn := uint64(oc.PoolWarnGB * (1 << 30)); warn > 0 && t.poolSize > warn {
+					o.logf("worktree pool for this repo uses %s (> pool_warn_gb %.0f GB): `sy clean` frees it; unused slots are pruned after pool_max_idle",
+						humanBytes(t.poolSize), oc.PoolWarnGB)
+				}
 			case <-ctx.Done():
 			}
 		}
@@ -586,6 +704,12 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 					mu.Unlock()
 					wake <- struct{}{}
 				}()
+				defer diag.Recover("subtask "+st.ID, func(crashLog string) {
+					mu.Lock()
+					results[st.ID] = stepResult{err: "internal error, details in " + crashLog}
+					done[st.ID] = true
+					mu.Unlock()
+				})
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():
@@ -801,6 +925,11 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	if ctx.Err() != nil {
 		return event.Decision{}, runner.Result{Err: ctx.Err(), Killed: true}
 	}
+	o.waitForRoom(ctx, t, agentID)
+	defer o.releaseRoom()
+	if ctx.Err() != nil {
+		return event.Decision{}, runner.Result{Err: ctx.Err(), Killed: true}
+	}
 	d := o.router.Route(step)
 	if o.router.NeedsJudge(d) && step.Kind != router.KindJudge {
 		jstep := router.Step{ID: step.ID + "-judge", Title: "judge " + step.Title, Kind: router.KindJudge}
@@ -858,7 +987,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	}
 	res := rn.Run(actx, spec, o.emit)
 	o.opts.Tracker.AddUsage(d.Provider, res.Tokens)
-	t.addTokens(res.Tokens)
+	t.addTokens(d.Provider, res.Tokens)
 	why := "at usage limit"
 	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && (reAuth.MatchString(res.Err.Error()) || strings.Contains(res.Err.Error(), "not found on PATH")) {
 		// A CLI that is logged out or missing is as unusable as one at its
@@ -883,6 +1012,65 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	return d, res
 }
 
+// busy reports whether the machine is too loaded to start another agent.
+func (o *Orchestrator) busy(oc config.OrchestratorCfg) (bool, string) {
+	s := o.opts.Load()
+	if oc.MaxCPUPercent > 0 && s.CPUOK && s.CPU*100 >= float64(oc.MaxCPUPercent) {
+		return true, fmt.Sprintf("CPU %.0f%% >= %d%%", s.CPU*100, oc.MaxCPUPercent)
+	}
+	if oc.MinFreeMemoryMB > 0 && s.MemOK && s.MemFree < uint64(oc.MinFreeMemoryMB)<<20 {
+		return true, fmt.Sprintf("only %d MB RAM free < %d MB", s.MemFree>>20, oc.MinFreeMemoryMB)
+	}
+	return false, ""
+}
+
+// waitForRoom holds a new agent while the machine is maxed out, then
+// reserves a slot for it (released with releaseRoom). The first agent always
+// starts (a task must make progress), and after busy_max_wait the agent
+// starts anyway, so a machine that is busy for other reasons only slows sy
+// down, never stops it. Checking and reserving happen under one lock, so
+// agents starting at the same moment cannot all slip through.
+func (o *Orchestrator) waitForRoom(ctx context.Context, t *task, agentID string) {
+	oc := t.cfg.Orchestrator
+	limited := oc.MaxCPUPercent > 0 || oc.MinFreeMemoryMB > 0
+	deadline := time.Now().Add(oc.BusyMaxWait.D())
+	held := false
+	for {
+		o.mu.Lock()
+		busy, why := false, ""
+		if limited && o.active > 0 {
+			busy, why = o.busy(oc)
+		}
+		late := !time.Now().Before(deadline)
+		if !busy || late || ctx.Err() != nil {
+			o.active++
+			o.mu.Unlock()
+			switch {
+			case busy && late:
+				o.logf("machine still busy (%s) after %s: starting %s anyway", why, oc.BusyMaxWait.D(), agentID)
+			case held && !busy:
+				o.logf("machine has room again: starting %s", agentID)
+			}
+			return
+		}
+		o.mu.Unlock()
+		if !held {
+			held = true
+			o.logf("machine busy (%s): holding %s until it calms down (at most %s)", why, agentID, oc.BusyMaxWait.D())
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(busyPoll):
+		}
+	}
+}
+
+func (o *Orchestrator) releaseRoom() {
+	o.mu.Lock()
+	o.active--
+	o.mu.Unlock()
+}
+
 func errText(err error) string {
 	if err == nil {
 		return ""
@@ -899,9 +1087,13 @@ func (o *Orchestrator) RunSingle(ctx context.Context, text, provider string, rou
 	o.mu.Unlock()
 	began := time.Now()
 	cfg := o.opts.Store.Get()
+	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
 	t := &task{id: fmt.Sprintf("task-%d", seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
+	t.key = o.opts.Log.Session() + "-" + t.id
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: "single"})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
+	t.quotaBefore = o.quotaNow()
+	o.snapshotBefore(t)
 	d := event.Decision{StepID: "single", StepTitle: "single agent", Role: event.RoleWorker, Provider: provider, Model: route.Model, Effort: route.Effort,
 		Rule: router.RuleForced, Reason: "single-agent baseline", Confidence: 1}
 	o.emit(event.Event{Kind: event.Route, AgentID: AgentMain, Provider: provider, Model: route.Model, Role: event.RoleWorker, Decision: &d})
@@ -913,16 +1105,22 @@ func (o *Orchestrator) RunSingle(ctx context.Context, text, provider string, rou
 		Model: route.Model, Effort: route.Effort, Prompt: text, Dir: o.opts.Dir, Timeout: cfg.Orchestrator.AgentTimeout.D()}
 	res := rn.Run(ctx, spec, o.emit)
 	o.opts.Tracker.AddUsage(provider, res.Tokens)
+	t.addTokens(provider, res.Tokens)
+	o.snapshotAfter(t)
 	tk := res.Tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: AgentMain, Step: "single", Attempt: 1,
 		Role: event.RoleWorker, Provider: provider, Model: route.Model, Effort: route.Effort, OK: sessionlog.Bool(res.OK()),
 		LimitHit: res.LimitHit, Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files})
-	out := TaskResult{OK: res.OK(), Duration: time.Since(began), Tokens: tk, Summary: clip(res.Final, 300)}
+	out := TaskResult{OK: res.OK(), Duration: time.Since(began), Tokens: tk, Summary: clip(res.Final, 300), Cost: o.cost(t)}
+	if t.useGit {
+		out.UndoKey = t.key
+	}
 	if res.Err != nil {
 		out.Summary = res.Err.Error()
 	}
+	cost := out.Cost
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTaskEnd, TaskID: t.id, Task: text, Mode: "single",
-		OK: sessionlog.Bool(out.OK), Text: out.Summary, Tokens: &tk, DurationMS: out.Duration.Milliseconds()})
-	o.emit(event.Event{Kind: event.TaskDone, OK: out.OK, Text: out.Summary, Tokens: tk})
+		OK: sessionlog.Bool(out.OK), Text: out.Summary, Tokens: &tk, DurationMS: out.Duration.Milliseconds(), Cost: &cost, Bench: o.opts.Bench})
+	o.emit(event.Event{Kind: event.TaskDone, OK: out.OK, Text: out.Summary, Tokens: tk, Cost: &cost})
 	return out
 }

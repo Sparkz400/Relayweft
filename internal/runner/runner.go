@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
+	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/limits"
 	"github.com/sparkz400/switchyard/internal/proc"
@@ -115,9 +116,13 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	}
 	stderr := &tail{max: 8 << 10}
 	cmd.Stderr = stderr
+	diag.Logf("spawn agent=%s role=%s step=%s attempt=%d model=%s effort=%s readonly=%v dir=%s: %s %s",
+		s.AgentID, s.Role, s.StepID, s.Attempt, s.Model, s.Effort, s.ReadOnly, s.Dir, path, strings.Join(x.args(s), " "))
 	if err := cmd.Start(); err != nil {
+		diag.Logf("spawn agent=%s failed: %v", s.AgentID, err)
 		return fail(fmt.Errorf("start %s: %w", x.Provider, err))
 	}
+	proc.Started(cmd)
 	emit(stamp(event.Event{Kind: event.Started, Text: "started " + s.Model}))
 
 	p := x.parser()
@@ -181,6 +186,13 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 			emit(stamp(event.Event{Kind: event.LimitHit, Text: res.Err.Error()}))
 		}
 	}
+	code := -1
+	if cmd.ProcessState != nil {
+		code = cmd.ProcessState.ExitCode()
+	}
+	diag.Logf("exit agent=%s pid=%d code=%d after %s ok=%v killed=%v limit=%v tokens=%d err=%v stderr=%q",
+		s.AgentID, cmd.Process.Pid, code, res.Duration.Round(time.Millisecond), res.OK(), res.Killed, res.LimitHit,
+		res.Tokens.Total(), res.Err, lastLines(stderr.String(), 4))
 	if res.Err != nil && !res.LimitHit && !res.Killed {
 		emit(stamp(event.Event{Kind: event.Error, Text: res.Err.Error()}))
 	}

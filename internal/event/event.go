@@ -5,6 +5,7 @@ package event
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -109,10 +110,62 @@ func (t TokenUsage) Add(o TokenUsage) TokenUsage {
 
 // QuotaInfo is provider-reported usage of the subscription window.
 type QuotaInfo struct {
-	Utilization float64   `json:"utilization"` // 0..1
-	Window      string    `json:"window,omitempty"`
-	ResetsAt    time.Time `json:"resets_at,omitempty"`
-	Status      string    `json:"status,omitempty"`
+	Utilization float64            `json:"utilization"` // 0..1, the fullest window
+	Window      string             `json:"window,omitempty"`
+	ResetsAt    time.Time          `json:"resets_at,omitempty"`
+	Status      string             `json:"status,omitempty"`
+	Windows     map[string]float64 `json:"windows,omitempty"` // every reported window, 0..1
+}
+
+// TaskCost is what one task used.
+type TaskCost struct {
+	PerProvider map[string]TokenUsage `json:"per_provider,omitempty"`
+	CostUSD     float64               `json:"cost_usd,omitempty"` // Claude's API-equivalent price (not billed on a subscription)
+	QuotaBefore map[string]float64    `json:"quota_before,omitempty"`
+	QuotaAfter  map[string]float64    `json:"quota_after,omitempty"`
+}
+
+// Summary is a one-line description, e.g.
+// "codex 12k · claude 40k fresh tokens · ≈$0.31 API-equivalent · claude limit 61%→64%".
+func (c TaskCost) Summary() string {
+	var parts []string
+	for _, p := range Providers {
+		if u, ok := c.PerProvider[p]; ok && u.Total() > 0 {
+			parts = append(parts, p+" "+HumanTokens(u.Total()))
+		}
+	}
+	if len(parts) == 0 {
+		return "no tokens used"
+	}
+	s := strings.Join(parts, " · ") + " fresh tokens"
+	if c.CostUSD > 0 {
+		s += fmt.Sprintf(" · ≈$%.2f API-equivalent", c.CostUSD)
+	}
+	for _, p := range Providers {
+		b, okB := c.QuotaBefore[p]
+		a, okA := c.QuotaAfter[p]
+		if okA {
+			if okB {
+				s += fmt.Sprintf(" · %s limit %.0f%%→%.0f%%", p, b*100, a*100)
+			} else {
+				s += fmt.Sprintf(" · %s limit %.0f%%", p, a*100)
+			}
+		}
+	}
+	return s
+}
+
+// HumanTokens formats a token count: 950, 1.2k, 45k, 1.3M.
+func HumanTokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 10_000:
+		return fmt.Sprintf("%.0fk", float64(n)/1e3)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1e3)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 // Decision is one routing decision.
@@ -154,6 +207,7 @@ type Event struct {
 	OK       bool       `json:"ok,omitempty"`       // Done, Checkpoint, Merge, TaskDone
 	Decision *Decision  `json:"decision,omitempty"` // Route
 	Quota    *QuotaInfo `json:"quota,omitempty"`    // Quota
+	Cost     *TaskCost  `json:"cost,omitempty"`     // TaskDone
 	Until    time.Time  `json:"until,omitempty"`    // ProviderState: limited until
 }
 
