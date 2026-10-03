@@ -48,13 +48,40 @@ type Stats struct {
 	Approved  int
 	Merges    int
 	MergeFail int
-	Recent    []Record // newest task_end records (with cost), newest first
+	Recent    []Record    // newest task_end records (with cost), newest first
+	Days      []*DayStats // last 7 local calendar days that had tasks, newest first
 }
+
+// DayStats totals one calendar day of tasks, so a day of heavy use (and what
+// it would have cost on the API) stands out without reading every task.
+type DayStats struct {
+	Date   string // YYYY-MM-DD, local time
+	Tasks  int
+	OK     int
+	Codex  int64   // fresh tokens
+	Claude int64   // fresh tokens
+	USD    float64 // Claude API-equivalent price
+}
+
+// statsDays is how many calendar days the per-day table covers.
+const statsDays = 7
 
 // Filter selects records.
 type Filter struct {
 	Since time.Time
 	Cwd   string // only records from this project directory
+}
+
+// keep reports whether a record passes the filter. Records without a cwd
+// (very old logs) are kept by --here rather than silently dropped.
+func (f Filter) keep(r Record) bool {
+	if !f.Since.IsZero() && r.TS.Before(f.Since) {
+		return false
+	}
+	if f.Cwd != "" && r.Cwd != "" && !samePath(r.Cwd, f.Cwd) {
+		return false
+	}
+	return true
 }
 
 // Aggregate builds statistics from records.
@@ -65,11 +92,9 @@ func Aggregate(recs []Record, f Filter) Stats {
 	sessions := map[string]bool{}
 	taskMode := map[string]string{}
 	taskTokens := map[string]map[string]int64{}
+	days := map[string]*DayStats{}
 	for _, r := range recs {
-		if !f.Since.IsZero() && r.TS.Before(f.Since) {
-			continue
-		}
-		if f.Cwd != "" && r.Cwd != "" && !samePath(r.Cwd, f.Cwd) {
+		if !f.keep(r) {
 			continue
 		}
 		sessions[r.Session] = true
@@ -112,6 +137,7 @@ func Aggregate(recs []Record, f Filter) Stats {
 			taskMode[r.Session+"/"+r.TaskID] = r.Mode
 		case TypeTaskEnd:
 			s.Recent = append(s.Recent, r)
+			addDay(days, r)
 			mode := r.Mode
 			if mode == "" {
 				mode = taskMode[r.Session+"/"+r.TaskID]
@@ -157,7 +183,45 @@ func Aggregate(recs []Record, f Filter) Stats {
 	if len(s.Recent) > 10 {
 		s.Recent = s.Recent[:10]
 	}
+	s.Days = lastDays(days, statsDays)
 	return s
+}
+
+// addDay adds one task_end record to its local calendar day.
+func addDay(days map[string]*DayStats, r Record) {
+	date := r.TS.Local().Format("2006-01-02")
+	d := days[date]
+	if d == nil {
+		d = &DayStats{Date: date}
+		days[date] = d
+	}
+	d.Tasks++
+	if r.OK != nil && *r.OK {
+		d.OK++
+	}
+	if r.Cost != nil {
+		d.Codex += r.Cost.PerProvider[event.Codex].Total()
+		d.Claude += r.Cost.PerProvider[event.Claude].Total()
+		d.USD += r.Cost.CostUSD
+	}
+}
+
+// now is the clock for the per-day window (replaced in tests).
+var now = time.Now
+
+// lastDays returns the days with tasks among the last n calendar days
+// (today included), newest first. Dates compare as strings because the
+// YYYY-MM-DD layout sorts chronologically.
+func lastDays(days map[string]*DayStats, n int) []*DayStats {
+	first := now().Local().AddDate(0, 0, -(n - 1)).Format("2006-01-02")
+	var out []*DayStats
+	for _, d := range days {
+		if d.Date >= first {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date > out[j].Date })
+	return out
 }
 
 func samePath(a, b string) bool {
@@ -217,7 +281,22 @@ func (s Stats) Print(w io.Writer) {
 		}
 		tw.Flush()
 	}
+	s.printDays(w)
 	s.printRecent(w)
+}
+
+// printDays lists per-day totals, newest first.
+func (s Stats) printDays(w io.Writer) {
+	if len(s.Days) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\nPer day (last %d days; $ is Claude's API-equivalent price)\n", statsDays)
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "  DATE\tTASKS\tOK\tCODEX\tCLAUDE\t$")
+	for _, d := range s.Days {
+		fmt.Fprintf(tw, "  %s\t%d\t%d\t%s\t%s\t%.2f\n", d.Date, d.Tasks, d.OK, human(d.Codex), human(d.Claude), d.USD)
+	}
+	tw.Flush()
 }
 
 // printRecent lists the newest tasks with what each one cost.
