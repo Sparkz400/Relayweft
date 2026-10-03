@@ -81,6 +81,10 @@ func main() {
 		err = cmdUpdate(args)
 	case "trust":
 		err = cmdTrust(args)
+	case "web":
+		err = cmdWeb(args)
+	case "app":
+		err = cmdApp(args)
 	case "version", "--version":
 		fmt.Println("switchyard", version)
 	case "help", "-h", "--help":
@@ -112,6 +116,8 @@ func usage() {
 Usage:
   sy [flags]                 start the TUI in the current directory
   sy --demo                  the full animated TUI driven by fake agents
+  sy web [--port N] [--no-open] [--demo]   the same engine in your browser (127.0.0.1, private link)
+  sy app [--port N] [--demo]               the browser UI in its own window (Edge/Chrome app mode)
   sy run [flags] "task"      run one task headless and print events
   sy run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
   sy run --file tasks.txt    run a list of tasks one after another, unattended
