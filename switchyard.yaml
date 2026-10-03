@@ -133,6 +133,18 @@ hooks:
   after_task: []                   # e.g. ["npm run lint"]
   timeout: 5m
 
+# MCP servers for the agents, passed to both CLIs on every run of the listed
+# roles. ${VAR} in any value is read from your environment when the agent
+# starts, so secrets stay out of this file. In a repo's .switchyard.yaml
+# this section applies only after `sy trust`. `sy doctor` checks it.
+# mcp:
+#   servers:
+#     docs: {command: npx, args: ["-y", "@some/mcp-server"], env: {API_KEY: "${DOCS_API_KEY}"}}
+#     db:   {url: "http://localhost:8080/mcp"}   # type: sse for SSE (Claude only)
+#   roles: [worker, worker_high, explorer, researcher]   # the default
+#   allow_tools: true    # pre-approve their tools for Claude (mcp__<server>)
+#   strict: false        # true: Claude uses only these, not your own MCP config
+
 # Desktop notifications (Windows toast, macOS, notify-send): a task finished
 # or failed, a provider hit its limit, or sy waits for your approval.
 notify:

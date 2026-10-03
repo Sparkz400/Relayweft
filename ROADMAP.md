@@ -194,6 +194,8 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.7 | ✅ **Talk to a running agent**: `@agent message` is delivered when the agent's turn ends, before its work is merged. |
 | 4.8 | ✅ **Persistent follow-ups**: sessions are kept per project folder. |
 | 4.9 | **Scheduled runs**: start a task file at a set time, for example when the Claude 5-hour window resets. |
+| 4.10 | ✅ **Task reports**: `sy report` writes one self-contained HTML (or `--md` Markdown) page per task: plan and results, routing decisions with rule and reason, reviews, checks, the diff and the cost. Everything is escaped, and a CSP blocks scripts. |
+| 4.11 | ✅ **MCP servers**: an `mcp:` config section passes MCP servers to both CLIs per role (Claude: a temporary `--mcp-config` file; Codex: `-c mcp_servers.*`). `${VAR}` comes from your environment, repo files need `sy trust`, and `sy doctor` checks the commands. |
 
 ---
 

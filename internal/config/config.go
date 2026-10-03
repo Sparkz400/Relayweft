@@ -173,6 +173,7 @@ type Config struct {
 	Verify        VerifyCfg              `yaml:"verify"`
 	Notify        NotifyCfg              `yaml:"notify"`
 	Hooks         HooksCfg               `yaml:"hooks"`
+	MCP           MCPCfg                 `yaml:"mcp,omitempty"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`
@@ -300,6 +301,7 @@ func (c *Config) Validate() error {
 	if c.Orchestrator.MaxThreads < 1 {
 		errs = append(errs, "orchestrator.max_threads must be >= 1")
 	}
+	errs = append(errs, c.MCP.validate()...)
 	switch c.Theme {
 	case "", "auto", "unicode", "ascii":
 	default:
