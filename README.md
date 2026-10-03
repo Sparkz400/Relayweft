@@ -206,4 +206,4 @@ internal/proc/          process-tree kill (Unix process groups, Windows taskkill
 internal/tui/           Bubble Tea model, views, model picker, commands
 ```
 
-See [plan.md](plan.md) for the original design.
+See [plan.md](plan.md) for the original design and [ROADMAP.md](ROADMAP.md) for what comes next.
