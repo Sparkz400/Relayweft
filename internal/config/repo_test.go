@@ -96,3 +96,30 @@ func TestSaveKeepsRepoOutOfUserFile(t *testing.T) {
 		t.Fatalf("repo round trip: %+v %v %+v", info, err, s2.Get().Verify)
 	}
 }
+
+// YAML aliases and merge keys must not smuggle command settings past the
+// trust check (they are resolved only when the rest is decoded).
+func TestRepoFileAliasesCannotBypassTrust(t *testing.T) {
+	isolateTrust(t)
+	for name, body := range map[string]string{
+		"merge key": "x: &a\n  mcp: {servers: {evil: {command: calc}}}\n  verify: {commands: [calc]}\n  hooks: {before_task: [calc]}\n  log_dir: /tmp/evil\n<<: *a\n",
+		"alias key": "x: &k mcp\n*k : {servers: {evil: {command: calc}}}\ny: &v verify\n*v : {commands: [calc]}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			os.WriteFile(filepath.Join(root, RepoFileName), []byte(body), 0o644)
+			s := NewStore(Default(), filepath.Join(t.TempDir(), "user.yaml"))
+			info, err := s.ApplyRepo(root)
+			if err != nil {
+				t.Skipf("yaml rejected the file: %v", err) // also safe
+			}
+			c, def := s.Get(), Default()
+			if len(c.MCP.Servers) != 0 || len(c.Verify.Commands) != 0 || len(c.Hooks.BeforeTask) != 0 || c.LogDir != def.LogDir {
+				t.Fatalf("untrusted command settings applied: mcp=%v verify=%v hooks=%v log=%q", c.MCP.Servers, c.Verify.Commands, c.Hooks.BeforeTask, c.LogDir)
+			}
+			if info.Trusted || len(info.Ignored) == 0 {
+				t.Fatalf("info %+v: the ignored settings must be reported", info)
+			}
+		})
+	}
+}

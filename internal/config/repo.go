@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -84,6 +85,11 @@ func ApplyRepo(c *Config, dir string) (RepoInfo, error) {
 	if root.Kind != yaml.MappingNode {
 		return info, fmt.Errorf("%s: want a mapping at the top level", p)
 	}
+	// Snapshot of everything that runs commands. An untrusted file gets
+	// these restored after decoding, whatever YAML it used to reach them
+	// (aliases, merge keys "<<: *x", anchors): the key check below is only
+	// a first filter and must not be the only guard.
+	guarded := c.Clone()
 	rest := &yaml.Node{Kind: yaml.MappingNode}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		k, v := root.Content[i], root.Content[i+1]
@@ -109,10 +115,40 @@ func ApplyRepo(c *Config, dir string) (RepoInfo, error) {
 			return info, fmt.Errorf("%s: %w", p, err)
 		}
 	}
+	if !info.Trusted {
+		for _, k := range restoreCommandSettings(c, guarded) {
+			if !contains(info.Ignored, k) {
+				info.Ignored = append(info.Ignored, k)
+			}
+		}
+	}
 	if err := c.Validate(); err != nil {
 		return info, fmt.Errorf("%s: %w", p, err)
 	}
 	return info, nil
+}
+
+// restoreCommandSettings puts back the settings that run commands (the
+// commandKeys) from before, and returns the ones the file had changed.
+func restoreCommandSettings(c, before *Config) []string {
+	var changed []string
+	if !reflect.DeepEqual(c.Verify, before.Verify) {
+		changed = append(changed, "verify")
+	}
+	if !reflect.DeepEqual(c.Hooks, before.Hooks) {
+		changed = append(changed, "hooks")
+	}
+	if !reflect.DeepEqual(c.Providers, before.Providers) {
+		changed = append(changed, "providers")
+	}
+	if c.LogDir != before.LogDir {
+		changed = append(changed, "log_dir")
+	}
+	if !reflect.DeepEqual(c.MCP, before.MCP) {
+		changed = append(changed, "mcp")
+	}
+	c.Verify, c.Hooks, c.Providers, c.LogDir, c.MCP = before.Verify, before.Hooks, before.Providers, before.LogDir, before.MCP
+	return changed
 }
 
 // mergeMap decodes each entry of a mapping node on top of the existing
