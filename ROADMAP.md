@@ -68,7 +68,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **A 3-minute stress run:** goroutines, file handles, heap and processes stayed flat over 1,750 tasks.
 
 **Not verified yet:**
-- A real Codex run against a model.
+- Real Codex runs with tool calls and file edits, a usage-limit hit and a logged-out CLI. A simple run and a resume are now recorded (see 1.1).
 - Real daily use on your Windows PC.
 - Behaviour under heavy load: a big repo, three agents in parallel, hours of use.
 - A ~10-task comparison against a single agent on real, multi-file tasks (`plan.md` §9). The starter set is too small to show it: on its one-file tasks a single agent is faster.
@@ -94,7 +94,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | # | Item | Why |
 |---|---|---|
 | | *Status: 1.2, 1.3, 1.4 and 1.5 are **done**. 1.1, 1.6, 1.7, 1.8 and 1.9 are open.* | |
-| 1.1 | **Real Codex end-to-end run**: record real `codex exec --json` output (success, tool calls, edits, limit hit, logged out) as test fixtures. | Codex has only been tested against output we built by hand from its docs and binary. |
+| 1.1 | 🟡 **Real Codex end-to-end run** (partly done): a real `codex exec --json` run and a real `codex exec resume` are recorded as test fixtures (`internal/runner/testdata/codex_real_*.jsonl`). They match the parser and resume works. They also showed that Codex sends **no `rate_limits`**, so Codex can only fall back after a limit, not switch before it. Still to record: a run with tool calls and edits, a limit hit, and a logged-out CLI. | Codex was tested only against hand-built output until now. |
 | 1.2 | ✅ **Load limits** (done): agents and git at below-normal priority, parallel checkout capped at min(4, cores/2), a busy gate that holds new agents above `max_cpu_percent` or below `min_free_memory_mb` (at most `busy_max_wait`). Was planned as: cap git's parallel checkout (`checkout.workers` = half the cores, at most 4), lower process priority for agents and git (`BELOW_NORMAL_PRIORITY_CLASS`), prewarm at most one pool slot at a time, and a `max_cpu_load` setting that pauses dispatch while the machine is pegged. | A freeze under load must never be triggered by `sy`. |
 | 1.3 | ✅ **Disk guard** (done): `min_free_disk_gb` floor, pruning after `pool_max_idle`, `pool_warn_gb` warning, pools listed in `sy doctor`, one shared pool per repo. Was planned as: show the pool size in `sy doctor`, warn at more than X GB, prune slots unused for 14 days, and refuse to create a slot when free space drops under 10 GB. | Each pool slot is a full checkout of your repo. |
 | 1.4 | ✅ **Crash safety** (done): `sy-debug.log`, `crash-*.log`, task-level panic recovery, `sy bugreport`. Was planned as: a panic handler that restores the terminal and writes `crash-<time>.log`; a persistent debug log (`%LocalAppData%\switchyard\logs\sy.log`) with every spawned command line, exit code and timing; `sy bugreport` zips the last session log, debug log, config and `doctor` output. | When something goes wrong, you can send one file and the reason is visible. |
@@ -216,7 +216,11 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
    - `@ follow-up` after a task;
    - close the window mid-task, then `sy resume`;
    - `sy app`.
-2. **1.1 Real Codex run.** Run `codex exec --json -m gpt-6-luna "say hi" > codex.jsonl` on your logged-in PC and send the file; it becomes a test fixture. Also check whether the output contains `rate_limits`; if it does, the quota switch then works for Codex too. Also run `codex exec resume --last "and now say bye"` once, to confirm that follow-ups work with your Codex version.
+2. **1.1 The rest of the Codex recordings.** In any git repo on your PC:
+   - an edit: `codex exec --json --skip-git-repo-check -m gpt-6-luna "create hello.txt containing hi" > codex-edit.jsonl`
+   - once you hit a Codex limit, run the same command again and keep the file (`codex-limit.jsonl`).
+   - after `codex logout`, run it once more (`codex-logout.jsonl`), then `codex login`.
+   Send the files; they become test fixtures.
 3. **Run `sy bench` on ~10 real, multi-file tasks from your own repos, with Codex.** This decides the Phase 3 exit criterion. After a week of use, run `sy tune`.
 4. **Releases:**
    - Submit the rendered winget manifests to microsoft/winget-pkgs (needs a fork of winget-pkgs on your account).
