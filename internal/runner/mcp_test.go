@@ -7,8 +7,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
@@ -150,12 +153,15 @@ func TestCodexMCPArgs(t *testing.T) {
 		t.Fatalf("names = %v", m.Names)
 	}
 	args := CodexArgs(config.Default().Providers[event.Codex], Spec{Model: "m", MCP: m})
+	// ${VAR} values (env, headers) go through the environment; a ${VAR}
+	// in a url cannot and stays a -c value.
 	want := []string{
-		"-c", `mcp_servers.db.url='http://localhost:8080/mcp?token=s3cr"et'`,
-		"-c", `mcp_servers.db.http_headers={Authorization = 'Bearer s3cr"et'}`,
+		"-c", `mcp_servers.db.url="http://localhost:8080/mcp?token=s3cr\u0022et"`,
+		"-c", `mcp_servers.db.bearer_token_env_var='SY_MCP_DB_BEARER'`,
 		"-c", `mcp_servers.docs.command='C:\Program Files\nodejs\npx.cmd'`,
 		"-c", `mcp_servers.docs.args=['-y', '@some/mcp-server', '--root', 'C:\Users\Nico Schu\repo', "it's"]`,
-		"-c", `mcp_servers.docs.env={API_KEY = 's3cr"et', MISSING = 'xy', PLAIN = 'a b'}`,
+		"-c", `mcp_servers.docs.env={PLAIN = 'a b'}`,
+		"-c", `mcp_servers.docs.env_vars=['API_KEY', 'MISSING']`,
 	}
 	got := strings.Join(args, "\n")
 	if !strings.Contains(got, strings.Join(want, "\n")) {
@@ -179,18 +185,21 @@ func TestTOMLString(t *testing.T) {
 	for in, want := range map[string]string{
 		`plain`:            `'plain'`,
 		`C:\a b\c`:         `'C:\a b\c'`,
-		`it's "q"`:         `"it's \"q\""`,
-		"two\nlines\\":     `"two\nlines\\"`,
+		`it's "q"`:         `"it's \u0022q\u0022"`,
+		"two\nlines\\":     `"two\nlines\u005C"`,
+		`100%`:             `"100\u0025"`,
+		`C:\%USERPROFILE%`: `"C:\u005C\u0025USERPROFILE\u0025"`,
+		`hey!`:             `"hey\u0021"`,
 		"tab\there":        "'tab\there'",
 		"bell\x07":         `"bell\u0007"`,
 		``:                 `''`,
-		`back\slash'quote`: `"back\\slash'quote"`,
+		`back\slash'quote`: `"back\u005Cslash'quote"`,
 	} {
 		if got := tomlString(in); got != want {
 			t.Errorf("tomlString(%q) = %s, want %s", in, got, want)
 		}
 	}
-	if got := tomlTable(map[string]string{"A-B": "1", "with space": "2"}); got != `{A-B = '1', "with space" = '2'}` {
+	if got := tomlTable(map[string]string{"A-B": "1", "with space": "2", `q"k`: "3"}); got != `{A-B = '1', "q\u0022k" = '3', "with space" = '2'}` {
 		t.Errorf("table = %s", got)
 	}
 }
@@ -243,4 +252,175 @@ func TestNewPassesMCP(t *testing.T) {
 			t.Errorf("%s runner has no MCP config", p)
 		}
 	}
+}
+
+// A Codex -c value passes cmd.exe and the CLI's argv parser on Windows
+// (npm .cmd shim): no " inside the TOML string, no backslash right before
+// a quote, no % or ! for cmd to expand, and the value decodes back.
+func TestTOMLStringSafeForCmdShim(t *testing.T) {
+	for _, in := range []string{
+		`' " -c sandbox_mode=danger-full-access "`,
+		`a\" -c sandbox_mode=danger-full-access \"b`,
+		`C:\dir\`, `trailing\\`, `"`, `\`, `%PATH%`, `100%`, `!x!`, "x'y\nz\t\x01",
+		`C:\Program Files\x`, `a & b | c < d > e ^ f`,
+	} {
+		out := tomlString(in)
+		inner := out[1 : len(out)-1]
+		if strings.ContainsAny(inner, `"%!`) || strings.Contains(out, `\"`) {
+			t.Errorf("tomlString(%q) = %s: quote, backslash-quote, %% or ! reaches the command line", in, out)
+		}
+		got := inner
+		if out[0] == '"' {
+			// TOML basic-string escapes (\uXXXX \n \r \t) are a subset of Go's.
+			var err error
+			if got, err = strconv.Unquote(out); err != nil {
+				t.Errorf("tomlString(%q) = %s: %v", in, out, err)
+			}
+		}
+		if got != in {
+			t.Errorf("tomlString(%q) = %s decodes to %q", in, out, got)
+		}
+	}
+}
+
+// ${VAR} values reach Codex through its environment: never on the command
+// line, which other processes can read.
+func TestCodexMCPSecretsStayOffCommandLine(t *testing.T) {
+	cfg := config.MCPCfg{Servers: map[string]config.MCPServer{
+		"docs": {Command: "npx", Env: map[string]string{
+			"API_KEY": "${SY_TEST_SECRET}", "LITERAL": "visible",
+			// The environment has OPENAI_API_KEY with another value:
+			// setting it for Codex would change Codex's own login, so this
+			// one stays a -c value (documented).
+			"OPENAI_API_KEY": "${SY_TEST_SECRET}",
+		}},
+		"other": {Command: "uvx", Env: map[string]string{"API_KEY": "${SY_TEST_OTHER}"}},
+		"web": {URL: "https://mcp.example.com/mcp", Headers: map[string]string{
+			"Authorization": "Bearer ${SY_TEST_SECRET}", "X-Api-Key": "${SY_TEST_SECRET}", "X-Plain": "p",
+		}},
+	}}
+	look := func(name string) (string, bool) {
+		switch name {
+		case "SY_TEST_SECRET":
+			return "s3cret", true
+		case "SY_TEST_OTHER":
+			return "0ther", true
+		case "OPENAI_API_KEY":
+			return "sk-own", true
+		}
+		return "", false
+	}
+	m, cleanup, err := PrepareMCP(event.Codex, event.RoleWorker, cfg, look)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	args := strings.Join(codexMCPArgs(m), "\n")
+	for _, want := range []string{
+		`mcp_servers.docs.env={LITERAL = 'visible', OPENAI_API_KEY = 's3cret'}`,
+		`mcp_servers.docs.env_vars=['API_KEY']`,
+		// Same name, other value: one Codex environment cannot hold both.
+		`mcp_servers.other.env={API_KEY = '0ther'}`,
+		`mcp_servers.web.http_headers={X-Plain = 'p'}`,
+		`mcp_servers.web.bearer_token_env_var='SY_MCP_WEB_BEARER'`,
+		`mcp_servers.web.env_http_headers={X-Api-Key = 'SY_MCP_WEB_HEADER_1'}`,
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("args miss %s:\n%s", want, args)
+		}
+	}
+	if n := strings.Count(args, "s3cret"); n != 1 {
+		t.Errorf("secret on the command line %d times (want only the documented OPENAI_API_KEY case):\n%s", n, args)
+	}
+	want := []string{"API_KEY=s3cret", "SY_MCP_WEB_BEARER=s3cret", "SY_MCP_WEB_HEADER_1=s3cret"}
+	got := append([]string(nil), m.ChildEnv...)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("child env = %q, want %q", got, want)
+	}
+	// Claude reads its config file: nothing moves.
+	cm, cleanup, err := PrepareMCP(event.Claude, event.RoleWorker, cfg, look)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if len(cm.ChildEnv) != 0 || cm.Servers["docs"].Env["API_KEY"] != "s3cret" {
+		t.Errorf("claude setup changed: %+v", cm)
+	}
+}
+
+// The Codex process gets the secrets in its environment, not its argv.
+func TestExecCodexMCPSecretsInChildEnv(t *testing.T) {
+	cmd, _, argsFile := fakeCLI(t, "codex_exec.jsonl", 0, "")
+	dir := filepath.Dir(cmd)
+	envFile := filepath.Join(dir, "env")
+	wrapper := filepath.Join(dir, "wrap")
+	os.WriteFile(wrapper, []byte("#!/bin/sh\nenv > '"+envFile+"'\nexec '"+cmd+"' \"$@\"\n"), 0o755)
+	cfg := config.Default()
+	pc := cfg.Providers[event.Codex]
+	pc.Command = wrapper
+	r := NewCodex(pc, nil)
+	r.MCP = config.MCPCfg{Servers: map[string]config.MCPServer{"docs": {Command: "npx", Env: map[string]string{"SY_MCP_TEST_KEY": "${SY_TEST_SECRET}"}}}}
+	r.LookupEnv = lookup
+	var c collector
+	res := r.Run(context.Background(), Spec{AgentID: "a", Role: event.RoleWorker, Model: "m", Dir: t.TempDir()}, c.emit)
+	if !res.OK() {
+		t.Fatalf("%+v", res)
+	}
+	args, _ := os.ReadFile(argsFile)
+	env, _ := os.ReadFile(envFile)
+	if strings.Contains(string(args), "s3cr") || !strings.Contains(string(args), "mcp_servers.docs.env_vars=['SY_MCP_TEST_KEY']") {
+		t.Errorf("args = %s", args)
+	}
+	if !strings.Contains(string(env), "SY_MCP_TEST_KEY=s3cr\"et\n") || !strings.Contains(string(env), "PATH=") {
+		t.Errorf("child env lacks the secret or the inherited environment:\n%s", env)
+	}
+}
+
+// Claude's config files live in sy's own dir; dirs a hard kill left behind
+// are removed after a day.
+func TestMCPTempDirSweepsStale(t *testing.T) {
+	root := t.TempDir()
+	old := mcpRoot
+	mcpRoot = func() string { return root }
+	sweepOnce = sync.Once{}
+	t.Cleanup(func() { mcpRoot = old; sweepOnce = sync.Once{} })
+	stale := filepath.Join(root, "sy-mcp-stale")
+	fresh := filepath.Join(root, "sy-mcp-fresh")
+	mine := filepath.Join(root, "keep-me")
+	for _, d := range []string{stale, fresh, mine} {
+		os.MkdirAll(d, 0o700)
+		os.WriteFile(filepath.Join(d, "mcp.json"), []byte("{}"), 0o600)
+	}
+	two := time.Now().Add(-48 * time.Hour)
+	os.Chtimes(stale, two, two)
+	os.Chtimes(mine, two, two)
+	m, cleanup, err := PrepareMCP(event.Claude, event.RoleWorker, mcpCfg(), lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if !strings.HasPrefix(m.ConfigFile, filepath.Join(root, "sy-mcp-")) {
+		t.Errorf("config file %s is not in sy's dir %s", m.ConfigFile, root)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("stale sy-mcp-* dir not removed")
+	}
+	for _, d := range []string{fresh, mine} {
+		if _, err := os.Stat(d); err != nil {
+			t.Errorf("%s removed: %v", d, err)
+		}
+	}
+}
+
+// TestMain keeps Claude's MCP config files out of the real cache dir.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "sy-runner-test-")
+	if err != nil {
+		panic(err)
+	}
+	mcpRoot = func() string { return dir }
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }

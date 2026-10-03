@@ -129,9 +129,10 @@ Usage:
   sy run --file tasks.txt    run a list of tasks one after another, unattended
   sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
   sy run --issue <N|URL> [--with-comments] [--pr]   run a GitHub issue as the task; --pr opens a PR (Closes #N)
-  sy run --issues label:<name> [--limit 5] [--pr]   run open labelled issues one after another, unattended
-                             (needs a clean working tree; with --pr each task's changes go to its PR branch and
-                             are undone here so the next issue starts from HEAD; the batch stops if that fails)
+  sy run --issues label:<name> [--limit 5] --pr     run open labelled issues one after another, unattended
+                             (needs --pr and a clean working tree; each task's changes go to its PR branch and
+                             are undone here so the next issue starts from HEAD; the batch stops if that fails,
+                             or if a PR would hold files no agent reported or commits not on origin)
   sy pr [task] [--base main] [--branch name] [--draft] [--title t] [--no-push] [--yes]
                              branch + commit + GitHub pull request from a finished task (index/worktree untouched)
   sy run --at 02:30 | --in 3h | --when-reset claude|codex|any  [--file tasks.txt | "task"]

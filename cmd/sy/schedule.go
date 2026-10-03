@@ -142,8 +142,17 @@ func printSchedule(w io.Writer, goos, exe, dir, file string, clock time.Time, da
 	fmt.Fprintf(w, "Run `sy run --file %s` in %s at %s%s. Nothing is installed: copy the command.\n\n", file, dir, hhmm, map[bool]string{true: " every day", false: ""}[daily])
 	switch goos {
 	case "windows":
+		if strings.Contains(dir+exe+file, "%") {
+			// cmd.exe expands %NAME% inside quotes too, when the line is
+			// pasted and again when the task runs; there is no escape.
+			fmt.Fprintln(w, "Windows Task Scheduler: a path contains %, which cmd.exe would expand, so there is no command to paste.")
+			fmt.Fprintf(w, "  Create the task in the Task Scheduler app: program %s, arguments: run --file \"%s\", start in: %s\n", exe, file, dir)
+			break
+		}
 		// schtasks /tr takes one command line; cmd /c cds into the project.
-		tr := fmt.Sprintf(`cmd /c cd /d "%s" && "%s" run --file "%s" > "%s" 2>&1`, dir, exe, file, filepath.Join(dir, "sy-scheduled.log"))
+		// Inside it, the paths are quoted for cmd; the task file also for
+		// sy's own argv parser (a trailing backslash would escape the quote).
+		tr := fmt.Sprintf(`cmd /c cd /d "%s" && "%s" run --file "%s" > "%s" 2>&1`, dir, exe, argvTrail(file), filepath.Join(dir, "sy-scheduled.log"))
 		sched := "/sc once"
 		if daily {
 			sched = "/sc daily"
@@ -156,7 +165,7 @@ func printSchedule(w io.Writer, goos, exe, dir, file string, clock time.Time, da
 			sched += " /sd " + day.Format("01/02/2006")
 		}
 		fmt.Fprintln(w, "Windows Task Scheduler (run in a terminal; the task runs while you are logged in):")
-		fmt.Fprintf(w, "  schtasks /create /tn \"Switchyard %s\" %s /st %s /tr \"%s\"\n\n", hhmm, sched, hhmm, strings.ReplaceAll(tr, `"`, `\"`))
+		fmt.Fprintf(w, "  schtasks /create /tn \"Switchyard %s\" %s /st %s /tr %s\n\n", hhmm, sched, hhmm, cmdCaret(argvQuote(tr)))
 		fmt.Fprintln(w, "  (if /sd is rejected, use your system's date format; check with: schtasks /query /tn \"Switchyard "+hhmm+"\")")
 		fmt.Fprintln(w, "  remove it: schtasks /delete /tn \"Switchyard "+hhmm+"\" /f")
 		fmt.Fprintln(w, "  wake the PC for it: Task Scheduler > the task > Conditions > \"Wake the computer to run this task\"")
@@ -181,6 +190,57 @@ func printSchedule(w io.Writer, goos, exe, dir, file string, clock time.Time, da
 		}
 	}
 	fmt.Fprintln(w, "\nOr keep a terminal open instead: sy run --file", file, "--at", hhmm)
+}
+
+// argvTrail doubles the trailing backslashes of s, which goes between
+// double quotes on a command line read by the MSVCRT rules: "C:\" would
+// read as C:" plus the rest of the line.
+func argvTrail(s string) string {
+	t := strings.TrimRight(s, `\`)
+	return s + s[len(t):]
+}
+
+// argvQuote quotes s as one argument by the MSVCRT rules (schtasks reads
+// its argv that way): " becomes \", and the backslashes before a " or the
+// closing quote are doubled.
+func argvQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	slashes := 0
+	for _, r := range s {
+		switch r {
+		case '\\':
+			slashes++
+			continue
+		case '"':
+			b.WriteString(strings.Repeat(`\`, 2*slashes+1))
+		default:
+			b.WriteString(strings.Repeat(`\`, slashes))
+		}
+		b.WriteRune(r)
+		slashes = 0
+	}
+	b.WriteString(strings.Repeat(`\`, 2*slashes))
+	b.WriteByte('"')
+	return b.String()
+}
+
+// cmdCaret escapes s for an interactive cmd.exe prompt. cmd.exe toggles
+// quoting at every " (it does not know \" escapes), so the parts of an
+// argvQuote'd string between \" pairs are outside quotes for it: there,
+// & | < > ( ) ^ get a ^ so cmd passes them on instead of acting on them.
+func cmdCaret(s string) string {
+	var b strings.Builder
+	quoted := false
+	for _, r := range s {
+		if r == '"' {
+			quoted = !quoted
+		} else if !quoted && strings.ContainsRune("&|<>()^", r) {
+			b.WriteByte('^')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func shQuote(s string) string {

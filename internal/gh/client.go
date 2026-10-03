@@ -360,13 +360,15 @@ var GHCLIToken = func(host string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// Token finds a token for host: GITHUB_TOKEN, GH_TOKEN (GH_ENTERPRISE_TOKEN
-// first for an enterprise host), then `gh auth token`. source says where it
-// came from ("" when there is none).
+// Token finds a token for host. github.com: GITHUB_TOKEN, GH_TOKEN, then
+// `gh auth token`. Any other host (GitHub Enterprise): GH_ENTERPRISE_TOKEN,
+// GITHUB_ENTERPRISE_TOKEN, then `gh auth token --hostname <host>`; a
+// github.com token is never sent there (as with gh itself). source says
+// where it came from ("" when there is none).
 func Token(host string) (token, source string) {
 	vars := []string{"GITHUB_TOKEN", "GH_TOKEN"}
 	if !isDotCom(host) && host != "" {
-		vars = append([]string{"GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}, vars...)
+		vars = []string{"GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
 	}
 	for _, v := range vars {
 		if t := strings.TrimSpace(os.Getenv(v)); t != "" {
