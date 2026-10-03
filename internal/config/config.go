@@ -144,6 +144,12 @@ type VerifyCfg struct {
 	Timeout  Duration `yaml:"timeout"`
 }
 
+// NotifyCfg controls desktop notifications.
+type NotifyCfg struct {
+	Enabled bool     `yaml:"enabled"`
+	MinTask Duration `yaml:"min_task"` // only tasks that ran at least this long
+}
+
 // Config is the whole file.
 type Config struct {
 	Roles         map[string]RoleCfg     `yaml:"roles"`
@@ -151,6 +157,7 @@ type Config struct {
 	Routing       RoutingCfg             `yaml:"routing"`
 	Orchestrator  OrchestratorCfg        `yaml:"orchestrator"`
 	Verify        VerifyCfg              `yaml:"verify"`
+	Notify        NotifyCfg              `yaml:"notify"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`

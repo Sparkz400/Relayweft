@@ -119,6 +119,12 @@ verify:
   commands: []                     # e.g. ["go test ./...", "go vet ./..."]
   timeout: 10m
 
+# Desktop notifications (Windows toast, macOS, notify-send): a task finished
+# or failed, a provider hit its limit, or sy waits for your approval.
+notify:
+  enabled: true
+  min_task: 1m                     # skip "done" for tasks shorter than this
+
 # Text that means "usage limit reached" (case-insensitive regular expressions).
 limit_patterns:
   - "usage limit"
