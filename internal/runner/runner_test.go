@@ -450,3 +450,43 @@ func TestClaudeSessionID(t *testing.T) {
 		t.Errorf("claude session = %q", r.SessionID)
 	}
 }
+
+// Recorded from a real `codex exec --json` and `codex exec resume --json`
+// (Windows, 3 Oct 2026). The resume carries an item-level "error" that is
+// only a model-mismatch warning: the run must still succeed.
+func TestCodexRealRecordings(t *testing.T) {
+	for _, c := range []struct {
+		file, final        string
+		input, cached, out int64
+		warnings           int
+	}{
+		{"codex_real_hi.jsonl", "Hi!", 20925, 12032, 6, 0},
+		{"codex_real_resume.jsonl", "Bye!", 46228, 20352, 12, 1},
+	} {
+		p := &codexParser{}
+		evs := feed(t, p, c.file)
+		var r Result
+		p.Finish(&r)
+		if r.Err != nil || r.LimitHit {
+			t.Errorf("%s: err %v limit %v", c.file, r.Err, r.LimitHit)
+		}
+		if r.Final != c.final || r.SessionID != "01a1017b-c8e1-7400-a637-8305ef91e912" {
+			t.Errorf("%s: final %q session %q", c.file, r.Final, r.SessionID)
+		}
+		if r.Tokens.Input != c.input || r.Tokens.Cached != c.cached || r.Tokens.Output != c.out {
+			t.Errorf("%s: tokens %+v", c.file, r.Tokens)
+		}
+		w := 0
+		for _, e := range evs {
+			if e.Kind == event.Error {
+				t.Errorf("%s: error event %q", c.file, e.Text)
+			}
+			if strings.HasPrefix(e.Text, "warning:") {
+				w++
+			}
+		}
+		if w != c.warnings {
+			t.Errorf("%s: %d warnings, want %d", c.file, w, c.warnings)
+		}
+	}
+}
