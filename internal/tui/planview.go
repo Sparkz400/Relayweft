@@ -36,6 +36,38 @@ type planOverlay struct {
 	depSel int
 	depOn  []bool // parallel to depIDs
 	depIDs []string
+	// est is the dry-run estimate of the plan as edited (nil without one).
+	est *orchestrator.PlanEstimate
+}
+
+// estWidth is the width of the plan's ESTIMATE column.
+const estWidth = 22
+
+// estimateLines are the estimate's total and its budget warnings.
+func (p *planOverlay) estimateLines(m *Model, iw int) []string {
+	th := m.th
+	what := "estimate"
+	if _, ok := p.est.Step(orchestrator.FinalReviewID); ok {
+		what = "estimate incl. final review"
+	}
+	lines := []string{fit(th.fg(th.Router).Render(what+": ")+th.fg(th.Text).Render(p.est.Totals()), iw)}
+	if n := p.est.NoHistoryNote(); n != "" {
+		lines = append(lines, fit(th.fg(th.Muted).Render("  "+n+" (marked ?): fixed defaults · median, 25th-75th percentile"), iw))
+	}
+	for _, w := range p.est.Warnings {
+		lines = append(lines, fit(th.fg(th.Warn).Render("budget: "+w), iw))
+	}
+	return append(lines, "")
+}
+
+// reestimate updates the estimate after an edit (roles, kinds and
+// dependencies change routes and the wall time).
+func (p *planOverlay) reestimate() {
+	if p.r.estimate == nil {
+		return
+	}
+	e := p.r.estimate(clonePlan(p.plan))
+	p.est = &e
 }
 
 func newPlanOverlay(r *approvalReq, ascii bool) *planOverlay {
@@ -47,7 +79,9 @@ func newPlanOverlay(r *approvalReq, ascii bool) *planOverlay {
 		ta.Prompt = "│ "
 	}
 	ta.KeyMap.InsertNewline = bkey.NewBinding(bkey.WithKeys("enter", "ctrl+j"))
-	return &planOverlay{r: r, plan: clonePlan(*r.plan), ta: ta}
+	p := &planOverlay{r: r, plan: clonePlan(*r.plan), ta: ta}
+	p.reestimate()
+	return p
 }
 
 func (p *planOverlay) req() *approvalReq { return p.r }
@@ -81,6 +115,11 @@ func cycleRole(r string) string {
 }
 
 func (p *planOverlay) update(m *Model, k tea.KeyMsg) tea.Cmd {
+	defer func() {
+		if !p.editing { // not on every key typed into a prompt
+			p.reestimate()
+		}
+	}()
 	if p.editing {
 		switch k.String() {
 		case "ctrl+s":
@@ -283,6 +322,9 @@ func (p *planOverlay) view(m *Model, W, H int) string {
 	}
 	lines = append(lines, "")
 	head := fmt.Sprintf("  %-12s %-9s %-12s %s", "ID", "KIND", "ROLE", "TITLE")
+	if p.est != nil {
+		head = fmt.Sprintf("  %-12s %-9s %-12s %-*s %s", "ID", "KIND", "ROLE", estWidth, "ESTIMATE", "TITLE")
+	}
 	lines = append(lines, th.bold(th.Muted).Render(fit(head, iw)))
 	if n == 0 {
 		lines = append(lines, th.fg(th.Warn).Render("  (no subtasks left: esc cancels the task)"))
@@ -311,10 +353,20 @@ func (p *planOverlay) view(m *Model, W, H int) string {
 		if repo := planRepo(p.plan, st); repo != "" { // multi-repo task (o changes it)
 			title += th.fg(th.Router).Render(" · in " + repo)
 		}
-		row := cursor + th.fg(th.Text).Render(fit(st.ID, 12)) + " " + th.fg(th.Role(string(st.Kind))).Render(fit(string(st.Kind), 9)) + " " + rs.Render(fit(role, 12)) + " " + title
-		lines = append(lines, fit(row, iw))
+		row := cursor + th.fg(th.Text).Render(fit(st.ID, 12)) + " " + th.fg(th.Role(string(st.Kind))).Render(fit(string(st.Kind), 9)) + " " + rs.Render(fit(role, 12)) + " "
+		if p.est != nil {
+			cell := ""
+			if se, ok := p.est.Step(st.ID); ok {
+				cell = se.Short()
+			}
+			row += th.fg(th.Muted).Render(fit(cell, estWidth)) + " "
+		}
+		lines = append(lines, fit(row+title, iw))
 	}
 	lines = append(lines, "")
+	if p.est != nil {
+		lines = append(lines, p.estimateLines(m, iw)...)
+	}
 	if p.err != "" {
 		lines = append(lines, fit(th.fg(th.FailColor).Render(p.err), iw))
 	}

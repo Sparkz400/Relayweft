@@ -30,7 +30,10 @@ type Approver struct {
 	closeOnce sync.Once
 }
 
-var _ orchestrator.Approver = (*Approver)(nil)
+var (
+	_ orchestrator.Approver         = (*Approver)(nil)
+	_ orchestrator.EstimateApprover = (*Approver)(nil)
+)
 
 // NewApprover returns an approver that waits for the browser.
 func NewApprover() *Approver { return &Approver{done: make(chan struct{})} }
@@ -63,11 +66,15 @@ type Request struct {
 	Plan    *orchestrator.Plan `json:"plan,omitempty"`
 	Changes *ChangeView        `json:"changes,omitempty"`
 	Budget  *BudgetView        `json:"budget,omitempty"`
-	Created time.Time          `json:"created"`
+	// Estimate is the plan's dry-run estimate (plan requests whose
+	// orchestrator made one); the page asks for a new one after edits.
+	Estimate *orchestrator.PlanEstimate `json:"estimate,omitempty"`
+	Created  time.Time                  `json:"created"`
 
-	ctx   context.Context
-	cs    *orchestrator.ChangeSet
-	reply chan reply
+	ctx      context.Context
+	cs       *orchestrator.ChangeSet
+	estimate func(orchestrator.Plan) orchestrator.PlanEstimate
+	reply    chan reply
 }
 
 type reply struct {
@@ -207,6 +214,34 @@ func (a *Approver) ApprovePlan(ctx context.Context, task string, p orchestrator.
 		return p, false
 	}
 	return rep.plan, rep.ok
+}
+
+// ApprovePlanEstimate implements orchestrator.EstimateApprover: the page
+// shows each step's estimate and the total (EstimatePlan re-estimates an
+// edited plan).
+func (a *Approver) ApprovePlanEstimate(ctx context.Context, task string, p orchestrator.Plan, est func(orchestrator.Plan) orchestrator.PlanEstimate) (orchestrator.Plan, bool) {
+	cp := clonePlan(p)
+	e := est(clonePlan(p))
+	rep, ok := a.ask(&Request{ctx: ctx, Type: "plan", Task: task, Plan: &cp, Estimate: &e, estimate: est})
+	if !ok {
+		return p, false
+	}
+	return rep.plan, rep.ok
+}
+
+// EstimatePlan estimates a plan request's plan as edited on the page.
+func (a *Approver) EstimatePlan(id string, p orchestrator.Plan) (orchestrator.PlanEstimate, error) {
+	r, err := a.find(id, "plan")
+	if err != nil {
+		return orchestrator.PlanEstimate{}, err
+	}
+	if r.estimate == nil {
+		return orchestrator.PlanEstimate{}, errors.New("this plan has no estimate")
+	}
+	if r.Plan != nil {
+		p.Repos = r.Plan.Repos
+	}
+	return r.estimate(clonePlan(p)), nil
 }
 
 // ReviewChanges implements orchestrator.Approver. Parallel agents may call

@@ -507,6 +507,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	}()
 
 	began := time.Now()
+	o.autoLearn() // routing.learn: auto (learn.go)
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
 	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
@@ -749,7 +750,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		o.emit(event.Event{Kind: event.Phase, Text: "approve-plan"})
 		o.logf("waiting for you to approve the plan (%d subtasks)", len(plan.Subtasks))
 		plan.Repos = t.workspaceNames()
-		p, ok := o.opts.Approver.ApprovePlan(ctx, t.text, plan)
+		p, ok := o.approvePlan(ctx, t, plan) // with the dry-run estimate (estimate.go)
 		if ctx.Err() != nil {
 			return TaskResult{Summary: "cancelled at plan approval"}
 		}
@@ -1534,7 +1535,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 
 	dc := d
 	o.emit(event.Event{Kind: event.Route, AgentID: agentID, ParentID: parent, Provider: d.Provider, Model: d.Model, Role: d.Role, Decision: &dc})
-	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeDecision, TaskID: t.id, Agent: agentID, Step: step.ID, Attempt: attempt,
+	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeDecision, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, Rule: d.Rule, Reason: d.Reason,
 		Confidence: d.Confidence, Fallback: d.Fallback, Judged: d.Judged})
 	title := step.Title
@@ -1602,7 +1603,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 		o.emit(event.Event{Kind: event.ProviderState, Provider: d.Provider, Until: until, Text: fmt.Sprintf("%s %s until %s; /limit %s reset to retry", d.Provider, why, until.Format("15:04"), d.Provider)})
 	}
 	tk := res.Tokens
-	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Attempt: attempt,
+	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit,
 		Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files, Text: clip(res.Final, 500)})
 	// Over budget now? Only noted: this agent's work is done, and a task

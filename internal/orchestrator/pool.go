@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sparkz400/switchyard/internal/canon"
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/sysload"
@@ -356,31 +357,9 @@ func samePath(a, b string) bool { return canonPath(a) == canonPath(b) }
 // canonPath).
 func SamePath(a, b string) bool { return samePath(a, b) }
 
-// canonPath normalizes a path for comparison: git prints C:/x where Go uses
-// C:\x, git resolves symlinks (macOS /var -> /private/var), and Windows paths
-// are case-insensitive.
-func canonPath(p string) string {
-	p = filepath.Clean(filepath.FromSlash(p))
-	p = evalExisting(p)
-	if runtime.GOOS == "windows" {
-		p = strings.ToLower(p)
-	}
-	return p
-}
-
-// evalExisting resolves symlinks in p's nearest existing ancestor and keeps
-// the rest, so a file an agent deleted still canonicalizes like its folder
-// (macOS: /var/... -> /private/var/...).
-func evalExisting(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
-	}
-	parent := filepath.Dir(p)
-	if parent == p {
-		return p
-	}
-	return filepath.Join(evalExisting(parent), filepath.Base(p))
-}
+// canonPath normalizes a path for comparison (see canon.Path: git's C:/x,
+// macOS /private/var, Windows case and 8.3 names).
+func canonPath(p string) string { return canon.Path(p) }
 
 // CleanPool removes the pooled worktrees of the repo containing dir that are
 // not in use and returns how many were removed. Slots that could not be
