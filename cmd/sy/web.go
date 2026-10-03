@@ -70,7 +70,7 @@ func startWeb(c *common, port int, demo bool, speed float64) (*webServer, error)
 		Events: w.events, ForceProvider: c.provider, NoGit: demo, Mode: mode, Approver: ap,
 	})
 	opt := web.Options{Orc: orc, Events: w.events, Approver: ap, Dir: dir, Demo: demo, Version: version, SessionLog: w.log.Path(),
-		Warn: func(msg string) { fmt.Fprintln(os.Stderr, "\n"+msg) }}
+		Warn: func(msg string) { fmt.Fprintln(os.Stderr, "\n"+msg) }, AllowSleep: c.allowSleep}
 	if demo {
 		opt.DemoTask = demoTask
 	}

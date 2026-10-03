@@ -50,6 +50,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/kill", s.handleKill)
 	mux.HandleFunc("POST /api/approvals/{id}/plan", s.handlePlan)
 	mux.HandleFunc("POST /api/approvals/{id}/changes", s.handleChanges)
+	mux.HandleFunc("POST /api/approvals/{id}/budget", s.handleBudget)
+	mux.HandleFunc("POST /api/schedule", s.handleSchedule)
 	mux.HandleFunc("GET /api/routes", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.routes()) })
 	mux.HandleFunc("POST /api/routes", s.handleSetRoute)
 	mux.HandleFunc("POST /api/config/save", func(w http.ResponseWriter, r *http.Request) {
@@ -674,6 +676,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		f.Since = time.Now().Add(-d)
 	}
 	st := sessionlog.Aggregate(recs, f)
+	st.DayLimitUSD, st.DayLimitTokens = cfg.Budget.DayUSD, cfg.Budget.DayTokens
 	var b strings.Builder
 	st.Print(&b)
 	v := statsView{Stats: st, Text: b.String(), MinTasks: minTuneTasks, LogDir: dir, Totals: map[string]int64{},

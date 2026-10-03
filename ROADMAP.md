@@ -193,7 +193,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.6 | ✅ **Hunk-level review**: in the TUI and in `sy web`. |
 | 4.7 | ✅ **Talk to a running agent**: `@agent message` is delivered when the agent's turn ends, before its work is merged. |
 | 4.8 | ✅ **Persistent follow-ups**: sessions are kept per project folder. |
-| 4.9 | **Scheduled runs**: start a task file at a set time, for example when the Claude 5-hour window resets. |
+| 4.9 | ✅ **Scheduled runs**: `sy run --at 02:30 / --in 3h / --when-reset claude` (task file or one task), `/schedule` in the TUI and the queue panel in `sy web`. The PC is kept awake while a scheduled run waits and runs; `sy schedule` prints a Task Scheduler / cron line. Plus **budgets** per task and per day (tokens and API-equivalent $). |
 
 ---
 
@@ -228,4 +228,3 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
    - For signed binaries, buy a code-signing certificate (see `packaging/README.md`).
 5. **Open Phase 4 items:**
    - 4.3: more providers. Started, then paused at your request.
-   - 4.9: scheduled runs.

@@ -136,6 +136,8 @@ func cmdRun(args []string) error {
 	quiet := fs.Bool("quiet", false, "only print routing, results and errors")
 	file := fs.String("file", "", "run the tasks in this file one after another, unattended (one per line, or blocks separated by a line with ---)")
 	approve := fs.Bool("approve", false, "ask on the terminal before a plan runs (and per change when orchestrator.review_changes is on)")
+	var sf scheduleFlags
+	sf.register(fs)
 	fs.Parse(args)
 	var tasks []string
 	if *file != "" {
@@ -165,8 +167,11 @@ func cmdRun(args []string) error {
 		}
 		single0.prov, single0.route = prov, route
 	}
+	// Task files and scheduled runs are unattended: nobody is there to
+	// answer, so they never ask (a budget limit stops them).
+	unattended := *file != "" || sf.set()
 	var ap orchestrator.Approver
-	if *approve && *file == "" {
+	if *approve && !unattended {
 		ap = newTermApprover(os.Stdin, os.Stdout)
 	}
 	h, err := startHeadless(&c, *quiet, ap)
@@ -174,6 +179,15 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer h.close()
+	what := "the task"
+	if len(tasks) > 1 {
+		what = fmt.Sprintf("%d tasks", len(tasks))
+	}
+	release, err := waitUntilDue(h.ctx, os.Stdout, &sf, h.cfg, h.orc.Tracker(), c.allowSleep, what)
+	if err != nil {
+		return err
+	}
+	defer release()
 	failed := 0
 	for i, task := range tasks {
 		if h.ctx.Err() != nil {
@@ -186,7 +200,7 @@ func cmdRun(args []string) error {
 		if single0.prov != "" {
 			res = h.orc.RunSingle(h.ctx, task, single0.prov, single0.route)
 		} else {
-			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: *file != ""})
+			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: unattended})
 		}
 		h.report(res)
 		if !res.OK {
@@ -568,6 +582,31 @@ func (a *termApprover) ReviewChanges(ctx context.Context, cs orchestrator.Change
 		default:
 			fmt.Fprintln(a.out, "unknown answer")
 		}
+	}
+}
+
+// ApproveBudget asks whether the task may go on past a budget limit.
+// Anything but yes stops it.
+func (a *termApprover) ApproveBudget(ctx context.Context, r orchestrator.BudgetRequest) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	fmt.Fprintf(a.out, "\nBudget reached: %s\n", r)
+	if r.Next != "" {
+		fmt.Fprintf(a.out, "  next: %s\n", r.Next)
+	}
+	fmt.Fprintf(a.out, "  (%s)\n", r.RaiseHint())
+	for {
+		ans, ok := a.ask(ctx, "Continue past the limit until this task ends? [y/N]: ")
+		if !ok {
+			return false
+		}
+		switch strings.ToLower(ans) {
+		case "y", "yes":
+			return true
+		case "", "n", "no", "q":
+			return false
+		}
+		fmt.Fprintln(a.out, "answer y or n")
 	}
 }
 

@@ -81,6 +81,8 @@ func main() {
 		err = cmdUpdate(args)
 	case "trust":
 		err = cmdTrust(args)
+	case "schedule":
+		err = cmdSchedule(args)
 	case "web":
 		err = cmdWeb(args)
 	case "app":
@@ -122,6 +124,9 @@ Usage:
   sy run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
   sy run --file tasks.txt    run a list of tasks one after another, unattended
   sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
+  sy run --at 02:30 | --in 3h | --when-reset claude|codex|any  [--file tasks.txt | "task"]
+                             start later, unattended (PC kept awake; --allow-sleep to opt out)
+  sy schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)
   sy history [--all] [-n 20]       recent tasks in this directory, with status and cost
   sy resume [task id]        continue an interrupted task (default: the last one here)
   sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline
@@ -148,6 +153,7 @@ Flags (TUI and run):
   --threads <n>  --no-parallel  --no-review  --judge
   --ascii | --unicode        force the ASCII or Unicode theme
   --demo  --speed <x>        demo mode (TUI only); speed multiplies animation pace
+  --budget-task-tokens <n>  --budget-task-usd <$>  --budget-day-usd <$>   budget limits (0 = off; config: budget)
 
 Roles: planner, worker, worker_high, explorer, researcher, reviewer, judge
 `)
@@ -170,6 +176,11 @@ type common struct {
 	judge      bool
 	ascii      bool
 	unicode    bool
+	// Budget overrides (negative = not given) and the keep-awake opt-out.
+	budgetTaskTokens int64
+	budgetTaskUSD    float64
+	budgetDayUSD     float64
+	allowSleep       bool
 }
 
 func (c *common) register(fs *flag.FlagSet) {
@@ -184,6 +195,10 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.BoolVar(&c.judge, "judge", false, "enable the LLM judge for unclear routing")
 	fs.BoolVar(&c.ascii, "ascii", false, "ASCII theme")
 	fs.BoolVar(&c.unicode, "unicode", false, "Unicode theme")
+	fs.Int64Var(&c.budgetTaskTokens, "budget-task-tokens", -1, "stop or ask when a task used this many fresh tokens (0 = no limit; default: config budget.task_tokens)")
+	fs.Float64Var(&c.budgetTaskUSD, "budget-task-usd", -1, "stop or ask when a task cost this much, API-equivalent $ (0 = no limit)")
+	fs.Float64Var(&c.budgetDayUSD, "budget-day-usd", -1, "stop or ask when today's tasks cost this much, API-equivalent $ (0 = no limit)")
+	fs.BoolVar(&c.allowSleep, "allow-sleep", false, "let the PC sleep while scheduled tasks wait or run")
 }
 
 // setup loads config and applies flag overrides.
@@ -269,6 +284,15 @@ func (c *common) setup() (*config.Store, string, error) {
 		if c.unicode {
 			cf.Theme = "unicode"
 		}
+		if c.budgetTaskTokens >= 0 {
+			cf.Budget.TaskTokens = c.budgetTaskTokens
+		}
+		if c.budgetTaskUSD >= 0 {
+			cf.Budget.TaskUSD = c.budgetTaskUSD
+		}
+		if c.budgetDayUSD >= 0 {
+			cf.Budget.DayUSD = c.budgetDayUSD
+		}
 		return nil
 	})
 	if err != nil {
@@ -321,6 +345,7 @@ func cmdTUI(args []string) error {
 	m := tui.New(tui.Options{
 		Orc: orc, Events: events, Dir: dir, Theme: tui.NewTheme(cfg.Theme), Demo: *demo,
 		DemoTask: map[bool]string{true: demoTask}[*demo], SessionLog: log.Path(), Version: version, Approver: ap,
+		AllowSleep: c.allowSleep,
 	})
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()
@@ -436,7 +461,9 @@ func cmdStats(args []string) error {
 		}
 		f.Since = time.Now().Add(-d)
 	}
-	sessionlog.Aggregate(recs, f).Print(os.Stdout)
+	st := sessionlog.Aggregate(recs, f)
+	st.DayLimitUSD, st.DayLimitTokens = cfg.Budget.DayUSD, cfg.Budget.DayTokens
+	st.Print(os.Stdout)
 	fmt.Println("\nlogs:", cfg.SessionDir())
 	return nil
 }

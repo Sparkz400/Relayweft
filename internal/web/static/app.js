@@ -542,6 +542,7 @@ function renderHeader() {
     cost.append(h('b', null, human(tok) + ' tok' + (usd ? ' · $' + usd.toFixed(2) : '')), s.running ? 'this task' : 'last task');
     cost.title = usd ? 'Fresh tokens; $ is Claude\'s API-equivalent price (not billed on a subscription)' : 'Fresh tokens used';
   }
+  renderBudget(s.budget);
   $('#btn-pause').classList.toggle('on', !!s.paused);
   $('#btn-pause').title = s.paused ? 'Resume dispatching' : 'Pause dispatching (running agents finish)';
   $('#btn-cancel').disabled = !s.running;
@@ -550,6 +551,29 @@ function renderHeader() {
   qb.textContent = s.queue.length;
   $('#history-badge').hidden = !s.interrupted;
   tickElapsed();
+}
+// Budget status: "$0.42/$2 today" (and the running task's share).
+function money(v) { return Number.isInteger(v) ? String(v) : v.toFixed(2); }
+function renderBudget(b) {
+  const el = $('#budget');
+  const l = (b && b.limits) || {};
+  let main = '', sub = '', worst = 0;
+  const level = (used, max) => { worst = Math.max(worst, used / max); };
+  if (l.day_usd > 0) { main = `$${b.day_usd.toFixed(2)}/$${money(l.day_usd)}`; sub = 'today'; level(b.day_usd, l.day_usd); }
+  else if (l.day_tokens > 0) { main = `${human(b.day_tokens)}/${human(l.day_tokens)} tok`; sub = 'today'; level(b.day_tokens, l.day_tokens); }
+  if (b && b.running) {
+    let t = '';
+    if (l.task_usd > 0) { t = `task $${b.task_usd.toFixed(2)}/$${money(l.task_usd)}`; level(b.task_usd, l.task_usd); }
+    else if (l.task_tokens > 0) { t = `task ${human(b.task_tokens)}/${human(l.task_tokens)} tok`; level(b.task_tokens, l.task_tokens); }
+    if (t && main) sub += ' · ' + t;
+    else if (t) { main = t; sub = 'budget'; }
+  }
+  el.hidden = !main;
+  if (!main) return;
+  el.textContent = '';
+  el.append(h('b', null, main), sub);
+  el.dataset.level = worst >= 1 ? 'over' : (l.warn_at > 0 && worst >= l.warn_at ? 'warn' : '');
+  el.title = 'Budget (config budget.*; 0 = off). $ is Claude\'s API-equivalent price; tokens are fresh tokens. At a limit you are asked whether the task goes on; queued and scheduled tasks stop.';
 }
 function tickElapsed() {
   const s = S.snap;
@@ -576,7 +600,7 @@ function renderBanner() {
   if (waiting.length && (!S.openApproval)) {
     const a = waiting[0];
     b.append(h('span', { class: 'dot' }),
-      h('div', { class: 'grow' }, h('b', null, a.type === 'plan' ? 'A plan is waiting for your approval' : `Changes of ${a.changes.step_id} are waiting for your review`),
+      h('div', { class: 'grow' }, h('b', null, approvalTitle(a)),
         waiting.length > 1 ? h('span', { class: 'muted' }, ` · ${waiting.length - 1} more`) : ''),
       h('button', { class: 'btn primary sm', onclick: () => openApproval(a, true) }, 'Open'));
     b.hidden = false;
@@ -941,7 +965,7 @@ function syncApprovals() {
   for (const a of list) {
     if (!S.seenApprovals.has(a.id)) {
       S.seenApprovals.add(a.id);
-      notify('Switchyard needs you', a.type === 'plan' ? 'Approve the plan: ' + oneLine(a.task, 120) : 'Review the changes of ' + a.changes.step_id);
+      notify('Switchyard needs you', a.type === 'plan' ? 'Approve the plan: ' + oneLine(a.task, 120) : a.type === 'budget' ? 'Budget reached: ' + a.budget.text : 'Review the changes of ' + a.changes.step_id);
       if (!S.openApproval && !$('#modal').dataset.busy) openApproval(a);
     }
   }
@@ -973,9 +997,48 @@ function openApproval(a) {
   card.textContent = '';
   card.className = 'modal-card';
   if (a.type === 'plan') planEditor(a, card);
+  else if (a.type === 'budget') budgetPanel(a, card);
   else reviewPanel(a, card);
   $('#modal').hidden = false;
   renderBanner();
+}
+
+function approvalTitle(a) {
+  if (a.type === 'plan') return 'A plan is waiting for your approval';
+  if (a.type === 'budget') return 'Budget reached: ' + a.budget.text + ' - continue?';
+  return `Changes of ${a.changes.step_id} are waiting for your review`;
+}
+
+// Budget question: go on past the limit (until the task ends) or stop.
+function budgetPanel(a, card) {
+  const b = a.budget;
+  const err = h('div', { class: 'm-err' });
+  async function answer(ok) {
+    err.textContent = '';
+    try {
+      $('#modal').dataset.busy = '1';
+      const r = await api('POST', `/api/approvals/${a.id}/budget`, { ok });
+      toast(r.message, ok ? 'ok' : 'warn');
+      closeModal();
+    } catch (e) {
+      err.textContent = e.message;
+    } finally {
+      delete $('#modal').dataset.busy;
+    }
+  }
+  card.append(
+    h('div', { class: 'm-head' },
+      h('div', { class: 'm-kicker' }, h('span', { class: 'pip' }), 'Budget reached'),
+      h('div', { class: 'm-title' }, oneLine(a.task, 160)),
+      h('div', { class: 'm-sub' }, b.next ? 'Next: ' + b.next : '')),
+    h('div', { class: 'm-body' },
+      h('p', { class: 'budget-q' }, b.text + '.'),
+      h('p', { class: 'muted small' }, 'Continue lets this task run past the limit until it ends. Stop ends it cleanly; finished work stays. To change the limit for good: ' + b.hint + '.')),
+    h('div', { class: 'm-foot' }, err, h('span', { class: 'grow' }),
+      h('button', { class: 'btn ghost', onclick: hideApproval, title: 'Hide (the question keeps waiting)' }, 'Later'),
+      h('button', { class: 'btn danger', onclick: () => answer(false) }, 'Stop the task'),
+      h('button', { class: 'btn primary', onclick: () => answer(true), title: 'Ctrl+Enter' }, icon('play'), 'Continue', h('kbd', null, 'Ctrl ↵'))));
+  card._submit = () => answer(true);
 }
 
 // Plan approval editor.
@@ -1377,14 +1440,38 @@ async function drawModels(body) {
 
 function drawQueue(body) {
   const q = (S.snap && S.snap.queue) || [];
+  const ae = document.activeElement;
+  const refocus = ae && body.contains(ae) && ae.dataset && ae.dataset.sched ? ae.dataset.sched : '';
   body.textContent = '';
-  body.append(h('div', { class: 'toolbar' }, h('div', { class: 'grow muted small' }, 'Tasks typed while one runs wait here and run one after another, unattended (no approvals).'),
+  body.append(h('div', { class: 'toolbar' }, h('div', { class: 'grow muted small' }, 'Tasks typed while one runs wait here and run one after another, unattended (no approvals). Scheduled tasks start at their time, after any running task.'),
     q.length ? h('button', { class: 'btn sm danger', onclick: () => act('POST', '/api/queue/clear', {}, 'warn') }, 'Clear all') : ''));
+  // The drawer re-renders on every state update: keep what is typed.
+  const sf = S.sched || (S.sched = { when: '', what: '' });
+  const when = h('input', { class: 'in when', placeholder: '02:30 · in 2h · reset claude', value: sf.when, dataset: { sched: 'when' }, title: 'When: HH:MM (today or tomorrow), "2026-10-04 02:30", in 2h, or reset claude|codex|any (when that usage limit resets)' });
+  const what = h('input', { class: 'in what', placeholder: 'Task to run then…', value: sf.what, dataset: { sched: 'what' } });
+  for (const [el, k] of [[when, 'when'], [what, 'what']]) el.addEventListener('input', () => { sf[k] = el.value; });
+  const go = async () => {
+    if (!sf.when.trim() || !sf.what.trim()) { toast('Give a time and a task', 'warn'); return; }
+    try {
+      const r = await api('POST', '/api/schedule', { when: sf.when, text: sf.what });
+      toast(r.message, 'ok');
+      sf.what = '';
+      what.value = '';
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  what.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  body.append(h('div', { class: 'sched-form' }, when, what, h('button', { class: 'btn sm primary', onclick: go }, 'Schedule')));
+  if (refocus) {
+    const el = refocus === 'when' ? when : what;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }
   if (!q.length) { body.append(h('div', { class: 'empty-list' }, 'The queue is empty.')); return; }
   const list = h('div', { class: 'list' });
   q.forEach((j, i) => list.append(h('div', { class: 'item', style: `animation-delay:${i * 30}ms` },
     h('div', { class: 't' }, j.label),
-    h('div', { class: 'meta' }, h('span', { class: 'pill' }, j.kind), '#' + (i + 1) + ' in line'),
+    h('div', { class: 'meta' }, h('span', { class: 'pill' }, j.at ? 'scheduled' : j.kind),
+      j.at ? 'at ' + new Date(Date.parse(j.at) + S.timeOffset).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '#' + (i + 1) + ' in line'),
     h('div', { class: 'side' }, h('button', { class: 'btn sm', onclick: () => act('POST', '/api/queue/remove', { id: j.id }) }, icon('trash'), 'Remove')))));
   body.append(list);
 }

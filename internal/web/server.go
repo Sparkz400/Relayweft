@@ -36,6 +36,9 @@ type Options struct {
 	SessionLog string
 	// Warn prints a security warning on sy's terminal (a link used twice).
 	Warn func(string)
+	// AllowSleep: do not keep the machine awake while scheduled tasks
+	// wait or run.
+	AllowSleep bool
 }
 
 // Server is the web UI backend.
@@ -64,6 +67,7 @@ type Server struct {
 	dirty       bool
 	interrupted *orchestrator.TaskState
 	last        *resultView
+	awake       func() // releases the keep-awake while scheduled work is pending
 
 	stateKick chan struct{}
 	stop      chan struct{}
@@ -92,14 +96,18 @@ func New(o Options) (*Server, error) {
 		s.interrupted = orchestrator.LastInterrupted(o.Dir)
 	}
 	s.ap.setNotify(s.kick, func(r *Request) {
-		if r.Type == "plan" {
+		switch r.Type {
+		case "plan":
 			s.desktopAlert("Switchyard needs you", "approve the plan: "+oneLine(r.Task, 120))
-		} else {
+		case "budget":
+			s.desktopAlert("Switchyard needs you", "budget reached: "+r.Budget.Text)
+		default:
 			s.desktopAlert("Switchyard needs you", "review the changes of "+r.Changes.StepID)
 		}
 	})
 	go s.pump()
 	go s.stateLoop()
+	go s.scheduleLoop()
 	return s, nil
 }
 
@@ -316,34 +324,36 @@ type settingsView struct {
 }
 
 type jobView struct {
-	ID    int    `json:"id"`
-	Label string `json:"label"`
-	Kind  string `json:"kind"`
+	ID    int        `json:"id"`
+	Label string     `json:"label"`
+	Kind  string     `json:"kind"`
+	At    *time.Time `json:"at,omitempty"` // scheduled start
 }
 
 type stateView struct {
-	Version     string                  `json:"version"`
-	Dir         string                  `json:"dir"`
-	Project     string                  `json:"project"`
-	Demo        bool                    `json:"demo"`
-	DemoTask    string                  `json:"demo_task,omitempty"`
-	ConfigPath  string                  `json:"config_path"`
-	SessionLog  string                  `json:"session_log,omitempty"`
-	Running     bool                    `json:"running"`
-	Cancelling  bool                    `json:"cancelling"`
-	Paused      bool                    `json:"paused"`
-	Phase       string                  `json:"phase"`
-	Task        string                  `json:"task,omitempty"`
-	TaskStart   *time.Time              `json:"task_start,omitempty"`
-	Queue       []jobView               `json:"queue"`
-	Approvals   []*Request              `json:"approvals"`
-	Providers   map[string]providerView `json:"providers"`
-	Settings    settingsView            `json:"settings"`
-	Dirty       bool                    `json:"dirty"`
-	Agents      []string                `json:"running_agents"`
-	Interrupted *orchestrator.TaskState `json:"interrupted,omitempty"`
-	Last        *resultView             `json:"last,omitempty"`
-	Now         time.Time               `json:"now"`
+	Version     string                    `json:"version"`
+	Dir         string                    `json:"dir"`
+	Project     string                    `json:"project"`
+	Demo        bool                      `json:"demo"`
+	DemoTask    string                    `json:"demo_task,omitempty"`
+	ConfigPath  string                    `json:"config_path"`
+	SessionLog  string                    `json:"session_log,omitempty"`
+	Running     bool                      `json:"running"`
+	Cancelling  bool                      `json:"cancelling"`
+	Paused      bool                      `json:"paused"`
+	Phase       string                    `json:"phase"`
+	Task        string                    `json:"task,omitempty"`
+	TaskStart   *time.Time                `json:"task_start,omitempty"`
+	Queue       []jobView                 `json:"queue"`
+	Approvals   []*Request                `json:"approvals"`
+	Providers   map[string]providerView   `json:"providers"`
+	Settings    settingsView              `json:"settings"`
+	Dirty       bool                      `json:"dirty"`
+	Agents      []string                  `json:"running_agents"`
+	Interrupted *orchestrator.TaskState   `json:"interrupted,omitempty"`
+	Last        *resultView               `json:"last,omitempty"`
+	Now         time.Time                 `json:"now"`
+	Budget      orchestrator.BudgetStatus `json:"budget"`
 }
 
 func (s *Server) snapshot() stateView {
@@ -383,9 +393,15 @@ func (s *Server) snapshot() stateView {
 	}
 	v.Queue = []jobView{}
 	for _, j := range s.queue {
-		v.Queue = append(v.Queue, jobView{ID: j.ID, Label: j.label(), Kind: j.kind()})
+		jv := jobView{ID: j.ID, Label: j.label(), Kind: j.kind()}
+		if !j.at.IsZero() {
+			at := j.at
+			jv.At = &at
+		}
+		v.Queue = append(v.Queue, jv)
 	}
 	s.mu.Unlock()
+	v.Budget = s.orc.BudgetStatus()
 	return v
 }
 
@@ -403,6 +419,7 @@ type job struct {
 	force      bool
 	single     *singleRoute
 	unattended bool
+	at         time.Time // scheduled start (zero = as soon as possible)
 }
 
 type singleRoute struct {
@@ -579,11 +596,7 @@ func (s *Server) jobFinished() {
 	s.running, s.cancelling = false, false
 	s.cancel = nil
 	s.current = nil
-	var next *job
-	if len(s.queue) > 0 {
-		next = s.queue[0]
-		s.queue = s.queue[1:]
-	}
+	next := s.popDueLocked(time.Now()) // scheduled jobs wait for their time
 	left := len(s.queue)
 	if next != nil {
 		select {

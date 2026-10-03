@@ -225,6 +225,38 @@ When a task finishes, the TUI log, `sy run` and `sy stats` show what it used:
 
 "Fresh" means uncached input plus output. The $ figure is what Claude Code reports a task *would* cost on the API; on a subscription you are not billed it, but it is a good relative measure. The limit share comes from the provider's own quota reports.
 
+### Budgets
+
+Cap what one task and one day may use (`budget:` in `switchyard.yaml`, 0 = off):
+
+```yaml
+budget: {task_tokens: 0, task_usd: 2, day_tokens: 0, day_usd: 10, warn_at: 0.8}
+```
+
+Tokens are fresh tokens on both providers; $ is Claude's API-equivalent price. The day total is today's finished tasks (local time, from the session logs of every `sy`) plus the running one. Before each agent starts and after each one finishes, `sy` checks the limits:
+
+- at `warn_at` (80%) the log shows one warning per limit;
+- at a limit, a task you are watching asks: **continue** (until this task ends) or **stop**. The TUI shows a small prompt (y/n), `sy web` a dialog, `sy run --approve` asks on the terminal;
+- queued, scheduled and `--file` tasks, and `sy run` without `--approve`, never ask: they stop cleanly with "stopped by budget: …" and say how to raise the limit.
+
+Flags for one run: `--budget-task-tokens`, `--budget-task-usd`, `--budget-day-usd` (on `sy`, `sy run`, `sy web`). The TUI and web headers show e.g. `$0.42/$10 today`, and `sy stats` adds the daily budget to its per-day table.
+
+### Scheduled runs
+
+Start work later, for example overnight or when a usage window resets:
+
+```
+sy run --file tasks.txt --at 02:30        # today, or tomorrow if 02:30 has passed; also "2026-10-04 02:30" or RFC3339
+sy run --in 3h "update the dependencies"
+sy run --file tasks.txt --when-reset claude   # claude | codex | any
+```
+
+`--when-reset` uses the newest known reset time: Claude's quota reports and limit hits are logged, so a later `sy run` finds them. When it is unknown or already past, the run starts now and says so. While waiting, `sy` prints a countdown every minute (Ctrl+C cancels) and keeps the PC from sleeping until the run ends (Windows: `SetThreadExecutionState`; macOS: `caffeinate`); `--allow-sleep` turns that off. Scheduled runs are unattended: no approvals, and a budget limit stops them.
+
+In the TUI, `/schedule 02:30 <task>`, `/schedule in 2h <task>` or `/schedule reset claude <task>` puts the task in the queue with a start time; it runs when due, after any running task. `/schedule` lists them, `/schedule rm <n>` removes one. In `sy web`, the Queue panel has the same form, and scheduled items show their time and a remove button.
+
+`sy schedule --file tasks.txt --at 02:30 [--daily]` prints a ready Windows Task Scheduler (`schtasks /create …`) or cron command, so the OS starts `sy` even when no terminal is open. It installs nothing.
+
 ### Protecting your machine
 
 Switchyard should never be what tips a PC over.

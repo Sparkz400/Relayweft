@@ -58,10 +58,11 @@ func (a *Approver) changed() {
 // Request is one question for the person: a plan or a change set.
 type Request struct {
 	ID      string             `json:"id"`
-	Type    string             `json:"type"` // "plan" or "changes"
+	Type    string             `json:"type"` // "plan", "changes" or "budget"
 	Task    string             `json:"task,omitempty"`
 	Plan    *orchestrator.Plan `json:"plan,omitempty"`
 	Changes *ChangeView        `json:"changes,omitempty"`
+	Budget  *BudgetView        `json:"budget,omitempty"`
 	Created time.Time          `json:"created"`
 
 	ctx   context.Context
@@ -216,6 +217,28 @@ func (a *Approver) ReviewChanges(ctx context.Context, cs orchestrator.ChangeSet)
 		return orchestrator.ChangeDecision{}
 	}
 	return rep.decision
+}
+
+// BudgetView is a budget question as the page shows it.
+type BudgetView struct {
+	orchestrator.BudgetRequest
+	Text string `json:"text"` // e.g. "this task's cost $2.04 reached the budget of $2.00"
+	Hint string `json:"hint"` // how to raise the limit for good
+}
+
+// ApproveBudget implements orchestrator.Approver: true lets the task go on
+// past the limit until it ends.
+func (a *Approver) ApproveBudget(ctx context.Context, r orchestrator.BudgetRequest) bool {
+	rep, ok := a.ask(&Request{ctx: ctx, Type: "budget", Task: r.Task, Budget: &BudgetView{BudgetRequest: r, Text: r.String(), Hint: r.RaiseHint()}})
+	return ok && rep.ok
+}
+
+// AnswerBudget answers a budget question: go on (ok) or stop the task.
+func (a *Approver) AnswerBudget(id string, ok bool) error {
+	if _, err := a.find(id, "budget"); err != nil {
+		return err
+	}
+	return a.answer(id, reply{ok: ok})
 }
 
 // AnswerPlan approves (ok, with the possibly edited plan) or rejects a plan.

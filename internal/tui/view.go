@@ -13,6 +13,7 @@ import (
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/switchyard/internal/schedule"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
 )
 
@@ -177,6 +178,12 @@ func (m *Model) viewHeader(W int) string {
 	left += th.fg(th.Muted).Render(" · ") + th.fg(th.Router).Render(phase)
 	if n := len(m.queue); n > 0 {
 		left += th.fg(th.Warn).Render(fmt.Sprintf(" · queued (%d)", n))
+		if next := m.nextScheduled(); !next.IsZero() {
+			left += th.fg(th.Warn).Render(" · next " + schedule.Clock(next, time.Now()))
+		}
+	}
+	if b := m.budgetLine(); b != "" {
+		left += th.fg(th.Muted).Render(" · ") + b
 	}
 	if m.orc.Paused() {
 		left += " " + lipgloss.NewStyle().Background(th.Warn).Foreground(lipgloss.Color("#000000")).Bold(true).Render(" PAUSED ")
@@ -224,6 +231,53 @@ func (m *Model) viewHeader(W int) string {
 		}
 	}
 	return left + strings.Repeat(" ", gap) + r
+}
+
+// budgetLine is the budget status for the header, e.g. "$0.42/$2 today"
+// ("" when no budget is set). It turns yellow at warn_at and red at the
+// limit.
+func (m *Model) budgetLine() string {
+	if !m.store.Budget().Any() {
+		return ""
+	}
+	st := m.orc.BudgetStatus()
+	b := st.Limits
+	th := m.th
+	var parts []string
+	worst := 0.0
+	add := func(used, max float64, s string) {
+		parts = append(parts, s)
+		worst = math.Max(worst, used/max)
+	}
+	if b.DayUSD > 0 {
+		add(st.DayUSD, b.DayUSD, fmt.Sprintf("$%.2f/$%s today", st.DayUSD, money(b.DayUSD)))
+	} else if b.DayTokens > 0 {
+		add(float64(st.DayTokens), float64(b.DayTokens), fmt.Sprintf("%s/%s tok today", sessionlog.Human(st.DayTokens), sessionlog.Human(b.DayTokens)))
+	}
+	if st.Running && b.TaskUSD > 0 {
+		add(st.TaskUSD, b.TaskUSD, fmt.Sprintf("task $%.2f/$%s", st.TaskUSD, money(b.TaskUSD)))
+	} else if st.Running && b.TaskTokens > 0 {
+		add(float64(st.TaskTokens), float64(b.TaskTokens), fmt.Sprintf("task %s/%s tok", sessionlog.Human(st.TaskTokens), sessionlog.Human(b.TaskTokens)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	c := th.Muted
+	switch {
+	case worst >= 1:
+		c = th.FailColor
+	case b.WarnAt > 0 && worst >= b.WarnAt:
+		c = th.Warn
+	}
+	return th.fg(c).Render(strings.Join(parts, " · "))
+}
+
+// money formats a limit: "2" for whole dollars, else "2.50".
+func money(v float64) string {
+	if v == math.Trunc(v) {
+		return fmt.Sprintf("%.0f", v)
+	}
+	return fmt.Sprintf("%.2f", v)
 }
 
 func shortWindow(w string) string {
