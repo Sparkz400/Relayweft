@@ -16,7 +16,8 @@ import (
 var helpText = []string{
 	"<task>                               run a task; typed while one runs, it is queued (runs unattended)",
 	"@<agent> <message> · @ <message>     follow up with a finished agent (or the newest); tab completes ids",
-	"/agents                              agents that take a follow-up",
+	"                                     a running agent gets the message when its current turn ends",
+	"/agents                              running agents, and finished ones that take a follow-up (kept across restarts)",
 	"/models                              open the model picker (also m or ctrl+o)",
 	"/route <role> <provider>:<model>[:effort]   e.g. /route worker claude:sonnet:high",
 	"/prefer <role|all> <codex|claude|other|auto>",
@@ -24,7 +25,7 @@ var helpText = []string{
 	"/single <provider>:<model>[:effort] <task>  run one agent only (baseline for sy stats)",
 	"/limit <codex|claude> [reset|set]    clear or set a provider's usage-limit state",
 	"/approve on|off                      show the plan for editing before anything runs",
-	"/review-changes on|off               show each agent's changes (per file) before they land",
+	"/review-changes on|off               show each agent's changes (per file or hunk) before they land",
 	"/verify [<command>|clear]            list, add or clear the checks run before the final review",
 	"/queue · /queue clear · /queue rm <n>   tasks waiting to run",
 	"/resume [<id>] · /history            continue an interrupted task · list the last 10 tasks",
@@ -34,8 +35,10 @@ var helpText = []string{
 	"roles: " + strings.Join(event.Roles, ", "),
 	"keys (agents focused): tab next · k k kill · p pause · x cancel · l log · m models · q quit",
 	"anywhere: ctrl+x cancel task (the queue stays) · ctrl+o models · alt+enter new line · pasting never submits",
-	"plan approval: ↑↓ · e edit prompt · d delete · k kind · r role · J/K move · enter run · esc cancel",
-	"change review: ↑↓ · space include · a all · n none · enter apply · f feedback · esc reject all",
+	"plan approval: ↑↓ · e edit prompt · x dependencies (space toggle, enter done) · d delete · k kind · r role · J/K move · enter run · esc cancel",
+	"change review: ↑↓ file · space include · a all · n none · enter apply · f feedback · esc reject all",
+	"  hunks: tab (or [ ]) into a modified file's hunks · ↑↓ hunk · space toggle · tab/esc back · [~] = applied in part",
+	"  new, deleted, binary, one-hunk and truncated files can only be taken whole",
 }
 
 func (m *Model) command(line string) tea.Cmd {
