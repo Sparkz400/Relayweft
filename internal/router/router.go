@@ -106,7 +106,19 @@ func (r *Router) Route(s Step) event.Decision {
 		return d
 	}
 	d.Rule, d.Reason = rule, reason
-	return Finalize(d)
+	return Finalize(learned(cfg, d))
+}
+
+// learned notes in the reason when the route came from the role's learned
+// route (config/learned.go), so logs and reports can be traced back to
+// `sy tune --learned`. A fallback to the other provider is not learned.
+func learned(cfg *config.Config, d event.Decision) event.Decision {
+	lr, ok := cfg.Learned[d.Role]
+	if !ok || d.Fallback || d.Provider != lr.Provider || d.Model != lr.Model || d.Effort != lr.Effort {
+		return d
+	}
+	d.Reason += "; learned route " + lr.Spec() + ": " + lr.Why
+	return d
 }
 
 // classify runs rules 2-6 (rule 1, limits, is applied in resolve because it

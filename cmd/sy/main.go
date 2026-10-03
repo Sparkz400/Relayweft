@@ -128,6 +128,7 @@ Usage:
   sy run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
   sy run --file tasks.txt    run a list of tasks one after another, unattended
   sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
+  sy run --estimate "task"   plan only: print the plan with estimated tokens, time and $ per step, run nothing
   sy run --issue <N|URL> [--with-comments] [--pr]   run a GitHub issue as the task; --pr opens a PR (Closes #N)
   sy run --issues label:<name> [--limit 5] --pr     run open labelled issues one after another, unattended
                              (needs --pr and a clean working tree; each task's changes go to its PR branch and
@@ -143,6 +144,7 @@ Usage:
   sy report [task id] [--out f.html] [--md] [--open]   one shareable page per task (default: the last one here)
   sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline
   sy tune [--here] [--since 7d]    routing suggestions from your logs
+  sy tune --apply | --learned | --reset   update, show or forget this repo's learned routes (routing.learn)
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
   sy doctor                  check CLIs, versions, git and terminal
   sy init [--global] [--force] [--print]   write the commented default config
@@ -247,6 +249,11 @@ func (c *common) setup() (*config.Store, string, error) {
 	if len(info.Ignored) > 0 {
 		fmt.Fprintf(os.Stderr, "note: %s sets %s, which run commands; they are ignored until you review and trust the file: sy trust\n",
 			info.Path, strings.Join(info.Ignored, ", "))
+	}
+	// Learned routes sit between your config and the repo file: the roles
+	// the file (above) or a flag (below) sets keep that setting.
+	if _, err := orchestrator.ApplyLearned(store, dir); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: learned routes not used:", err)
 	}
 	for _, r := range c.routes {
 		role, spec, ok := strings.Cut(r, "=")

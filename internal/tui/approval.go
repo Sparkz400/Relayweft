@@ -22,7 +22,10 @@ type Approver struct {
 	closeOnce sync.Once
 }
 
-var _ orchestrator.Approver = (*Approver)(nil)
+var (
+	_ orchestrator.Approver         = (*Approver)(nil)
+	_ orchestrator.EstimateApprover = (*Approver)(nil)
+)
 
 // NewApprover returns an approver that waits for the TUI.
 func NewApprover() *Approver {
@@ -41,7 +44,9 @@ type approvalReq struct {
 	plan    *orchestrator.Plan      // set for plan approval
 	changes *orchestrator.ChangeSet // set for change review
 	budget  *orchestrator.BudgetRequest
-	reply   chan approvalReply // buffered: answering never blocks
+	// estimate re-estimates the plan (nil: the plan has no estimate).
+	estimate func(orchestrator.Plan) orchestrator.PlanEstimate
+	reply    chan approvalReply // buffered: answering never blocks
 }
 
 type approvalReply struct {
@@ -75,6 +80,17 @@ func (a *Approver) ask(r *approvalReq) (approvalReply, bool) {
 func (a *Approver) ApprovePlan(ctx context.Context, task string, p orchestrator.Plan) (orchestrator.Plan, bool) {
 	cp := clonePlan(p)
 	rep, ok := a.ask(&approvalReq{ctx: ctx, task: task, plan: &cp})
+	if !ok {
+		return p, false
+	}
+	return rep.plan, rep.ok
+}
+
+// ApprovePlanEstimate implements orchestrator.EstimateApprover: the plan
+// overlay shows each step's estimate and the total, updated as it is edited.
+func (a *Approver) ApprovePlanEstimate(ctx context.Context, task string, p orchestrator.Plan, est func(orchestrator.Plan) orchestrator.PlanEstimate) (orchestrator.Plan, bool) {
+	cp := clonePlan(p)
+	rep, ok := a.ask(&approvalReq{ctx: ctx, task: task, plan: &cp, estimate: est})
 	if !ok {
 		return p, false
 	}

@@ -110,6 +110,9 @@ type RoutingCfg struct {
 	Judge                bool     `yaml:"judge"`
 	JudgeBelowConfidence float64  `yaml:"judge_below_confidence"`
 	SwitchAtUtilization  float64  `yaml:"switch_at_utilization"`
+	// Learn and LearnMinSamples control the learned routes (learned.go).
+	Learn           string `yaml:"learn"`             // auto | suggest | off ("" = suggest)
+	LearnMinSamples int    `yaml:"learn_min_samples"` // runs (after the age decay) a route needs; 0 = 8
 }
 
 // OrchestratorCfg tunes the task lifecycle.
@@ -204,6 +207,9 @@ type Config struct {
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`
+	// Learned are the learned routes in effect, per role (learned.go): set
+	// by Store.ApplyLearned, read by the router for its reasons, never saved.
+	Learned map[string]LearnedRoute `yaml:"-" json:"-"`
 }
 
 // Default returns the built-in configuration.
@@ -340,6 +346,14 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, "theme must be auto, unicode or ascii")
 	}
+	switch c.Routing.Learn {
+	case "", LearnAuto, LearnSuggest, LearnOff:
+	default:
+		errs = append(errs, "routing.learn must be auto, suggest or off")
+	}
+	if c.Routing.LearnMinSamples < 0 {
+		errs = append(errs, "routing.learn_min_samples must be >= 0 (0 = 8)")
+	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
 	}
@@ -356,6 +370,7 @@ func (c *Config) Clone() *Config {
 	if err != nil {
 		panic(err)
 	}
+	out.Learned = cloneLearned(c.Learned) // not in the YAML
 	return out
 }
 
@@ -408,10 +423,14 @@ type Store struct {
 	mu   sync.RWMutex
 	cfg  *Config
 	path string
-	// base is the config without the repo file (what Save writes), nil
-	// when no repo file was applied.
+	// base is the config without the repo file and the learned routes
+	// (what Save writes), nil when neither was applied.
 	base *Config
 	repo RepoInfo
+	// learned are the learned routes (learned.go) and pinned the roles
+	// set explicitly (repo file, flags, session edits), which they skip.
+	learned *Learned
+	pinned  map[string]bool
 }
 
 // ApplyRepo layers the project's .switchyard.yaml (if any) over the live
@@ -420,13 +439,18 @@ func (s *Store) ApplyRepo(dir string) (RepoInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	base := s.cfg.Clone()
-	live := s.cfg.Clone()
+	if s.base != nil {
+		base = s.base.Clone() // without learned routes: they go back on below
+	}
+	live := base.Clone()
 	info, err := ApplyRepo(live, dir)
 	if err != nil {
 		return info, err
 	}
-	if info.Path != "" {
+	if info.Path != "" || s.base != nil {
 		s.base, s.cfg = base, live
+		s.pinRepoRoles(base, live)
+		s.layerLearned()
 	}
 	s.repo = info
 	return info, nil
@@ -448,7 +472,7 @@ func (s *Store) SaveRepo(dir string) (string, error) {
 	if p == "" {
 		p = filepath.Join(dir, RepoFileName)
 	}
-	if err := SaveRepo(s.cfg, p); err != nil {
+	if err := SaveRepo(s.unlearnedLocked(), p); err != nil { // learned routes stay yours
 		return "", err
 	}
 	if s.base == nil {
@@ -498,6 +522,7 @@ func (s *Store) Update(fn func(c *Config) error) error {
 			s.base = nb
 		}
 	}
+	s.pinEdited(next) // an edited role wins over its learned route
 	s.cfg = next
 	return nil
 }
@@ -513,7 +538,8 @@ func (s *Store) Save() error {
 }
 
 // SetRoute changes one role's route on one provider.
-func (s *Store) SetRoute(role, provider string, r Route) error {
+func (s *Store) SetRoute(role, provider string, r Route) (err error) {
+	defer s.pinIfOK(role, &err) // set explicitly, even to the value it had
 	return s.Update(func(c *Config) error {
 		rc, ok := c.Roles[role]
 		if !ok {
@@ -530,7 +556,8 @@ func (s *Store) SetRoute(role, provider string, r Route) error {
 }
 
 // SetPrefer changes which provider a role prefers.
-func (s *Store) SetPrefer(role, prefer string) error {
+func (s *Store) SetPrefer(role, prefer string) (err error) {
+	defer s.pinIfOK(role, &err)
 	return s.Update(func(c *Config) error {
 		rc, ok := c.Roles[role]
 		if !ok {

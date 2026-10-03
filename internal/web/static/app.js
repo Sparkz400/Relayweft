@@ -1049,17 +1049,63 @@ function planEditor(a, card) {
   const err = h('div', { class: 'm-err' });
   const count = h('span');
   let dragFrom = -1;
+  // Dry-run estimate (a.estimate when the orchestrator made one): a chip per
+  // step and the total with budget warnings, re-estimated after edits.
+  let est = a.estimate || null;
+  const estBox = h('div', { class: 'plan-est' });
+  const chips = new Map();
+  let estTimer = 0;
+  function estChip(st) {
+    const se = est && (est.steps || []).find((x) => x.step_id === st.id);
+    if (!se) return ['', ''];
+    let text = `${human(se.tokens.mid)} · ${dur(se.seconds.mid * 1000)}`;
+    if (se.usd.high > 0) text += ` · $${se.usd.mid.toFixed(2)}`;
+    const src = se.samples ? `${se.source}, ${se.samples} runs` : se.source;
+    return [text + (se.source === 'no history' ? ' ?' : ''),
+      `${se.role} on ${se.route}: ${human(se.tokens.low)}-${human(se.tokens.high)} tokens, ${dur(se.seconds.low * 1000)}-${dur(se.seconds.high * 1000)}` +
+      (se.usd.high > 0 ? `, $${se.usd.low.toFixed(2)}-$${se.usd.high.toFixed(2)}` : '') + ` (median, 25th-75th percentile; ${src})`];
+  }
+  function renderEstimate() {
+    estBox.textContent = '';
+    estBox.hidden = !est;
+    if (!est) return;
+    for (const [id, chip] of chips) {
+      const st = plan.subtasks.find((s) => s.id === id);
+      const [text, title] = st ? estChip(st) : ['', ''];
+      chip.textContent = text;
+      chip.title = title;
+      chip.hidden = !text;
+    }
+    const t = est;
+    let total = `~${human(t.tokens.mid)} tokens (${human(t.tokens.low)}-${human(t.tokens.high)}) · ~${dur(t.seconds.mid * 1000)} (${dur(t.seconds.low * 1000)}-${dur(t.seconds.high * 1000)})`;
+    if (t.usd.high > 0) total += ` · ≈$${t.usd.mid.toFixed(2)} ($${t.usd.low.toFixed(2)}-$${t.usd.high.toFixed(2)}) API-equivalent`;
+    const review = (t.steps || []).some((s) => s.step_id === 'review-final');
+    estBox.append(h('div', { class: 'est-total' }, h('b', null, review ? 'Estimate incl. final review: ' : 'Estimate: '), total),
+      t.no_history ? h('div', { class: 'faint small' }, `${t.no_history} of ${(t.steps || []).length} steps have no history yet: fixed defaults (marked ?).`) : '',
+      (t.warnings || []).map((w) => h('div', { class: 'est-warn' }, icon('err'), w)));
+  }
+  function reestimate() {
+    if (!est) return;
+    clearTimeout(estTimer);
+    estTimer = setTimeout(async () => {
+      try {
+        est = await api('POST', `/api/approvals/${a.id}/estimate`, { plan });
+        renderEstimate();
+      } catch (e) { /* the request ended: the modal closes */ }
+    }, 250);
+  }
 
   function renderSteps(focusIdx) {
     list.textContent = '';
+    chips.clear();
     count.textContent = `${plan.subtasks.length} subtask${plan.subtasks.length === 1 ? '' : 's'} · nothing has run yet`;
     if (!plan.subtasks.length) list.append(h('div', { class: 'empty-list' }, 'No subtasks left - add one, or cancel the task.'));
     plan.subtasks.forEach((st, i) => {
       const color = ROLE_COLORS[st.role || st.kind] || 'var(--muted)';
       const title = h('input', { class: 'in title-in', value: st.title || '', placeholder: 'Title', oninput: (e) => { st.title = e.target.value; } });
-      const kind = h('select', { class: 'sel-in', title: 'Kind: explore and research are read-only', onchange: (e) => { st.kind = e.target.value; renderSteps(); } },
+      const kind = h('select', { class: 'sel-in', title: 'Kind: explore and research are read-only', onchange: (e) => { st.kind = e.target.value; renderSteps(); reestimate(); } },
         PLAN_KINDS.map((k) => h('option', { value: k, selected: st.kind === k }, k)));
-      const role = h('select', { class: 'sel-in', title: 'Pin to a role (auto lets the router decide)', onchange: (e) => { st.role = e.target.value; } },
+      const role = h('select', { class: 'sel-in', title: 'Pin to a role (auto lets the router decide)', onchange: (e) => { st.role = e.target.value; reestimate(); } },
         PLAN_ROLES.map((r) => h('option', { value: r, selected: (st.role || '') === r }, r ? r.replace('_', ' ') : 'auto (router)')));
       // Multi-repo task: the repo the step works in ('' = the project folder, plan.repos[0]).
       const repo = plan.repos && plan.repos.length ? h('select', { class: 'sel-in', title: 'Repo this subtask works in', onchange: (e) => { st.repo = e.target.value; } },
@@ -1073,6 +1119,7 @@ function planEditor(a, card) {
           return h('label', { class: 'dep' + (on ? ' on' : '') }, h('input', { type: 'checkbox', checked: on, onchange: (e) => {
             st.depends_on = e.target.checked ? st.depends_on.concat(o.id) : st.depends_on.filter((d) => d !== o.id);
             e.target.parentNode.classList.toggle('on', e.target.checked);
+            reestimate();
           } }), o.id);
         }),
         others.length && !st.depends_on.length ? h('span', { class: 'faint' }, '(nothing - starts right away)') : '');
@@ -1081,8 +1128,10 @@ function planEditor(a, card) {
         h('button', { class: 'btn icon ghost sm', title: 'Move down', disabled: i === plan.subtasks.length - 1, onclick: () => move(i, i + 1) }, icon('down')),
         h('button', { class: 'btn icon ghost sm danger', title: 'Delete this subtask', onclick: () => del(i) }, icon('trash')));
       const grip = h('div', { class: 'grip', title: 'Drag to reorder' }, icon('grip'), h('span', { class: 'n' }, String(i + 1)));
+      const chip = h('span', { class: 'est-chip', hidden: true });
+      chips.set(st.id, chip);
       const el = h('div', { class: 'step', style: `--rc:${color}` }, grip,
-        h('div', null, h('div', { class: 'step-row' }, h('span', { class: 'step-id' }, st.id), title, kind, role, repo, tools), ta, deps));
+        h('div', null, h('div', { class: 'step-row' }, h('span', { class: 'step-id' }, st.id), title, kind, role, repo, chip, tools), ta, deps));
       grip.addEventListener('mousedown', () => { el.draggable = true; });
       el.addEventListener('dragstart', (e) => { dragFrom = i; el.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); });
       el.addEventListener('dragend', () => { el.draggable = false; el.classList.remove('dragging'); $$('.step', list).forEach((s) => s.classList.remove('drop-before', 'drop-after')); });
@@ -1108,6 +1157,7 @@ function planEditor(a, card) {
       requestAnimationFrame(() => grow(ta));
       if (focusIdx === i) setTimeout(() => title.focus(), 30);
     });
+    renderEstimate();
   }
   function grow(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(260, ta.scrollHeight + 2) + 'px'; }
   function move(from, to) {
@@ -1115,18 +1165,21 @@ function planEditor(a, card) {
     const [x] = plan.subtasks.splice(from, 1);
     plan.subtasks.splice(to, 0, x);
     renderSteps();
+    reestimate();
   }
   function del(i) {
     const gone = plan.subtasks[i].id;
     plan.subtasks.splice(i, 1);
     for (const st of plan.subtasks) st.depends_on = st.depends_on.filter((d) => d !== gone);
     renderSteps();
+    reestimate();
   }
   function addStep() {
     let n = plan.subtasks.length + 1;
     while (plan.subtasks.some((s) => s.id === 'step-' + n)) n++;
     plan.subtasks.push({ id: 'step-' + n, title: '', kind: 'edit', prompt: '', files: [], depends_on: [], role: '' });
     renderSteps(plan.subtasks.length - 1);
+    reestimate();
   }
   async function answer(ok) {
     err.textContent = '';
@@ -1148,7 +1201,7 @@ function planEditor(a, card) {
       h('div', { class: 'm-kicker' }, h('span', { class: 'pip' }), 'Approve the plan'),
       h('div', { class: 'm-title' }, oneLine(a.task, 160)),
       h('div', { class: 'm-sub' }, count)),
-    h('div', { class: 'm-body' }, plan.summary ? h('div', { class: 'plan-summary' }, plan.summary) : '', list,
+    h('div', { class: 'm-body' }, plan.summary ? h('div', { class: 'plan-summary' }, plan.summary) : '', estBox, list,
       h('button', { class: 'btn sm', style: 'margin-top:10px', onclick: addStep }, icon('plus'), 'Add subtask')),
     h('div', { class: 'm-foot' }, err, h('span', { class: 'grow' }),
       h('button', { class: 'btn ghost', onclick: hideApproval, title: 'Hide (the plan keeps waiting)' }, 'Later'),

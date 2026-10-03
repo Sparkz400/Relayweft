@@ -86,6 +86,8 @@ routing:
   judge: false                     # rule-less cases ask the judge model (costs a little quota)
   judge_below_confidence: 0.65
   switch_at_utilization: 0.9       # move work to the other provider once one reports this share of its limit used (0 = off)
+  learn: suggest                   # learned routes per repo: auto (refresh daily at task start) | suggest (only `sy tune --apply`) | off
+  learn_min_samples: 8             # runs (recent ones count more) a route needs before it is learned
 
 orchestrator:
   max_threads: 3                   # parallel agents at once

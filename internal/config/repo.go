@@ -17,10 +17,12 @@ import (
 // Per-repo settings: a .switchyard.yaml committed in the repository root
 // (or the project folder) is layered on top of the user's config:
 //
-//	built-in defaults < user config (switchyard.yaml) < repo file < flags
+//	built-in defaults < user config (switchyard.yaml) < learned routes
+//	  < repo file < flags
 //
-// It holds only what it sets; maps (roles, providers) merge per key, so
-// `roles: {worker: {prefer: claude}}` keeps the worker's routes.
+// (learned routes: see learned.go). It holds only what it sets; maps
+// (roles, providers) merge per key, so `roles: {worker: {prefer: claude}}`
+// keeps the worker's routes.
 //
 // A repo file comes from whoever pushed to the repo, so the parts that run
 // commands on your machine (verify commands, hooks, provider commands and
