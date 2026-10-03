@@ -121,10 +121,17 @@ func (m *Model) view() string {
 	}
 	rest := max(4, H-fixed)
 	logH := max(6, rest/3)
-	if need := m.bodyNeed(W); m.picker == nil && rest-logH < need {
+	panel := m.picker != nil || m.overlay != nil
+	if m.overlay != nil {
+		logH = min(logH, rest/5) // approvals get the room
+		if logH < 4 {
+			logH = 0
+		}
+	}
+	if need := m.bodyNeed(W); !panel && rest-logH < need {
 		logH = max(6, rest-need) // give the tree room before the log
 	}
-	if m.fullLog {
+	if m.fullLog && m.overlay == nil {
 		logH = rest
 	}
 	bodyH := rest - logH
@@ -132,15 +139,15 @@ func (m *Model) view() string {
 	parts := []string{header, legend}
 	if bodyH > 0 {
 		var body string
-		if m.picker != nil {
-			body = m.picker.view(m, W, bodyH)
+		if panel {
+			body = m.viewPanel(W, bodyH)
 		} else {
 			body = m.viewBody(W, bodyH)
 		}
 		parts = append(parts, padLines(clipLines(body, bodyH), bodyH))
-	} else if m.picker != nil {
+	} else if panel {
 		logH = 0
-		parts = append(parts, padLines(clipLines(m.picker.view(m, W, rest), rest), rest))
+		parts = append(parts, padLines(clipLines(m.viewPanel(W, rest), rest), rest))
 	}
 	if logH > 0 {
 		parts = append(parts, m.viewLog(W, logH))
@@ -152,6 +159,14 @@ func (m *Model) view() string {
 	return strings.Join(parts, "\n")
 }
 
+// viewPanel is what replaces the agent tree: an approval, else the picker.
+func (m *Model) viewPanel(W, H int) string {
+	if m.overlay != nil {
+		return m.overlay.view(m, W, H)
+	}
+	return m.picker.view(m, W, H)
+}
+
 func (m *Model) viewHeader(W int) string {
 	th := m.th
 	left := th.bold(th.Main).Render(" "+th.G.Logo+" SWITCHYARD") + th.fg(th.Muted).Render(" · "+filepath.Base(m.opt.Dir))
@@ -160,6 +175,9 @@ func (m *Model) viewHeader(W int) string {
 		phase += " · " + dur(time.Since(m.taskStart))
 	}
 	left += th.fg(th.Muted).Render(" · ") + th.fg(th.Router).Render(phase)
+	if n := len(m.queue); n > 0 {
+		left += th.fg(th.Warn).Render(fmt.Sprintf(" · queued (%d)", n))
+	}
 	if m.orc.Paused() {
 		left += " " + lipgloss.NewStyle().Background(th.Warn).Foreground(lipgloss.Color("#000000")).Bold(true).Render(" PAUSED ")
 	}
@@ -236,6 +254,8 @@ func (m *Model) viewLegend(W int) string {
 func (m *Model) viewKeys(W int) string {
 	var keys string
 	switch {
+	case m.overlay != nil:
+		keys = m.overlay.keys()
 	case m.picker != nil:
 		keys = "↑↓ role · ←→ column · enter change · s save · esc close"
 	case m.focus == focusPrompt:
@@ -249,12 +269,15 @@ func (m *Model) viewKeys(W int) string {
 func (m *Model) viewPrompt(W int) string {
 	th := m.th
 	c := th.Faint
-	if m.focus == focusPrompt && m.picker == nil {
+	if m.focus == focusPrompt && m.picker == nil && m.overlay == nil {
 		c = th.Main
 	}
 	inner := m.input.View()
-	if m.running && m.focus != focusPrompt {
-		inner = th.fg(th.Muted).Render("task running · enter to type a command · x or ctrl+x to cancel")
+	switch {
+	case m.overlay != nil:
+		inner = th.fg(th.Warn).Render("waiting for your answer above · ctrl+x cancels the task")
+	case m.running && m.focus != focusPrompt:
+		inner = th.fg(th.Muted).Render("task running · enter to type (a new task is queued) · x or ctrl+x to cancel")
 	}
 	lines := strings.Split(inner, "\n")
 	for i := range lines {

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{\"subtasks\":[{\"id\":\"a\",\"prompt\":\"1\",\"depends_on\":[\"a\",\"main\",\"reviewer\"]},{\"id\":\"b\",\"depends_on\":[\"A\",\"a\"]}]}")

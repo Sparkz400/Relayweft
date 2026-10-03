@@ -53,6 +53,19 @@ type Options struct {
 	// TaskIDPrefix makes task ids unique when several orchestrators share
 	// one session log (sy bench).
 	TaskIDPrefix string
+	// Approver asks a person to approve plans and changes (nil = approve).
+	Approver Approver
+}
+
+// TaskOptions adjust one task run.
+type TaskOptions struct {
+	// Unattended tasks (queued, overnight) never wait for approvals.
+	Unattended bool
+	// Resume continues an interrupted task from its saved state.
+	Resume *TaskState
+	// Force resumes a task that is no longer marked running (it finished,
+	// failed or was cancelled): its unfinished steps run again.
+	Force bool
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -72,6 +85,9 @@ type Orchestrator struct {
 	running bool
 	taskSeq int
 	tipped  bool // the big-repo git settings hint was shown
+
+	sessions map[string]AgentSession // finished agents, for follow-ups
+	told     map[string][]string     // messages for running agents (Tell)
 }
 
 // New creates an orchestrator.
@@ -246,6 +262,23 @@ type task struct {
 	perProv     map[string]event.TokenUsage // guarded by tokensMu
 	quotaBefore map[string]float64
 	agentFiles  map[string]bool // repo-relative paths agents changed (guarded by tokensMu)
+
+	unattended bool       // no approvals (queued task)
+	state      *TaskState // persisted progress (nil in bench runs)
+	resumed    bool       // continuing an interrupted task
+	keepBefore bool       // resumed: undo keeps the original "before" snapshot
+	repoMap    string     // context hand-off (handoff.go)
+	repoNotes  string
+}
+
+// approving reports whether this task asks a person to approve its plan.
+func (o *Orchestrator) approving(t *task) bool {
+	return o.opts.Approver != nil && !t.unattended && t.cfg.Orchestrator.ApprovePlan
+}
+
+// reviewing reports whether each agent's changes are shown before they land.
+func (o *Orchestrator) reviewing(t *task) bool {
+	return o.opts.Approver != nil && !t.unattended && t.cfg.Orchestrator.ReviewChanges
 }
 
 // noteFiles records files an agent working in dir reported changing, as
@@ -286,7 +319,8 @@ func (o *Orchestrator) worktreesAllowed(t *task) bool {
 		o.tipped = true
 		o.logf("big repo (%d tracked files): for faster snapshots run in it: %s", files, strings.Join(tips, " && "))
 	}
-	if !oc.Worktrees || !oc.Parallel || oc.MaxThreads < 2 {
+	// Reviewing changes needs every writer in a worktree, even one at a time.
+	if !o.reviewing(t) && (!oc.Worktrees || !oc.Parallel || oc.MaxThreads < 2) {
 		return false
 	}
 	if !SupportsMergeTree() {
@@ -350,14 +384,18 @@ func (o *Orchestrator) snapshotBefore(t *task) {
 	}
 	t.root = root
 	o.logf("snapshotting the working tree (git add -A on a temporary index)")
-	snap, err := (git{root}).snapshot(subject("switchyard before: ", t.text))
+	snap, big, err := (git{root}).snapshotSkipping(subject("switchyard before: ", t.text))
 	if err != nil {
 		o.logf("git snapshot failed, worktrees and undo disabled: %v", err)
 		return
 	}
+	if len(big) > 0 {
+		o.logf("left %d untracked file(s) over %d MB out of the snapshot (agents in worktrees do not see them, undo does not cover them): %s",
+			len(big), snapshotMaxFile.Load()>>20, clip(strings.Join(big, ", "), 300))
+	}
 	t.useGit = true
 	t.snapshot, t.start = snap, snap
-	if o.opts.Bench == "" {
+	if o.opts.Bench == "" && !t.keepBefore {
 		git{root}.recordSnapshot(t.key, "before", snap)
 	}
 }
@@ -379,7 +417,15 @@ func (o *Orchestrator) snapshotAfter(t *task) {
 
 // Run executes a task end to end. A panic inside the task is written to a
 // crash log and ends the task as failed instead of taking sy down.
-func (o *Orchestrator) Run(ctx context.Context, text string) (result TaskResult) {
+func (o *Orchestrator) Run(ctx context.Context, text string) TaskResult {
+	return o.RunWith(ctx, text, TaskOptions{})
+}
+
+// RunWith is Run with options (unattended, resume).
+func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOptions) (result TaskResult) {
+	if opts.Resume != nil {
+		text = opts.Resume.Task
+	}
 	o.mu.Lock()
 	if o.running {
 		o.mu.Unlock()
@@ -411,13 +457,70 @@ func (o *Orchestrator) Run(ctx context.Context, text string) (result TaskResult)
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
 	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
+	snapshotMaxFile.Store(int64(max(0, cfg.Orchestrator.SnapshotMaxFileMB)) << 20)
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
+	t.unattended = opts.Unattended
+	refused := ""
+	if o.opts.Bench == "" && o.opts.Mode != "demo" {
+		t.state = opts.Resume
+		if t.state == nil {
+			t.state = &TaskState{ID: t.key, Task: text, Dir: o.opts.Dir, Mode: o.opts.Mode, Created: time.Now(), UndoKey: t.key}
+		} else {
+			t.resumed = true
+		}
+		// The lock comes first: two sy processes must never run one task.
+		unlock, ok := t.state.lock()
+		if !ok {
+			refused = fmt.Sprintf("task %s is running in another sy", t.state.ID)
+			t.state = nil
+		} else {
+			defer unlock()
+			if t.resumed {
+				// The state on disk is the truth: another sy may have
+				// resumed and finished it since this one was loaded.
+				fresh, err := LoadTask(t.state.ID)
+				switch {
+				case err != nil:
+					refused = err.Error()
+				case fresh.Status != "running" && !opts.Force:
+					refused = fmt.Sprintf("task %s is %s now, not interrupted (sy resume --force runs its unfinished steps)", fresh.ID, fresh.Status)
+				}
+				if refused != "" {
+					t.state = nil
+				} else {
+					t.state = fresh
+					if fresh.UndoKey != "" {
+						// Undo covers the whole task, not just this part.
+						t.key, t.keepBefore = fresh.UndoKey, true
+					}
+				}
+			}
+		}
+		if t.state != nil {
+			t.state.Status = "running"
+			t.state.save()
+		}
+	}
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
 
 	t.quotaBefore = o.quotaNow()
-	res := o.run(ctx, t)
+	var res TaskResult
+	if refused == "" {
+		if err := o.runHooks(ctx, t, "before_task", cfg.Hooks.BeforeTask, nil); err != nil {
+			refused = "not started: " + err.Error()
+			if t.state != nil {
+				t.state.Status = "failed"
+			}
+		}
+	}
+	if refused != "" {
+		o.emit(event.Event{Kind: event.Error, Text: refused})
+		res = TaskResult{Summary: refused}
+	} else {
+		res = o.run(ctx, t)
+	}
 	o.snapshotAfter(t)
 	res.Duration = time.Since(began)
 	res.Tokens = t.tokens
@@ -429,6 +532,24 @@ func (o *Orchestrator) Run(ctx context.Context, text string) (result TaskResult)
 	if ctx.Err() != nil {
 		res.OK = false
 		res.Summary = "cancelled: " + res.Summary
+	}
+	status := map[bool]string{true: "done", false: "failed"}[res.OK]
+	if ctx.Err() != nil {
+		status = "cancelled"
+	}
+	// after_task runs even after a cancel, so give it a context of its own.
+	o.runHooks(context.WithoutCancel(ctx), t, "after_task", cfg.Hooks.AfterTask, map[string]string{"SY_STATUS": status, "SY_SUMMARY": res.Summary})
+	if res.OK && t.useGit && o.opts.Bench == "" && t.cfg.Orchestrator.Handoff {
+		addRepoNote(t.root, text, res.Summary, t.changedFiles())
+	}
+	if s := t.state; s != nil {
+		s.Status = map[bool]string{true: "done", false: "failed"}[res.OK]
+		if ctx.Err() != nil {
+			s.Status = "cancelled"
+		}
+		s.Summary, s.UndoKey, s.CostLine = res.Summary, res.UndoKey, res.Cost.Summary()
+		s.save()
+		pruneStates()
 	}
 	tk := t.tokens
 	cost := res.Cost
@@ -452,11 +573,28 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	// Git setup.
 	o.snapshotBefore(t)
 	t.wtOK = o.worktreesAllowed(t)
+	if o.reviewing(t) && !t.wtOK {
+		why := "this folder is not a git repo"
+		if t.useGit {
+			why = "worktrees are off for this repo (git < 2.38 or more than worktree_max_files files)"
+		}
+		o.emit(event.Event{Kind: event.Error, Text: "change review is on, but " + why + ": agents write straight into your tree (sy undo still works in git repos)"})
+	}
+	if t.useGit && cfg.Orchestrator.Handoff {
+		t.repoMap = repoMap(t.root)
+		t.repoNotes = repoNotes(t.root)
+	}
 
 	// 1. Plan.
 	o.emit(event.Event{Kind: event.Phase, Text: "plan"})
 	var plan Plan
-	if words := len(strings.Fields(t.text)); oc.SmallTaskWords > 0 && words < oc.SmallTaskWords {
+	small := false
+	if t.resumed && t.state.Plan != nil {
+		plan = *t.state.Plan
+		o.logf("%s", t.state.resumeSummary())
+		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
+	} else if words := len(strings.Fields(t.text)); oc.SmallTaskWords > 0 && words < oc.SmallTaskWords {
+		small = true
 		plan = Plan{Summary: "small task: one worker step", Subtasks: []Subtask{{ID: "work", Title: firstWords(t.text, 6), Kind: router.KindEdit, Prompt: t.text}}}
 		if looksRead(t.text) {
 			plan.Subtasks[0].Kind = router.KindExplore
@@ -485,8 +623,10 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 			return TaskResult{Summary: "planning failed: " + p.Summary}
 		}
 		plan = p
-		// 2. Review the plan.
-		if oc.ReviewBeforePlan {
+		// 2. Review the plan. A one-step plan is skipped unless asked for:
+		// on the bench every one was approved, and the final review still
+		// checks the work.
+		if oc.ReviewBeforePlan && (len(plan.Subtasks) > 1 || oc.ReviewSingleStepPlan) {
 			for rev := 0; ; rev++ {
 				o.emit(event.Event{Kind: event.Phase, Text: "review-plan"})
 				v, ok := o.review(ctx, t, "plan", planReviewPrompt(t.text, plan))
@@ -506,6 +646,31 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		}
 	}
 
+	// 2b. The person approves (and may edit) the plan.
+	if !(t.resumed && t.state.Plan != nil) && !small && o.approving(t) {
+		o.emit(event.Event{Kind: event.Phase, Text: "approve-plan"})
+		o.logf("waiting for you to approve the plan (%d subtasks)", len(plan.Subtasks))
+		p, ok := o.opts.Approver.ApprovePlan(ctx, t.text, plan)
+		if ctx.Err() != nil {
+			return TaskResult{Summary: "cancelled at plan approval"}
+		}
+		if !ok {
+			return TaskResult{Summary: "plan not approved: nothing was run"}
+		}
+		np, err := NormalizePlan(p)
+		if err != nil {
+			return TaskResult{Summary: "the edited plan is empty: nothing was run"}
+		}
+		plan = np
+		o.logf("plan approved: %d subtasks", len(plan.Subtasks))
+	}
+	if t.state != nil {
+		pl := plan
+		t.state.Plan = &pl
+		t.state.Phase = "execute"
+		t.state.save()
+	}
+
 	// 3. Execute.
 	o.emit(event.Event{Kind: event.Phase, Text: "execute"})
 	results := o.execute(ctx, t, plan)
@@ -519,31 +684,56 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		}
 	}
 
-	// 4. Review before done, with fix rounds.
+	// 4. Verify (the repo's own checks) and review before done, with fix
+	// rounds that get the reviewer's advice and the failing output.
 	approved := true
+	verified := true
 	var lastAdvice string
-	if oc.ReviewBeforeDone && hasEdits(plan) {
+	verifying := len(t.cfg.Verify.Commands) > 0
+	if hasEdits(plan) && (oc.ReviewBeforeDone || verifying) {
 		for round := 0; ; round++ {
-			o.emit(event.Event{Kind: event.Phase, Text: "review"})
-			stat, diff := "", ""
-			if t.useGit {
-				stat, diff = git{t.root}.diff(t.start, 40_000)
+			report := ""
+			if verifying {
+				o.emit(event.Event{Kind: event.Phase, Text: "verify"})
+				verified, report = o.verify(ctx, t)
+				if ctx.Err() != nil {
+					return TaskResult{Summary: "cancelled during verify"}
+				}
 			}
-			v, ok := o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes))
-			if ctx.Err() != nil {
-				return TaskResult{Summary: "cancelled during final review"}
+			roundOK := verified
+			var v Verdict
+			if oc.ReviewBeforeDone {
+				o.emit(event.Event{Kind: event.Phase, Text: "review"})
+				stat, diff := "", ""
+				if t.useGit {
+					stat, diff = git{t.root}.diff(t.start, 40_000)
+				}
+				var ok bool
+				v, ok = o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes, report))
+				if ctx.Err() != nil {
+					return TaskResult{Summary: "cancelled during final review"}
+				}
+				if ok {
+					roundOK = roundOK && v.Approve
+					lastAdvice = v.Advice
+				}
 			}
-			if !ok {
-				break // reviewer unavailable: do not block
-			}
-			approved = v.Approve
-			lastAdvice = v.Advice
-			if v.Approve || round >= oc.MaxFixRounds {
+			approved = roundOK
+			if roundOK || round >= oc.MaxFixRounds {
 				break
+			}
+			if !verified {
+				v.Approve = false
+				v.Advice = strings.TrimSpace(v.Advice + "\n\nThese checks fail; make them pass:\n" + report)
 			}
 			o.emit(event.Event{Kind: event.Phase, Text: "fix"})
 			fix := Subtask{ID: fmt.Sprintf("fix-%d", round+1), Title: "Apply review fixes", Kind: router.KindFix, Prompt: fixPrompt(t.text, v)}
-			r := o.runStep(ctx, t, fix, nil, o.opts.Dir, fixPrompt(t.text, v))
+			var r stepResult
+			if o.reviewing(t) && t.wtOK {
+				r = o.runInWorktree(ctx, t, fix, nil, fixPrompt(t.text, v))
+			} else {
+				r = o.runStep(ctx, t, fix, nil, o.opts.Dir, fixPrompt(t.text, v))
+			}
 			results[fix.ID] = r
 			if !r.ok {
 				allOK = false
@@ -561,10 +751,16 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		}
 	}
 	fmt.Fprintf(&b, "%d/%d subtasks ok", done, len(plan.Subtasks))
-	if !approved {
+	switch {
+	case !verified:
+		b.WriteString("; checks still fail (" + strings.Join(t.cfg.Verify.Commands, ", ") + ")")
+	case !approved:
 		b.WriteString("; reviewer still has concerns: " + clip(lastAdvice, 200))
-	} else if oc.ReviewBeforeDone && hasEdits(plan) {
+	case oc.ReviewBeforeDone && hasEdits(plan):
 		b.WriteString("; reviewer approved")
+	}
+	if verified && verifying && hasEdits(plan) {
+		b.WriteString("; checks pass")
 	}
 	if len(t.kept) > 0 {
 		b.WriteString("; conflicts kept on " + strings.Join(t.kept, ", "))
@@ -589,7 +785,7 @@ func looksRead(s string) bool { return reReadTask.MatchString(s) }
 // step, so a chatty planner never blocks progress.
 func (o *Orchestrator) plan(ctx context.Context, t *task, advice string, prev *Plan) (Plan, bool) {
 	step := router.Step{ID: "plan", Title: "Plan the task", Kind: router.KindPlan, Prompt: t.text}
-	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev))
+	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev)+t.handoff())
 	t.mainProv = d.Provider
 	if !res.OK() {
 		msg := "planner failed"
@@ -663,7 +859,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 			edits++
 		}
 	}
-	useWT := t.wtOK && threads > 1 && edits > 1
+	useWT := t.wtOK && ((threads > 1 && edits > 1) || (o.reviewing(t) && edits > 0))
 	if useWT {
 		if t.lfs {
 			o.logf("git lfs repo: worktrees keep LFS files as pointers")
@@ -689,6 +885,21 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 	var mu sync.Mutex
 	done := map[string]bool{}
 	started := map[string]bool{}
+	if t.resumed && t.state != nil {
+		// Subtasks that already succeeded before the interruption: their
+		// changes are in the working tree, their results feed dependents.
+		for i, st := range p.Subtasks {
+			if r, ok := t.state.Results[st.ID]; ok && r.OK {
+				results[st.ID] = stepResult{ok: true, final: r.Final}
+				done[st.ID], started[st.ID] = true, true
+				o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, OK: true, Text: "done before the interruption"})
+			} else if !st.Kind.ReadOnly() {
+				// It may have been running when sy stopped: its agent may
+				// have left half-done edits in the tree.
+				p.Subtasks[i].Prompt += "\n\nNOTE: an earlier attempt at this subtask was interrupted (sy stopped). Files it was editing may be partly changed: check the current state of the files before you edit, and finish or redo the work."
+			}
+		}
+	}
 	sem := make(chan struct{}, threads)
 	t.writeSem = make(chan struct{}, 1) // writers in the main tree run one at a time
 	writeSem := t.writeSem
@@ -764,9 +975,19 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				defer func() { <-sem }()
 				mu.Lock()
 				var deps []string
+				declared := map[string]bool{}
 				for _, d := range st.DependsOn {
+					declared[d] = true
 					if r := results[d]; r.final != "" {
 						deps = append(deps, fmt.Sprintf("[%s] %s", d, clip(r.final, 3000)))
+					}
+				}
+				if !st.Kind.ReadOnly() && t.cfg.Orchestrator.Handoff {
+					// What finished read-only steps found helps every writer.
+					for _, ro := range p.Subtasks {
+						if r := results[ro.ID]; ro.Kind.ReadOnly() && !declared[ro.ID] && r.ok && r.final != "" {
+							deps = append(deps, fmt.Sprintf("[%s, read-only finding] %s", ro.ID, clip(r.final, 1500)))
+						}
 					}
 				}
 				mu.Unlock()
@@ -775,7 +996,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				case st.Kind.ReadOnly():
 					r = o.runStep(ctx, t, st, deps, o.opts.Dir, "")
 				case useWT:
-					r = o.runInWorktree(ctx, t, st, deps)
+					r = o.runInWorktree(ctx, t, st, deps, "")
 				default:
 					select {
 					case writeSem <- struct{}{}:
@@ -786,6 +1007,9 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 						func() {
 							defer func() { <-writeSem }() // released even if the step panics
 							r = o.runStep(ctx, t, st, deps, o.opts.Dir, "")
+							if r.ok {
+								o.afterMerge(ctx, t, st.ID, r.files) // it wrote straight into the tree
+							}
 						}()
 					}
 				}
@@ -793,6 +1017,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				results[st.ID] = r
 				done[st.ID] = true
 				mu.Unlock()
+				t.state.setResult(st.ID, r)
 			}()
 		}
 		select {
@@ -805,7 +1030,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 }
 
 // runInWorktree runs a writing subtask in its own worktree and merges it.
-func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, deps []string) stepResult {
+func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, deps []string, prompt string) stepResult {
 	g := git{t.root}
 	t.mergeMu.Lock()
 	base := t.snapshot
@@ -813,13 +1038,16 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	s, err := acquireSlot(t.root, base)
 	if err != nil {
 		o.logf("worktree for %s failed (%v); running in the main tree", st.ID, err)
+		if o.reviewing(t) {
+			o.emit(event.Event{Kind: event.Error, AgentID: st.ID, Text: "change review is not possible for " + st.ID + " (no worktree): its changes go straight into your tree; sy undo reverts the task"})
+		}
 		select { // one writer at a time in the main tree
 		case t.writeSem <- struct{}{}:
 			defer func() { <-t.writeSem }()
 		case <-ctx.Done():
 			return stepResult{err: "cancelled"}
 		}
-		return o.runStep(ctx, t, st, deps, o.opts.Dir, "")
+		return o.runStep(ctx, t, st, deps, o.opts.Dir, prompt)
 	}
 	defer s.release()
 	path := s.path
@@ -828,20 +1056,81 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	if rel, err := filepath.Rel(t.root, o.opts.Dir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
 		dir = filepath.Join(path, rel)
 	}
-	r := o.runStep(ctx, t, st, deps, dir, "")
+	r := o.runStep(ctx, t, st, deps, dir, prompt)
 	if !r.ok {
 		return r
 	}
 	wg := git{path}
-	commit, changed, err := wg.commitAll("switchyard: " + st.Title)
-	if err != nil {
-		o.mergeEvent(t, st.ID, false, "commit failed: "+err.Error())
-		r.ok, r.err = false, "commit failed: "+err.Error()
-		return r
-	}
-	if !changed {
-		o.mergeEvent(t, st.ID, true, "no file changes")
-		return r
+	var commit, agentHead string
+	for round := 1; ; round++ {
+		sc, err := wg.commitWork(base, "switchyard: "+st.Title)
+		if err != nil {
+			o.mergeEvent(t, st.ID, false, "commit failed: "+err.Error())
+			r.ok, r.err = false, "commit failed: "+err.Error()
+			return r
+		}
+		o.slotWarnings(t, st.ID, sc, &agentHead)
+		if !sc.Changed && round == 1 {
+			o.mergeEvent(t, st.ID, true, "no file changes")
+			return r
+		}
+		commit = sc.Commit
+		if !o.reviewing(t) {
+			break
+		}
+		// The person reviews the agent's changes before they land.
+		files, err := g.changeSet(base, commit)
+		if err != nil || len(files) == 0 {
+			break
+		}
+		o.logf("%s: waiting for you to review %d changed file(s)", st.ID, len(files))
+		dec := o.opts.Approver.ReviewChanges(ctx, ChangeSet{StepID: st.ID, Title: st.Title, Summary: r.final, Round: round, Files: files})
+		if ctx.Err() != nil {
+			r.ok, r.err = false, "cancelled during your review"
+			return r
+		}
+		if dec.Feedback != "" && round >= 3 {
+			// Out of feedback rounds: asking for changes must never apply
+			// the work it objected to.
+			o.logf("%s: no more feedback rounds; the changes are not applied", st.ID)
+			dec = ChangeDecision{}
+		}
+		if dec.Feedback != "" {
+			o.logf("%s: you asked for changes: %s", st.ID, clip(dec.Feedback, 200))
+			again := stepPrompt(t.text, st, deps, "", "", false) + "\nYou already changed files in this directory for this subtask. The user reviewed your changes and asks:\n" +
+				dec.Feedback + "\nUpdate your changes accordingly, then reply with a short summary.\n"
+			r = o.runStep(ctx, t, st, deps, dir, again)
+			if !r.ok {
+				// Keep the last reviewed version; the slot is reset for the
+				// next agent.
+				branch := o.saveBranch(t, st.ID, commit)
+				o.logf("%s: the rerun failed; your previous version is kept on %s", st.ID, branch)
+				return r
+			}
+			continue
+		}
+		if len(dec.Apply) == 0 {
+			branch := o.saveBranch(t, st.ID, commit)
+			o.mergeEvent(t, st.ID, false, "rejected by you; the changes are kept on "+branch)
+			t.mergeMu.Lock() // t.notes is shared by parallel steps
+			t.notes = append(t.notes, fmt.Sprintf("the user rejected the changes of %s (kept on branch %s)", st.ID, branch))
+			t.mergeMu.Unlock()
+			r.ok, r.err = false, "changes rejected by you"
+			return r
+		}
+		if len(dec.Apply) < len(files) || len(dec.Hunks) > 0 {
+			full := commit
+			pc, err := g.selectionCommit(base, commit, files, dec, "switchyard: "+st.Title+" (what you accepted)")
+			if err != nil {
+				branch := o.saveBranch(t, st.ID+"-full", full)
+				r.ok, r.err = false, "could not apply the selected files ("+err.Error()+"); the full change is on "+branch
+				return r
+			}
+			commit = pc
+			branch := o.saveBranch(t, st.ID+"-full", full)
+			o.logf("%s: applying %d of %d files (%d split by hunk); the full change is kept on %s", st.ID, len(dec.Apply), len(files), len(dec.Hunks), branch)
+		}
+		break
 	}
 	t.mergeMu.Lock()
 	defer t.mergeMu.Unlock()
@@ -863,13 +1152,19 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		r.ok, r.err = false, err.Error()
 		return r
 	}
-	if err := g.applyDiff(t.snapshot, merged); err != nil {
+	skipped, err := g.applyDiffReport(t.snapshot, merged)
+	if len(skipped) > 0 {
+		o.logf("%s: submodule changes are not applied to your tree: %s", st.ID, strings.Join(skipped, ", "))
+		t.notes = append(t.notes, fmt.Sprintf("%s changed submodule(s) %s; Switchyard does not apply submodule changes", st.ID, strings.Join(skipped, ", ")))
+	}
+	if err != nil {
 		branch := o.keepBranch(t, st.ID, commit)
 		o.mergeEvent(t, st.ID, false, fmt.Sprintf("could not apply to working tree (%v); kept on %s", err, branch))
 		t.notes = append(t.notes, fmt.Sprintf("%s could not be applied to the working tree; its changes are on branch %s", st.ID, branch))
 		r.ok, r.err = false, "apply failed"
 		return r
 	}
+	var landed []string
 	if names, err := g.out("diff", "--name-only", "-z", t.snapshot, merged); err == nil {
 		var paths []string
 		for _, p := range strings.Split(names, "\x00") {
@@ -878,17 +1173,105 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			}
 		}
 		t.noteFiles(t.root, paths)
+		landed = paths
 	}
 	t.snapshot = merged
 	o.mergeEvent(t, st.ID, true, fmt.Sprintf("merged %d file(s)", len(r.files)))
+	o.afterMerge(ctx, t, st.ID, landed)
 	return r
 }
 
-func (o *Orchestrator) keepBranch(t *task, stepID, commit string) string {
-	branch := fmt.Sprintf("sy/%s/%s/%s", o.opts.Log.Session(), t.id, stepID)
-	if _, err := (git{t.root}).out("branch", "-f", branch, commit); err != nil {
-		return commit[:min(12, len(commit))]
+// slotWarnings reports what an agent did in its worktree that Switchyard
+// cannot carry over as is. agentHead remembers the HEAD already saved.
+func (o *Orchestrator) slotWarnings(t *task, stepID string, sc slotCommit, agentHead *string) {
+	if sc.Head != "" && sc.Head != *agentHead {
+		*agentHead = sc.Head
+		branch := o.saveBranch(t, stepID+"-agent-head", sc.Head)
+		o.logf("%s: the agent moved git HEAD in its worktree (committed or switched branches); its files are merged as usual, and its own commits are kept on %s", stepID, branch)
+		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeMerge, TaskID: t.id, Step: stepID, Text: "agent moved HEAD; kept on " + branch})
 	}
+	if len(sc.Nested) > 0 {
+		o.logf("%s: left out nested git repositories the agent created (their files are not merged): %s", stepID, strings.Join(sc.Nested, ", "))
+		t.mergeMu.Lock()
+		t.notes = append(t.notes, fmt.Sprintf("%s created nested git repositories (%s); they were not merged", stepID, strings.Join(sc.Nested, ", ")))
+		t.mergeMu.Unlock()
+	}
+	if len(sc.Sparse) > 0 {
+		o.logf("%s: files written outside your sparse checkout are dropped: %s", stepID, clip(strings.Join(sc.Sparse, ", "), 300))
+		t.mergeMu.Lock()
+		t.notes = append(t.notes, fmt.Sprintf("%s wrote files outside the sparse checkout (%s); they were dropped", stepID, clip(strings.Join(sc.Sparse, ", "), 300)))
+		t.mergeMu.Unlock()
+	}
+}
+
+// saveBranch keeps a commit on a branch for the person to look at later
+// without counting it as a conflict. Branches are only ever created, never
+// moved: an existing name gets a numbered suffix.
+func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
+	g := git{t.root}
+	base := "sy/" + refPart(o.opts.Log.Session()) + "/" + refPart(t.id) + "/" + refPart(stepID)
+	for i := 1; i <= 20; i++ {
+		name := base
+		if i > 1 {
+			name = fmt.Sprintf("%s-%d", base, i)
+		}
+		if created, exists := createBranch(g, name, commit); created {
+			return name
+		} else if !exists {
+			break
+		}
+	}
+	// Last resort; the commit must stay referenced either way.
+	name := "sy/kept-" + commit[:min(12, len(commit))]
+	if created, _ := createBranch(g, name, commit); created {
+		return name
+	}
+	g.out("update-ref", "refs/switchyard/kept/"+commit, commit)
+	return commit[:min(12, len(commit))]
+}
+
+// createBranch creates refs/heads/name at commit unless it exists; a branch
+// already at commit counts as created.
+func createBranch(g git, name, commit string) (created, exists bool) {
+	ref := "refs/heads/" + name
+	if _, err := g.out("update-ref", "--create-reflog", ref, commit, ""); err == nil {
+		return true, false
+	}
+	cur, err := g.out("rev-parse", "-q", "--verify", ref+"^{commit}")
+	if err != nil {
+		return false, false
+	}
+	return cur == commit, true
+}
+
+// refPart makes s usable as one component of a branch name.
+func refPart(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	p := b.String()
+	for strings.Contains(p, "..") {
+		p = strings.ReplaceAll(p, "..", ".")
+	}
+	p = strings.Trim(p, ".-")
+	p = strings.TrimSuffix(p, ".lock")
+	if len(p) > 60 {
+		p = strings.TrimRight(p[:60], ".-")
+	}
+	if p == "" {
+		p = "x"
+	}
+	return p
+}
+
+func (o *Orchestrator) keepBranch(t *task, stepID, commit string) string {
+	branch := o.saveBranch(t, stepID, commit)
 	t.kept = append(t.kept, branch)
 	return branch
 }
@@ -921,15 +1304,18 @@ func errorSignature(s string) string {
 // "error repeats" escalation. prompt overrides the generated step prompt.
 func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []string, dir, prompt string) stepResult {
 	oc := t.cfg.Orchestrator
-	step := router.Step{ID: st.ID, Title: st.Title, Kind: st.Kind, Prompt: st.Prompt, Files: st.Files, MainProvider: t.mainProv}
+	step := router.Step{ID: st.ID, Title: st.Title, Kind: st.Kind, Prompt: st.Prompt, Files: st.Files, MainProvider: t.mainProv, UserRole: st.Role}
 	var prevErr, advice, lastSig string
 	failures, limitRetries := 0, 0
 	for attempt := 1; ; attempt++ {
 		p := prompt
 		if p == "" {
-			p = stepPrompt(t.text, st, deps, prevErr, advice, st.Kind.ReadOnly())
+			p = stepPrompt(t.text, st, deps, prevErr, advice, st.Kind.ReadOnly()) + t.handoff()
 			if t.lfs && t.pool != "" && strings.HasPrefix(dir, t.pool) {
 				p += lfsNote
+			}
+			if cmds := t.cfg.Verify.Commands; len(cmds) > 0 && !st.Kind.ReadOnly() {
+				p += "\nBefore you finish, run the repo's checks (" + strings.Join(cmds, "; ") + ") and fix what your change broke.\n"
 			}
 		} else if advice != "" || prevErr != "" {
 			p += "\n\nPREVIOUS ATTEMPT FAILED WITH:\n" + clip(prevErr, 2000) + "\n\nREVIEWER ADVICE:\n" + advice
@@ -1011,7 +1397,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	o.emit(event.Event{Kind: event.Route, AgentID: agentID, ParentID: parent, Provider: d.Provider, Model: d.Model, Role: d.Role, Decision: &dc})
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeDecision, TaskID: t.id, Agent: agentID, Step: step.ID, Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, Rule: d.Rule, Reason: d.Reason,
-		Confidence: d.Confidence, Fallback: d.Fallback})
+		Confidence: d.Confidence, Fallback: d.Fallback, Judged: d.Judged})
 	title := step.Title
 	if attempt > 1 {
 		title = fmt.Sprintf("%s (attempt %d)", step.Title, attempt)
@@ -1042,7 +1428,15 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 		Provider: d.Provider, Model: d.Model, Effort: d.Effort, Prompt: prompt, Dir: dir,
 		ReadOnly: step.Kind.ReadOnly(), Timeout: t.cfg.Orchestrator.AgentTimeout.D(),
 	}
+	if !spec.ReadOnly {
+		spec.AllowedCommands = t.cfg.Verify.Commands
+	}
 	res := rn.Run(actx, spec, o.emit)
+	res = o.deliverTold(actx, rn, spec, agentID, res)
+	if res.SessionID != "" {
+		o.rememberSession(agentID, AgentSession{Provider: d.Provider, Model: d.Model, Effort: d.Effort, Role: d.Role,
+			SessionID: res.SessionID, Dir: dir, Final: res.Final, Title: step.Title, Task: t.text})
+	}
 	o.opts.Tracker.AddUsage(d.Provider, res.Tokens)
 	t.addTokens(d.Provider, res.Tokens)
 	if !step.Kind.ReadOnly() {

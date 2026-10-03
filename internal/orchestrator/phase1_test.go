@@ -334,7 +334,7 @@ func TestTaskCostPerProvider(t *testing.T) {
 			return runner.Result{Final: `{"approve": true}`, Tokens: event.TokenUsage{Input: 500, Output: 50, CostUSD: 0.12}}
 		}},
 	}
-	o, rec := newOrc(t, "", set, nil)
+	o, rec := newOrc(t, "", set, func(c *config.Config) { c.Orchestrator.ReviewSingleStepPlan = true })
 	o.Tracker().SetQuota(event.Claude, event.QuotaInfo{Utilization: 0.40, ResetsAt: time.Now().Add(time.Hour)})
 	res := o.Run(context.Background(), longTask)
 	c := res.Cost
@@ -417,6 +417,7 @@ func TestReviewerRetriesOnOtherProvider(t *testing.T) {
 		}},
 	}
 	o, _ := newOrc(t, "", set, func(c *config.Config) {
+		c.Orchestrator.ReviewSingleStepPlan = true
 		r := c.Roles[event.RoleReviewer]
 		r.Prefer = config.PreferCodex
 		c.Roles[event.RoleReviewer] = r

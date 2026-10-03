@@ -93,6 +93,7 @@ orchestrator:
   worktrees: true                  # parallel writing agents get their own git worktree (pooled, reused between tasks; `sy clean` removes them)
   worktree_max_files: 0            # >0: repos with more tracked files skip worktrees (writers take turns in your tree)
   review_before_plan: true
+  review_single_step_plan: false   # also review one-step plans (sy bench: 10/10 approved, +1 strong-model call each)
   review_on_repeat_error: true
   review_before_done: true
   max_plan_revisions: 1
@@ -100,6 +101,9 @@ orchestrator:
   max_attempts: 3                  # per subtask, not counting limit fallbacks
   agent_timeout: 30m
   small_task_words: 12             # tasks shorter than this skip planning and run as one worker step
+  approve_plan: true               # TUI / sy run --approve: show the plan and let you edit it before anything runs
+  review_changes: false            # show each agent's changes (per file) before they land in your tree
+  handoff: true                    # give agents a repo map, earlier tasks' notes and read-only findings
 
   # Machine protection: sy should never be what tips your PC over.
   low_priority: true               # agents and git run below normal CPU priority
@@ -107,8 +111,33 @@ orchestrator:
   min_free_memory_mb: 1024         # ... or has less free RAM than this (0 = off)
   busy_max_wait: 2m                # start anyway after waiting this long
   min_free_disk_gb: 10             # never create a pool worktree below this much free disk (falls back to your tree)
+  snapshot_max_file_mb: 100        # untracked files bigger than this are left out of snapshots and worktrees (0 = no limit)
   pool_warn_gb: 20                 # warn when this repo's worktree pool grows beyond this
   pool_max_idle: 336h              # pool worktrees unused this long are removed (14 days; 0 = keep)
+
+# Your repo's own checks. Agents may run them without asking; Switchyard runs
+# them after the agents finish and before the final review, and failures go
+# into the fix round. `sy init` detects them (go test, npm test, pytest, ...).
+verify:
+  commands: []                     # e.g. ["go test ./...", "go vet ./..."]
+  timeout: 10m
+
+# Your own commands around every task (run through the system shell in the
+# project folder). Environment: SY_TASK, SY_TASK_ID, SY_DIR, SY_STATUS
+# (after_task: done|failed|cancelled), SY_SUMMARY, SY_STEP and SY_FILES
+# (after_merge: the step and the files it changed, one per line).
+# A failing before_task hook stops the task.
+hooks:
+  before_task: []                  # e.g. ["git fetch --quiet"]
+  after_merge: []                  # e.g. ["gofmt -w ."]
+  after_task: []                   # e.g. ["npm run lint"]
+  timeout: 5m
+
+# Desktop notifications (Windows toast, macOS, notify-send): a task finished
+# or failed, a provider hit its limit, or sy waits for your approval.
+notify:
+  enabled: true
+  min_task: 1m                     # skip "done" for tasks shorter than this
 
 # Text that means "usage limit reached" (case-insensitive regular expressions).
 limit_patterns:

@@ -41,6 +41,7 @@ type Step struct {
 	Escalations  int    // how many tiers to escalate (grows with each repeat)
 	MainProvider string // provider the planner used, for prefer: other
 	ForceRole    string // set by the judge
+	UserRole     string // chosen by the person in plan approval
 }
 
 // State is what the router needs to know about providers.
@@ -111,6 +112,9 @@ func (r *Router) Route(s Step) event.Decision {
 // classify runs rules 2-6 (rule 1, limits, is applied in resolve because it
 // only changes the provider, not the role).
 func (r *Router) classify(cfg *config.Config, s Step) (role, rule, reason string, conf float64) {
+	if s.UserRole != "" {
+		return s.UserRole, RuleForced, "role chosen in plan approval", 1
+	}
 	if s.ForceRole != "" {
 		return s.ForceRole, RuleJudge, "judge picked " + s.ForceRole, 0.75
 	}

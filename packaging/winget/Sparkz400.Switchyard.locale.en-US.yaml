@@ -1,0 +1,26 @@
+# Template: render with packaging/render-manifests.sh, do not submit as is.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: Sparkz400.Switchyard
+PackageVersion: {{VERSION}}
+PackageLocale: en-US
+Publisher: Sparkz400
+PublisherUrl: https://github.com/sparkz400
+PackageName: Switchyard
+PackageUrl: https://github.com/sparkz400/switchyard
+License: MIT
+LicenseUrl: https://github.com/sparkz400/switchyard/blob/main/LICENSE
+ShortDescription: Terminal app that routes coding work between the Codex CLI and Claude Code.
+Description: |-
+  Switchyard (sy) is a Windows-first, animated terminal app that routes coding
+  work between your ChatGPT (Codex CLI) and Claude (Claude Code) subscriptions.
+  It drives the official CLIs with their normal login and never uses API keys.
+Moniker: switchyard
+Tags:
+  - cli
+  - tui
+  - codex
+  - claude
+  - ai
+ReleaseNotesUrl: https://github.com/sparkz400/switchyard/releases/tag/v{{VERSION}}
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

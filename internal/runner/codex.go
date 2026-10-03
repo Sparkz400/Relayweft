@@ -26,19 +26,31 @@ func NewCodex(cfg config.ProviderCfg, det *limits.Detector) *Exec {
 
 // CodexArgs builds the argument list. The prompt is read from stdin ("-").
 func CodexArgs(cfg config.ProviderCfg, s Spec) []string {
-	args := []string{"exec", "--json", "--color", "never", "--skip-git-repo-check"}
-	if s.Model != "" {
-		args = append(args, "-m", s.Model)
-	}
-	if s.Effort != "" {
-		args = append(args, "-c", "model_reasoning_effort="+s.Effort)
-	}
 	sandbox := cfg.WriteSandbox
 	if sandbox == "" {
 		sandbox = "workspace-write"
 	}
 	if s.ReadOnly {
 		sandbox = "read-only"
+	}
+	if s.Resume != "" {
+		// `codex exec resume` takes no --sandbox, --color or -C; the sandbox
+		// is set through config so a follow-up never runs with another one.
+		args := []string{"exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=" + sandbox}
+		if s.Model != "" {
+			args = append(args, "-m", s.Model)
+		}
+		if s.Effort != "" {
+			args = append(args, "-c", "model_reasoning_effort="+s.Effort)
+		}
+		return append(append(args, cfg.ExtraArgs...), s.Resume, "-")
+	}
+	args := []string{"exec", "--json", "--color", "never", "--skip-git-repo-check"}
+	if s.Model != "" {
+		args = append(args, "-m", s.Model)
+	}
+	if s.Effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+s.Effort)
 	}
 	// No -C: the working directory is set on the process, and a quoted path
 	// argument breaks cmd.exe quoting of npm .cmd shims on Windows.
@@ -56,6 +68,7 @@ func CodexArgs(cfg config.ProviderCfg, s Spec) []string {
 //
 // It also accepts the older {"id":..,"msg":{"type":...}} protocol.
 type codexParser struct {
+	thread string
 	final  string
 	tokens event.TokenUsage
 	fatal  string
@@ -63,12 +76,13 @@ type codexParser struct {
 }
 
 type codexLine struct {
-	Type    string                    `json:"type"`
-	Item    *codexItem                `json:"item"`
-	Usage   *codexUsage               `json:"usage"`
-	Error   *struct{ Message string } `json:"error"`
-	Message string                    `json:"message"`
-	Msg     json.RawMessage           `json:"msg"` // legacy protocol
+	Type     string                    `json:"type"`
+	ThreadID string                    `json:"thread_id"`
+	Item     *codexItem                `json:"item"`
+	Usage    *codexUsage               `json:"usage"`
+	Error    *struct{ Message string } `json:"error"`
+	Message  string                    `json:"message"`
+	Msg      json.RawMessage           `json:"msg"` // legacy protocol
 }
 
 type codexItem struct {
@@ -120,7 +134,12 @@ func (p *codexParser) Line(line []byte) []event.Event {
 
 func (p *codexParser) typed(l codexLine) []event.Event {
 	switch l.Type {
-	case "thread.started", "turn.started":
+	case "thread.started":
+		if l.ThreadID != "" {
+			p.thread = l.ThreadID
+		}
+		return nil
+	case "turn.started":
 		return nil
 	case "turn.completed":
 		if l.Usage != nil {
@@ -145,6 +164,9 @@ func (p *codexParser) typed(l codexLine) []event.Event {
 		msg := l.Message
 		if l.Error != nil && msg == "" {
 			msg = l.Error.Message
+		}
+		if msg == "" {
+			msg = "codex: error" // never an empty, silently ignored failure
 		}
 		if transient(msg) {
 			// Codex reports its own retries as "error" events; the run goes on.
@@ -276,6 +298,9 @@ func (p *codexParser) legacy(raw json.RawMessage) []event.Event {
 			p.final = m.LastAgentMessage
 		}
 	case "error", "stream_error":
+		if m.Message == "" {
+			m.Message = "codex: " + m.Type
+		}
 		p.fatal = m.Message
 		return []event.Event{{Kind: event.Error, Text: m.Message}}
 	}
@@ -284,6 +309,7 @@ func (p *codexParser) legacy(raw json.RawMessage) []event.Event {
 
 func (p *codexParser) Finish(r *Result) {
 	r.Final = p.final
+	r.SessionID = p.thread
 	r.Tokens = p.tokens
 	r.Files = p.files.list()
 	if p.fatal != "" && p.final == "" {

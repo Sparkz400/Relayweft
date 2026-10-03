@@ -14,6 +14,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	cacheDir = func() (string, error) { return dir, nil }
+	stateDir = func() string { return filepath.Join(dir, "tasks") }
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

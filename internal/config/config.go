@@ -114,25 +114,54 @@ type RoutingCfg struct {
 
 // OrchestratorCfg tunes the task lifecycle.
 type OrchestratorCfg struct {
-	MaxThreads          int      `yaml:"max_threads"`
-	Parallel            bool     `yaml:"parallel"`
-	Worktrees           bool     `yaml:"worktrees"`
-	WorktreeMaxFiles    int      `yaml:"worktree_max_files"`
-	ReviewBeforePlan    bool     `yaml:"review_before_plan"`
-	ReviewOnRepeatError bool     `yaml:"review_on_repeat_error"`
-	ReviewBeforeDone    bool     `yaml:"review_before_done"`
-	MaxPlanRevisions    int      `yaml:"max_plan_revisions"`
-	MaxFixRounds        int      `yaml:"max_fix_rounds"`
-	MaxAttempts         int      `yaml:"max_attempts"`
-	AgentTimeout        Duration `yaml:"agent_timeout"`
-	SmallTaskWords      int      `yaml:"small_task_words"`
-	LowPriority         bool     `yaml:"low_priority"`
-	MaxCPUPercent       int      `yaml:"max_cpu_percent"`
-	MinFreeMemoryMB     int      `yaml:"min_free_memory_mb"`
-	BusyMaxWait         Duration `yaml:"busy_max_wait"`
-	MinFreeDiskGB       float64  `yaml:"min_free_disk_gb"`
-	PoolWarnGB          float64  `yaml:"pool_warn_gb"`
-	PoolMaxIdle         Duration `yaml:"pool_max_idle"`
+	MaxThreads           int      `yaml:"max_threads"`
+	Parallel             bool     `yaml:"parallel"`
+	Worktrees            bool     `yaml:"worktrees"`
+	WorktreeMaxFiles     int      `yaml:"worktree_max_files"`
+	ReviewBeforePlan     bool     `yaml:"review_before_plan"`
+	ReviewSingleStepPlan bool     `yaml:"review_single_step_plan"`
+	ReviewOnRepeatError  bool     `yaml:"review_on_repeat_error"`
+	ReviewBeforeDone     bool     `yaml:"review_before_done"`
+	MaxPlanRevisions     int      `yaml:"max_plan_revisions"`
+	MaxFixRounds         int      `yaml:"max_fix_rounds"`
+	MaxAttempts          int      `yaml:"max_attempts"`
+	AgentTimeout         Duration `yaml:"agent_timeout"`
+	SmallTaskWords       int      `yaml:"small_task_words"`
+	ApprovePlan          bool     `yaml:"approve_plan"`
+	ReviewChanges        bool     `yaml:"review_changes"`
+	Handoff              bool     `yaml:"handoff"`
+	LowPriority          bool     `yaml:"low_priority"`
+	MaxCPUPercent        int      `yaml:"max_cpu_percent"`
+	MinFreeMemoryMB      int      `yaml:"min_free_memory_mb"`
+	BusyMaxWait          Duration `yaml:"busy_max_wait"`
+	MinFreeDiskGB        float64  `yaml:"min_free_disk_gb"`
+	PoolWarnGB           float64  `yaml:"pool_warn_gb"`
+	PoolMaxIdle          Duration `yaml:"pool_max_idle"`
+	SnapshotMaxFileMB    int      `yaml:"snapshot_max_file_mb"`
+}
+
+// VerifyCfg lists the repo's own checks (tests, build, lint). Agents may
+// run them without asking, and Switchyard runs them before the final review.
+type VerifyCfg struct {
+	Commands []string `yaml:"commands"`
+	Timeout  Duration `yaml:"timeout"`
+}
+
+// HooksCfg runs your own commands around tasks. Each list runs in order in
+// the project folder through the system shell, with SY_* environment
+// variables describing the task (see README). A failing before_task hook
+// stops the task; failures of the others are reported and ignored.
+type HooksCfg struct {
+	BeforeTask []string `yaml:"before_task,omitempty"`
+	AfterMerge []string `yaml:"after_merge,omitempty"` // after each agent's changes land in your tree
+	AfterTask  []string `yaml:"after_task,omitempty"`  // every end: done, failed or cancelled
+	Timeout    Duration `yaml:"timeout,omitempty"`
+}
+
+// NotifyCfg controls desktop notifications.
+type NotifyCfg struct {
+	Enabled bool     `yaml:"enabled"`
+	MinTask Duration `yaml:"min_task"` // only tasks that ran at least this long
 }
 
 // Config is the whole file.
@@ -141,6 +170,9 @@ type Config struct {
 	Providers     map[string]ProviderCfg `yaml:"providers"`
 	Routing       RoutingCfg             `yaml:"routing"`
 	Orchestrator  OrchestratorCfg        `yaml:"orchestrator"`
+	Verify        VerifyCfg              `yaml:"verify"`
+	Notify        NotifyCfg              `yaml:"notify"`
+	Hooks         HooksCfg               `yaml:"hooks"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`
@@ -341,6 +373,54 @@ type Store struct {
 	mu   sync.RWMutex
 	cfg  *Config
 	path string
+	// base is the config without the repo file (what Save writes), nil
+	// when no repo file was applied.
+	base *Config
+	repo RepoInfo
+}
+
+// ApplyRepo layers the project's .switchyard.yaml (if any) over the live
+// config. Save keeps writing the user's file without it.
+func (s *Store) ApplyRepo(dir string) (RepoInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	base := s.cfg.Clone()
+	live := s.cfg.Clone()
+	info, err := ApplyRepo(live, dir)
+	if err != nil {
+		return info, err
+	}
+	if info.Path != "" {
+		s.base, s.cfg = base, live
+	}
+	s.repo = info
+	return info, nil
+}
+
+// Repo describes the applied repo file.
+func (s *Store) Repo() RepoInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.repo
+}
+
+// SaveRepo writes the shareable settings to the repo file (creating
+// <dir>/.switchyard.yaml when there is none yet) and returns its path.
+func (s *Store) SaveRepo(dir string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.repo.Path
+	if p == "" {
+		p = filepath.Join(dir, RepoFileName)
+	}
+	if err := SaveRepo(s.cfg, p); err != nil {
+		return "", err
+	}
+	if s.base == nil {
+		s.base = s.cfg.Clone()
+	}
+	s.repo = RepoInfo{Path: p, Trusted: true}
+	return p, nil
 }
 
 // NewStore wraps a config and the path it is saved to.
@@ -368,6 +448,13 @@ func (s *Store) Update(fn func(c *Config) error) error {
 	if err := next.Validate(); err != nil {
 		return err
 	}
+	if s.base != nil {
+		// Changes made in the session also go to the user's file on Save.
+		nb := s.base.Clone()
+		if err := fn(nb); err == nil && nb.Validate() == nil {
+			s.base = nb
+		}
+	}
 	s.cfg = next
 	return nil
 }
@@ -376,6 +463,9 @@ func (s *Store) Update(fn func(c *Config) error) error {
 func (s *Store) Save() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.base != nil {
+		return s.base.Save(s.path) // never bake the repo file into yours
+	}
 	return s.cfg.Save(s.path)
 }
 

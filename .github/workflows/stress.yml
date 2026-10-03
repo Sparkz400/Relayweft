@@ -1,0 +1,47 @@
+name: stress
+
+# Long-run stress test (ROADMAP 1.7): whole tasks in a loop for 30 minutes
+# (demo mode, then a real git repo with worktrees and real agent
+# subprocesses), checking that goroutines, heap, open handles, leftover
+# processes and pool worktrees stay flat. See internal/orchestrator/stress_test.go.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 4 * * 0" # weekly, Sunday
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "How long to run (Go duration)"
+        required: false
+        default: "30m"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stress-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stress:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: git identity for tests
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@example.com
+      - name: stress
+        shell: bash
+        env:
+          SY_STRESS_DURATION: ${{ inputs.duration || '30m' }}
+        run: go test -run '^TestStress$' -v -count=1 -timeout 42m ./internal/orchestrator

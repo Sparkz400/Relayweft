@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/sysload"
 )
@@ -57,31 +59,66 @@ func repoCache(root string) string {
 func poolDir(root string) string { return filepath.Join(repoCache(root), "pool") }
 
 type slot struct {
-	path   string
-	unlock func()
+	path    string
+	unlock  func()
+	untrack func()
 }
 
-func (s *slot) release() { s.unlock() }
+// release stops tracking the slot's processes, kills what the agents left
+// running there (Unix), and unlocks it.
+func (s *slot) release() {
+	s.untrack()
+	proc.ReapOrphans(pidFile(s.path))
+	s.unlock()
+}
+
+// pidFile lists the agent processes running in a slot (see proc.TrackDir):
+// a sy killed with SIGKILL cannot stop its agents, and the next user of
+// the slot must not share it with them.
+func pidFile(slot string) string { return slot + ".pid" }
+
+// lockSlot locks a slot and makes sure no leftover agent of a crashed sy is
+// still running in it.
+func lockSlot(path string) (unlock func(), ok bool) {
+	unlock, ok = proc.TryLock(path + ".lock")
+	if !ok {
+		return nil, false
+	}
+	if !proc.ReapOrphans(pidFile(path)) {
+		diag.Logf("pool: %s skipped, an agent of an earlier sy is still running in it", path)
+		unlock()
+		return nil, false
+	}
+	return unlock, true
+}
 
 // acquireSlot locks a free pool worktree and moves it to commit, creating it
-// when it does not exist yet.
+// when it does not exist yet. A slot that cannot be prepared is skipped.
 func acquireSlot(root, commit string) (*slot, error) {
 	dir := poolDir(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	var firstErr error
 	for i := 0; i < maxPoolSlots; i++ {
 		path := filepath.Join(dir, strconv.Itoa(i))
-		unlock, ok := proc.TryLock(path + ".lock")
+		unlock, ok := lockSlot(path)
 		if !ok {
 			continue
 		}
 		if err := prepareSlot(root, path, commit); err != nil {
 			unlock()
-			return nil, err
+			diag.Logf("pool: slot %s unusable: %v", path, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		touch(path)
-		return &slot{path: path, unlock: unlock}, nil
+		return &slot{path: path, unlock: unlock, untrack: proc.TrackDir(path, pidFile(path))}, nil
+	}
+	if firstErr != nil {
+		return nil, fmt.Errorf("no usable pool worktree: %w", firstErr)
 	}
 	return nil, fmt.Errorf("all %d pool worktrees are in use", maxPoolSlots)
 }
@@ -90,19 +127,152 @@ func acquireSlot(root, commit string) (*slot, error) {
 // still a worktree of root and recreating it otherwise.
 func prepareSlot(root, path, commit string) error {
 	if isWorktreeOf(root, path) {
-		wg := git{path}
-		if _, err := wg.run(lfsSkip, nil, "checkout", "--force", "--detach", commit); err == nil {
-			if _, err := wg.out("clean", "-fd"); err == nil {
-				return nil
-			}
+		err := resetSlot(path, commit)
+		if err == nil {
+			return nil
 		}
+		diag.Logf("pool: resetting %s failed, recreating it: %v", path, err)
 	}
 	if err := checkDisk(filepath.Dir(path)); err != nil {
 		return err
 	}
 	g := git{root}
-	g.removeWorktree(path)
+	if err := removeSlot(g.commonDir(), path); err != nil {
+		return err
+	}
 	return g.addWorktree(path, commit)
+}
+
+// staleLockAge is when a slot's index.lock counts as left behind by a git
+// the agent ran and that was killed.
+const staleLockAge = time.Minute
+
+// resetSlot moves an existing slot to commit and removes everything the
+// previous agent left (files, nested repositories, an unfinished rebase or
+// merge). Ignored files stay.
+func resetSlot(path, commit string) error {
+	if gd := slotGitDir(path); gd != "" {
+		clearSlotState(gd)
+	}
+	wg := git{path}
+	if _, err := wg.run(lfsSkip, nil, append(noHooks(), "checkout", "--force", "--detach", commit)...); err != nil {
+		return err
+	}
+	// -ff: also nested repositories an agent created.
+	_, err := wg.out("clean", "-ffd")
+	return err
+}
+
+// clearSlotState removes in-progress operations from a slot's git dir; a
+// checkout does not end them and the next agent would find e.g. "rebase in
+// progress".
+func clearSlotState(gd string) {
+	for _, n := range []string{"rebase-merge", "rebase-apply", "sequencer", "MERGE_HEAD", "MERGE_MSG", "MERGE_MODE", "MERGE_RR",
+		"AUTO_MERGE", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", filepath.Join("refs", "bisect")} {
+		os.RemoveAll(filepath.Join(gd, n))
+	}
+	if m, _ := filepath.Glob(filepath.Join(gd, "BISECT_*")); len(m) > 0 {
+		for _, f := range m {
+			os.RemoveAll(f)
+		}
+	}
+	// The slot lock is ours and leftover agents are gone: an old index.lock
+	// was left by a git that was killed.
+	lock := filepath.Join(gd, "index.lock")
+	if st, err := os.Stat(lock); err == nil && time.Since(st.ModTime()) > staleLockAge {
+		os.Remove(lock)
+	}
+}
+
+// removeSlot deletes a pool worktree and the repository's record of it, and
+// nothing else: `git worktree prune` would also drop the user's own
+// worktrees whose directory is missing for a moment (an unplugged drive).
+// A directory that cannot be deleted (Windows: a program still has a file
+// open there) is moved aside as <slot>.trash-<random> for PrunePools and
+// CleanPool to delete later, so the slot path is free again.
+func removeSlot(common, path string) error {
+	recs := slotRecords(common, path)
+	if gd := slotGitDir(path); gd != "" && isRecordOf(gd, path) {
+		recs = append(recs, gd)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		if _, serr := os.Lstat(path); serr == nil {
+			if rerr := os.Rename(path, trashName(path)); rerr != nil {
+				return fmt.Errorf("cannot delete or move %s: %v", path, err)
+			}
+			diag.Logf("pool: could not delete %s (%v); moved it aside", path, err)
+		}
+	}
+	for _, r := range recs {
+		os.RemoveAll(r)
+	}
+	return nil
+}
+
+func trashName(path string) string {
+	var b [4]byte
+	rand.Read(b[:])
+	return path + ".trash-" + hex.EncodeToString(b[:])
+}
+
+func isTrash(name string) bool { return strings.Contains(name, ".trash-") }
+
+// slotRecords finds the worktree records (<common>/worktrees/<id>) that
+// point at path.
+func slotRecords(common, path string) []string {
+	if common == "" {
+		return nil
+	}
+	base := filepath.Join(common, "worktrees")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if rec := filepath.Join(base, e.Name()); e.IsDir() && isRecordOf(rec, path) {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// isRecordOf reports whether the worktree record rec belongs to path (its
+// gitdir file names <path>/.git).
+func isRecordOf(rec, path string) bool {
+	b, err := os.ReadFile(filepath.Join(rec, "gitdir"))
+	if err != nil {
+		return false
+	}
+	p := filepath.FromSlash(strings.TrimSpace(string(b)))
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(rec, p)
+	}
+	return looseSamePath(filepath.Dir(p), path)
+}
+
+// looseSamePath is samePath for paths that may no longer exist (symlinks in
+// their parents are still resolved).
+func looseSamePath(a, b string) bool {
+	if samePath(a, b) {
+		return true
+	}
+	return filepath.Base(a) == filepath.Base(b) && samePath(filepath.Dir(a), filepath.Dir(b))
+}
+
+// removeTrash deletes slot directories moved aside earlier; it returns the
+// ones that still cannot be deleted.
+func removeTrash(pd string) (left []string) {
+	entries, _ := os.ReadDir(pd)
+	for _, e := range entries {
+		if isTrash(e.Name()) {
+			p := filepath.Join(pd, e.Name())
+			if os.RemoveAll(p) != nil {
+				left = append(left, p)
+			}
+		}
+	}
+	return left
 }
 
 // minFreeDisk is the free space below which no new pool worktree is created
@@ -143,7 +313,7 @@ func prewarmPool(root, commit string, n int) {
 	}
 	for i := 0; i < n && i < maxPoolSlots; i++ {
 		path := filepath.Join(dir, strconv.Itoa(i))
-		unlock, ok := proc.TryLock(path + ".lock")
+		unlock, ok := lockSlot(path)
 		if !ok {
 			continue
 		}
@@ -154,8 +324,7 @@ func prewarmPool(root, commit string, n int) {
 			}
 			touch(path)
 			g := git{root}
-			g.removeWorktree(path)
-			if g.addWorktree(path, commit) == nil {
+			if removeSlot(g.commonDir(), path) == nil && g.addWorktree(path, commit) == nil {
 				// The first status check of a fresh checkout re-reads every
 				// file (racily clean entries); pay for it here, in the
 				// background, instead of when an agent needs the slot.
@@ -198,7 +367,8 @@ func canonPath(p string) string {
 }
 
 // CleanPool removes the pooled worktrees of the repo containing dir that are
-// not in use and returns how many were removed.
+// not in use and returns how many were removed. Slots that could not be
+// deleted are not counted and are named in the error.
 func CleanPool(dir string) (int, error) {
 	root, err := repoRoot(dir)
 	if err != nil {
@@ -212,34 +382,49 @@ func CleanPool(dir string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	common := git{root}.commonDir()
 	n := 0
+	var failed []string
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || isTrash(e.Name()) {
 			continue
 		}
 		path := filepath.Join(pd, e.Name())
-		unlock, ok := proc.TryLock(path + ".lock")
+		unlock, ok := lockSlot(path)
 		if !ok {
 			continue // in use by a running sy
 		}
-		git{root}.removeWorktree(path)
-		unlock()
-		// sy clean is explicit and leaves nothing behind. (Automatic pruning
-		// keeps lock files: a concurrent sy could otherwise end up holding a
-		// lock on a deleted file while another locks a new one.)
-		os.Remove(path + ".lock")
+		if err := removeSlot(common, path); err != nil {
+			failed = append(failed, path)
+			unlock()
+			continue
+		}
 		n++
+		// sy clean is explicit and leaves nothing behind. The lock file is
+		// deleted while it is held: proc.TryLock refuses a lock on a file
+		// that is no longer at its path, so no two sy can end up holding
+		// different files for one slot.
+		os.Remove(pidFile(path))
+		os.Remove(path + ".lock")
+		unlock()
 	}
+	failed = append(failed, removeTrash(pd)...)
 	bench := filepath.Join(filepath.Dir(pd), "bench", "work")
 	if unlock, ok := proc.TryLock(bench + ".lock"); ok {
 		if _, err := os.Stat(bench); err == nil {
-			git{root}.removeWorktree(bench)
-			n++
+			if removeSlot(common, bench) == nil {
+				n++
+			} else {
+				failed = append(failed, bench)
+			}
 		}
 		unlock()
 	}
 	os.Remove(pd)               // only succeeds when empty
 	os.Remove(filepath.Dir(pd)) // likewise
+	if len(failed) > 0 {
+		return n, fmt.Errorf("removed %d pooled worktree(s); could not delete %s (a program may still have files open there)", n, strings.Join(failed, ", "))
+	}
 	return n, nil
 }
 
@@ -305,6 +490,10 @@ func Pools() []PoolInfo {
 				continue
 			}
 			path := filepath.Join(pd, s.Name())
+			if isTrash(s.Name()) {
+				info.Bytes += dirSize(path)
+				continue
+			}
 			info.Slots++
 			info.Bytes += dirSize(path)
 			if t := lastUse(path); t.After(info.LastUsed) {
@@ -394,30 +583,38 @@ func PrunePools(maxIdle time.Duration) (removed int, freed uint64) {
 			continue
 		}
 		for _, s := range slots {
-			if !s.IsDir() {
+			if !s.IsDir() || isTrash(s.Name()) {
 				continue
 			}
 			path := filepath.Join(pd, s.Name())
 			if time.Since(lastUse(path)) < maxIdle {
 				continue
 			}
-			unlock, ok := proc.TryLock(path + ".lock")
+			unlock, ok := lockSlot(path)
 			if !ok {
 				continue // in use right now
 			}
 			size := dirSize(path)
-			gd := slotGitDir(path)
-			if err := os.RemoveAll(path); err == nil {
+			common := ""
+			if gd := slotGitDir(path); gd != "" {
+				common = filepath.Dir(filepath.Dir(gd)) // <common>/worktrees/<id>
+			}
+			if removeSlot(common, path) == nil {
 				removed++
 				freed += size
-				if gd != "" {
-					// Drop the repo's worktree record for the deleted slot.
-					git{"."}.out("--git-dir="+filepath.Dir(filepath.Dir(gd)), "worktree", "prune")
-				}
 			}
 			unlock()
 			// The lock file stays: deleting it could let two sy instances lock
 			// different files for the same slot.
+		}
+		for _, s := range slots {
+			if isTrash(s.Name()) {
+				path := filepath.Join(pd, s.Name())
+				size := dirSize(path)
+				if os.RemoveAll(path) == nil {
+					freed += size
+				}
+			}
 		}
 		os.Remove(pd)
 		os.Remove(filepath.Dir(pd))

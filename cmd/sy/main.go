@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -49,6 +48,7 @@ func main() {
 		defer diag.Close()
 	}
 	defer crashGuard()
+	cleanupOldBinary()
 	var err error
 	switch sub {
 	case "":
@@ -71,6 +71,20 @@ func main() {
 		err = cmdUndo(args)
 	case "bench":
 		err = cmdBench(args)
+	case "tune":
+		err = cmdTune(args)
+	case "history":
+		err = cmdHistory(args)
+	case "resume":
+		err = cmdResume(args)
+	case "update":
+		err = cmdUpdate(args)
+	case "trust":
+		err = cmdTrust(args)
+	case "web":
+		err = cmdWeb(args)
+	case "app":
+		err = cmdApp(args)
 	case "version", "--version":
 		fmt.Println("switchyard", version)
 	case "help", "-h", "--help":
@@ -102,16 +116,27 @@ func usage() {
 Usage:
   sy [flags]                 start the TUI in the current directory
   sy --demo                  the full animated TUI driven by fake agents
+  sy web [--port N] [--no-open] [--demo]   the same engine in your browser (127.0.0.1, private link)
+  sy app [--port N] [--demo]               the browser UI in its own window (Edge/Chrome app mode)
   sy run [flags] "task"      run one task headless and print events
   sy run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
-  sy stats [--here] [--since 7d]   usage per model and route, routed vs baseline
+  sy run --file tasks.txt    run a list of tasks one after another, unattended
+  sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
+  sy history [--all] [-n 20]       recent tasks in this directory, with status and cost
+  sy resume [task id]        continue an interrupted task (default: the last one here)
+  sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline
+  sy tune [--here] [--since 7d]    routing suggestions from your logs
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
   sy doctor                  check CLIs, versions, git and terminal
   sy init [--global] [--force] [--print]   write the commented default config
+  sy init --repo             write .switchyard.yaml: this repo's shared settings (detected checks, routes)
+  sy trust [--revoke]        review and trust the commands in this repo's .switchyard.yaml
   sy clean [--dir <path>] [--idle 72h]   remove this repo's pooled worktrees (or all idle ones)
   sy undo [--list] [--redo] [--yes] [task]   revert (or re-apply) a task's changes, with preview
   sy bench [--file bench.yaml] [--init]      compare routed Switchyard vs single agents on your tasks
+  sy bench --starter <dir>   create a ready-made 5-task benchmark repo (Python) to run sy bench on
   sy bugreport               zip logs, config and diagnostics into one file to send
+  sy update [--check] [--yes]      update sy to the latest release
   sy version
 
 Flags (TUI and run):
@@ -168,6 +193,26 @@ func (c *common) setup() (*config.Store, string, error) {
 		return nil, "", err
 	}
 	store := config.NewStore(cfg, path)
+	dir := c.dir
+	if dir == "" {
+		dir, _ = os.Getwd()
+	}
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return nil, "", fmt.Errorf("--dir %s is not a directory", dir)
+	}
+	// The project's .switchyard.yaml, then flags on top.
+	info, err := store.ApplyRepo(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(info.Ignored) > 0 {
+		fmt.Fprintf(os.Stderr, "note: %s sets %s, which run commands; they are ignored until you review and trust the file: sy trust\n",
+			info.Path, strings.Join(info.Ignored, ", "))
+	}
 	for _, r := range c.routes {
 		role, spec, ok := strings.Cut(r, "=")
 		if !ok {
@@ -229,17 +274,6 @@ func (c *common) setup() (*config.Store, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	dir := c.dir
-	if dir == "" {
-		dir, _ = os.Getwd()
-	}
-	dir, err = filepath.Abs(dir)
-	if err != nil {
-		return nil, "", err
-	}
-	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
-		return nil, "", fmt.Errorf("--dir %s is not a directory", dir)
-	}
 	return store, dir, nil
 }
 
@@ -277,13 +311,16 @@ func cmdTUI(args []string) error {
 		log = nil
 	}
 	defer log.Close()
+	// Always a real approver: a nil *tui.Approver in the interface would
+	// make every task wait forever.
+	ap := tui.NewApprover()
 	orc := orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: runners, Tracker: limits.NewTracker(), Log: log,
-		Events: events, ForceProvider: c.provider, NoGit: *demo, Mode: mode,
+		Events: events, ForceProvider: c.provider, NoGit: *demo, Mode: mode, Approver: ap,
 	})
 	m := tui.New(tui.Options{
 		Orc: orc, Events: events, Dir: dir, Theme: tui.NewTheme(cfg.Theme), Demo: *demo,
-		DemoTask: map[bool]string{true: demoTask}[*demo], SessionLog: log.Path(), Version: version,
+		DemoTask: map[bool]string{true: demoTask}[*demo], SessionLog: log.Path(), Version: version, Approver: ap,
 	})
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()
@@ -294,80 +331,6 @@ func cmdTUI(args []string) error {
 	}()
 	m.Shutdown()
 	return runErr
-}
-
-func cmdRun(args []string) error {
-	fs := flag.NewFlagSet("sy run", flag.ExitOnError)
-	fs.Usage = usage
-	var c common
-	c.register(fs)
-	single := fs.String("single", "", "provider:model[:effort] - one agent, no planning or review (baseline)")
-	quiet := fs.Bool("quiet", false, "only print routing, results and errors")
-	fs.Parse(args)
-	task := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if task == "" {
-		return errors.New(`usage: sy run [flags] "task"`)
-	}
-	store, dir, err := c.setup()
-	if err != nil {
-		return err
-	}
-	_ = proc.Guard()
-	cfg := store.Get()
-	prunePoolsInBackground(cfg)
-	log, err := sessionlog.Open(cfg.SessionDir(), dir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "warning: session log disabled:", err)
-		log = nil
-	}
-	defer log.Close()
-	events := make(chan event.Event, 4096)
-	orc := orchestrator.New(orchestrator.Options{
-		Dir: dir, Store: store, Runners: runner.New, Tracker: limits.NewTracker(), Log: log,
-		Events: events, ForceProvider: c.provider,
-	})
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	go func() {
-		<-ctx.Done()
-		stop() // a second Ctrl+C now kills sy immediately
-		fmt.Fprintln(os.Stderr, "\ncancelling: stopping all agents... (Ctrl+C again to force quit)")
-	}()
-	printed := make(chan struct{})
-	go func() {
-		defer close(printed)
-		for e := range events {
-			printEvent(e, *quiet)
-		}
-	}()
-	var res orchestrator.TaskResult
-	if *single != "" {
-		prov, route, err := config.ParseRouteSpec(*single)
-		if err != nil {
-			return err
-		}
-		res = orc.RunSingle(ctx, task, prov, route)
-	} else {
-		res = orc.Run(ctx, task)
-	}
-	close(events)
-	<-printed
-	status := "OK"
-	if !res.OK {
-		status = "FAILED"
-	}
-	fmt.Printf("\n%s in %s · %s\n", status, res.Duration.Round(time.Second), res.Summary)
-	fmt.Printf("cost: %s\n", res.Cost.Summary())
-	if res.UndoKey != "" {
-		fmt.Printf("undo: sy undo %s   (preview first; your later edits are kept)\n", res.UndoKey)
-	}
-	if log != nil {
-		fmt.Println("session log:", log.Path())
-	}
-	if !res.OK {
-		return errTaskFailed
-	}
-	return nil
 }
 
 var (
@@ -726,12 +689,16 @@ func refreshCodex(cfg *config.Config, all bool) (int, error) {
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("sy init", flag.ExitOnError)
 	global := fs.Bool("global", false, "write to the user config dir instead of ./switchyard.yaml")
+	repo := fs.Bool("repo", false, "write a .switchyard.yaml for this repository (shared settings to commit)")
 	force := fs.Bool("force", false, "overwrite an existing file")
 	print := fs.Bool("print", false, "print the default config instead of writing it")
 	fs.Parse(args)
 	if *print {
 		os.Stdout.Write(config.DefaultYAML())
 		return nil
+	}
+	if *repo {
+		return initRepo(*force)
 	}
 	path := config.FileName
 	if *global {
@@ -747,9 +714,23 @@ func cmdInit(args []string) error {
 	if _, err := os.Stat(path); err == nil && !*force {
 		return fmt.Errorf("%s exists (use --force to overwrite)", path)
 	}
-	if err := os.WriteFile(path, config.DefaultYAML(), 0o644); err != nil {
+	data := config.DefaultYAML()
+	var checks []string
+	if !*global {
+		// The repo's own checks: agents may run them and sy runs them
+		// before the final review.
+		wd, _ := os.Getwd()
+		checks = config.DetectVerify(wd)
+		data = config.WithVerify(data, checks)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err
 	}
 	fmt.Println("wrote", path)
+	if len(checks) > 0 {
+		fmt.Printf("verify commands detected: %s (edit verify.commands to change)\n", strings.Join(checks, ", "))
+	} else if !*global {
+		fmt.Println("no test command detected: set verify.commands so agents and sy can run your checks")
+	}
 	return nil
 }

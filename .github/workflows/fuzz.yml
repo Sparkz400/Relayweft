@@ -1,0 +1,69 @@
+name: fuzz
+
+# Parser fuzzing (ROADMAP 1.8). Every fuzz target runs for a short time;
+# `go test ./...` in ci.yml already replays the seed corpora and the
+# regression inputs in testdata/fuzz on every push.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *" # nightly
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Time per fuzz target (Go duration)"
+        required: false
+        default: "30s"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: ./internal/runner
+            targets: FuzzCodexParser FuzzClaudeParser
+          - pkg: ./internal/orchestrator
+            targets: FuzzParsePlan FuzzNormalizePlan FuzzParseVerdict FuzzSplitHunks FuzzParseChangeList
+          - pkg: ./internal/limits
+            targets: FuzzParseReset FuzzDetector
+          - pkg: ./internal/router
+            targets: FuzzParseJudge
+          - pkg: ./internal/config
+            targets: FuzzParse FuzzParseRouteSpec
+          - pkg: ./internal/tui
+            targets: FuzzParseFollowUp
+          - pkg: ./cmd/sy
+            targets: FuzzParseTaskFile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: fuzz
+        env:
+          PKG: ${{ matrix.pkg }}
+          TARGETS: ${{ matrix.targets }}
+          FUZZTIME: ${{ inputs.fuzztime || '30s' }}
+        run: |
+          status=0
+          for t in $TARGETS; do
+            echo "::group::$t ($FUZZTIME)"
+            if ! go test -run='^$' -fuzz="^$t\$" -fuzztime="$FUZZTIME" "$PKG"; then
+              echo "::error::$t found a failing input (see the testdata/fuzz artifact)"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $status
+      - name: upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures-${{ strategy.job-index }}
+          path: "**/testdata/fuzz/**"

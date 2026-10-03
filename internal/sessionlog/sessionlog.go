@@ -3,6 +3,8 @@
 package sessionlog
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -45,6 +47,7 @@ type Record struct {
 	Rule       string            `json:"rule,omitempty"`
 	Reason     string            `json:"reason,omitempty"`
 	Confidence float64           `json:"confidence,omitempty"`
+	Judged     bool              `json:"judged,omitempty"` // decision: the judge model picked or confirmed the role
 	Fallback   bool              `json:"fallback,omitempty"`
 	OK         *bool             `json:"ok,omitempty"`
 	LimitHit   bool              `json:"limit_hit,omitempty"`
@@ -75,9 +78,9 @@ func Open(dir, cwd string) (*Writer, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	session := time.Now().Format("20060102-150405")
+	session := newSessionID()
 	path := filepath.Join(dir, session+".jsonl")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -86,10 +89,23 @@ func Open(dir, cwd string) (*Writer, error) {
 	return w, nil
 }
 
+// newSessionID is the start time plus a random suffix: two sy started in
+// the same second must not share kept branches or undo refs.
+// Format: 20060102-150405-1a2b.
+func newSessionID() string {
+	var b [2]byte
+	rand.Read(b[:])
+	return time.Now().Format("20060102-150405") + "-" + hex.EncodeToString(b[:])
+}
+
+// nilSession is the session id of a nil Writer, fixed for the process so
+// every caller in one sy agrees on it.
+var nilSession = sync.OnceValue(newSessionID)
+
 // Session returns the session id.
 func (w *Writer) Session() string {
 	if w == nil {
-		return time.Now().Format("20060102-150405")
+		return nilSession()
 	}
 	return w.session
 }

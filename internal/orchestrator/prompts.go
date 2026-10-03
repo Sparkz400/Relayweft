@@ -24,6 +24,8 @@ type Subtask struct {
 	Prompt    string      `json:"prompt"`
 	Files     []string    `json:"files"`
 	DependsOn []string    `json:"depends_on"`
+	// Role pins the subtask to a role (set in plan approval); "" = router.
+	Role string `json:"role,omitempty"`
 }
 
 // Verdict is what the reviewer returns.
@@ -63,6 +65,13 @@ func ParsePlan(reply string) (Plan, error) {
 	if err := extractJSON(reply, &p); err != nil {
 		return p, err
 	}
+	return NormalizePlan(p)
+}
+
+// NormalizePlan checks and repairs a plan (also after a person edited it):
+// unique, safe ids; known kinds; dependencies only on existing subtasks;
+// no cycles.
+func NormalizePlan(p Plan) (Plan, error) {
 	if len(p.Subtasks) == 0 {
 		return p, fmt.Errorf("plan has no subtasks")
 	}
@@ -71,13 +80,14 @@ func ParsePlan(reply string) (Plan, error) {
 	}
 	// The fixed agent ids are reserved so a subtask never collides with them.
 	seen := map[string]bool{"main": true, "reviewer": true, "judge": true}
+	ids := map[string]bool{} // the subtasks' own ids: the only valid dependencies
 	for i := range p.Subtasks {
 		st := &p.Subtasks[i]
 		st.ID = slug(st.ID)
 		for n := i + 1; st.ID == "" || seen[st.ID]; n++ {
 			st.ID = fmt.Sprintf("t%d", n)
 		}
-		seen[st.ID] = true
+		seen[st.ID], ids[st.ID] = true, true
 		switch strings.ToLower(string(st.Kind)) {
 		case "explore", "explorer", "search", "read":
 			st.Kind = router.KindExplore
@@ -99,7 +109,7 @@ func ParsePlan(reply string) (Plan, error) {
 		var deps []string
 		for _, d := range st.DependsOn {
 			d = slug(d)
-			if seen[d] && d != st.ID {
+			if ids[d] && d != st.ID {
 				deps = append(deps, d)
 			}
 		}
@@ -243,7 +253,7 @@ Reply with ONLY this JSON in a json code block:
 `, runner.MarkerErrorReview, attempts, task, st.Title, st.Prompt, clip(errText, 4000))
 }
 
-func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat, diff string, mergeNotes []string) string {
+func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat, diff string, mergeNotes []string, verifyReport string) string {
 	var b strings.Builder
 	b.WriteString(runner.MarkerFinalReview + " You are the reviewer at the final checkpoint. Do NOT modify files; you may read the repository and run read-only checks.\n")
 	b.WriteString("Decide whether the task is done correctly.\n\nTASK:\n" + task + "\n\nPLAN SUMMARY:\n" + p.Summary + "\n\nSUBTASK RESULTS:\n")
@@ -257,6 +267,9 @@ func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat,
 	}
 	if len(mergeNotes) > 0 {
 		b.WriteString("\nMERGE NOTES:\n- " + strings.Join(mergeNotes, "\n- ") + "\n")
+	}
+	if verifyReport != "" {
+		b.WriteString("\nTHE REPO'S CHECKS (run by Switchyard just now):\n" + clip(verifyReport, 6000) + "\n")
 	}
 	if stat != "" {
 		b.WriteString("\nDIFF STAT:\n" + stat + "\n\nDIFF:\n" + diff + "\n")
