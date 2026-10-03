@@ -266,7 +266,7 @@ func TestReviewOverlayDecisions(t *testing.T) {
 	m.Update(key("f"))
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("handle the empty case")})
 	m.Update(key("enter"))
-	if d := waitDecision(t, res); d.Feedback != "handle the empty case" || len(d.Apply) != 3 {
+	if d := waitDecision(t, res); d.Feedback != "handle the empty case" || len(d.Apply) != 0 { // feedback never applies
 		t.Fatalf("decision = %+v", d)
 	}
 
@@ -381,6 +381,8 @@ func TestParseFollowUp(t *testing.T) {
 		{"@edit", "edit", "", true},
 		{"@", "", "", true},
 		{"fix @ the parser", "", "", false},
+		{"@types/node bump to v22", "", "", false},
+		{"@Component rename props", "", "", false},
 	}
 	for _, c := range cases {
 		a, msg, ok := parseFollowUp(c.in)
@@ -480,5 +482,38 @@ func TestAgentTabCompletion(t *testing.T) {
 	m.input.SetValue("plain task")
 	if m.completeAgent() {
 		t.Error("completion outside @")
+	}
+}
+
+func init() {
+	// Tests press keys right after an overlay opens; the grace period that
+	// protects a typing user has its own test.
+	overlayGrace = 0
+}
+
+// Keys typed while an approval pops up must not answer it.
+func TestOverlayGraceIgnoresTyping(t *testing.T) {
+	isolateState(t)
+	overlayGrace = 300 * time.Millisecond
+	defer func() { overlayGrace = 0 }()
+	ap := NewApprover()
+	m, _, _ := newModelWith(t, false, ap)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	res := askPlan(ap, context.Background())
+	nextApproval(t, m, ap)
+	for _, k := range []string{"d", "d", "enter"} {
+		m.Update(key(k))
+		time.Sleep(50 * time.Millisecond)
+	}
+	select {
+	case r := <-res:
+		t.Fatalf("typing answered the plan: %+v", r)
+	case <-time.After(100 * time.Millisecond):
+	}
+	time.Sleep(350 * time.Millisecond) // the user pauses
+	m.Update(key("enter"))
+	r := waitPlan(t, res)
+	if !r.ok || len(r.p.Subtasks) != 3 {
+		t.Fatalf("after the pause: %+v", r)
 	}
 }

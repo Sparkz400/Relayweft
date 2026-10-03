@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
@@ -153,7 +154,14 @@ func (m *Model) openApproval() {
 	}
 	m.input.Blur()
 	m.focus = focusTree
+	m.overlayArm = time.Now().Add(overlayGrace)
 }
+
+// overlayGrace keeps an overlay that just opened from taking keys: someone
+// typing in the prompt when it pops up must not delete steps or approve by
+// accident. Every key in the grace period extends it, so the overlay starts
+// listening only after a short pause in typing.
+var overlayGrace = 700 * time.Millisecond
 
 // answer replies to the open request and moves on to the next one.
 func (m *Model) answer(rep approvalReply) {

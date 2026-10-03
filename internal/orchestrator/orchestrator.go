@@ -1009,7 +1009,13 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			r.ok, r.err = false, "cancelled during your review"
 			return r
 		}
-		if dec.Feedback != "" && round < 3 {
+		if dec.Feedback != "" && round >= 3 {
+			// Out of feedback rounds: asking for changes must never apply
+			// the work it objected to.
+			o.logf("%s: no more feedback rounds; the changes are not applied", st.ID)
+			dec = ChangeDecision{}
+		}
+		if dec.Feedback != "" {
 			o.logf("%s: you asked for changes: %s", st.ID, clip(dec.Feedback, 200))
 			again := stepPrompt(t.text, st, deps, "", "", false) + "\nYou already changed files in this directory for this subtask. The user reviewed your changes and asks:\n" +
 				dec.Feedback + "\nUpdate your changes accordingly, then reply with a short summary.\n"
@@ -1022,7 +1028,9 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		if len(dec.Apply) == 0 {
 			branch := o.saveBranch(t, st.ID, commit)
 			o.mergeEvent(t, st.ID, false, "rejected by you; the changes are kept on "+branch)
+			t.mergeMu.Lock() // t.notes is shared by parallel steps
 			t.notes = append(t.notes, fmt.Sprintf("the user rejected the changes of %s (kept on branch %s)", st.ID, branch))
+			t.mergeMu.Unlock()
 			r.ok, r.err = false, "changes rejected by you"
 			return r
 		}

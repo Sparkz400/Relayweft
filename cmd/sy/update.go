@@ -188,7 +188,13 @@ func replaceBinary(target string, data []byte, windows bool) error {
 		os.Remove(tmp)
 		return fmt.Errorf("move running binary aside: %w", err)
 	}
-	if err := os.Rename(tmp, target); err != nil {
+	err := os.Rename(tmp, target)
+	for i := 0; err != nil && windows && i < 5; i++ {
+		// A virus scanner often holds a freshly written .exe for a moment.
+		time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
+		err = os.Rename(tmp, target)
+	}
+	if err != nil {
 		// Put the old binary back so sy keeps working.
 		if rerr := os.Rename(old, target); rerr != nil {
 			return fmt.Errorf("install new binary: %w (and restoring failed: %v; the old binary is %s)", err, rerr, old)
@@ -211,6 +217,12 @@ func latestRelease() (*ghRelease, error) {
 		return nil, fmt.Errorf("check for updates: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized && githubToken() != "" {
+		// A stale or wrong token must not block updates of a public repo.
+		fmt.Fprintln(updateOut, "note: GitHub rejected the token in GITHUB_TOKEN/GH_TOKEN (401); trying without it")
+		tokenRejected = true
+		return latestRelease()
+	}
 	if resp.StatusCode == http.StatusNotFound {
 		hint := "If the repository is private, set GITHUB_TOKEN or GH_TOKEN to a token that can read it."
 		if githubToken() != "" {
@@ -264,7 +276,14 @@ func download(a ghAsset) ([]byte, error) {
 	return data, nil
 }
 
+// tokenRejected is set when GitHub answered 401 to the token: later
+// requests in this run go without it.
+var tokenRejected bool
+
 func githubToken() string {
+	if tokenRejected {
+		return ""
+	}
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
 		return t
 	}

@@ -3,10 +3,12 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/router"
@@ -111,8 +113,24 @@ func followUpContext(s AgentSession, text string) string {
 func (o *Orchestrator) FollowUp(ctx context.Context, agentID, text string) TaskResult {
 	s, ok := o.Session(agentID)
 	if !ok {
-		return TaskResult{Summary: fmt.Sprintf("no finished agent %q to follow up (agents: %s)", agentID, strings.Join(o.sessionIDs(), ", "))}
+		return o.refuse(fmt.Sprintf("no finished agent %q to follow up (agents: %s)", agentID, strings.Join(o.sessionIDs(), ", ")))
 	}
+	return o.FollowUpSession(ctx, s, text)
+}
+
+// refuse ends a follow-up that cannot start like a task, so a UI waiting
+// for TaskDone is never left hanging.
+func (o *Orchestrator) refuse(why string) TaskResult {
+	o.emit(event.Event{Kind: event.TaskStart, Text: why})
+	o.emit(event.Event{Kind: event.Phase, Text: "done"})
+	o.emit(event.Event{Kind: event.TaskDone, Text: why})
+	return TaskResult{Summary: why}
+}
+
+// FollowUpSession is FollowUp for a session looked up earlier (a queued
+// follow-up keeps the agent it was typed for, even if a later task's agent
+// with the same id finished since).
+func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text string) (result TaskResult) {
 	o.mu.Lock()
 	if o.running {
 		o.mu.Unlock()
@@ -122,10 +140,20 @@ func (o *Orchestrator) FollowUp(ctx context.Context, agentID, text string) TaskR
 	o.taskSeq++
 	seq := o.taskSeq
 	o.mu.Unlock()
+	finished := false
 	defer func() {
+		r := recover()
 		o.mu.Lock()
 		o.running = false
 		o.mu.Unlock()
+		if r != nil {
+			path := diag.Crash("follow-up", r, debug.Stack())
+			result = TaskResult{Summary: "internal error, Switchyard bug: details in " + path + " (sy bugreport)"}
+			if !finished {
+				o.emit(event.Event{Kind: event.Phase, Text: "done"})
+				o.emit(event.Event{Kind: event.TaskDone, Text: result.Summary})
+			}
+		}
 	}()
 
 	began := time.Now()
@@ -203,6 +231,7 @@ func (o *Orchestrator) FollowUp(ctx context.Context, agentID, text string) TaskR
 	o.mu.Lock()
 	o.running = false
 	o.mu.Unlock()
+	finished = true
 	o.emit(event.Event{Kind: event.Phase, Text: "done"})
 	o.emit(event.Event{Kind: event.TaskDone, OK: out.OK, Text: out.Summary, Tokens: tk, Cost: &cost})
 	return out

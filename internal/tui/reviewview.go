@@ -65,7 +65,7 @@ func (v *reviewOverlay) update(m *Model, k tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 			m.flashNotice(v.cs.StepID + ": sent back to the agent with your feedback")
-			m.answer(approvalReply{decision: orchestrator.ChangeDecision{Apply: v.selected(), Feedback: text}})
+			m.answer(approvalReply{decision: orchestrator.ChangeDecision{Feedback: text}})
 			return nil
 		case tea.KeyEsc:
 			v.feedback = false

@@ -20,7 +20,8 @@ import (
 type job struct {
 	text       string
 	followUp   bool
-	agent      string // follow-up target; "" = the newest agent
+	agent      string                    // follow-up target; "" = the newest agent
+	session    orchestrator.AgentSession // the target, resolved when typed
 	resume     *orchestrator.TaskState
 	unattended bool // queued: never waits for approvals
 }
@@ -52,10 +53,25 @@ func parseFollowUp(text string) (agent, msg string, ok bool) {
 		return rest, "", true
 	}
 	agent = rest[:i]
+	if !isAgentID(agent) {
+		return "", "", false // "@types/node ..." is a task, not a follow-up
+	}
 	if agent == "last" {
 		agent = ""
 	}
 	return agent, strings.TrimSpace(rest[i:]), true
+}
+
+// isAgentID reports whether s looks like a step id (planner ids are short
+// lowercase slugs), so tasks that start with @scope/pkg or @Component are
+// not taken for follow-ups.
+func isAgentID(s string) bool {
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // submit starts typed text: a follow-up when it starts with @, else a task.
@@ -65,11 +81,12 @@ func (m *Model) submit(text string) {
 			m.flashNotice("usage: @<agent> <message> or @ <message> for the last agent (/agents lists them)")
 			return
 		}
-		if _, have := m.orc.Session(agent); !have {
+		s, have := m.orc.Session(agent)
+		if !have {
 			m.flashNotice(fmt.Sprintf("no finished agent %q to follow up - /agents lists them", orLast(agent)))
 			return
 		}
-		m.startJob(job{text: msg, followUp: true, agent: agent})
+		m.startJob(job{text: msg, followUp: true, agent: agent, session: s})
 		return
 	}
 	m.startTask(text)
@@ -120,7 +137,7 @@ func (m *Model) startJob(j job) {
 	go func() {
 		defer close(done)
 		if j.followUp {
-			orc.FollowUp(ctx, j.agent, j.text)
+			orc.FollowUpSession(ctx, j.session, j.text)
 			return
 		}
 		orc.RunWith(ctx, j.text, orchestrator.TaskOptions{Unattended: j.unattended, Resume: j.resume})
@@ -219,10 +236,15 @@ func (m *Model) phase2Command(cmd string, args []string, rest string, say func(s
 	case "queue":
 		m.queueCommand(args, say)
 	case "resume":
-		if len(args) == 0 && m.orc.Paused() {
+		// While a task runs, /resume means "unpause"; otherwise it
+		// continues an interrupted task.
+		if len(args) == 0 && m.orc.Paused() && m.running {
 			m.orc.SetPaused(false)
 			say("resumed")
 			return true
+		}
+		if m.orc.Paused() && !m.running {
+			m.orc.SetPaused(false) // a resumed task must not start paused
 		}
 		m.resumeCommand(args, say)
 	case "unpause":

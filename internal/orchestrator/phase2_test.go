@@ -264,7 +264,7 @@ func TestFollowUpResumesSession(t *testing.T) {
 		}
 		return runner.Result{Final: "answer to " + s.StepID, SessionID: "sess-" + s.StepID}
 	})
-	o, _ := newOrc(t, "", set, nil)
+	o, rec := newOrc(t, "", set, nil)
 	if res := o.Run(context.Background(), "add a test"); !res.OK {
 		t.Fatalf("task: %+v", res)
 	}
@@ -290,5 +290,44 @@ func TestFollowUpResumesSession(t *testing.T) {
 	}
 	if res := o.FollowUp(context.Background(), "nobody", "x"); res.OK || !strings.Contains(res.Summary, "no finished agent") {
 		t.Fatalf("unknown agent: %+v", res)
+	}
+	// A refused follow-up still ends with TaskDone, or a UI would wait forever.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		n := 0
+		for _, e := range rec.all() {
+			if e.Kind == event.TaskDone && strings.Contains(e.Text, "no finished agent") {
+				n++
+			}
+		}
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("refused follow-up emitted %d TaskDone", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Feedback after the last feedback round rejects instead of applying.
+func TestChangeReviewFeedbackNeverApplies(t *testing.T) {
+	dir := gitRepo(t)
+	set := both(func(s runner.Spec) runner.Result {
+		if r, ok := twoEdits(s); ok {
+			return r
+		}
+		os.WriteFile(filepath.Join(s.Dir, s.StepID+".txt"), []byte("x\n"), 0o644)
+		return runner.Result{Final: "wrote"}
+	})
+	o, _ := newOrc(t, dir, set, func(c *config.Config) { c.Orchestrator.ReviewChanges = true })
+	withApprover(o, &fakeApprover{review: func(cs ChangeSet) ChangeDecision {
+		return ChangeDecision{Apply: cs.AllPaths(), Feedback: "still wrong"}
+	}})
+	o.Run(context.Background(), longTask)
+	for _, f := range []string{"a.txt", "b.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			t.Errorf("%s applied although every review asked for changes", f)
+		}
 	}
 }

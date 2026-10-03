@@ -171,6 +171,7 @@ type Model struct {
 
 	approvals   []*approvalReq // waiting for the person; the first is on screen
 	overlay     overlay        // plan approval or change review
+	overlayArm  time.Time      // the overlay takes keys from then on
 	queue       []job          // tasks typed while one ran
 	interrupted *orchestrator.TaskState
 	complete    struct { // tab completion of @agent ids
@@ -759,6 +760,11 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.overlay != nil {
 		if k.Type == tea.KeyCtrlX {
 			m.cancelRunning()
+			return m, nil
+		}
+		if now := time.Now(); now.Before(m.overlayArm) {
+			m.overlayArm = now.Add(overlayGrace)
+			m.flashNotice("an approval just opened - keys are ignored until you pause typing")
 			return m, nil
 		}
 		return m, m.overlay.update(m, k)
