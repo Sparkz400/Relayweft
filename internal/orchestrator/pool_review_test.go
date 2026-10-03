@@ -719,3 +719,16 @@ func TestCommitWorkReportsSparseCheckoutWrites(t *testing.T) {
 		t.Errorf("commit = %+v, want the write outside the cone reported", sc)
 	}
 }
+
+// git 2.5x adds an "unable to index file" line for a nested repository
+// without a commit; it must not turn into a failed commit.
+func TestAddWarningsNewGit(t *testing.T) {
+	msg := "error: 'scratch/' does not have a commit checked out\nerror: unable to index file 'scratch/'\nwarning: adding embedded git repository: vendor/lib\nhint: You've added another git repository\nfatal: adding files failed"
+	nested, _, ok := addWarnings(&gitError{msg: msg})
+	if !ok || len(nested) != 1 || nested[0] != "scratch" {
+		t.Fatalf("nested %v ok %v", nested, ok)
+	}
+	if _, _, ok := addWarnings(&gitError{msg: "error: unable to index file 'real.txt'"}); ok {
+		t.Fatal("a file that cannot be indexed was ignored")
+	}
+}

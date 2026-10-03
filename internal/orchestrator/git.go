@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -492,6 +493,9 @@ var reNoCommit = regexp.MustCompile(`'([^']+)' does not have a commit checked ou
 // addWarnings sorts the errors of `git add -A --ignore-errors` into nested
 // repositories without a commit and paths outside the sparse-checkout cone.
 // ok is false when anything else went wrong.
+// reUnindexable is git's "error: unable to index file '<path>'".
+var reUnindexable = regexp.MustCompile(`^error: unable to index file '(.+)'$`)
+
 func addWarnings(err error) (nested, sparse []string, ok bool) {
 	var ge *gitError
 	if !errors.As(err, &ge) {
@@ -506,6 +510,9 @@ func addWarnings(err error) (nested, sparse []string, ok bool) {
 			inSparse = false
 		case reNoCommit.MatchString(l):
 			nested = append(nested, strings.TrimSuffix(reNoCommit.FindStringSubmatch(l)[1], "/"))
+		case reUnindexable.MatchString(l) && slices.Contains(nested, strings.TrimSuffix(reUnindexable.FindStringSubmatch(l)[1], "/")):
+			// git >= 2.5x follows "does not have a commit checked out"
+			// with this line for the same directory.
 		case strings.HasPrefix(l, "The following paths and/or pathspecs matched paths that exist"):
 			inSparse = true
 		case strings.HasPrefix(l, "outside of your sparse-checkout definition"), strings.HasPrefix(l, "updated in the index"):
