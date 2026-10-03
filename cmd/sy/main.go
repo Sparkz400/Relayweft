@@ -292,13 +292,16 @@ func cmdTUI(args []string) error {
 		log = nil
 	}
 	defer log.Close()
+	// Always a real approver: a nil *tui.Approver in the interface would
+	// make every task wait forever.
+	ap := tui.NewApprover()
 	orc := orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: runners, Tracker: limits.NewTracker(), Log: log,
-		Events: events, ForceProvider: c.provider, NoGit: *demo, Mode: mode,
+		Events: events, ForceProvider: c.provider, NoGit: *demo, Mode: mode, Approver: ap,
 	})
 	m := tui.New(tui.Options{
 		Orc: orc, Events: events, Dir: dir, Theme: tui.NewTheme(cfg.Theme), Demo: *demo,
-		DemoTask: map[bool]string{true: demoTask}[*demo], SessionLog: log.Path(), Version: version,
+		DemoTask: map[bool]string{true: demoTask}[*demo], SessionLog: log.Path(), Version: version, Approver: ap,
 	})
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()

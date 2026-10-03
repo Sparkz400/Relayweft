@@ -197,10 +197,10 @@ func (m *Model) phase2Command(cmd string, args []string, rest string, say func(s
 			return true
 		}
 		m.setOrch(func(c *config.Config) { c.Orchestrator.ApprovePlan = on }, fmt.Sprintf("approve plan = %v", on))
-	case "review":
+	case "review-changes":
 		on, ok := onOff(args)
 		if !ok {
-			say("usage: /review on|off  (now %s: show each agent's changes before they land)", onWord(m.store.Get().Orchestrator.ReviewChanges))
+			say("usage: /review-changes on|off  (now %s: show each agent's changes before they land)", onWord(m.store.Get().Orchestrator.ReviewChanges))
 			return true
 		}
 		m.setOrch(func(c *config.Config) { c.Orchestrator.ReviewChanges = on }, fmt.Sprintf("review changes = %v", on))

@@ -103,7 +103,8 @@ func (f *Fake) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	f.mu.Unlock()
 
 	send(event.Started, "started "+s.Model)
-	res := Result{}
+	// A session id makes demo agents take follow-ups (@agent message).
+	res := Result{SessionID: fmt.Sprintf("demo-%s-%d", s.AgentID, call)}
 	finish := func() Result {
 		res.Duration = time.Since(start)
 		if ctx.Err() != nil {

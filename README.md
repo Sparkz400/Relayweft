@@ -143,7 +143,10 @@ There are four ways to change any of this, at any time:
 - `/single <provider>:<model>[:effort] <task>` runs a single-agent baseline
 - `/limit <codex|claude> [reset|set]` to correct the limit state by hand
 - `/threads <n>`, `/parallel on|off`, `/review on|off`, `/judge on|off`
-- `/pause`, `/resume`, `/kill <agent>`, `/cancel`, `/clear`, `/usage`
+- `/approve on|off` (plan approval), `/review-changes on|off` (per-file change review), `/verify [<cmd>|clear]`
+- `@<agent> message` (or `@ message` for the newest agent; `tab` completes ids) sends a follow-up, `/agents` lists who can take one
+- `/queue`, `/queue rm <n>`, `/queue clear`; `/history`; `/resume [<id>]` continues an interrupted task
+- `/pause`, `/unpause` (`/resume` also unpauses while paused), `/kill <agent>`, `/cancel`, `/clear`, `/usage`
 - `/undo` previews reverting the last task, `/undo yes` applies it; `/redo` and `/redo yes` put it back
 
 ## Other commands

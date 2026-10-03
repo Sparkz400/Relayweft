@@ -24,11 +24,11 @@ var helpText = []string{
 	"/single <provider>:<model>[:effort] <task>  run one agent only (baseline for sy stats)",
 	"/limit <codex|claude> [reset|set]    clear or set a provider's usage-limit state",
 	"/approve on|off                      show the plan for editing before anything runs",
-	"/review on|off                       show each agent's changes (per file) before they land",
+	"/review-changes on|off               show each agent's changes (per file) before they land",
 	"/verify [<command>|clear]            list, add or clear the checks run before the final review",
 	"/queue · /queue clear · /queue rm <n>   tasks waiting to run",
 	"/resume [<id>] · /history            continue an interrupted task · list the last 10 tasks",
-	"/threads <n> · /parallel on|off · /reviewer on|off · /judge on|off",
+	"/threads <n> · /parallel on|off · /review on|off (reviewer checkpoints) · /judge on|off",
 	"/pause · /unpause · /kill <agent> · /cancel · /clear · /usage",
 	"/undo [yes] · /redo [yes]          preview, then revert (or re-apply) the last task's changes",
 	"roles: " + strings.Join(event.Roles, ", "),
@@ -132,7 +132,7 @@ func (m *Model) command(line string) tea.Cmd {
 			return nil
 		}
 		m.setOrch(func(c *config.Config) { c.Orchestrator.MaxThreads = n }, fmt.Sprintf("max_threads = %d", n))
-	case "parallel", "reviewer", "judge":
+	case "parallel", "review", "reviewer", "judge":
 		on, ok := onOff(args)
 		if !ok {
 			say("usage: /%s on|off", cmd)
@@ -142,7 +142,7 @@ func (m *Model) command(line string) tea.Cmd {
 			switch cmd {
 			case "parallel":
 				c.Orchestrator.Parallel = on
-			case "reviewer":
+			case "review", "reviewer":
 				c.Orchestrator.ReviewBeforePlan = on
 				c.Orchestrator.ReviewOnRepeatError = on
 				c.Orchestrator.ReviewBeforeDone = on

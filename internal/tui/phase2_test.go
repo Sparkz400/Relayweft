@@ -351,8 +351,8 @@ func TestVerifyApproveReviewCommands(t *testing.T) {
 		t.Errorf("verify not cleared: %d", n)
 	}
 	m.command("/approve off")
-	m.command("/review on")
-	m.command("/reviewer off")
+	m.command("/review-changes on")
+	m.command("/review off")
 	oc := orc.Store().Get().Orchestrator
 	if oc.ApprovePlan || !oc.ReviewChanges || oc.ReviewBeforeDone {
 		t.Errorf("orchestrator cfg = approve %v review %v reviewer %v", oc.ApprovePlan, oc.ReviewChanges, oc.ReviewBeforeDone)
@@ -362,7 +362,7 @@ func TestVerifyApproveReviewCommands(t *testing.T) {
 	}
 	m.command("/help")
 	help := strings.Join(logTexts(m), "\n")
-	for _, c := range []string{"/approve", "/review", "/verify", "/queue", "/resume", "/history", "/agents", "@<agent>"} {
+	for _, c := range []string{"/approve", "/review-changes", "/verify", "/queue", "/resume", "/history", "/agents", "@<agent>"} {
 		if !strings.Contains(help, c) {
 			t.Errorf("/help lacks %s", c)
 		}
