@@ -19,10 +19,21 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - disk guard
   - debug and crash logs with `sy bugreport`
   - `sy undo`
-- **Ahead of schedule from Phase 3:**
-  - `sy bench`
+- **Phase 2 (done, needs real-world use):**
+  - plan approval
+  - change review before applying
+  - agents run your tests (`verify`)
+  - follow-up messages
+  - task history and resume
+  - task queue
+  - notifications
+  - release pipeline with `sy update`
+- **Phase 3 (built; tuning waits for data):**
+  - `sy bench` with a starter set
   - switching provider before the limit
-  - per-task cost
+  - `sy tune` (rule tuning and judge advice)
+  - context hand-off
+  - cost per task and per day
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
@@ -72,14 +83,14 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 | # | Item | Why |
 |---|---|---|
-| 2.1 | **Plan approval step**: show the plan in the TUI, let you edit, delete or reorder subtasks, change a route, then run (or turn approval off). | You stay in control of what runs, before any quota is spent. |
-| 2.2 | **Review the diff before it lands**: an option to stage each agent's merge for approval, with a per-file diff view in the TUI (accept, reject, ask for changes). | Bad edits are rejected before they reach your tree, not undone after. |
-| 2.3 | **Agents can run tests safely**: per-repo test command presets (`go test ./...`, `npm test`, `pytest`) that become Claude `allowedTools` and Codex sandbox settings automatically, detected by `sy init`. | Today Claude workers can edit but cannot verify their own work. |
-| 2.4 | **Follow-up messages**: talk to a running or finished agent ("also handle the empty case") using `codex exec resume` and `claude --resume`. | Real work is iterative; today every follow-up starts a new task. |
-| 2.5 | **Task history and resume**: a list of past tasks with their results and diffs, and resuming an interrupted task from its last finished subtask. | Closing the window or a reboot no longer loses progress. |
-| 2.6 | **Task queue**: line up several tasks; they run one after another, optionally overnight. | Uses quota while you're away. |
-| 2.7 | **Notifications**: a Windows toast when a task finishes, fails or hits a limit. | You don't have to watch the terminal. |
-| 2.8 | **Distribution**: GitHub Releases with signed `sy.exe`, plus winget and Scoop packages and `sy update`. | Installing no longer needs Go or a build. |
+| 2.1 | ✅ **Plan approval step**: the plan opens in the TUI (or on the terminal with `sy run --approve`). You can delete, reorder or edit subtasks, pin a role, or cancel. Turn it off with `/approve off`. | You stay in control of what runs, before any quota is spent. |
+| 2.2 | ✅ **Review the diff before it lands** (`review_changes`): a per-file diff view where you can accept, accept only some files, reject, or send it back with feedback (the agent continues in its worktree). Rejected work is kept on a branch. | Bad edits are rejected before they reach your tree, not undone after. |
+| 2.3 | ✅ **Agents can run tests safely**: `verify.commands`, detected by `sy init` (Go, npm/pnpm/yarn/bun, pytest, cargo, dotnet, Maven, Gradle). They become Claude `allowedTools`, are run by `sy` before the final review, and failures feed the fix round. Codex workers already run commands inside their workspace-write sandbox. | Today Claude workers can edit but cannot verify their own work. |
+| 2.4 | ✅ **Follow-up messages**: `@agent message` resumes that agent's CLI session (`codex exec resume`, `claude --resume`), falling back to a fresh agent with context. Finished agents only; a running agent is not interrupted. | Real work is iterative; today every follow-up starts a new task. |
+| 2.5 | ✅ **Task history and resume**: the state of every task is saved after each step. `sy history` / `/history` list tasks; `sy resume` / `/resume` continue an interrupted one, skipping finished steps. Diffs per task come from `sy undo --list`. | Closing the window or a reboot no longer loses progress. |
+| 2.6 | ✅ **Task queue**: submitting while a task runs queues it in the TUI (`/queue`). `sy run --file tasks.txt` runs a list overnight. Queued tasks run unattended. | Uses quota while you're away. |
+| 2.7 | ✅ **Notifications**: a desktop notification when a task finishes or fails, a limit is hit, or `sy` waits for you (Windows toast, macOS, notify-send). | You don't have to watch the terminal. |
+| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, and `sy update` (checksum-verified, swaps the running .exe safely on Windows). Code signing needs a certificate: see `packaging/README.md`. | Installing no longer needs Go or a build. |
 
 **Exit criteria:**
 - You reach for `sy` before plain `codex` or `claude` for multi-step work.
@@ -93,12 +104,12 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 | # | Item | Why |
 |---|---|---|
-| 3.1 | ✅ **Benchmark command** (done early): `sy bench` with `bench.yaml`, check commands, routed vs single, saved results. Next: a starter task set. Was planned as: `sy bench` runs a task set (yours, plus a starter set) routed vs single-agent, and records correctness (did the tests pass), wall time and quota used. | This is the success measure from `plan.md` §9, automated. |
+| 3.1 | ✅ **Benchmark command**: `sy bench` with `bench.yaml`, check commands, routed vs single, saved results, and `sy bench --starter` (five Python tasks with check scripts). | This is the success measure from `plan.md` §9, automated. |
 | 3.2 | ✅ **Quota-aware scheduling** (done early, Claude; Codex as soon as its CLI reports `rate_limits`): `quota-preempt` at `switch_at_utilization`, and the planner and reviewer retry on the other provider. Was planned as: use Claude's live 5-hour and 7-day utilization (already received) and Codex limits to move work to the other provider *before* hitting the limit, not after. | Avoids stalls entirely. |
-| 3.3 | **Rule tuning from stats**: `sy stats` flags rules that often lead to retries or rejected reviews and suggests route changes. | Routing improves from your own data. |
-| 3.4 | **Judge model**: turn the judge on where the stats show the rules guess wrong; measure its cost against the gain. | Spend quota only where it pays. |
-| 3.5 | **Context hand-off**: pass explorer findings and file maps between agents in a compact form instead of re-reading the repo. | Fewer tokens, faster workers. |
-| 3.6 | ✅ **Cost visibility** (done early): fresh tokens per provider, Claude API-equivalent $, limit before and after, in the TUI, `sy run` and `sy stats`. Next: per-day totals. Was planned as: token use and the share of the limit used per task, per model and per day in the header and in `sy stats`. | You can see what each task cost. |
+| 3.3 | ✅ **Rule tuning from stats**: `sy tune` flags failing routes, frequent escalations, rejected reviews, quota pressure and over-sized read-only models, and prints the `/route` / `/prefer` command for each. | Routing improves from your own data. |
+| 3.4 | ✅ **Judge model** (measurement): decisions record whether the judge ran, and `sy tune` compares judged with rule-routed steps to suggest `/judge on` or `/judge off`. | Spend quota only where it pays. |
+| 3.5 | ✅ **Context hand-off**: a repo map and notes from earlier tasks in the same repo go into planner and step prompts, and every writer gets what this task's read-only steps found. | Fewer tokens, faster workers. |
+| 3.6 | ✅ **Cost visibility**: fresh tokens per provider, Claude API-equivalent $, and limit before and after, in the TUI, `sy run` and `sy stats`, plus a per-day table in `sy stats`. | You can see what each task cost. |
 
 **Exit criteria:** on the benchmark, Switchyard beats a single agent on at least 2 of the 3 measures: correctness, wall time, and how quickly the limits are reached.
 
@@ -133,5 +144,5 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 2. **1.1 Real Codex run.** Run `codex exec --json -m gpt-6-luna "say hi" > codex.jsonl` on your logged-in PC and send the file; it becomes a test fixture. Also check whether the output contains `rate_limits`; if it does, the quota switch then works for Codex too.
 3. **1.9 Review the PR #2 pool code and 1.8 parser fuzzing.** No user input needed.
 4. **1.7 Long-run stress test in CI.**
-5. **Then Phase 2:** 2.1 plan approval, 2.3 agents run tests safely, 2.2 diff review before applying.
-6. **Run `sy bench` on ~10 real tasks** as soon as Codex works. Its results decide which Phase 3 tuning is worth doing.
+5. **Cut the first release** (`git tag v0.1.0 && git push --tags`), then render the Scoop and winget manifests with `packaging/render-manifests.sh`. Signing needs a certificate.
+6. **Run `sy bench --starter`, then `sy bench` on ~10 real tasks** as soon as Codex works. After a week of use, run `sy tune`. Its suggestions and the bench results decide the routing defaults.
