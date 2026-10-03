@@ -54,6 +54,8 @@ type Stats struct {
 	// 0 = none), set by the caller to show it in the per-day table.
 	DayLimitUSD    float64 `json:"day_limit_usd,omitempty"`
 	DayLimitTokens int64   `json:"day_limit_tokens,omitempty"`
+	// daysTitle replaces the per-day table's heading (merged exports).
+	daysTitle string
 }
 
 // DayStats totals one calendar day of tasks, so a day of heavy use (and what
@@ -294,7 +296,11 @@ func (s Stats) printDays(w io.Writer) {
 	if len(s.Days) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "\nPer day (last %d days; $ is Claude's API-equivalent price)\n", statsDays)
+	if s.daysTitle != "" {
+		fmt.Fprintln(w, "\n"+s.daysTitle)
+	} else {
+		fmt.Fprintf(w, "\nPer day (last %d days; $ is Claude's API-equivalent price)\n", statsDays)
+	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	limited := s.DayLimitUSD > 0 || s.DayLimitTokens > 0
 	head := "  DATE\tTASKS\tOK\tCODEX\tCLAUDE\t$"

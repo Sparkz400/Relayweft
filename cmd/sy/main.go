@@ -142,6 +142,8 @@ Usage:
   sy resume [task id]        continue an interrupted task (default: the last one here)
   sy report [task id] [--out f.html] [--md] [--open]   one shareable page per task (default: the last one here)
   sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline
+  sy stats --json [--since 7d] [--out f.json] [--name label] [--with-tasks]   this machine's usage as a JSON export
+  sy stats --merge a.json b.json ... | <folder>   combined tables of several machines' exports, per machine too
   sy tune [--here] [--since 7d]    routing suggestions from your logs
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
   sy doctor                  check CLIs, versions, git and terminal
@@ -496,10 +498,34 @@ func cmdStats(args []string) error {
 	cfgPath := fs.String("config", "", "config file")
 	here := fs.Bool("here", false, "only sessions run in the current directory")
 	since := fs.String("since", "", "only records newer than this (e.g. 24h, 7d)")
-	fs.Parse(args)
+	var ex statsExportFlags
+	ex.register(fs)
+	// Flags may follow the --merge files.
+	var files []string
+	for rest := args; ; rest = fs.Args()[1:] {
+		fs.Parse(rest)
+		if fs.NArg() == 0 {
+			break
+		}
+		files = append(files, fs.Arg(0))
+	}
+	if err := ex.check(files); err != nil {
+		return err
+	}
 	cfg, _, err := config.Load(*cfgPath)
 	if err != nil {
 		return err
+	}
+	if ex.merge {
+		var from time.Time
+		if *since != "" {
+			d, err := parseSince(*since)
+			if err != nil {
+				return err
+			}
+			from = time.Now().Add(-d)
+		}
+		return mergeExports(cfg, files, from)
 	}
 	recs, err := sessionlog.ReadDir(cfg.SessionDir())
 	if err != nil {
@@ -515,6 +541,9 @@ func cmdStats(args []string) error {
 			return err
 		}
 		f.Since = time.Now().Add(-d)
+	}
+	if ex.json {
+		return ex.export(recs, f)
 	}
 	st := sessionlog.Aggregate(recs, f)
 	st.DayLimitUSD, st.DayLimitTokens = cfg.Budget.DayUSD, cfg.Budget.DayTokens

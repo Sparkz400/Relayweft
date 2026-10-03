@@ -442,6 +442,7 @@ func (o *Orchestrator) prepareExtras(t *task) error {
 			r.repoMap = repoMap(r.root)
 			r.repoNotes = repoNotes(r.root)
 		}
+		r.repoDocs = repoDocs(t.cfg, r.root)
 	}
 	names := t.workspaceNames()
 	o.logf("multi-repo task: %s", strings.Join(names, ", "))

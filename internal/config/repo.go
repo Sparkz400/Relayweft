@@ -25,7 +25,8 @@ import (
 // A repo file comes from whoever pushed to the repo, so the parts that run
 // commands on your machine (verify commands, hooks, provider commands and
 // arguments, the log directory, MCP servers) apply only after you trust that exact
-// content with `sy trust`. Routes, preferences and toggles always apply.
+// content with `sy trust`, and so does budget.team.dir (where sy writes its
+// usage file). Routes, preferences and toggles always apply.
 
 // RepoFileName is the per-repo settings file.
 const RepoFileName = ".switchyard.yaml"
@@ -155,9 +156,18 @@ func restoreCommandSettings(c, before *Config) []string {
 	if !reflect.DeepEqual(c.Workspace, before.Workspace) {
 		changed = append(changed, "workspace")
 	}
+	// The team folder is where sy writes its usage file: like log_dir, a
+	// path nobody reviewed must not decide where sy writes.
+	if c.Budget.Team.Dir != before.Budget.Team.Dir {
+		changed = append(changed, teamDirKey)
+	}
 	c.Verify, c.Hooks, c.Providers, c.LogDir, c.MCP, c.Workspace = before.Verify, before.Hooks, before.Providers, before.LogDir, before.MCP, before.Workspace
+	c.Budget.Team.Dir = before.Budget.Team.Dir
 	return changed
 }
+
+// teamDirKey is the one budget setting that needs trust.
+const teamDirKey = "budget.team.dir"
 
 // stricterBudget keeps the tighter of two budgets per limit (0 = no limit).
 func stricterBudget(mine, repo BudgetCfg) BudgetCfg {
@@ -181,6 +191,11 @@ func stricterBudget(mine, repo BudgetCfg) BudgetCfg {
 	if repo.WarnAt > 0 && (mine.WarnAt <= 0 || repo.WarnAt < mine.WarnAt) {
 		out.WarnAt = repo.WarnAt
 	}
+	out.Team.DayTokens = tighterI(mine.Team.DayTokens, repo.Team.DayTokens)
+	out.Team.DayUSD = tighterF(mine.Team.DayUSD, repo.Team.DayUSD)
+	// The folder is not a limit: it is the repo file's only when trusted
+	// (restoreCommandSettings put yours back otherwise).
+	out.Team.Dir = repo.Team.Dir
 	return out
 }
 
@@ -289,6 +304,13 @@ func CommandSettings(path string) ([]string, error) {
 		if v, ok := raw[k]; ok {
 			b, _ := yaml.Marshal(map[string]any{k: v})
 			out = append(out, strings.TrimRight(string(b), "\n"))
+		}
+	}
+	if b, ok := raw["budget"].(map[string]any); ok {
+		if t, ok := b["team"].(map[string]any); ok {
+			if d, ok := t["dir"]; ok {
+				out = append(out, fmt.Sprintf("%s: %v (sy writes this machine's usage file there)", teamDirKey, d))
+			}
 		}
 	}
 	sort.Strings(out)

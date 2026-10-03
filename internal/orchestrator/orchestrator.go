@@ -97,6 +97,10 @@ type Orchestrator struct {
 
 	day dayCache // today's finished tasks, for the budget (budget.go)
 	cur *task    // the running task (RunWith), for BudgetStatus
+	// The other machines' totals for the team budget (team.go), and the
+	// team folder problems already logged.
+	team       teamCache
+	teamWarned map[string]bool
 }
 
 // New creates an orchestrator.
@@ -284,6 +288,7 @@ type task struct {
 	keepBefore bool       // resumed: undo keeps the original "before" snapshot
 	repoMap    string     // context hand-off (handoff.go)
 	repoNotes  string
+	repoDocs   string // the repo's own conventions (repodocs; untrusted)
 
 	// Multi-repo tasks (workspace.go). The task holds the primary repo's
 	// state; each extra repo's git state is held in a *task of its own.
@@ -673,6 +678,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		t.repoMap = repoMap(t.root)
 		t.repoNotes = repoNotes(t.root)
 	}
+	t.repoDocs = repoDocs(cfg, t.root)
 	if err := o.prepareExtras(t); err != nil {
 		return TaskResult{Summary: "not started: " + err.Error()}
 	}
@@ -804,7 +810,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 				o.emit(event.Event{Kind: event.Phase, Text: "review"})
 				stat, diff := t.workspaceDiff(40_000)
 				var ok bool
-				v, ok = o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes, report))
+				v, ok = o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes, report, t.docsContext()))
 				if ctx.Err() != nil {
 					return TaskResult{Summary: "cancelled during final review"}
 				}
@@ -872,7 +878,7 @@ func looksRead(s string) bool { return reReadTask.MatchString(s) }
 // step, so a chatty planner never blocks progress.
 func (o *Orchestrator) plan(ctx context.Context, t *task, advice string, prev *Plan) (Plan, bool) {
 	step := router.Step{ID: "plan", Title: "Plan the task", Kind: router.KindPlan, Prompt: t.text}
-	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev)+t.planContext())
+	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev)+t.planContext()+t.docsContext())
 	t.mainProv = d.Provider
 	if !res.OK() {
 		msg := "planner failed"

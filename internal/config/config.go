@@ -182,11 +182,65 @@ type BudgetCfg struct {
 	DayTokens  int64   `yaml:"day_tokens" json:"day_tokens"`
 	DayUSD     float64 `yaml:"day_usd" json:"day_usd"`
 	WarnAt     float64 `yaml:"warn_at" json:"warn_at"` // warn once at this share of a limit (0 = no warning)
+	// Team is a day budget several machines share through a folder.
+	Team TeamBudgetCfg `yaml:"team" json:"team"`
 }
 
 // Any reports whether any budget limit is set.
 func (b BudgetCfg) Any() bool {
-	return b.TaskTokens > 0 || b.TaskUSD > 0 || b.DayTokens > 0 || b.DayUSD > 0
+	return b.TaskTokens > 0 || b.TaskUSD > 0 || b.DayTokens > 0 || b.DayUSD > 0 || b.Team.Limited()
+}
+
+// TeamBudgetCfg is a day budget shared by several machines: each one
+// writes its own usage export (the `sy stats --json` format) to a shared
+// folder (OneDrive, a network share) after every task, and checks the
+// combined day total of every machine there before an agent starts. Dir
+// is where sy writes, so a repo file's dir applies only after `sy trust`.
+type TeamBudgetCfg struct {
+	Dir       string  `yaml:"dir" json:"dir"` // "" = off; ~ and environment variables ($X, %X%) are expanded
+	DayTokens int64   `yaml:"day_tokens" json:"day_tokens"`
+	DayUSD    float64 `yaml:"day_usd" json:"day_usd"`
+}
+
+// Limited reports whether the team folder is set and has a limit.
+func (t TeamBudgetCfg) Limited() bool {
+	return t.Dir != "" && (t.DayTokens > 0 || t.DayUSD > 0)
+}
+
+var reWinEnv = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_()]*)%`)
+
+// Folder is Dir with ~ and environment variables expanded ("" when off).
+// It must be absolute: a relative folder would depend on where sy started.
+func (t TeamBudgetCfg) Folder() (string, error) {
+	d := strings.TrimSpace(t.Dir)
+	if d == "" {
+		return "", nil
+	}
+	d = reWinEnv.ReplaceAllStringFunc(d, func(m string) string {
+		if v, ok := os.LookupEnv(m[1 : len(m)-1]); ok {
+			return v
+		}
+		return m
+	})
+	d = os.ExpandEnv(d)
+	if d == "~" || strings.HasPrefix(d, "~/") || strings.HasPrefix(d, `~\`) {
+		if h, err := os.UserHomeDir(); err == nil {
+			d = filepath.Join(h, d[1:])
+		}
+	}
+	if !filepath.IsAbs(d) {
+		return "", fmt.Errorf("budget.team.dir %q is not an absolute path", t.Dir)
+	}
+	return filepath.Clean(d), nil
+}
+
+// ContextCfg controls what the planner and the final reviewer learn from
+// the repo's own documents (CONTRIBUTING, the PR template, CI workflows,
+// AGENTS.md...). The summary is built without a model call and is shown
+// as untrusted repo data: none of it becomes a command.
+type ContextCfg struct {
+	RepoDocs      bool `yaml:"repo_docs"`
+	RepoDocsMaxKB int  `yaml:"repo_docs_max_kb"` // total size of the summary (0 = 8)
 }
 
 // Config is the whole file.
@@ -201,6 +255,7 @@ type Config struct {
 	MCP           MCPCfg                 `yaml:"mcp,omitempty"`
 	Workspace     WorkspaceCfg           `yaml:"workspace,omitempty"`
 	Budget        BudgetCfg              `yaml:"budget"`
+	Context       ContextCfg             `yaml:"context"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`
@@ -331,6 +386,12 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.MCP.validate()...)
 	if b := c.Budget; b.TaskTokens < 0 || b.TaskUSD < 0 || b.DayTokens < 0 || b.DayUSD < 0 {
 		errs = append(errs, "budget limits must be >= 0 (0 = off)")
+	}
+	if tb := c.Budget.Team; tb.DayTokens < 0 || tb.DayUSD < 0 {
+		errs = append(errs, "budget.team limits must be >= 0 (0 = off)")
+	}
+	if c.Context.RepoDocsMaxKB < 0 {
+		errs = append(errs, "context.repo_docs_max_kb must be >= 0 (0 = 8)")
 	}
 	if w := c.Budget.WarnAt; w < 0 || w > 1 {
 		errs = append(errs, "budget.warn_at must be between 0 and 1")

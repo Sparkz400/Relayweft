@@ -22,12 +22,15 @@ const (
 	LimitTaskUSD    = "task_usd"
 	LimitDayTokens  = "day_tokens"
 	LimitDayUSD     = "day_usd"
+	// The team budget: every machine's tasks today (team.go).
+	LimitTeamDayTokens = "team_day_tokens"
+	LimitTeamDayUSD    = "team_day_usd"
 )
 
 // BudgetRequest asks a person whether a task may go on past a budget
 // limit. Approving lets the task run past that limit until it ends.
 type BudgetRequest struct {
-	Limit string  `json:"limit"` // task_tokens, task_usd, day_tokens or day_usd
+	Limit string  `json:"limit"` // task_tokens, task_usd, day_tokens, day_usd, team_day_tokens or team_day_usd
 	Used  float64 `json:"used"`  // tokens or dollars so far
 	Max   float64 `json:"max"`   // the limit
 	Task  string  `json:"task"`
@@ -35,7 +38,9 @@ type BudgetRequest struct {
 }
 
 // USD reports whether the limit is in dollars (else in fresh tokens).
-func (r BudgetRequest) USD() bool { return r.Limit == LimitTaskUSD || r.Limit == LimitDayUSD }
+func (r BudgetRequest) USD() bool {
+	return r.Limit == LimitTaskUSD || r.Limit == LimitDayUSD || r.Limit == LimitTeamDayUSD
+}
 
 // What names the limit, e.g. "the task's cost (API-equivalent)".
 func (r BudgetRequest) What() string {
@@ -46,6 +51,10 @@ func (r BudgetRequest) What() string {
 		return "this task's cost"
 	case LimitDayTokens:
 		return "today's tokens"
+	case LimitTeamDayTokens:
+		return "the team's tokens today"
+	case LimitTeamDayUSD:
+		return "the team's cost today"
 	}
 	return "today's cost"
 }
@@ -80,9 +89,16 @@ func (r BudgetRequest) Flag() string {
 
 // RaiseHint says how to raise the limit.
 func (r BudgetRequest) RaiseHint() string {
-	s := "raise budget." + r.Limit + " in " + config.FileName
+	key := "budget." + r.Limit
+	switch r.Limit {
+	case LimitTeamDayTokens:
+		key = "budget.team.day_tokens"
+	case LimitTeamDayUSD:
+		key = "budget.team.day_usd"
+	}
+	s := "raise " + key + " in " + config.FileName
 	if f := r.Flag(); f != "" {
-		s = "raise it with " + f + " <n> or budget." + r.Limit + " in " + config.FileName
+		s = "raise it with " + f + " <n> or " + key + " in " + config.FileName
 	}
 	return s + " (0 = no limit)"
 }
@@ -258,6 +274,7 @@ func (o *Orchestrator) endBudget(t *task, cost event.TaskCost) {
 	}
 	t.budget.cancel()
 	o.addDay(t.usage(), cost.CostUSD)
+	o.writeTeam()
 }
 
 // budgetStopped returns why the budget stopped the task ("" = it did not).
@@ -303,8 +320,15 @@ func (o *Orchestrator) budgetCheck(ctx context.Context, t *task, what string, af
 	}
 	u := t.usage()
 	var day dayCache
-	if cfg.DayTokens > 0 || cfg.DayUSD > 0 {
+	if cfg.DayTokens > 0 || cfg.DayUSD > 0 || cfg.Team.Limited() {
 		day = o.dayTotals(time.Now(), dayMaxAge, true)
+	}
+	// The team's day: the other machines' files plus this machine's day.
+	var team teamCache
+	teamTokens, teamUSD := float64(0), float64(0)
+	if cfg.Team.Limited() {
+		team = o.teamTotals(time.Now(), dayMaxAge, true)
+		teamTokens, teamUSD = float64(cfg.Team.DayTokens), cfg.Team.DayUSD
 	}
 	type lim struct {
 		name      string
@@ -315,6 +339,8 @@ func (o *Orchestrator) budgetCheck(ctx context.Context, t *task, what string, af
 		{LimitTaskUSD, u.CostUSD, cfg.TaskUSD},
 		{LimitDayTokens, float64(day.tokens + u.Total()), float64(cfg.DayTokens)},
 		{LimitDayUSD, day.usd + u.CostUSD, cfg.DayUSD},
+		{LimitTeamDayTokens, float64(team.tokens + day.tokens + u.Total()), teamTokens},
+		{LimitTeamDayUSD, team.usd + day.usd + u.CostUSD, teamUSD},
 	}
 	for _, l := range limits {
 		if l.max <= 0 || b.allowed[l.name] {
