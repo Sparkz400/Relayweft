@@ -262,6 +262,8 @@ type task struct {
 	unattended bool       // no approvals (queued task)
 	state      *TaskState // persisted progress (nil in bench runs)
 	resumed    bool       // continuing an interrupted task
+	repoMap    string     // context hand-off (handoff.go)
+	repoNotes  string
 }
 
 // approving reports whether this task asks a person to approve its plan.
@@ -477,6 +479,9 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		res.OK = false
 		res.Summary = "cancelled: " + res.Summary
 	}
+	if res.OK && t.useGit && o.opts.Bench == "" && t.cfg.Orchestrator.Handoff {
+		addRepoNote(t.root, text, res.Summary, t.changedFiles())
+	}
 	if s := t.state; s != nil {
 		s.Status = map[bool]string{true: "done", false: "failed"}[res.OK]
 		if ctx.Err() != nil {
@@ -508,6 +513,10 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	// Git setup.
 	o.snapshotBefore(t)
 	t.wtOK = o.worktreesAllowed(t)
+	if t.useGit && cfg.Orchestrator.Handoff {
+		t.repoMap = repoMap(t.root)
+		t.repoNotes = repoNotes(t.root)
+	}
 
 	// 1. Plan.
 	o.emit(event.Event{Kind: event.Phase, Text: "plan"})
@@ -707,7 +716,7 @@ func looksRead(s string) bool { return reReadTask.MatchString(s) }
 // step, so a chatty planner never blocks progress.
 func (o *Orchestrator) plan(ctx context.Context, t *task, advice string, prev *Plan) (Plan, bool) {
 	step := router.Step{ID: "plan", Title: "Plan the task", Kind: router.KindPlan, Prompt: t.text}
-	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev))
+	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev)+t.handoff())
 	t.mainProv = d.Provider
 	if !res.OK() {
 		msg := "planner failed"
@@ -893,9 +902,19 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				defer func() { <-sem }()
 				mu.Lock()
 				var deps []string
+				declared := map[string]bool{}
 				for _, d := range st.DependsOn {
+					declared[d] = true
 					if r := results[d]; r.final != "" {
 						deps = append(deps, fmt.Sprintf("[%s] %s", d, clip(r.final, 3000)))
+					}
+				}
+				if !st.Kind.ReadOnly() && t.cfg.Orchestrator.Handoff {
+					// What finished read-only steps found helps every writer.
+					for _, ro := range p.Subtasks {
+						if r := results[ro.ID]; ro.Kind.ReadOnly() && !declared[ro.ID] && r.ok && r.final != "" {
+							deps = append(deps, fmt.Sprintf("[%s, read-only finding] %s", ro.ID, clip(r.final, 1500)))
+						}
 					}
 				}
 				mu.Unlock()
@@ -1114,7 +1133,7 @@ func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []
 	for attempt := 1; ; attempt++ {
 		p := prompt
 		if p == "" {
-			p = stepPrompt(t.text, st, deps, prevErr, advice, st.Kind.ReadOnly())
+			p = stepPrompt(t.text, st, deps, prevErr, advice, st.Kind.ReadOnly()) + t.handoff()
 			if t.lfs && t.pool != "" && strings.HasPrefix(dir, t.pool) {
 				p += lfsNote
 			}

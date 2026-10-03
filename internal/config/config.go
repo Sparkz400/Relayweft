@@ -128,6 +128,7 @@ type OrchestratorCfg struct {
 	SmallTaskWords      int      `yaml:"small_task_words"`
 	ApprovePlan         bool     `yaml:"approve_plan"`
 	ReviewChanges       bool     `yaml:"review_changes"`
+	Handoff             bool     `yaml:"handoff"`
 	LowPriority         bool     `yaml:"low_priority"`
 	MaxCPUPercent       int      `yaml:"max_cpu_percent"`
 	MinFreeMemoryMB     int      `yaml:"min_free_memory_mb"`

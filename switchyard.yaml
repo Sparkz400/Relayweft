@@ -102,6 +102,7 @@ orchestrator:
   small_task_words: 12             # tasks shorter than this skip planning and run as one worker step
   approve_plan: true               # TUI / sy run --approve: show the plan and let you edit it before anything runs
   review_changes: false            # show each agent's changes (per file) before they land in your tree
+  handoff: true                    # give agents a repo map, earlier tasks' notes and read-only findings
 
   # Machine protection: sy should never be what tips your PC over.
   low_priority: true               # agents and git run below normal CPU priority
