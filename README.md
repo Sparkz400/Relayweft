@@ -165,11 +165,15 @@ sy run --file tasks.txt               run several tasks one after another, unatt
 sy run --approve "task"               approve the plan (and changes, with review_changes) on the terminal
 sy run --issue 12 [--pr]              run a GitHub issue as the task; --pr opens a pull request that closes it
 sy run --issues label:sy [--limit 5] --pr     run open labelled issues one after another, unattended
+sy run --estimate "task"              plan only: estimated tokens, time and $ per step; runs nothing
 sy pr [task] [--base main] [--draft] [--no-push] [--yes]   branch + commit + pull request from a finished task
+sy watch [--every 15m] [--list] [--forget n]   follow up on the PRs sy opened: failed checks, review comments
+sy review <PR> [--provider codex|claude] [--post] [--yes]   second-opinion review of a pull request
 sy history [--all] [-n 20]            recent tasks: status, steps done, cost; marks interrupted ones
 sy resume [task id] [--force]         continue an interrupted task (default: the last one in this directory)
 sy report [task id] [--out f] [--md] [--open]   one shareable HTML (or Markdown) page about a task
 sy tune [--here] [--since 7d]         routing suggestions from your own logs, as ready-to-paste commands
+sy tune --apply | --learned | --reset   update, show or forget this repo's learned routes
 sy update [--check] [--yes]           update sy to the latest GitHub release (checksum-verified)
 sy web / sy app [--port N] [--demo]   the browser UI / the same in its own window
 sy init --repo                        write this repo's .switchyard.yaml (shared settings)
@@ -178,6 +182,8 @@ sy undo [--list] [--redo] [--yes] [task]   revert a task's changes (preview firs
 sy bench [--init] [--file bench.yaml] [--only a,b]   routed vs single agents on your own tasks
 sy bench --starter <dir>              a ready-made 5-task Python benchmark repo
 sy stats [--here] [--since 7d]        usage per model, rules fired, routed vs baseline, per day, recent task costs
+sy stats --json [--out f.json]        this machine's usage as a JSON export (no task texts unless --with-tasks)
+sy stats --merge a.json b.json | dir  combined tables of several machines' exports
 sy models [--refresh] [--all]         routes + catalogs; refresh Codex catalog
 sy doctor                             CLIs, logins, git, terminal, machine load, free disk, worktree pools
 sy bugreport [--out file.zip]         one zip with logs, crash logs, config and doctor output to send
@@ -206,6 +212,14 @@ Every task in a git repo records the working tree before and after it ran. The s
 - `sy run --issues label:sy --limit 5 --pr` works through the open issues with that label, oldest first, unattended (`--pr` is required: without PRs the tasks' changes would pile up in the working tree). It skips pull requests and issues an open PR already closes. It never discards your work: it starts only on a clean working tree, and after each PR it takes that task's changes back out of the working tree with `sy undo` (they live on in the PR branch; `sy undo --redo <key>` puts them back), so the next issue starts from `HEAD`. If that is not possible, or a task leaves changes without a PR, the batch stops. With `--at`/`--in`/`--when-reset` the issues are read and the working tree checked when the run starts.
 - Nobody reviews these PRs before they are pushed, so `--pr` (with `--issue` or `--issues`) refuses a PR that would carry more than the agents' work: files that changed while the task ran but that no agent reported changing, or commits of `HEAD` that are not on `origin/<base>` (also when there is no `origin/<base>` to compare with: `git fetch` first). The work stays in the working tree, the batch stops, and you can check it and run `sy pr`. A multi-repo workspace is refused up front: open its PRs with `sy pr <task> [--repo <name>]`.
 
+### Watching PRs and reviewing them
+
+- **`sy watch`** follows up on the pull requests `sy pr` opened (also from `--issue(s) --pr`). For each one it looks at failed checks on the current head and at review comments and "changes requested" reviews from other people. New items get one follow-up task on the PR's branch, in a separate checkout under sy's cache folder: your working tree, index and branches are not touched. The result is pushed to the PR branch (never forced; refused if the branch moved in the meantime) and sy replies once on the PR. Each item runs once; `watch.max_rounds` (default 3, 0 = report only) caps the rounds per PR, and merged or closed PRs are dropped.
+  - `sy watch` makes one pass; `sy watch --every 15m` keeps going, unattended (a budget limit stops it), and keeps the PC awake. Combine with `sy schedule` for a cron or Task Scheduler line.
+  - CI logs and comments reach the agents only as fenced, untrusted text, and the unattended rule of `sy pr` applies: nothing is pushed if a file changed that no agent reported changing.
+  - `sy watch --list` shows the watched PRs; `--forget <n>` stops watching one. It needs a GitHub token (see above).
+- **`sy review <PR>`** (a number or URL) runs one read-only reviewer on a pull request's diff. If sy opened the PR, the reviewer is the provider that did *not* write it; otherwise the configured reviewer role (`--provider` overrides). It prints the findings; `--post` posts them as a single review (always a plain comment, never approve or request changes), inline where the line is in the diff, after a preview (`--yes` skips it). It counts into the day budget.
+
 ### Bench: does Switchyard beat a single agent on *your* work?
 
 1. Run `sy bench --init` to create `bench.yaml`. Fill in a few real tasks, each with a check command (`go test ./...`, `npm test`, ...), then commit.
@@ -229,7 +243,11 @@ First results (Claude only): [docs/bench](docs/bench/2026-10-03-starter-claude.m
 - whether turning the judge on (or off) would pay;
 - routed tasks doing worse than single-agent runs.
 
-It needs about 10 logged tasks before its suggestions mean anything. `sy stats` also has a per-day table (tasks, success, fresh tokens per provider, $).
+It needs about 10 logged tasks before its suggestions mean anything.
+
+**Learned routes.** `sy tune --apply` turns this into per-repo routes: for each role (planner, worker, worker_high, explorer, researcher) it switches to another configured route only on clear evidence from this repo's logs and bench runs (at least `routing.learn_min_samples` runs, default 8, on both routes; +15 points of success, or the same success with 40% fewer tokens; older runs count less, half every 30 days; one change per role at a time). They are stored in your config folder, not in the repo. Order: defaults < your config < learned < the repo file < flags, so anything you set for a role explicitly wins. Every decision that used a learned route says so in its reason (log, reports). `routing.learn: suggest` (default) uses only what you applied; `auto` refreshes them at most once a day; `off` ignores them. `sy tune --learned` shows them, `--reset` forgets them.
+
+**Estimates.** Plan approval (TUI, `sy web`, `sy run --approve`) shows each step's expected tokens, time and $ (the median, with a 25–75% range) from earlier steps of the same role, kind and route, in this repo first, then all repos. It also warns when the total would likely go over what is left of your task or day budget. `sy run --estimate "task"` only plans and prints this. `sy stats` also has a per-day table (tasks, success, fresh tokens per provider, $).
 
 ### Cost of every task
 
@@ -272,6 +290,14 @@ Tokens are fresh tokens on both providers; $ is Claude's API-equivalent price. T
 - changes still waiting for your review when the budget stops a task are kept on a `sy/...` branch.
 
 Flags for one run: `--budget-task-tokens`, `--budget-task-usd`, `--budget-day-usd` (on `sy`, `sy run`, `sy web`). The TUI and web headers show e.g. `$0.42/$10 today`, and `sy stats` adds the daily budget to its per-day table.
+
+**Team budgets.** Several machines (or people) sharing subscriptions can share a day budget through a shared folder (OneDrive, a network share):
+
+```yaml
+budget: {team: {dir: "~/OneDrive/switchyard-team", day_tokens: 0, day_usd: 40}}
+```
+
+After each task, every machine writes only its own `<machine id>.json` there (the last 7 days, no task texts); before each agent, the others' files are added to today's total. Broken or stale files are skipped with a warning. From a repo's `.switchyard.yaml`, `budget.team.dir` needs `sy trust` and its limits can only tighten. `sy stats --json` and `sy stats --merge <folder>` show the same numbers as tables, per machine too.
 
 ### Scheduled runs
 
@@ -358,6 +384,8 @@ Switchyard should never be what tips a PC over.
 - routes and models, settings, history and resume, the queue, and stats with `sy tune` suggestions;
 - dark and light themes.
 
+**VS Code.** `editors/vscode` is an extension on the same engine (`sy web --client`): an Agents view with the live tree and queue, the activity log, plan approval, follow-ups, undo, and change review in VS Code's diff editor with per-hunk accept/reject. See [editors/vscode/README.md](editors/vscode/README.md) to build and install it.
+
 The server listens on 127.0.0.1 only. Each link `sy` prints or opens works once, within 2 minutes; press Enter in `sy`'s terminal for a new one. The page trades the link for a session that lives only in that browser tab, and there are no cookies. Requests from other sites, other ports and other host names are refused.
 
 | | |
@@ -373,7 +401,11 @@ The server listens on 127.0.0.1 only. Each link `sy` prints or opens works once,
 A `.switchyard.yaml` in a repository holds the settings for that repo (in the repo root, or in the project folder). It is layered over your own config: built-in defaults < your config < the repo file < command-line flags. It only needs what the repo cares about; roles merge per key, so `roles: {worker: {prefer: claude}}` keeps the worker's routes.
 
 - Create one with `sy init --repo`, which detects the test commands, or with `/save repo` from the TUI. Commit it to share.
-- **Commands need your trust.** The parts that run commands or reach other folders are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers`, `log_dir`, `mcp` and `workspace`. A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
+- **Commands need your trust.** The parts that run commands or reach other folders are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers`, `log_dir`, `mcp`, `workspace` and `budget.team.dir`. A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
+
+### The repo's own conventions
+
+When planning and in the final review, sy adds a short summary of the repo's CONTRIBUTING file, its PR template, CODEOWNERS (whether it exists), the test/lint/build commands from `.github/workflows`, and AGENTS.md / CLAUDE.md (`context.repo_docs`, at most `context.repo_docs_max_kb`, default 8 KB in total). It is given to the agents as untrusted repo text: CI commands are hints, never added to `verify`. `sy pr` fills the repo's PR template headings (summary, plan, testing, notes) from the task when there is one.
 
 ### Hooks
 
