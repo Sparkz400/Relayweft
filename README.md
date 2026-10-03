@@ -294,7 +294,7 @@ Switchyard should never be what tips a PC over.
 - routes and models, settings, history and resume, the queue, and stats with `sy tune` suggestions;
 - dark and light themes.
 
-The server listens on 127.0.0.1 only. Every run gets a new random token, which goes in the link `sy` opens for you. Requests from other sites and other host names are refused.
+The server listens on 127.0.0.1 only. Each link `sy` prints or opens works once, within 2 minutes; press Enter in `sy`'s terminal for a new one. The page trades the link for a session that lives only in that browser tab, and there are no cookies. Requests from other sites, other ports and other host names are refused.
 
 | | |
 |---|---|
