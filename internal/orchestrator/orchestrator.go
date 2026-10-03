@@ -50,6 +50,9 @@ type Options struct {
 	Load func() sysload.Sample
 	// Bench labels task records with a `sy bench` task name.
 	Bench string
+	// TaskIDPrefix makes task ids unique when several orchestrators share
+	// one session log (sy bench).
+	TaskIDPrefix string
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -182,6 +185,9 @@ func (o *Orchestrator) emit(e event.Event) {
 		}
 	case event.Phase, event.Error, event.LimitHit, event.Merge, event.Checkpoint, event.TaskStart, event.TaskDone, event.ProviderState, event.Log:
 		diag.Logf("%s agent=%s ok=%v: %s", e.Kind, e.AgentID, e.OK, clip(e.Text, 600))
+		if e.Kind == event.TaskDone || e.Kind == event.TaskStart || e.Kind == event.Error {
+			diag.Sync()
+		}
 	}
 	if o.opts.Events != nil {
 		o.opts.Events <- e
@@ -239,6 +245,32 @@ type task struct {
 
 	perProv     map[string]event.TokenUsage // guarded by tokensMu
 	quotaBefore map[string]float64
+	agentFiles  map[string]bool // repo-relative paths agents changed (guarded by tokensMu)
+}
+
+// noteFiles records files an agent working in dir reported changing, as
+// repo-relative slash paths (agents in pool worktrees are covered by their
+// merge diffs instead).
+func (t *task) noteFiles(dir string, files []string) {
+	if t.root == "" {
+		return
+	}
+	t.tokensMu.Lock()
+	defer t.tokensMu.Unlock()
+	if t.agentFiles == nil {
+		t.agentFiles = map[string]bool{}
+	}
+	for _, f := range files {
+		f = filepath.FromSlash(f)
+		if !filepath.IsAbs(f) {
+			f = filepath.Join(dir, f)
+		}
+		rel, err := filepath.Rel(canonPath(t.root), canonPath(f))
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		t.agentFiles[filepath.ToSlash(rel)] = true
+	}
 }
 
 // worktreesAllowed reports whether writers may use pooled worktrees in this
@@ -307,6 +339,11 @@ func (o *Orchestrator) snapshotBefore(t *task) {
 	if o.opts.NoGit || !isRepo(o.opts.Dir) {
 		return
 	}
+	defer func() {
+		if o.opts.Bench != "" {
+			t.key = "" // bench runs are not undoable user tasks
+		}
+	}()
 	root, err := repoRoot(o.opts.Dir)
 	if err != nil {
 		return
@@ -320,16 +357,21 @@ func (o *Orchestrator) snapshotBefore(t *task) {
 	}
 	t.useGit = true
 	t.snapshot, t.start = snap, snap
-	git{root}.recordSnapshot(t.key, "before", snap)
+	if o.opts.Bench == "" {
+		git{root}.recordSnapshot(t.key, "before", snap)
+	}
 }
 
 // snapshotAfter records the end state (also after a cancel or failure).
 func (o *Orchestrator) snapshotAfter(t *task) {
-	if !t.useGit || t.start == "" {
+	if !t.useGit || t.start == "" || t.key == "" {
 		return
 	}
 	g := git{t.root}
-	if snap, err := g.snapshot(subject("switchyard after: ", t.text)); err == nil {
+	t.tokensMu.Lock()
+	msg := afterMessage(t.text, t.agentFiles)
+	t.tokensMu.Unlock()
+	if snap, err := g.snapshot(msg); err == nil {
 		g.recordSnapshot(t.key, "after", snap)
 		trimUndo(t.root)
 	}
@@ -369,7 +411,7 @@ func (o *Orchestrator) Run(ctx context.Context, text string) (result TaskResult)
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
 	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
-	t := &task{id: fmt.Sprintf("task-%d", seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
+	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
@@ -382,7 +424,7 @@ func (o *Orchestrator) Run(ctx context.Context, text string) (result TaskResult)
 	res.Kept = t.kept
 	res.Cost = o.cost(t)
 	if t.useGit {
-		res.UndoKey = t.key
+		res.UndoKey = t.key // "" for bench runs
 	}
 	if ctx.Err() != nil {
 		res.OK = false
@@ -741,8 +783,10 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 						r = stepResult{err: "cancelled"}
 					}
 					if r.err == "" {
-						r = o.runStep(ctx, t, st, deps, o.opts.Dir, "")
-						<-writeSem
+						func() {
+							defer func() { <-writeSem }() // released even if the step panics
+							r = o.runStep(ctx, t, st, deps, o.opts.Dir, "")
+						}()
 					}
 				}
 				mu.Lock()
@@ -825,6 +869,15 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		t.notes = append(t.notes, fmt.Sprintf("%s could not be applied to the working tree; its changes are on branch %s", st.ID, branch))
 		r.ok, r.err = false, "apply failed"
 		return r
+	}
+	if names, err := g.out("diff", "--name-only", "-z", t.snapshot, merged); err == nil {
+		var paths []string
+		for _, p := range strings.Split(names, "\x00") {
+			if p != "" {
+				paths = append(paths, filepath.Join(t.root, filepath.FromSlash(p)))
+			}
+		}
+		t.noteFiles(t.root, paths)
 	}
 	t.snapshot = merged
 	o.mergeEvent(t, st.ID, true, fmt.Sprintf("merged %d file(s)", len(r.files)))
@@ -925,8 +978,12 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	if ctx.Err() != nil {
 		return event.Decision{}, runner.Result{Err: ctx.Err(), Killed: true}
 	}
-	o.waitForRoom(ctx, t, agentID)
-	defer o.releaseRoom()
+	if step.Kind != router.KindJudge {
+		// The judge runs inside its parent's slot; holding it would only
+		// make the parent wait for itself.
+		o.waitForRoom(ctx, t, agentID)
+		defer o.releaseRoom()
+	}
 	if ctx.Err() != nil {
 		return event.Decision{}, runner.Result{Err: ctx.Err(), Killed: true}
 	}
@@ -988,6 +1045,9 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	res := rn.Run(actx, spec, o.emit)
 	o.opts.Tracker.AddUsage(d.Provider, res.Tokens)
 	t.addTokens(d.Provider, res.Tokens)
+	if !step.Kind.ReadOnly() {
+		t.noteFiles(dir, res.Files)
+	}
 	why := "at usage limit"
 	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && (reAuth.MatchString(res.Err.Error()) || strings.Contains(res.Err.Error(), "not found on PATH")) {
 		// A CLI that is logged out or missing is as unusable as one at its
@@ -1088,7 +1148,7 @@ func (o *Orchestrator) RunSingle(ctx context.Context, text, provider string, rou
 	began := time.Now()
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
-	t := &task{id: fmt.Sprintf("task-%d", seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
+	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: "single"})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})

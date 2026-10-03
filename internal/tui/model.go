@@ -700,6 +700,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case submitMsg:
 		m.startTask(string(msg))
 		return m, nil
+	case undoMsg:
+		for _, l := range msg {
+			m.addLog(logLine{kind: event.Log, text: l})
+		}
+		return m, nil
 	case submitCheckMsg:
 		text, ok := m.input.confirm(msg)
 		if !ok {

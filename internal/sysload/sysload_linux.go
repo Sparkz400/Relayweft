@@ -25,6 +25,11 @@ func cpuTimes() (busy, total uint64, ok bool) {
 		return 0, 0, false
 	}
 	var idle uint64
+	// user nice system idle iowait irq softirq steal; guest and guest_nice
+	// are already included in user and nice.
+	if len(fields) > 9 {
+		fields = fields[:9]
+	}
 	for i, v := range fields[1:] {
 		n, _ := strconv.ParseUint(v, 10, 64)
 		total += n

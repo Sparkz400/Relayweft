@@ -2,7 +2,10 @@ package orchestrator
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+
+	"github.com/sparkz400/switchyard/internal/proc"
 )
 
 // BenchWorkspace is a reusable worktree for `sy bench`: every run starts
@@ -23,6 +26,16 @@ func NewBenchWorkspace(dir string) (*BenchWorkspace, error) {
 	return &BenchWorkspace{root: root, Path: filepath.Join(repoCache(root), "bench", "work")}, nil
 }
 
+// Lock makes sure only one sy bench uses the workspace.
+func (b *BenchWorkspace) Lock() (unlock func(), err error) {
+	os.MkdirAll(filepath.Dir(b.Path), 0o755)
+	unlock, ok := proc.TryLock(b.Path + ".lock")
+	if !ok {
+		return nil, fmt.Errorf("another sy bench is running for this repo")
+	}
+	return unlock, nil
+}
+
 // Head returns the commit the runs start from.
 func (b *BenchWorkspace) Head() (string, error) { return git{b.root}.out("rev-parse", "HEAD") }
 
@@ -34,6 +47,7 @@ func (b *BenchWorkspace) Dirty() bool {
 
 // Reset makes the workspace a clean checkout of commit.
 func (b *BenchWorkspace) Reset(commit string) error {
+	os.MkdirAll(filepath.Dir(b.Path), 0o755) // so the disk check can measure it
 	if err := checkDisk(filepath.Dir(b.Path)); err != nil && !isWorktreeOf(b.root, b.Path) {
 		return err
 	}

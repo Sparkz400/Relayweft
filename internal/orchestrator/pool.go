@@ -224,8 +224,19 @@ func CleanPool(dir string) (int, error) {
 		}
 		git{root}.removeWorktree(path)
 		unlock()
+		// sy clean is explicit and leaves nothing behind. (Automatic pruning
+		// keeps lock files: a concurrent sy could otherwise end up holding a
+		// lock on a deleted file while another locks a new one.)
 		os.Remove(path + ".lock")
 		n++
+	}
+	bench := filepath.Join(filepath.Dir(pd), "bench", "work")
+	if unlock, ok := proc.TryLock(bench + ".lock"); ok {
+		if _, err := os.Stat(bench); err == nil {
+			git{root}.removeWorktree(bench)
+			n++
+		}
+		unlock()
 	}
 	os.Remove(pd)               // only succeeds when empty
 	os.Remove(filepath.Dir(pd)) // likewise
@@ -349,7 +360,11 @@ func slotGitDir(slot string) string {
 	if !strings.HasPrefix(s, "gitdir:") {
 		return ""
 	}
-	return filepath.FromSlash(strings.TrimSpace(strings.TrimPrefix(s, "gitdir:")))
+	gd := filepath.FromSlash(strings.TrimSpace(strings.TrimPrefix(s, "gitdir:")))
+	if !filepath.IsAbs(gd) { // worktree.useRelativePaths
+		gd = filepath.Join(slot, gd)
+	}
+	return gd
 }
 
 // slotRepo is the working directory of the repository a slot belongs to.
@@ -401,7 +416,8 @@ func PrunePools(maxIdle time.Duration) (removed int, freed uint64) {
 				}
 			}
 			unlock()
-			os.Remove(path + ".lock")
+			// The lock file stays: deleting it could let two sy instances lock
+			// different files for the same slot.
 		}
 		os.Remove(pd)
 		os.Remove(filepath.Dir(pd))

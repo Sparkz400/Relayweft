@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/sparkz400/switchyard/internal/config"
+	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/runner"
 )
 
@@ -108,6 +109,7 @@ func TestBugreportZip(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 	startDiag("test")
+	t.Cleanup(diag.Close) // an open log blocks TempDir cleanup on Windows
 	out := filepath.Join(dir, "r.zip")
 	if err := cmdBugreport([]string{"--out", out}); err != nil {
 		t.Fatal(err)

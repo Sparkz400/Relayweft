@@ -294,8 +294,12 @@ func asExit(err error) (int, bool) {
 // only overwritten when its content still matches `from`; if the user edited
 // it meanwhile, a 3-way patch is attempted for those files and anything that
 // still does not fit is reported as a conflict instead of being clobbered.
-func (g git) applyDiff(from, to string) error {
-	out, err := g.run(nil, nil, "diff", "--name-status", "--no-renames", "-z", from, to)
+func (g git) applyDiff(from, to string, only ...string) error {
+	args := []string{"diff", "--name-status", "--no-renames", "-z", from, to}
+	if len(only) > 0 {
+		args = append(append(args, "--"), only...)
+	}
+	out, err := g.run(nil, nil, args...)
 	if err != nil {
 		return err
 	}

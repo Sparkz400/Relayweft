@@ -157,6 +157,11 @@ func cmdBench(args []string) error {
 	if ws.Dirty() {
 		fmt.Println("note: your working tree has uncommitted changes; the bench runs on HEAD without them.")
 	}
+	unlock, err := ws.Lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	runs := len(tasks) * len(modes)
 	fmt.Printf("%d task(s) x %d mode(s) = %d runs from %s, in %s\n", len(tasks), len(modes), runs, head[:min(10, len(head))], ws.Path)
 	if !*yes {
@@ -220,7 +225,7 @@ func cmdBench(args []string) error {
 			orc := orchestrator.New(orchestrator.Options{
 				Dir: ws.Path, Store: store, Runners: benchRunners, Tracker: tracker, Log: log,
 				Events: events, ForceProvider: c.provider, Mode: map[bool]string{true: "routed", false: "single"}[m.provider == ""],
-				Bench: t.Name,
+				Bench: t.Name, TaskIDPrefix: fmt.Sprintf("bench%d-", n),
 			})
 			var res orchestrator.TaskResult
 			if m.provider == "" {
@@ -231,6 +236,14 @@ func cmdBench(args []string) error {
 			close(events)
 			<-printed
 			r.agentOK, r.wall, r.cost = res.OK, res.Duration, res.Cost
+			if err := rctx.Err(); err != nil {
+				// Cancelled or out of time: the check cannot tell anything.
+				cancel()
+				r.note = map[bool]string{true: "timed out", false: "cancelled"}[err == context.DeadlineExceeded]
+				results = append(results, r)
+				fmt.Println("  =>", r.note)
+				continue
+			}
 			ok, out := shell(rctx, ws.Path, t.Check)
 			cancel()
 			r.passed = ok
@@ -266,7 +279,10 @@ func benchReport(rs []benchResult, modes []string) string {
 	fmt.Fprintln(tw, "TASK\tMODE\tCHECK\tWALL\tCODEX TOK\tCLAUDE TOK\tNOTE")
 	for _, r := range rs {
 		mark := "pass"
-		if !r.passed {
+		switch {
+		case r.note == "cancelled" || r.note == "timed out":
+			mark = "-"
+		case !r.passed:
 			mark = "FAIL"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.task, r.mode, mark, r.wall.Round(time.Second),
@@ -282,7 +298,7 @@ func benchReport(rs []benchResult, modes []string) string {
 		var cx, cl int64
 		var usd float64
 		for _, r := range rs {
-			if r.mode != m {
+			if r.mode != m || r.note == "cancelled" {
 				continue
 			}
 			total++

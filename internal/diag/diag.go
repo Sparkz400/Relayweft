@@ -101,12 +101,32 @@ func Logf(format string, args ...any) {
 	if written > maxSize {
 		path := filepath.Join(dir, debugFile)
 		f.Close()
-		os.Rename(path, path+".1")
-		if nf, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644); err == nil {
+		// The rename fails on Windows while another sy has the log open;
+		// then keep appending rather than truncate both instances' history.
+		flag := os.O_CREATE | os.O_APPEND | os.O_WRONLY
+		if os.Rename(path, path+".1") == nil {
+			flag |= os.O_TRUNC
+		}
+		if nf, err := os.OpenFile(path, flag, 0o644); err == nil {
 			f, written = nf, 0
+			if flag&os.O_TRUNC == 0 {
+				if st, err := nf.Stat(); err == nil {
+					written = st.Size() - maxSize/2 // retry the rotation later, not on every line
+				}
+			}
 		} else {
 			f = nil
 		}
+	}
+}
+
+// Sync flushes the debug log to disk. It is called at task ends and on
+// crashes, so the last lines survive even a hard machine freeze.
+func Sync() {
+	mu.Lock()
+	defer mu.Unlock()
+	if f != nil {
+		f.Sync()
 	}
 }
 
@@ -121,6 +141,7 @@ func Recent() []string {
 // debug lines, and returns its path ("" if it could not be written).
 func Crash(where string, value any, stack []byte) string {
 	Logf("PANIC in %s: %v", where, value)
+	Sync()
 	var b strings.Builder
 	fmt.Fprintf(&b, "Switchyard %s crashed in %s at %s\n", Version, where, time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&b, "os %s/%s, go %s\n\npanic: %v\n\n%s\n", runtime.GOOS, runtime.GOARCH, runtime.Version(), value, stack)

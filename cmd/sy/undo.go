@@ -18,12 +18,15 @@ func cmdUndo(args []string) error {
 	list := fs.Bool("list", false, "list the recorded tasks")
 	redo := fs.Bool("redo", false, "put an undone task's changes back")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	agentOnly := fs.Bool("agent-files-only", false, "only touch files an agent reported changing (keeps your own edits made while the task ran)")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: sy undo [--list] [--redo] [--yes] [--dir <path>] [task]
+		fmt.Fprint(os.Stderr, `Usage: sy undo [--list] [--redo] [--yes] [--agent-files-only] [--dir <path>] [task]
 
 Reverts the changes a task made to your files: files it changed are
 restored, files it created are removed. Files you edited after the task
 keep your edits (3-way merge); if that conflicts, nothing is changed.
+Files that changed while the task ran but that no agent reported are
+listed separately (they may be your own edits); --agent-files-only skips them.
 Without a task, the newest task that is not undone yet is used.
 --redo puts an undone task's changes back.
 `)
@@ -88,6 +91,14 @@ Without a task, the newest task that is not undone yet is used.
 	if len(plan.Edited) > 0 {
 		fmt.Printf("\nYou edited %d of these files after the task; your edits are kept (3-way merge).\nIf an edit overlaps, nothing at all is changed and you are told which file.\n", len(plan.Edited))
 	}
+	if len(plan.Unreported) > 0 {
+		fmt.Printf("\nNo agent reported changing these, so they may be your own edits made while the task ran:\n  %s\n", strings.Join(plan.Unreported, "\n  "))
+		if *agentOnly {
+			fmt.Println("--agent-files-only: they are left as they are.")
+		} else {
+			fmt.Println("They are reverted too; add --agent-files-only to leave them alone.")
+		}
+	}
 	if !*yes {
 		fmt.Printf("\n%s these changes? [y/N] ", verb)
 		ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
@@ -96,7 +107,7 @@ Without a task, the newest task that is not undone yet is used.
 			return nil
 		}
 	}
-	if _, err := orchestrator.Undo(*dir, plan.Task.Key, *redo); err != nil {
+	if _, err := orchestrator.Undo(*dir, plan.Task.Key, *redo, *agentOnly); err != nil {
 		return fmt.Errorf("%s failed, nothing was changed: %w", strings.ToLower(verb), err)
 	}
 	fmt.Printf("%s done.\n", verb)

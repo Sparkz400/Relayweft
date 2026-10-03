@@ -231,7 +231,7 @@ func TestUndoAndRedo(t *testing.T) {
 			os.WriteFile(filepath.Join(s.Dir, "story.txt"), []byte("ONE\ntwo\nthree\nfour\nfive\nsix\n"), 0o644)
 			os.WriteFile(filepath.Join(s.Dir, "new.txt"), []byte("created\n"), 0o644)
 			os.Remove(filepath.Join(s.Dir, "shared.txt"))
-			return runner.Result{Final: "edited"}
+			return runner.Result{Final: "edited", Files: []string{"story.txt", filepath.Join(s.Dir, "new.txt"), "shared.txt"}}
 		}
 		return approve()
 	})
@@ -254,7 +254,7 @@ func TestUndoAndRedo(t *testing.T) {
 	if len(plan.Changes) != 3 || len(plan.Edited) != 1 || plan.Edited[0] != "story.txt" {
 		t.Fatalf("plan = %+v", plan)
 	}
-	if _, err := Undo(dir, "", false); err != nil {
+	if _, err := Undo(dir, "", false, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(t, filepath.Join(dir, "story.txt")); got != "one\ntwo\nthree\nfour\nfive\nSIX by user\n" {
@@ -272,7 +272,7 @@ func TestUndoAndRedo(t *testing.T) {
 	if _, _, err := findTask(dir, "", false); err == nil {
 		t.Error("an undone task is offered for undo again")
 	}
-	if _, err := Undo(dir, "", true); err != nil {
+	if _, err := Undo(dir, "", true, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(t, filepath.Join(dir, "story.txt")); got != "ONE\ntwo\nthree\nfour\nfive\nSIX by user\n" {
@@ -296,7 +296,7 @@ func TestUndoConflictChangesNothing(t *testing.T) {
 	o, _ := newOrc(t, dir, set, func(c *config.Config) { c.Orchestrator.ReviewBeforeDone = false })
 	o.Run(context.Background(), "edit shared")
 	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("user rewrote the same line\n"), 0o644)
-	if _, err := Undo(dir, "", false); err == nil || !strings.Contains(err.Error(), "shared.txt") {
+	if _, err := Undo(dir, "", false, false); err == nil || !strings.Contains(err.Error(), "shared.txt") {
 		t.Fatalf("want a conflict on shared.txt, got %v", err)
 	}
 	if read(t, filepath.Join(dir, "shared.txt")) != "user rewrote the same line\n" || read(t, filepath.Join(dir, "other.txt")) != "agent other\n" {
@@ -441,5 +441,125 @@ func TestWorktreesOfOneRepoShareAPool(t *testing.T) {
 	}
 	if poolDir(ws.Path) != poolDir(dir) {
 		t.Fatalf("bench workspace has its own pool:\n%s\n%s", poolDir(ws.Path), poolDir(dir))
+	}
+}
+
+// An edit the user makes while the task runs, in a file no agent touched,
+// is flagged and can be kept with agentOnly.
+func TestUndoFlagsEditsMadeDuringTheTask(t *testing.T) {
+	dir := gitRepo(t)
+	set := both(func(s runner.Spec) runner.Result {
+		if strings.Contains(s.Prompt, "[SY:STEP]") {
+			os.WriteFile(filepath.Join(s.Dir, "agent.txt"), []byte("by agent\n"), 0o644)
+			// meanwhile the user edits their own file
+			os.WriteFile(filepath.Join(dir, "README.md"), []byte("# user edit during the task\n"), 0o644)
+			return runner.Result{Final: "ok", Files: []string{"agent.txt"}}
+		}
+		return approve()
+	})
+	o, _ := newOrc(t, dir, set, func(c *config.Config) { c.Orchestrator.ReviewBeforeDone = false })
+	o.Run(context.Background(), "add agent file")
+	plan, err := PreviewUndo(dir, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Unreported) != 1 || plan.Unreported[0] != "README.md" {
+		t.Fatalf("unreported = %v", plan.Unreported)
+	}
+	if _, err := Undo(dir, "", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, filepath.Join(dir, "README.md")) != "# user edit during the task\n" {
+		t.Error("agent-files-only undo reverted the user's edit")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "agent.txt")); !os.IsNotExist(err) {
+		t.Error("agent file not removed")
+	}
+}
+
+func TestUndoKeyedTaskStateIsChecked(t *testing.T) {
+	dir := gitRepo(t)
+	set := both(func(s runner.Spec) runner.Result {
+		if strings.Contains(s.Prompt, "[SY:STEP]") {
+			os.WriteFile(filepath.Join(s.Dir, "x.txt"), []byte("x"), 0o644)
+			return runner.Result{Final: "ok", Files: []string{"x.txt"}}
+		}
+		return approve()
+	})
+	o, _ := newOrc(t, dir, set, func(c *config.Config) { c.Orchestrator.ReviewBeforeDone = false })
+	res := o.Run(context.Background(), "make x")
+	if _, err := Undo(dir, res.UndoKey, true, false); err == nil {
+		t.Error("redo of an applied task accepted")
+	}
+	if _, err := Undo(dir, res.UndoKey, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Undo(dir, res.UndoKey, false, false); err == nil || !strings.Contains(err.Error(), "already undone") {
+		t.Errorf("second undo: %v", err)
+	}
+	if l, _ := UndoList(dir); !l[0].Undone {
+		t.Error("task lost its undone state")
+	}
+}
+
+// Bench runs (and other worktrees) never show up in the main tree's undo
+// history.
+func TestBenchRunsAreNotUndoable(t *testing.T) {
+	dir := gitRepo(t)
+	ws, _ := NewBenchWorkspace(dir)
+	head, _ := ws.Head()
+	if err := ws.Reset(head); err != nil {
+		t.Fatal(err)
+	}
+	set := both(func(s runner.Spec) runner.Result {
+		if strings.Contains(s.Prompt, "[SY:STEP]") {
+			os.WriteFile(filepath.Join(s.Dir, "bench.txt"), []byte("b"), 0o644)
+		}
+		return runner.Result{Final: `{"approve": true}`}
+	})
+	o, _ := newOrc(t, ws.Path, set, func(c *config.Config) { c.Orchestrator.ReviewBeforeDone = false })
+	o.opts.Bench = "t1"
+	if res := o.Run(context.Background(), "bench run"); res.UndoKey != "" {
+		t.Errorf("bench run got undo key %q", res.UndoKey)
+	}
+	for _, d := range []string{dir, ws.Path} {
+		if l, _ := UndoList(d); len(l) != 0 {
+			t.Errorf("undo history in %s: %+v", d, l)
+		}
+	}
+}
+
+// A panicking main-tree writer must not keep the writer lock: the next
+// writer still runs and the task ends.
+func TestPanickingWriterReleasesLock(t *testing.T) {
+	var ran atomic.Int32
+	set := both(func(s runner.Spec) runner.Result {
+		if strings.Contains(s.Prompt, runner.MarkerPlan) {
+			return runner.Result{Final: planJSON(
+				map[string]any{"id": "boom", "kind": "edit", "prompt": "a"},
+				map[string]any{"id": "next", "kind": "edit", "prompt": "b", "depends_on": []string{"boom"}},
+			)}
+		}
+		if s.StepID == "boom" {
+			panic("agent adapter bug")
+		}
+		if s.StepID == "next" {
+			ran.Add(1)
+		}
+		return runner.Result{Final: "ok"}
+	})
+	o, _ := newOrc(t, "", set, func(c *config.Config) {
+		c.Orchestrator.ReviewBeforePlan = false
+		c.Orchestrator.ReviewBeforeDone = false
+	})
+	done := make(chan TaskResult)
+	go func() { done <- o.Run(context.Background(), longTask) }()
+	select {
+	case res := <-done:
+		if res.OK || ran.Load() != 1 {
+			t.Fatalf("res=%+v next ran %d times", res, ran.Load())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("task hung after a panicking writer")
 	}
 }
