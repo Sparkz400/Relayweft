@@ -30,6 +30,12 @@ type planOverlay struct {
 	editing bool
 	ta      textarea.Model
 	err     string
+	// The dependency picker for the selected step (x): the other steps
+	// with a checkbox each.
+	deps   bool
+	depSel int
+	depOn  []bool // parallel to depIDs
+	depIDs []string
 }
 
 func newPlanOverlay(r *approvalReq, ascii bool) *planOverlay {
@@ -50,7 +56,10 @@ func (p *planOverlay) keys() string {
 	if p.editing {
 		return "editing the prompt · ctrl+s keep · esc discard"
 	}
-	return "↑↓ select · e edit · d delete · k kind · r role · J/K move · enter run · esc cancel task"
+	if p.deps {
+		return "dependencies: ↑↓ step · space toggle · enter done · esc cancel"
+	}
+	return "↑↓ select · e edit · x deps · d delete · k kind · r role · J/K move · enter run · esc cancel task"
 }
 
 func cycleKind(k router.Kind) router.Kind {
@@ -90,9 +99,19 @@ func (p *planOverlay) update(m *Model, k tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if p.deps {
+		p.updateDeps(k)
+		return nil
+	}
 	sts := p.plan.Subtasks
 	p.err = ""
 	switch k.String() {
+	case "x":
+		if len(sts) < 2 {
+			p.err = "a step can only wait for another step: this plan has one"
+			return nil
+		}
+		p.openDeps()
 	case "up":
 		if p.sel > 0 {
 			p.sel--
@@ -158,6 +177,95 @@ func (p *planOverlay) update(m *Model, k tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// openDeps opens the dependency picker for the selected step.
+func (p *planOverlay) openDeps() {
+	st := p.plan.Subtasks[p.sel]
+	on := map[string]bool{}
+	for _, d := range st.DependsOn {
+		on[d] = true
+	}
+	p.depIDs, p.depOn, p.depSel = nil, nil, 0
+	for _, o := range p.plan.Subtasks {
+		if o.ID == st.ID {
+			continue
+		}
+		p.depIDs = append(p.depIDs, o.ID)
+		p.depOn = append(p.depOn, on[o.ID])
+	}
+	p.deps = true
+}
+
+func (p *planOverlay) updateDeps(k tea.KeyMsg) {
+	switch k.String() {
+	case "up":
+		if p.depSel > 0 {
+			p.depSel--
+		}
+	case "down":
+		if p.depSel < len(p.depIDs)-1 {
+			p.depSel++
+		}
+	case " ", "space":
+		if p.depSel < len(p.depOn) {
+			p.depOn[p.depSel] = !p.depOn[p.depSel]
+		}
+		p.err = ""
+	case "enter":
+		var deps []string
+		for i, id := range p.depIDs {
+			if p.depOn[i] {
+				deps = append(deps, id)
+			}
+		}
+		st := &p.plan.Subtasks[p.sel]
+		if cyc := depCycle(p.plan.Subtasks, st.ID, deps); cyc != nil {
+			p.err = "that makes a cycle: " + strings.Join(cyc, " after ") + " (untick a step, or esc)"
+			return
+		}
+		st.DependsOn = deps
+		p.deps, p.err = false, ""
+	case "esc":
+		p.deps, p.err = false, ""
+	}
+}
+
+// depCycle reports the cycle that giving step id the dependencies deps
+// would create (as "a after b after a"), or nil.
+func depCycle(sts []orchestrator.Subtask, id string, deps []string) []string {
+	graph := map[string][]string{}
+	for _, s := range sts {
+		graph[s.ID] = s.DependsOn
+	}
+	graph[id] = deps
+	// A cycle through id: a path from one of its deps back to id.
+	var path []string
+	seen := map[string]bool{}
+	var walk func(n string) bool
+	walk = func(n string) bool {
+		path = append(path, n)
+		if n == id {
+			return true
+		}
+		if !seen[n] {
+			seen[n] = true
+			for _, d := range graph[n] {
+				if walk(d) {
+					return true
+				}
+			}
+		}
+		path = path[:len(path)-1]
+		return false
+	}
+	for _, d := range deps {
+		path = []string{id}
+		if walk(d) {
+			return path
+		}
+	}
+	return nil
+}
+
 func (p *planOverlay) view(m *Model, W, H int) string {
 	th := m.th
 	w := min(W, 118)
@@ -206,7 +314,30 @@ func (p *planOverlay) view(m *Model, W, H int) string {
 	room := max(2, H-2-len(lines))
 	if p.sel < n {
 		st := p.plan.Subtasks[p.sel]
-		if p.editing {
+		if p.deps {
+			lines = append(lines, th.bold(th.Router).Render(st.ID+" runs after")+th.fg(th.Muted).Render(" · space toggle · enter done · esc cancel"))
+			first := max(0, min(p.depSel-(room-2), len(p.depIDs)-(room-1)))
+			for i, id := range p.depIDs {
+				if i < first || i >= first+max(1, room-1) {
+					continue
+				}
+				cur := "  "
+				if i == p.depSel {
+					cur = th.fg(th.Main).Render("> ")
+				}
+				box := "[ ]"
+				if p.depOn[i] {
+					box = th.fg(th.OKColor).Render("[x]")
+				}
+				title := ""
+				for _, o := range p.plan.Subtasks {
+					if o.ID == id {
+						title = oneLine(o.Title, 0)
+					}
+				}
+				lines = append(lines, fit(cur+box+" "+th.fg(th.Text).Render(fit(id, 12))+" "+th.fg(th.Muted).Render(title), iw))
+			}
+		} else if p.editing {
 			lines = append(lines, th.bold(th.Router).Render("prompt of "+st.ID)+th.fg(th.Muted).Render(" · ctrl+s keep · esc discard"))
 			p.ta.SetWidth(iw)
 			p.ta.SetHeight(max(1, room-1))

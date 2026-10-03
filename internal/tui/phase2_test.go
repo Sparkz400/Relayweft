@@ -476,7 +476,7 @@ func TestNotifications(t *testing.T) {
 func TestAgentTabCompletion(t *testing.T) {
 	m, _, _ := newModel(t, false)
 	m.input.SetValue("@ed")
-	if !m.completeAgent() || !strings.Contains(m.notice, "no finished agent") {
+	if !m.completeAgent() || !strings.Contains(m.notice, "no running or finished agent") {
 		t.Errorf("completion without sessions: %q", m.notice)
 	}
 	m.input.SetValue("plain task")

@@ -81,6 +81,14 @@ func (m *Model) submit(text string) {
 			m.flashNotice("usage: @<agent> <message> or @ <message> for the last agent (/agents lists them)")
 			return
 		}
+		if agent != "" && m.agentRunning(agent) {
+			// A running agent gets the message when its current turn ends.
+			if err := m.orc.Tell(agent, msg); err == nil {
+				m.flashNotice(fmt.Sprintf("will be delivered when %s's turn ends: %s", agent, oneLine(msg, 60)))
+				return
+			}
+			// It finished meanwhile: fall through to a follow-up.
+		}
 		s, have := m.orc.Session(agent)
 		if !have {
 			m.flashNotice(fmt.Sprintf("no finished agent %q to follow up - /agents lists them", orLast(agent)))
@@ -90,6 +98,16 @@ func (m *Model) submit(text string) {
 		return
 	}
 	m.startTask(text)
+}
+
+// agentRunning reports whether an agent of the current task is running.
+func (m *Model) agentRunning(id string) bool {
+	for _, a := range m.orc.RunningAgents() {
+		if a == id {
+			return true
+		}
+	}
+	return false
 }
 
 func orLast(agent string) string {
@@ -224,15 +242,7 @@ func (m *Model) phase2Command(cmd string, args []string, rest string, say func(s
 	case "verify":
 		m.verifyCommand(args, rest, say)
 	case "agents":
-		ss := m.orc.Sessions()
-		if len(ss) == 0 {
-			say("no finished agents yet - follow-ups need an agent that finished in this session")
-			return true
-		}
-		say("agents that take a follow-up (@<agent> message · @ message = the newest):")
-		for _, s := range ss {
-			say("  %-12s %-10s %s:%s · %s · %s", s.AgentID, s.Role, s.Provider, s.Model, s.Ended.Format("15:04"), oneLine(s.Title, 60))
-		}
+		m.agentsCommand(say)
 	case "queue":
 		m.queueCommand(args, say)
 	case "resume":
@@ -272,6 +282,60 @@ func (m *Model) phase2Command(cmd string, args []string, rest string, say func(s
 		return false
 	}
 	return true
+}
+
+// agentsCommand lists the running agents (a message reaches them when
+// their turn ends) and the finished ones that take a follow-up, also from
+// earlier sy sessions in this folder.
+func (m *Model) agentsCommand(say func(string, ...any)) {
+	running := m.orc.RunningAgents()
+	sort.Strings(running)
+	if len(running) > 0 {
+		say("running now (@<agent> message is delivered when its turn ends): %s", strings.Join(running, ", "))
+	}
+	ss := m.orc.Sessions()
+	if len(ss) == 0 {
+		if len(running) == 0 {
+			say("no finished agents yet - an agent takes a follow-up once it has finished (kept across restarts in this folder)")
+		}
+		return
+	}
+	say("finished agents that take a follow-up (@<agent> message · @ message = the newest):")
+	now := time.Now()
+	for _, s := range ss {
+		line := fmt.Sprintf("  %-12s %-10s %s:%s · %s", s.AgentID, s.Role, s.Provider, s.Model, when(s.Ended, now))
+		if s.Title != "" {
+			line += " · " + oneLine(s.Title, 40)
+		}
+		if task := firstLine(s.Task); task != "" {
+			line += " · task: " + oneLine(task, 60)
+		}
+		say("%s", line)
+	}
+}
+
+// when is a time of day today, else a date and time.
+func when(t, now time.Time) string {
+	if t.IsZero() {
+		return "?"
+	}
+	y1, m1, d1 := t.Date()
+	y2, m2, d2 := now.Date()
+	if y1 == y2 && m1 == m2 && d1 == d2 {
+		return t.Format("15:04")
+	}
+	if y1 != y2 {
+		return t.Format("Jan 2 2006 15:04")
+	}
+	return t.Format("Jan 2 15:04")
+}
+
+// firstLine is the task text before any appended follow-ups.
+func firstLine(task string) string {
+	if i := strings.Index(task, "\n\nFollow-up: "); i >= 0 {
+		return task[:i]
+	}
+	return task
 }
 
 func onWord(b bool) string {
@@ -372,8 +436,9 @@ func sameDir(a, b string) bool {
 	return strings.EqualFold(strings.TrimRight(a, `/\`), strings.TrimRight(b, `/\`))
 }
 
-// completeAgent completes "@<prefix>" in the prompt to the next finished
-// agent id that matches, cycling on repeated tabs.
+// completeAgent completes "@<prefix>" in the prompt to the next agent id
+// (running, or finished with a remembered session) that matches, cycling
+// on repeated tabs.
 func (m *Model) completeAgent() bool {
 	v := m.input.Value()
 	prefix := ""
@@ -386,9 +451,19 @@ func (m *Model) completeAgent() bool {
 		}
 		prefix = v[1:]
 	}
+	seen := map[string]bool{}
 	var ids []string
+	for _, id := range m.orc.RunningAgents() {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
 	for _, s := range m.orc.Sessions() {
-		ids = append(ids, s.AgentID)
+		if !seen[s.AgentID] {
+			seen[s.AgentID] = true
+			ids = append(ids, s.AgentID)
+		}
 	}
 	sort.Strings(ids)
 	var match []string
@@ -398,7 +473,7 @@ func (m *Model) completeAgent() bool {
 		}
 	}
 	if len(match) == 0 {
-		m.flashNotice("no finished agent matches @" + prefix + " (/agents lists them)")
+		m.flashNotice("no running or finished agent matches @" + prefix + " (/agents lists them)")
 		return true
 	}
 	next := match[0]
