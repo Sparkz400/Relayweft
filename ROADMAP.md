@@ -4,6 +4,8 @@
 
 The phases are ordered. A phase starts only when the previous phase's **exit criteria** are met. Features never jump ahead of reliability.
 
+> **Note (October 2026):** Phases 2 and 3 were built ahead of Phase 1's exit criteria, at your request. Their code is tested but has not been used for real. Phase 1's open items (1.1, 1.6–1.9) and its exit criteria still come first. Until they are met, treat Phase 2 and 3 features as a beta.
+
 ---
 
 ## Where we are (October 2026)
@@ -37,14 +39,27 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
-- Real end-to-end runs with Claude Code.
+- Real end-to-end runs with Claude Code (before Phase 2).
 - `.cmd` shim launching on a Windows CI runner.
+- **Phase 2 and 3, with fake agents and real git:**
+  - plan edits and cancel
+  - partial apply, reject and feedback in change review
+  - a failing check feeding the fix round
+  - resume skipping finished steps
+  - follow-ups resuming a session, and the fresh-agent fallback
+  - the TUI plan overlay, driven in the demo
+- **The starter bench checks:** all five fail on the untouched project and pass with reference solutions.
 
 **Not verified yet:**
 - A real Codex run against a model.
 - Real daily use on your Windows PC.
 - Behaviour under heavy load: a big repo, three agents in parallel, hours of use.
 - A ~10-task comparison against a single agent (`plan.md` §9).
+- **Phase 2 and 3 against the real CLIs:**
+  - `codex exec resume` and `claude --resume` (the flags come from the CLIs' docs and help output, not from a recorded run)
+  - Claude running verify commands through `allowedTools`
+- **The release pipeline:** no tag has been pushed yet. `sy update` has not run against a real release.
+- **Notifications on a real desktop:** Windows toast, macOS and notify-send.
 
 **Open risk:** a full Windows freeze happened on 3 Oct while using `sy`.
 - The logs show the same unexplained hard resets since August, before Switchyard existed, with no blue screen and no disk or memory exhaustion.
@@ -92,6 +107,22 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 2.7 | ✅ **Notifications**: a desktop notification when a task finishes or fails, a limit is hit, or `sy` waits for you (Windows toast, macOS, notify-send). | You don't have to watch the terminal. |
 | 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, and `sy update` (checksum-verified, swaps the running .exe safely on Windows). Code signing needs a certificate: see `packaging/README.md`. | Installing no longer needs Go or a build. |
 
+**Known gaps (follow-ups to Phase 2):**
+- **2.1 Plan approval:** dependencies can't be edited in the overlay. Only deleting a step removes it from the dependencies.
+- **2.2 Change review:**
+  - Review is per file, not per hunk.
+  - Changes made in the main tree (one writer with review off) are not reviewable. With review on, every writer gets a worktree.
+  - Feedback reruns are capped at 2 per step.
+- **2.3 Tests:** Codex runs commands through its sandbox, not an allowlist, so `verify.commands` only restricts Claude.
+- **2.4 Follow-ups:**
+  - Only agents that finished in the current `sy` session can take a follow-up; sessions are not kept across restarts.
+  - A Claude agent that ran in a pool worktree can't be resumed from the main tree, so it gets a fresh agent with context.
+- **2.5 Resume:** a step that was running when `sy` died starts again from scratch. Its partial edits stay in the tree, or in its worktree.
+- **2.8 Distribution:**
+  - Code signing needs a certificate.
+  - The Scoop and winget manifests must be rendered after each release.
+  - The repo has no LICENSE file, so the manifests say "Proprietary".
+
 **Exit criteria:**
 - You reach for `sy` before plain `codex` or `claude` for multi-step work.
 - A new user goes from install to first task in under 5 minutes.
@@ -111,6 +142,13 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 3.5 | ✅ **Context hand-off**: a repo map and notes from earlier tasks in the same repo go into planner and step prompts, and every writer gets what this task's read-only steps found. | Fewer tokens, faster workers. |
 | 3.6 | ✅ **Cost visibility**: fresh tokens per provider, Claude API-equivalent $, and limit before and after, in the TUI, `sy run` and `sy stats`, plus a per-day table in `sy stats`. | You can see what each task cost. |
 
+**Known gaps (follow-ups to Phase 3):**
+- **`sy tune` model names:** the cheap and strong model names it suggests are fixed in code (haiku / gpt-6-luna), not read from your model catalog.
+- **`sy tune` confidence:** its thresholds are first guesses. Adjust them once real logs exist.
+- **The judge's cost:** it is measured only indirectly, as the success rate of judged vs rule-routed steps. The judge's own tokens are not compared to what it saves.
+- **Context hand-off:** the gain is not measured yet. Compare `sy bench` with `orchestrator.handoff` on and off.
+- **Repo notes:** they record only successful tasks. They can go stale after big refactors; delete the notes file to reset.
+
 **Exit criteria:** on the benchmark, Switchyard beats a single agent on at least 2 of the 3 measures: correctness, wall time, and how quickly the limits are reached.
 
 ---
@@ -124,6 +162,10 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.3 | **More providers**: a generic runner interface for other official CLIs (for example Gemini CLI) via config. |
 | 4.4 | **Per-repo profiles**: routes, test commands and limits in `.switchyard.yaml` committed with the repo. |
 | 4.5 | **Hooks**: run your own scripts before and after a task or merge (format, lint, notify). |
+| 4.6 | **Hunk-level review**: accept or reject single hunks in the change-review overlay, not just whole files. |
+| 4.7 | **Talk to a running agent**: queue a message that is delivered when the agent's current turn ends, instead of only finished agents. |
+| 4.8 | **Persistent follow-ups**: keep agent sessions across `sy` restarts, so `@agent` works on yesterday's task. |
+| 4.9 | **Scheduled runs**: start a task file at a set time, for example when the Claude 5-hour window resets. |
 
 ---
 
@@ -140,8 +182,12 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 ## Suggested order for the next steps
 
-1. **Use it for real on Windows and send a `sy bugreport` after any problem.** Items 1.6 (the Windows test pass) and the exit criterion (2 weeks of daily use) need you at the keyboard.
-2. **1.1 Real Codex run.** Run `codex exec --json -m gpt-6-luna "say hi" > codex.jsonl` on your logged-in PC and send the file; it becomes a test fixture. Also check whether the output contains `rate_limits`; if it does, the quota switch then works for Codex too.
+1. **Use it for real on Windows and send a `sy bugreport` after any problem.** Items 1.6 (the Windows test pass) and the exit criterion (2 weeks of daily use) need you at the keyboard. Try each Phase 2 feature once:
+   - approve and edit a plan;
+   - `/review-changes on` for one task;
+   - `@ follow-up` after a task;
+   - close the window mid-task, then `sy resume`.
+2. **1.1 Real Codex run.** Run `codex exec --json -m gpt-6-luna "say hi" > codex.jsonl` on your logged-in PC and send the file; it becomes a test fixture. Also check whether the output contains `rate_limits`; if it does, the quota switch then works for Codex too. Also run `codex exec resume --last "and now say bye"` once, to confirm that follow-ups work with your Codex version.
 3. **1.9 Review the PR #2 pool code and 1.8 parser fuzzing.** No user input needed.
 4. **1.7 Long-run stress test in CI.**
 5. **Cut the first release** (`git tag v0.1.0 && git push --tags`), then render the Scoop and winget manifests with `packaging/render-manifests.sh`. Signing needs a certificate.
