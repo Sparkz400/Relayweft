@@ -34,6 +34,7 @@ var version = "dev"
 const demoTask = "Make the parser keep trailing empty fields and add a --strict flag that rejects malformed lines, with tests and README docs"
 
 func main() {
+	badPath = proc.FixPath()
 	args := os.Args[1:]
 	sub := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -53,6 +54,8 @@ func main() {
 		err = cmdModels(args)
 	case "init":
 		err = cmdInit(args)
+	case "clean":
+		err = cmdClean(args)
 	case "version", "--version":
 		fmt.Println("switchyard", version)
 	case "help", "-h", "--help":
@@ -73,6 +76,9 @@ func main() {
 
 var errTaskFailed = errors.New("task failed")
 
+// badPath holds PATH entries with stray quotes that proc.FixPath repaired.
+var badPath []string
+
 func usage() {
 	fmt.Print(`Switchyard - route coding work between Codex and Claude subscriptions
 
@@ -85,6 +91,7 @@ Usage:
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
   sy doctor                  check CLIs, versions, git and terminal
   sy init [--global] [--force] [--print]   write the commented default config
+  sy clean [--dir <path>]    remove this repo's pooled agent worktrees
   sy version
 
 Flags (TUI and run):
@@ -449,6 +456,18 @@ func parseSince(s string) (time.Duration, error) {
 	return time.ParseDuration(s)
 }
 
+func cmdClean(args []string) error {
+	fs := flag.NewFlagSet("sy clean", flag.ExitOnError)
+	dir := fs.String("dir", ".", "project directory")
+	fs.Parse(args)
+	n, err := orchestrator.CleanPool(*dir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("removed %d pooled worktree(s)\n", n)
+	return nil
+}
+
 func cmdDoctor(args []string) error {
 	fs := flag.NewFlagSet("sy doctor", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "config file")
@@ -469,6 +488,9 @@ func cmdDoctor(args []string) error {
 		fmt.Printf("%s config      %s\n", ok(true), path)
 	} else {
 		fmt.Printf("%s config      built-in defaults (run `sy init` to create %s)\n", stMuted.Render("info"), path)
+	}
+	for _, e := range badPath {
+		fmt.Printf("%s PATH        stray quote in entry %s - repaired for sy; remove it in Environment Variables (sysdm.cpl)\n", warn, e)
 	}
 	for _, p := range event.Providers {
 		pc := cfg.Providers[p]
@@ -517,6 +539,9 @@ func cmdDoctor(args []string) error {
 		fmt.Printf("%s git         %d.%d (parallel worktrees supported)\n", ok(true), a, b)
 	} else {
 		fmt.Printf("%s git         %d.%d - parallel writing agents need git >= 2.38\n", warn, a, b)
+	}
+	if files, tips := orchestrator.PerfTips("."); len(tips) > 0 {
+		fmt.Printf("%s repo        %d tracked files - for faster snapshots run here: %s\n", warn, files, strings.Join(tips, " && "))
 	}
 	theme := tui.NewTheme(cfg.Theme)
 	tname := "unicode"

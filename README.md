@@ -131,6 +131,7 @@ sy stats [--here] [--since 7d]        usage per model, rules fired, routed vs ba
 sy models [--refresh] [--all]         routes + catalogs; refresh Codex catalog
 sy doctor                             check CLIs, versions, codex login, git, terminal
 sy init [--global] [--force] [--print]
+sy clean [--dir <path>]               remove the repo's pooled agent worktrees
 ```
 
 `sy run` exits 1 when the task fails, so it is scriptable. For the success measurement in the plan, run the same ~10 tasks with `sy run "..."` and with `sy run --single <provider:model> "..."`, then compare with `sy stats`.
@@ -144,13 +145,19 @@ sy init [--global] [--force] [--print]
 - **Read-only roles** (planner, explorer, researcher, reviewer, judge) can never write: Codex runs them with `--sandbox read-only`, Claude without write tools.
 - **Parallel worktrees** (`internal/orchestrator/git.go`):
   - At the start, your working tree (tracked + untracked, honouring `.gitignore`) is captured as a snapshot commit with a temporary index. **Your index, HEAD and branch are never touched.**
-  - Each writing agent gets `git worktree add --detach` at the current integration commit, outside your repo (in the user cache dir).
+  - Each writing agent gets a **pooled worktree** outside your repo (in the user cache dir), moved to the current integration commit with `git checkout --detach`. Slots persist between tasks, so git only rewrites the files that changed: about 0.2 s per slot in a 20,000-file repo, against about 6 s to create and delete a fresh worktree. Missing slots are created in the background while the planner runs. Ignored files (`node_modules`, build caches) survive in the slots. A lock file per slot keeps two `sy` instances apart. `sy clean` removes the pool.
   - When it finishes, its work is merged with `git merge-tree --write-tree` (an object-only merge, hence git 2.38+).
   - The changed files are written into your working tree with `git restore --source`, so CRLF/`autocrlf` on Windows is handled by git itself.
   - If you edited one of those files meanwhile, a `git merge-file` 3-way merge is used; if that conflicts, nothing is overwritten.
   - On a conflict, that agent's work is kept on branch `sy/<session>/<step>` and the reviewer is told.
   - Dependent subtasks start from the merged state.
   - Without git, or with one writing step, agents work directly in your directory, one writer at a time.
+  - Big repos:
+    - The snapshot starts from a copy of your index, so only changed files are re-hashed.
+    - Worktrees keep Git LFS files as pointer files (`GIT_LFS_SKIP_SMUDGE=1`), and agents are told so.
+    - Checkouts use all CPU cores (`checkout.workers=0`).
+    - In repos with 5,000+ tracked files, `sy doctor` and the session log suggest `git config core.fsmonitor true` and `git config core.untrackedCache true`, which make snapshots nearly instant.
+    - `orchestrator.worktree_max_files` can still turn worktrees off above a file count (off by default).
   - Limitation: worktrees do not contain ignored files such as `node_modules`, so agents in worktrees may not be able to run builds that need them. Set `orchestrator.worktrees: false` (writers then run one at a time in your tree) or `max_threads: 1` if that matters.
 - **Usage-limit detection** (`internal/limits`):
   - Claude's `rate_limit_event` with status `rejected`, any error text matching `limit_patterns`, or a non-zero exit with such text.

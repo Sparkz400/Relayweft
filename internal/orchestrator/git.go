@@ -2,8 +2,6 @@ package orchestrator
 
 import (
 	"bytes"
-	"crypto/sha1"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -20,8 +18,9 @@ import (
 //   - At the start of the execute phase the main working tree is captured as a
 //     snapshot commit (tracked + untracked, honouring .gitignore) using a
 //     temporary index, so the user's index and branch are never touched.
-//   - Each parallel writing agent gets `git worktree add --detach` at the
-//     current integration commit (the snapshot plus everything merged so far).
+//   - Each parallel writing agent gets a pooled worktree (pool.go) moved to
+//     the current integration commit (the snapshot plus everything merged so
+//     far).
 //   - When an agent finishes, its worktree is committed and merged into the
 //     integration commit with `git merge-tree --write-tree` (pure object
 //     operation, git >= 2.38).
@@ -34,6 +33,9 @@ import (
 type git struct{ dir string }
 
 func (g git) run(env []string, stdin []byte, args ...string) (string, error) {
+	// Parallel checkout (one worker per core) for worktree creation, slot
+	// resets and restores into the main tree; git ignores it elsewhere.
+	args = append([]string{"-c", "checkout.workers=0"}, args...)
 	if runtime.GOOS == "windows" {
 		// Worktrees live under %LOCALAPPDATA%; deep repos exceed MAX_PATH.
 		args = append([]string{"-c", "core.longpaths=true"}, args...)
@@ -107,7 +109,11 @@ func (g git) snapshot(msg string) (string, error) {
 	defer os.Remove(idx)
 	env := []string{"GIT_INDEX_FILE=" + idx}
 	head, headErr := g.out("rev-parse", "--verify", "-q", "HEAD")
-	if headErr == nil && head != "" {
+	// Seed the temporary index with a copy of the real one: its cached stat
+	// data lets `add -A` re-hash only changed files. An index built by
+	// read-tree has none, so every file (and every LFS object, through the
+	// clean filter) would be re-hashed, which takes minutes in big repos.
+	if !g.copyIndex(idx) && headErr == nil && head != "" {
 		if _, err := g.run(env, nil, "read-tree", head); err != nil {
 			return "", err
 		}
@@ -126,6 +132,34 @@ func (g git) snapshot(msg string) (string, error) {
 	return g.commitTree(args...)
 }
 
+// copyIndex copies the repository's index file to dst. The real index is
+// only read, never written. The copy keeps the original mtime: git compares
+// it with each entry's mtime to catch "racily clean" files (edited in the
+// same timestamp tick the index was written), and a fresh mtime would make
+// such edits invisible to `add -A`.
+func (g git) copyIndex(dst string) bool {
+	src, err := g.out("rev-parse", "--path-format=absolute", "--git-path", "index")
+	if err != nil {
+		return false
+	}
+	fi, err := os.Stat(src)
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return false
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return false
+	}
+	if err := os.Chtimes(dst, fi.ModTime(), fi.ModTime()); err != nil {
+		os.Remove(dst)
+		return false
+	}
+	return true
+}
+
 func (g git) commitTree(args ...string) (string, error) {
 	env := []string{
 		"GIT_AUTHOR_NAME=Switchyard", "GIT_AUTHOR_EMAIL=switchyard@localhost",
@@ -135,13 +169,35 @@ func (g git) commitTree(args ...string) (string, error) {
 	return strings.TrimSpace(s), err
 }
 
+// lfsSkip leaves Git LFS files in worktrees as pointer files, so a worktree
+// of a repo with gigabytes of assets is as cheap as one without. Committing a
+// pointer again is a no-op, and changed LFS files reach the main tree through
+// applyDiff, whose `git restore` runs the normal LFS filters there.
+var lfsSkip = []string{"GIT_LFS_SKIP_SMUDGE=1"}
+
 // addWorktree creates a detached worktree at commit.
 func (g git) addWorktree(path, commit string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	_, err := g.out("worktree", "add", "--detach", "--force", path, commit)
+	_, err := g.run(lfsSkip, nil, "worktree", "add", "--detach", "--force", path, commit)
 	return err
+}
+
+// usesLFS reports whether the repo tracks files with Git LFS (top-level
+// .gitattributes, which is where `git lfs track` writes).
+func (g git) usesLFS() bool {
+	data, err := os.ReadFile(filepath.Join(g.dir, ".gitattributes"))
+	return err == nil && bytes.Contains(data, []byte("filter=lfs"))
+}
+
+// trackedFiles counts the files in the index, i.e. what a worktree checks out.
+func (g git) trackedFiles() int {
+	s, err := g.run(nil, nil, "ls-files", "-z")
+	if err != nil {
+		return 0
+	}
+	return strings.Count(s, "\x00")
 }
 
 func (g git) removeWorktree(path string) {
@@ -320,15 +376,4 @@ func (g git) diff(from string, max int) (stat, patch string) {
 		p = p[:max] + "\n... (diff truncated) ..."
 	}
 	return stat, p
-}
-
-// worktreeBase is where Switchyard keeps worktrees for a repo: outside the
-// repo, so `git status` in the user's tree stays clean.
-func worktreeBase(root, session string) string {
-	h := sha1.Sum([]byte(root))
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = os.TempDir()
-	}
-	return filepath.Join(base, "switchyard", "worktrees", hex.EncodeToString(h[:])[:12], session)
 }
