@@ -1,0 +1,18 @@
+# Weekly update PRs for Go modules and GitHub Actions. Security fixes come
+# as soon as they are published (with Dependabot security updates on).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-modules:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
