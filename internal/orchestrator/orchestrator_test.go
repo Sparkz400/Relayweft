@@ -25,10 +25,26 @@ type recorder struct {
 	evs []event.Event
 }
 
+// all returns the events once the task's TaskDone has been collected: the
+// recorder drains the channel on its own goroutine, so right after Run
+// returns the last events may still be in flight.
 func (r *recorder) all() []event.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]event.Event(nil), r.evs...)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		r.mu.Lock()
+		done := false
+		for _, e := range r.evs {
+			if e.Kind == event.TaskDone {
+				done = true
+			}
+		}
+		out := append([]event.Event(nil), r.evs...)
+		r.mu.Unlock()
+		if done || time.Now().After(deadline) {
+			return out
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // newOrc builds an orchestrator whose events are collected.
@@ -535,4 +551,87 @@ func TestCommitAllIgnoresSigningConfig(t *testing.T) {
 	if _, changed, err := g.commitAll("test"); err != nil || !changed {
 		t.Fatalf("commit with gpgsign=true: changed=%v err=%v", changed, err)
 	}
+}
+
+func TestCancelStopsWholeTask(t *testing.T) {
+	var mu sync.Mutex
+	started := map[string]bool{}
+	running := make(chan struct{}, 64)
+	set := runner.Set{}
+	r := cancelRunner{onStart: func(s runner.Spec) {
+		mu.Lock()
+		started[s.StepID] = true
+		mu.Unlock()
+		running <- struct{}{}
+	}}
+	set[event.Codex], set[event.Claude] = r, r
+	o, rec := newOrc(t, "", set, func(c *config.Config) {
+		c.Orchestrator.MaxThreads = 2
+		c.Orchestrator.ReviewBeforePlan = false
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan TaskResult)
+	go func() { done <- o.Run(ctx, longTask) }()
+	<-running // planner
+	<-running // first subtasks running
+	cancel()
+	var res TaskResult
+	select {
+	case res = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancel did not end the task")
+	}
+	if res.OK || !strings.HasPrefix(res.Summary, "cancelled") {
+		t.Errorf("result = %+v", res)
+	}
+	if o.Running() || len(o.RunningAgents()) != 0 {
+		t.Error("orchestrator still busy after cancel")
+	}
+	mu.Lock()
+	n := len(started)
+	mu.Unlock()
+	if n > 3 { // plan + at most 2 parallel subtasks
+		t.Errorf("%d agents started; nothing new may start after cancel", n)
+	}
+	sawDone := false
+	for _, e := range rec.all() {
+		if e.Kind == event.TaskDone {
+			sawDone = true
+		}
+		if e.Kind == event.Phase && (e.Text == "review" || e.Text == "fix") {
+			t.Errorf("phase %s ran after cancel", e.Text)
+		}
+	}
+	if !sawDone {
+		t.Error("no TaskDone event: the UI would stay 'running'")
+	}
+	// The orchestrator is reusable right away (the next task gets going
+	// instead of "a task is already running").
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel2()
+	if res := o.Run(ctx2, "fix it"); res.Summary == "a task is already running" {
+		t.Errorf("not reusable after cancel: %+v", res)
+	}
+}
+
+// cancelRunner plans four parallel edits, then blocks every agent until
+// its context is cancelled.
+type cancelRunner struct{ onStart func(runner.Spec) }
+
+func (c cancelRunner) Run(ctx context.Context, s runner.Spec, emit func(event.Event)) runner.Result {
+	if strings.Contains(s.Prompt, runner.MarkerPlan) {
+		c.onStart(s)
+		return runner.Result{Final: planJSON(
+			map[string]any{"id": "a", "kind": "edit", "prompt": "a"},
+			map[string]any{"id": "b", "kind": "edit", "prompt": "b"},
+			map[string]any{"id": "c", "kind": "edit", "prompt": "c"},
+			map[string]any{"id": "d", "kind": "edit", "prompt": "d"},
+		)}
+	}
+	if s.Prompt == "" || strings.Contains(s.Prompt, "[SY:STEP]") || strings.Contains(s.Prompt, "fix it") {
+		c.onStart(s)
+		<-ctx.Done()
+		return runner.Result{Err: ctx.Err(), Killed: true}
+	}
+	return runner.Result{Final: `{"approve": true}`}
 }

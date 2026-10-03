@@ -227,7 +227,7 @@ func (m *Model) viewKeys(W int) string {
 	case m.picker != nil:
 		keys = "↑↓ role · ←→ column · enter change · s save · esc close"
 	case m.focus == focusPrompt:
-		keys = "enter run · tab/esc agents · ctrl+o models · /help commands · ctrl+c quit"
+		keys = "enter run · alt+enter new line · tab/esc agents · ctrl+o models · ctrl+x cancel · /help · ctrl+c quit"
 	default:
 		keys = "tab select agent · k k kill · p pause · x cancel task · l full log · m models · enter prompt · q quit"
 	}
@@ -242,9 +242,13 @@ func (m *Model) viewPrompt(W int) string {
 	}
 	inner := m.input.View()
 	if m.running && m.focus != focusPrompt {
-		inner = th.fg(th.Muted).Render("task running · enter to type a command · x to cancel")
+		inner = th.fg(th.Muted).Render("task running · enter to type a command · x or ctrl+x to cancel")
 	}
-	return lipgloss.NewStyle().Border(th.G.Border).BorderForeground(c).Width(W - 2).Render(fit(inner, W-2))
+	lines := strings.Split(inner, "\n")
+	for i := range lines {
+		lines[i] = fit(lines[i], W-2)
+	}
+	return lipgloss.NewStyle().Border(th.G.Border).BorderForeground(c).Width(W - 2).Render(strings.Join(lines, "\n"))
 }
 
 // bodyNeed is the smallest height that shows the whole tree (compact boxes,

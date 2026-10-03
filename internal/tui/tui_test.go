@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -176,7 +177,7 @@ func TestSlashCommands(t *testing.T) {
 	run := func(s string) {
 		m.focus = focusPrompt
 		m.input.SetValue(s)
-		m.Update(key("enter"))
+		pressEnter(m)
 	}
 	run("/route reviewer codex:gpt-6-astra:max")
 	if r := orc.Store().Get().Roles[event.RoleReviewer].Codex; r.Model != "gpt-6-astra" || r.Effort != "max" {
@@ -237,4 +238,157 @@ func TestTabCyclesAndKillNeedsSelection(t *testing.T) {
 	if m.focus != focusPrompt {
 		t.Error("enter did not return to the prompt")
 	}
+}
+
+// pressEnter is a human Enter: a pause before it, then the submit check.
+func pressEnter(m *Model) {
+	m.input.lastKey = time.Time{}
+	_, cmd := m.Update(key("enter"))
+	if cmd != nil {
+		m.Update(cmd())
+	}
+}
+
+// fakeClock drives the prompt's paste detection deterministically.
+type fakeClock struct{ t time.Time }
+
+func (c *fakeClock) now() time.Time       { return c.t }
+func (c *fakeClock) step(d time.Duration) { c.t = c.t.Add(d) }
+
+// typeKeys sends keys as a Windows console paste does: one by one, 1ms apart.
+func typeKeys(m *Model, c *fakeClock, s string) []tea.Cmd {
+	var cmds []tea.Cmd
+	for _, r := range s {
+		c.step(time.Millisecond)
+		var msg tea.KeyMsg
+		switch r {
+		case '\n':
+			msg = tea.KeyMsg{Type: tea.KeyEnter}
+		case '\t':
+			msg = tea.KeyMsg{Type: tea.KeyTab}
+		default:
+			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		}
+		_, cmd := m.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+	return cmds
+}
+
+func newPromptModel(t *testing.T) (*Model, *fakeClock) {
+	m, _, _ := newModel(t, false)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	c := &fakeClock{t: time.Unix(1000, 0)}
+	m.input.now = c.now
+	return m, c
+}
+
+// fire delivers every pending submit check, like the 40ms timers would.
+func fire(m *Model, cmds []tea.Cmd) {
+	for _, cmd := range cmds {
+		if cmd == nil {
+			continue
+		}
+		if msg, ok := cmd().(submitCheckMsg); ok {
+			m.Update(msg)
+		}
+	}
+}
+
+func TestWindowsStylePasteKeepsAllLines(t *testing.T) {
+	m, c := newPromptModel(t)
+	cmds := typeKeys(m, c, "first line\nsecond line\n\tindented\nlast line")
+	fire(m, cmds)
+	if m.running {
+		t.Fatal("a paste must never submit")
+	}
+	want := "first line\nsecond line\n    indented\nlast line"
+	if got := m.input.Value(); got != want {
+		t.Fatalf("value = %q, want %q", got, want)
+	}
+	if m.focus != focusPrompt {
+		t.Error("a tab inside a paste moved the focus")
+	}
+	// Now the user presses Enter: the whole text is submitted as one task.
+	c.step(2 * time.Second)
+	_, cmd := m.Update(key("enter"))
+	m.Update(cmd())
+	if !m.running || m.taskText != want {
+		t.Fatalf("submitted %q running=%v", m.taskText, m.running)
+	}
+	if m.input.Value() != "" {
+		t.Error("prompt not cleared after submit")
+	}
+	m.Shutdown()
+}
+
+func TestPasteStartingOrEndingWithNewline(t *testing.T) {
+	m, c := newPromptModel(t)
+	c.step(time.Second)
+	cmds := typeKeys(m, c, "\nabc\n")
+	fire(m, cmds) // the first Enter's timer arrives after the paste
+	if m.running {
+		t.Fatal("submitted a paste")
+	}
+	if got := m.input.Value(); got != "\nabc\n" {
+		t.Fatalf("value = %q", got)
+	}
+}
+
+func TestBracketedPaste(t *testing.T) {
+	m, _ := newPromptModel(t)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("one\ntwo\nthree"), Paste: true})
+	if got := m.input.Value(); got != "one\ntwo\nthree" || m.running {
+		t.Fatalf("value = %q running=%v", got, m.running)
+	}
+	if !strings.Contains(m.View(), "three") {
+		t.Error("multi-line prompt not rendered")
+	}
+}
+
+func TestTypedEnterSubmitsAndAltEnterIsNewline(t *testing.T) {
+	m, c := newPromptModel(t)
+	for _, r := range "where is x" {
+		c.step(150 * time.Millisecond) // human typing speed
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	c.step(150 * time.Millisecond)
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	if !strings.Contains(m.input.Value(), "\n") {
+		t.Fatalf("alt+enter did not add a line: %q", m.input.Value())
+	}
+	c.step(150 * time.Millisecond)
+	_, cmd := m.Update(key("enter"))
+	if m.running {
+		t.Fatal("submitted before the paste window passed")
+	}
+	m.Update(cmd())
+	if !m.running {
+		t.Fatal("typed enter did not submit")
+	}
+	m.Shutdown()
+}
+
+func TestCancelMarksEverythingStopped(t *testing.T) {
+	m, _, ch := newModel(t, false)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	// A node that never got to run, and one that was running.
+	m.running = true
+	m.cancelTask = func() {}
+	m.node("queued-one")
+	m.node("busy").status = stRunning
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	if !m.cancelling || m.phase != "cancelling" {
+		t.Fatalf("ctrl+x did not start cancelling (phase %q)", m.phase)
+	}
+	m.handleEvent(event.Event{Kind: event.TaskDone, Text: "cancelled: execution"}.Stamp())
+	for _, id := range []string{"queued-one", "busy", orchestrator.AgentMain} {
+		if st := m.nodes[id].status; st != stKilled {
+			t.Errorf("%s status = %v, want killed", id, st)
+		}
+	}
+	if m.running || m.cancelling {
+		t.Error("still running after TaskDone")
+	}
+	_ = ch
 }

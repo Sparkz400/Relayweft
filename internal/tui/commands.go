@@ -22,7 +22,8 @@ var helpText = []string{
 	"/threads <n> · /parallel on|off · /review on|off · /judge on|off",
 	"/pause · /resume · /kill <agent> · /cancel · /clear · /usage",
 	"roles: " + strings.Join(event.Roles, ", "),
-	"keys (agents focused): tab next · k kill · p pause · x cancel · l log · m models · q quit",
+	"keys (agents focused): tab next · k k kill · p pause · x cancel · l log · m models · q quit",
+	"anywhere: ctrl+x cancel task · ctrl+o models · alt+enter new line in the prompt · pasting multi-line text never submits",
 }
 
 func (m *Model) command(line string) tea.Cmd {
@@ -144,10 +145,7 @@ func (m *Model) command(line string) tea.Cmd {
 			say("usage: /kill <agent> (running: %s)", strings.Join(m.orc.RunningAgents(), ", "))
 		}
 	case "cancel":
-		if m.cancelTask != nil && m.running {
-			m.cancelTask()
-			say("cancelling task...")
-		}
+		m.cancelRunning()
 	case "clear":
 		if !m.running {
 			m.resetTree()
