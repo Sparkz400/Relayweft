@@ -3,6 +3,7 @@ package sessionlog
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,5 +227,69 @@ func TestMachineID(t *testing.T) {
 	os.WriteFile(p, []byte("../broken\n"), 0o644)
 	if c, err := MachineID(); err != nil || c == a || !reMachine.MatchString(c) {
 		t.Errorf("damaged id file: %q %v", c, err)
+	}
+}
+
+// Negative counts or $ (which would lower a team's totals) are rejected.
+func TestExportRejectsNegativeUsage(t *testing.T) {
+	now := time.Now()
+	good := BuildExport(exportRecs(now), ExportOptions{Machine: "0123456789abcdef", Now: now, WithTasks: true})
+	data, _ := good.Marshal()
+	if _, err := ParseExport(data); err != nil {
+		t.Fatal(err)
+	}
+	for name, bad := range map[string]func(e *Export){
+		"tasks":        func(e *Export) { e.Days[0].Tasks = -1 },
+		"ok":           func(e *Export) { e.Days[0].OK = -1 },
+		"fresh_tokens": func(e *Export) { e.Days[0].FreshTokens = -5000 },
+		"usd":          func(e *Export) { e.Days[0].USD = -10 },
+		"limit_hits":   func(e *Export) { e.Days[0].LimitHits = -1 },
+		"providers":    func(e *Export) { e.Days[0].Providers = map[string]int64{"claude": -1} },
+		"model calls":  func(e *Export) { e.Days[1].Models[0].Calls = -1 },
+		"model ok":     func(e *Export) { e.Days[1].Models[0].OK = -1 },
+		"model tokens": func(e *Export) { e.Days[1].Models[0].FreshTokens = -1 },
+		"model usd":    func(e *Export) { e.Days[1].Models[0].USD = -0.5 },
+		"model limit":  func(e *Export) { e.Days[1].Models[0].LimitHits = -1 },
+		"task tokens":  func(e *Export) { e.Tasks[0].FreshTokens = -1 },
+		"task usd":     func(e *Export) { e.Tasks[0].USD = -1 },
+	} {
+		e := good
+		e.Days = append([]ExportDay(nil), good.Days...)
+		for i := range e.Days {
+			e.Days[i].Models = append([]ExportModel(nil), e.Days[i].Models...)
+		}
+		e.Tasks = append([]ExportTask(nil), good.Tasks...)
+		bad(&e)
+		data, _ := e.Marshal()
+		if _, err := ParseExport(data); err == nil {
+			t.Errorf("negative %s accepted", name)
+		}
+	}
+	for _, v := range []float64{math.NaN(), math.Inf(1)} {
+		if validUSD(v) {
+			t.Errorf("validUSD(%v)", v)
+		}
+	}
+}
+
+// Text from another machine's export reaches the terminal without control
+// characters (no escape sequences), keeping other Unicode.
+func TestMergedReportStripsControls(t *testing.T) {
+	now := time.Now()
+	e := Export{Format: ExportFormat, Version: ExportVersion, Machine: "aaaa000000000001", Name: "bad\x1b[2Jbox\u009b31m ünï", Generated: now,
+		Days: []ExportDay{{Date: now.Format("2006-01-02"), Tasks: 1, Models: []ExportModel{{Provider: "claude\x1b]0;x\x07", Model: "op\rus\x00", Calls: 1}}}}}
+	var out bytes.Buffer
+	PrintMerged(&out, []Export{e}, 0, 0)
+	s := out.String()
+	for _, bad := range []string{"\x1b", "\u009b", "\x07", "\r", "\x00"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("report holds %q:\n%q", bad, s)
+		}
+	}
+	if !strings.Contains(s, "bad[2Jbox31m ünï") || !strings.Contains(s, "claude]0;x:op us") {
+		t.Errorf("report:\n%s", s)
+	}
+	if got := StripControl("a\tb\u0085c\x7fd\u00a0é\xff"); got != "a b cd\u00a0é?" {
+		t.Errorf("StripControl = %q", got)
 	}
 }

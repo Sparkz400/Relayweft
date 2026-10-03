@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -245,21 +246,57 @@ func ParseExport(data []byte) (Export, error) {
 		if _, err := time.Parse("2006-01-02", d.Date); err != nil {
 			return Export{}, fmt.Errorf("export of machine %s: bad date %q", e.Machine, d.Date)
 		}
+		if err := d.check(); err != nil {
+			return Export{}, fmt.Errorf("export of machine %s, %s: %w", e.Machine, d.Date, err)
+		}
+	}
+	for _, t := range e.Tasks {
+		if t.FreshTokens < 0 || !validUSD(t.USD) {
+			return Export{}, fmt.Errorf("export of machine %s: task at %s has negative or invalid usage", e.Machine, t.TS.Format(time.RFC3339))
+		}
 	}
 	return e, nil
 }
+
+// check rejects negative counts and $ (and NaN or infinite $): another
+// machine's file must not lower the team's totals below what was used.
+func (d ExportDay) check() error {
+	if d.Tasks < 0 || d.OK < 0 || d.FreshTokens < 0 || d.LimitHits < 0 || !validUSD(d.USD) {
+		return errors.New("negative or invalid totals")
+	}
+	for p, n := range d.Providers {
+		if n < 0 {
+			return fmt.Errorf("negative tokens for provider %q", p)
+		}
+	}
+	for _, m := range d.Models {
+		if m.Calls < 0 || m.OK < 0 || m.FreshTokens < 0 || m.LimitHits < 0 || !validUSD(m.USD) {
+			return fmt.Errorf("negative or invalid usage for model %q", m.Model)
+		}
+	}
+	return nil
+}
+
+func validUSD(f float64) bool { return f >= 0 && !math.IsInf(f, 0) } // NaN >= 0 is false
 
 // exportMaxSize caps what is read of one export (a year of days is far
 // less; anything bigger is not ours).
 const exportMaxSize = 8 << 20
 
-// ReadExport reads and parses one export file.
+// ReadExport reads and parses one export file. It must be a regular file:
+// a FIFO or device (in a shared team folder, say) would block or never
+// end. The open does not wait for a FIFO's writer (openNoBlock).
 func ReadExport(path string) (Export, error) {
-	f, err := os.Open(path)
+	f, err := openNoBlock(path)
 	if err != nil {
 		return Export{}, err
 	}
 	defer f.Close()
+	if st, err := f.Stat(); err != nil {
+		return Export{}, fmt.Errorf("%s: %w", path, err)
+	} else if !st.Mode().IsRegular() {
+		return Export{}, fmt.Errorf("%s: not a regular file", path)
+	}
 	data, err := io.ReadAll(io.LimitReader(f, exportMaxSize+1))
 	if err != nil {
 		return Export{}, fmt.Errorf("%s: %w", path, err)
@@ -452,6 +489,10 @@ func ReadTeamDir(dir, skip string, now time.Time) (exps []Export, warnings []str
 		if base == skip || strings.HasPrefix(base, ".") {
 			continue
 		}
+		if err := RegularFile(f); err != nil {
+			warnings = append(warnings, fmt.Sprintf("skipped %s: %v", filepath.Base(f), err))
+			continue
+		}
 		e, err := ReadExport(f)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("skipped %s: %v", filepath.Base(f), trimPath(err, f)))
@@ -473,6 +514,26 @@ func ReadTeamDir(dir, skip string, now time.Time) (exps []Export, warnings []str
 		exps = append(exps, e)
 	}
 	return exps, warnings, nil
+}
+
+// RegularFile reports, without following a symbolic link, why path is
+// not a plain file to read (nil when it is): files found in a folder are
+// read only when they are regular, never through links, FIFOs or devices.
+func RegularFile(path string) error {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	switch m := st.Mode(); {
+	case m.IsRegular():
+		return nil
+	case m&os.ModeSymlink != 0:
+		return errors.New("a symbolic link, not a regular file")
+	case m.IsDir():
+		return errors.New("a folder, not a regular file")
+	default:
+		return fmt.Errorf("not a regular file (%s)", m.Type())
+	}
 }
 
 // trimPath drops the file path an error repeats.
@@ -525,7 +586,8 @@ func PrintMerged(w io.Writer, exps []Export, dayUSD float64, dayTokens int64) {
 	for _, e := range exps {
 		for _, d := range e.Days {
 			for _, m := range d.Models {
-				k := m.Provider + ":" + m.Model
+				// Another machine's file: never print its text raw.
+				k := printable(m.Provider) + ":" + printable(m.Model)
 				r := routes[k]
 				if r == nil {
 					r = &route{key: k}
@@ -601,10 +663,29 @@ func PrintMerged(w io.Writer, exps []Export, dayUSD float64, dayTokens int64) {
 	tw.Flush()
 }
 
+// StripControl makes text from elsewhere (an export, a log) safe to print
+// on a terminal: valid UTF-8 without C0 or C1 control characters (escape
+// sequences, carriage returns, ...). Whitespace controls become spaces;
+// other Unicode is kept.
+func StripControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t' || r == '\n' || r == '\r' || r == '\v' || r == '\f' || r == 0x85:
+			return ' '
+		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, "?"))
+}
+
+// printable is s on one line without control characters.
+func printable(s string) string { return strings.Join(strings.Fields(StripControl(s)), " ") }
+
 // oneLineName keeps a machine label (chosen by whoever exported) on one
 // short line.
 func oneLineName(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
+	s = printable(s)
 	if r := []rune(s); len(r) > 30 {
 		s = string(r[:30]) + "..."
 	}

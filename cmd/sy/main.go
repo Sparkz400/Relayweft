@@ -501,8 +501,10 @@ func printEvent(e event.Event, quiet bool) {
 	}
 }
 
+// oneLine is s on one line of at most n bytes, without control characters
+// (it often prints text from agents, GitHub or other machines).
 func oneLine(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
+	s = strings.Join(strings.Fields(sessionlog.StripControl(s)), " ")
 	if len(s) > n {
 		return s[:n] + "…"
 	}

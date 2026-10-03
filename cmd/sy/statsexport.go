@@ -99,6 +99,9 @@ func mergeExports(cfg *config.Config, args []string, since time.Time) error {
 			return err
 		}
 		if !st.IsDir() {
+			if !st.Mode().IsRegular() {
+				return fmt.Errorf("%s: not a regular file", a)
+			}
 			e, err := sessionlog.ReadExport(a)
 			if err != nil {
 				return err
@@ -111,6 +114,10 @@ func mergeExports(cfg *config.Config, args []string, since time.Time) error {
 		n := 0
 		for _, f := range files {
 			if strings.HasPrefix(filepath.Base(f), ".") {
+				continue
+			}
+			if err := sessionlog.RegularFile(f); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: skipped %s: %v\n", f, err)
 				continue
 			}
 			e, err := sessionlog.ReadExport(f)

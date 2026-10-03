@@ -556,6 +556,14 @@ func TestWatchTaskFencesEverything(t *testing.T) {
 	}
 }
 
+// oneLine prints text from agents and GitHub: no terminal control
+// characters (C0 or C1), other Unicode kept.
+func TestOneLineStripsControls(t *testing.T) {
+	if got := oneLine("a\x1b[2J b\u009b31m\r\nc\x00 ünï\x07", 100); got != "a[2J b31m c ünï" {
+		t.Errorf("oneLine = %q", got)
+	}
+}
+
 // --api serves only the watched pull requests on its own host: a token is
 // per host, and another host's must never reach it.
 func TestWatchAPIOnlyForItsHost(t *testing.T) {
