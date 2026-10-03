@@ -81,6 +81,24 @@ export function locateSy(configured: string, le: LocateEnv): Located {
   return { tried };
 }
 
+/** Part of what WorkspaceConfiguration.inspect returns. */
+export interface Inspected<T> {
+  defaultValue?: T;
+  globalValue?: T;
+  workspaceValue?: T; // ignored by userSetting
+  workspaceFolderValue?: T; // ignored by userSetting
+}
+
+/**
+ * A setting's user (global) value, else its default. Workspace and folder
+ * values are ignored on purpose: switchyard.path and switchyard.args choose
+ * what program runs, and a cloned repository's .vscode/settings.json must
+ * not be able to choose that.
+ */
+export function userSetting<T>(i: Inspected<T> | undefined, fallback: T): T {
+  return i?.globalValue ?? i?.defaultValue ?? fallback;
+}
+
 /** The arguments for `sy web --client` in dir, then the user's extra ones. */
 export function clientArgs(dir: string, extra: readonly string[]): string[] {
   return ['web', '--client', '--dir', dir, ...extra.filter((a) => typeof a === 'string' && a !== '')];

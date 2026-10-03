@@ -25,6 +25,11 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
   "contributes": {
     "commands": [
       { "command": "switchyard.start", "title": "Start", "category": "Switchyard", "icon": "$(play)" },
@@ -117,14 +122,14 @@
         "switchyard.path": {
           "type": "string",
           "default": "",
-          "scope": "machine-overridable",
+          "scope": "machine",
           "markdownDescription": "Path to the `sy` executable (`sy.exe` on Windows). Empty: look for `sy` on PATH, then in `~/go/bin` and Scoop's shims."
         },
         "switchyard.args": {
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "scope": "machine-overridable",
+          "scope": "machine",
           "markdownDescription": "Extra arguments for `sy web --client`, one per item (no shell quoting), e.g. `[\"--threads\", \"2\"]` or `[\"--demo\"]`."
         },
         "switchyard.notifyApprovals": {

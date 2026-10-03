@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as vscode from 'vscode';
 import { SyApi } from './api';
-import { clientArgs, locateSy } from './locate';
+import { clientArgs, locateSy, userSetting } from './locate';
 import { logLine, oneLine, parseFollowUp, TaskModel } from './model';
 import { PlanFlow } from './plan';
 import { ReviewController, ReviewItem, SCHEME } from './review';
@@ -120,8 +120,9 @@ class Extension {
 
   /** The sy executable, or undefined after telling the person how to fix it. */
   private findSy(): string | undefined {
-    const cfg = vscode.workspace.getConfiguration('switchyard');
-    const configured = cfg.get<string>('path', '') ?? '';
+    // Only the user's own value: a repository's settings must not pick the
+    // program sy is (userSetting).
+    const configured = userSetting(vscode.workspace.getConfiguration('switchyard').inspect<string>('path'), '');
     const found = locateSy(configured, {
       platform: process.platform,
       env: process.env,
@@ -174,7 +175,8 @@ class Extension {
     if (!exe) {
       return;
     }
-    const extra = vscode.workspace.getConfiguration('switchyard').get<string[]>('args', []) ?? [];
+    // As with switchyard.path, workspace values are ignored (userSetting).
+    const extra = userSetting(vscode.workspace.getConfiguration('switchyard').inspect<string[]>('args'), []);
     const dir = folder.uri.fsPath;
     const args = clientArgs(dir, Array.isArray(extra) ? extra : []);
     this.starting = true;

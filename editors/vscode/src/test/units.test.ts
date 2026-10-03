@@ -1,8 +1,9 @@
 import * as assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { test } from 'node:test';
 import { decisionBody, selectAll, setFile, setHunk, type ReviewFile } from '../decision';
-import { clientArgs, locateSy, parseHello } from '../locate';
+import { clientArgs, locateSy, parseHello, userSetting } from '../locate';
 import { parseFollowUp, TaskModel } from '../model';
 import { SseParser, type SseMessage } from '../sse';
 import { LineReader } from '../syProcess';
@@ -112,4 +113,19 @@ test('TaskModel folds events into a tree and log lines', () => {
   assert.equal(m.nodes.get('s1')?.status, 'ok');
   assert.equal(m.nodes.get('reviewer')?.status, 'killed');
   assert.equal(m.nodes.get('main')?.status, 'failed');
+});
+
+test('sy path and args come only from user settings, never a workspace', () => {
+  // A repository's .vscode/settings.json must not choose what program runs.
+  const ws = { defaultValue: '', workspaceValue: '/repo/evil', workspaceFolderValue: '/repo/evil' };
+  assert.equal(userSetting(ws, 'x'), '');
+  assert.equal(userSetting({ ...ws, globalValue: '/usr/bin/sy' }, ''), '/usr/bin/sy');
+  assert.deepEqual(userSetting({ defaultValue: [], workspaceValue: ['--evil'] }, ['x']), []);
+  assert.deepEqual(userSetting(undefined, ['x']), ['x']);
+  const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
+  const props = pkg.contributes.configuration.properties;
+  for (const k of ['switchyard.path', 'switchyard.args']) {
+    assert.equal(props[k].scope, 'machine', k);
+  }
+  assert.equal(pkg.capabilities?.untrustedWorkspaces?.supported, false);
 });

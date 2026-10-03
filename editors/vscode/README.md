@@ -79,7 +79,7 @@ web UI.
 
 | Setting | Default | |
 |---|---|---|
-| `switchyard.path` | `""` | Path to `sy` / `sy.exe`; empty searches as above. |
+| `switchyard.path` | `""` | Path to `sy` / `sy.exe`; empty searches as above. This and `switchyard.args` are read from your user settings only, never from a workspace's `.vscode/settings.json`. |
 | `switchyard.args` | `[]` | Extra arguments for `sy web --client`, one per item, e.g. `["--threads", "2"]`, `["--provider", "claude"]` or `["--demo"]` to try it with fake agents. Nothing is shell-quoted. |
 | `switchyard.notifyApprovals` | `true` | Notify when a plan, change set or budget question waits. |
 
