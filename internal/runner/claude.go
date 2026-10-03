@@ -38,6 +38,9 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 	if s.Effort != "" {
 		args = append(args, "--effort", s.Effort)
 	}
+	if s.Resume != "" {
+		args = append(args, "--resume", s.Resume)
+	}
 	// extra_args go before --tools/--allowedTools, which are variadic and
 	// would swallow anything after them.
 	args = append(args, cfg.ExtraArgs...)
@@ -51,9 +54,14 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 		}
 		args = append(args, "--permission-mode", mode)
 	}
-	if !s.ReadOnly && len(cfg.WriteAllowedTools) > 0 {
+	allowed := append([]string(nil), cfg.WriteAllowedTools...)
+	for _, c := range s.AllowedCommands {
+		// Exact command and with arguments (e.g. "go test ./pkg/...").
+		allowed = append(allowed, "Bash("+c+")", "Bash("+c+" *)")
+	}
+	if !s.ReadOnly && len(allowed) > 0 {
 		// Variadic flag: keep it last so it cannot swallow other arguments.
-		args = append(args, "--allowedTools", strings.Join(cfg.WriteAllowedTools, ","))
+		args = append(args, "--allowedTools", strings.Join(allowed, ","))
 	}
 	return args
 }
@@ -67,6 +75,7 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 //	{"type":"system","subtype":"task_summary","detail":"Reading a.txt"}
 //	{"type":"result","subtype":"success","is_error":false,"result":"...","usage":{...},"total_cost_usd":0.01}
 type claudeParser struct {
+	session string
 	final   string
 	lastMsg string
 	tokens  event.TokenUsage
@@ -78,6 +87,7 @@ type claudeParser struct {
 
 type claudeLine struct {
 	Type          string          `json:"type"`
+	SessionID     string          `json:"session_id"`
 	Subtype       string          `json:"subtype"`
 	Model         string          `json:"model"`
 	Detail        *string         `json:"detail"`
@@ -133,6 +143,9 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 			return []event.Event{{Kind: event.Thinking, Text: s}}
 		}
 		return nil
+	}
+	if l.SessionID != "" {
+		p.session = l.SessionID
 	}
 	switch l.Type {
 	case "system":
@@ -248,6 +261,7 @@ func toolArg(raw json.RawMessage) string {
 
 func (p *claudeParser) Finish(r *Result) {
 	r.Final = p.final
+	r.SessionID = p.session
 	if r.Final == "" {
 		r.Final = p.lastMsg
 	}

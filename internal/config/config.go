@@ -126,6 +126,8 @@ type OrchestratorCfg struct {
 	MaxAttempts         int      `yaml:"max_attempts"`
 	AgentTimeout        Duration `yaml:"agent_timeout"`
 	SmallTaskWords      int      `yaml:"small_task_words"`
+	ApprovePlan         bool     `yaml:"approve_plan"`
+	ReviewChanges       bool     `yaml:"review_changes"`
 	LowPriority         bool     `yaml:"low_priority"`
 	MaxCPUPercent       int      `yaml:"max_cpu_percent"`
 	MinFreeMemoryMB     int      `yaml:"min_free_memory_mb"`
@@ -135,12 +137,20 @@ type OrchestratorCfg struct {
 	PoolMaxIdle         Duration `yaml:"pool_max_idle"`
 }
 
+// VerifyCfg lists the repo's own checks (tests, build, lint). Agents may
+// run them without asking, and Switchyard runs them before the final review.
+type VerifyCfg struct {
+	Commands []string `yaml:"commands"`
+	Timeout  Duration `yaml:"timeout"`
+}
+
 // Config is the whole file.
 type Config struct {
 	Roles         map[string]RoleCfg     `yaml:"roles"`
 	Providers     map[string]ProviderCfg `yaml:"providers"`
 	Routing       RoutingCfg             `yaml:"routing"`
 	Orchestrator  OrchestratorCfg        `yaml:"orchestrator"`
+	Verify        VerifyCfg              `yaml:"verify"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`

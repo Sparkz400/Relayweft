@@ -36,6 +36,12 @@ type Spec struct {
 	Dir      string
 	ReadOnly bool
 	Timeout  time.Duration
+	// Resume continues an earlier session of the same CLI (a follow-up
+	// message) instead of starting a new one.
+	Resume string
+	// AllowedCommands are shell command prefixes a writing agent may run
+	// without asking (verify/test commands); Claude needs them listed.
+	AllowedCommands []string
 }
 
 // Result is what an agent run produced.
@@ -48,6 +54,8 @@ type Result struct {
 	Files    []string  // files the agent reported editing
 	Duration time.Duration
 	Killed   bool // cancelled by the user or the orchestrator
+	// SessionID identifies the CLI session so a follow-up can resume it.
+	SessionID string
 }
 
 // OK reports whether the run succeeded.

@@ -100,6 +100,8 @@ orchestrator:
   max_attempts: 3                  # per subtask, not counting limit fallbacks
   agent_timeout: 30m
   small_task_words: 12             # tasks shorter than this skip planning and run as one worker step
+  approve_plan: true               # TUI / sy run --approve: show the plan and let you edit it before anything runs
+  review_changes: false            # show each agent's changes (per file) before they land in your tree
 
   # Machine protection: sy should never be what tips your PC over.
   low_priority: true               # agents and git run below normal CPU priority
@@ -109,6 +111,13 @@ orchestrator:
   min_free_disk_gb: 10             # never create a pool worktree below this much free disk (falls back to your tree)
   pool_warn_gb: 20                 # warn when this repo's worktree pool grows beyond this
   pool_max_idle: 336h              # pool worktrees unused this long are removed (14 days; 0 = keep)
+
+# Your repo's own checks. Agents may run them without asking; Switchyard runs
+# them after the agents finish and before the final review, and failures go
+# into the fix round. `sy init` detects them (go test, npm test, pytest, ...).
+verify:
+  commands: []                     # e.g. ["go test ./...", "go vet ./..."]
+  timeout: 10m
 
 # Text that means "usage limit reached" (case-insensitive regular expressions).
 limit_patterns:

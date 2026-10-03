@@ -53,6 +53,16 @@ type Options struct {
 	// TaskIDPrefix makes task ids unique when several orchestrators share
 	// one session log (sy bench).
 	TaskIDPrefix string
+	// Approver asks a person to approve plans and changes (nil = approve).
+	Approver Approver
+}
+
+// TaskOptions adjust one task run.
+type TaskOptions struct {
+	// Unattended tasks (queued, overnight) never wait for approvals.
+	Unattended bool
+	// Resume continues an interrupted task from its saved state.
+	Resume *TaskState
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -72,6 +82,8 @@ type Orchestrator struct {
 	running bool
 	taskSeq int
 	tipped  bool // the big-repo git settings hint was shown
+
+	sessions map[string]AgentSession // finished agents, for follow-ups
 }
 
 // New creates an orchestrator.
@@ -246,6 +258,20 @@ type task struct {
 	perProv     map[string]event.TokenUsage // guarded by tokensMu
 	quotaBefore map[string]float64
 	agentFiles  map[string]bool // repo-relative paths agents changed (guarded by tokensMu)
+
+	unattended bool       // no approvals (queued task)
+	state      *TaskState // persisted progress (nil in bench runs)
+	resumed    bool       // continuing an interrupted task
+}
+
+// approving reports whether this task asks a person to approve its plan.
+func (o *Orchestrator) approving(t *task) bool {
+	return o.opts.Approver != nil && !t.unattended && t.cfg.Orchestrator.ApprovePlan
+}
+
+// reviewing reports whether each agent's changes are shown before they land.
+func (o *Orchestrator) reviewing(t *task) bool {
+	return o.opts.Approver != nil && !t.unattended && t.cfg.Orchestrator.ReviewChanges
 }
 
 // noteFiles records files an agent working in dir reported changing, as
@@ -286,7 +312,8 @@ func (o *Orchestrator) worktreesAllowed(t *task) bool {
 		o.tipped = true
 		o.logf("big repo (%d tracked files): for faster snapshots run in it: %s", files, strings.Join(tips, " && "))
 	}
-	if !oc.Worktrees || !oc.Parallel || oc.MaxThreads < 2 {
+	// Reviewing changes needs every writer in a worktree, even one at a time.
+	if !o.reviewing(t) && (!oc.Worktrees || !oc.Parallel || oc.MaxThreads < 2) {
 		return false
 	}
 	if !SupportsMergeTree() {
@@ -379,7 +406,15 @@ func (o *Orchestrator) snapshotAfter(t *task) {
 
 // Run executes a task end to end. A panic inside the task is written to a
 // crash log and ends the task as failed instead of taking sy down.
-func (o *Orchestrator) Run(ctx context.Context, text string) (result TaskResult) {
+func (o *Orchestrator) Run(ctx context.Context, text string) TaskResult {
+	return o.RunWith(ctx, text, TaskOptions{})
+}
+
+// RunWith is Run with options (unattended, resume).
+func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOptions) (result TaskResult) {
+	if opts.Resume != nil {
+		text = opts.Resume.Task
+	}
 	o.mu.Lock()
 	if o.running {
 		o.mu.Unlock()
@@ -413,6 +448,18 @@ func (o *Orchestrator) Run(ctx context.Context, text string) (result TaskResult)
 	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
+	t.unattended = opts.Unattended
+	if o.opts.Bench == "" {
+		t.state = opts.Resume
+		if t.state == nil {
+			t.state = &TaskState{ID: t.key, Task: text, Dir: o.opts.Dir, Mode: o.opts.Mode, Created: time.Now()}
+		} else {
+			t.resumed = true
+		}
+		t.state.Status = "running"
+		t.state.save()
+		defer t.state.lock()()
+	}
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
 
@@ -429,6 +476,15 @@ func (o *Orchestrator) Run(ctx context.Context, text string) (result TaskResult)
 	if ctx.Err() != nil {
 		res.OK = false
 		res.Summary = "cancelled: " + res.Summary
+	}
+	if s := t.state; s != nil {
+		s.Status = map[bool]string{true: "done", false: "failed"}[res.OK]
+		if ctx.Err() != nil {
+			s.Status = "cancelled"
+		}
+		s.Summary, s.UndoKey, s.CostLine = res.Summary, res.UndoKey, res.Cost.Summary()
+		s.save()
+		pruneStates()
 	}
 	tk := t.tokens
 	cost := res.Cost
@@ -456,7 +512,13 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	// 1. Plan.
 	o.emit(event.Event{Kind: event.Phase, Text: "plan"})
 	var plan Plan
-	if words := len(strings.Fields(t.text)); oc.SmallTaskWords > 0 && words < oc.SmallTaskWords {
+	small := false
+	if t.resumed && t.state.Plan != nil {
+		plan = *t.state.Plan
+		o.logf("%s", t.state.resumeSummary())
+		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
+	} else if words := len(strings.Fields(t.text)); oc.SmallTaskWords > 0 && words < oc.SmallTaskWords {
+		small = true
 		plan = Plan{Summary: "small task: one worker step", Subtasks: []Subtask{{ID: "work", Title: firstWords(t.text, 6), Kind: router.KindEdit, Prompt: t.text}}}
 		if looksRead(t.text) {
 			plan.Subtasks[0].Kind = router.KindExplore
@@ -506,6 +568,31 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		}
 	}
 
+	// 2b. The person approves (and may edit) the plan.
+	if !t.resumed && !small && o.approving(t) {
+		o.emit(event.Event{Kind: event.Phase, Text: "approve-plan"})
+		o.logf("waiting for you to approve the plan (%d subtasks)", len(plan.Subtasks))
+		p, ok := o.opts.Approver.ApprovePlan(ctx, t.text, plan)
+		if ctx.Err() != nil {
+			return TaskResult{Summary: "cancelled at plan approval"}
+		}
+		if !ok {
+			return TaskResult{Summary: "plan not approved: nothing was run"}
+		}
+		np, err := NormalizePlan(p)
+		if err != nil {
+			return TaskResult{Summary: "the edited plan is empty: nothing was run"}
+		}
+		plan = np
+		o.logf("plan approved: %d subtasks", len(plan.Subtasks))
+	}
+	if t.state != nil {
+		pl := plan
+		t.state.Plan = &pl
+		t.state.Phase = "execute"
+		t.state.save()
+	}
+
 	// 3. Execute.
 	o.emit(event.Event{Kind: event.Phase, Text: "execute"})
 	results := o.execute(ctx, t, plan)
@@ -519,31 +606,56 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		}
 	}
 
-	// 4. Review before done, with fix rounds.
+	// 4. Verify (the repo's own checks) and review before done, with fix
+	// rounds that get the reviewer's advice and the failing output.
 	approved := true
+	verified := true
 	var lastAdvice string
-	if oc.ReviewBeforeDone && hasEdits(plan) {
+	verifying := len(t.cfg.Verify.Commands) > 0
+	if hasEdits(plan) && (oc.ReviewBeforeDone || verifying) {
 		for round := 0; ; round++ {
-			o.emit(event.Event{Kind: event.Phase, Text: "review"})
-			stat, diff := "", ""
-			if t.useGit {
-				stat, diff = git{t.root}.diff(t.start, 40_000)
+			report := ""
+			if verifying {
+				o.emit(event.Event{Kind: event.Phase, Text: "verify"})
+				verified, report = o.verify(ctx, t)
+				if ctx.Err() != nil {
+					return TaskResult{Summary: "cancelled during verify"}
+				}
 			}
-			v, ok := o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes))
-			if ctx.Err() != nil {
-				return TaskResult{Summary: "cancelled during final review"}
+			roundOK := verified
+			var v Verdict
+			if oc.ReviewBeforeDone {
+				o.emit(event.Event{Kind: event.Phase, Text: "review"})
+				stat, diff := "", ""
+				if t.useGit {
+					stat, diff = git{t.root}.diff(t.start, 40_000)
+				}
+				var ok bool
+				v, ok = o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes, report))
+				if ctx.Err() != nil {
+					return TaskResult{Summary: "cancelled during final review"}
+				}
+				if ok {
+					roundOK = roundOK && v.Approve
+					lastAdvice = v.Advice
+				}
 			}
-			if !ok {
-				break // reviewer unavailable: do not block
-			}
-			approved = v.Approve
-			lastAdvice = v.Advice
-			if v.Approve || round >= oc.MaxFixRounds {
+			approved = roundOK
+			if roundOK || round >= oc.MaxFixRounds {
 				break
+			}
+			if !verified {
+				v.Approve = false
+				v.Advice = strings.TrimSpace(v.Advice + "\n\nThese checks fail; make them pass:\n" + report)
 			}
 			o.emit(event.Event{Kind: event.Phase, Text: "fix"})
 			fix := Subtask{ID: fmt.Sprintf("fix-%d", round+1), Title: "Apply review fixes", Kind: router.KindFix, Prompt: fixPrompt(t.text, v)}
-			r := o.runStep(ctx, t, fix, nil, o.opts.Dir, fixPrompt(t.text, v))
+			var r stepResult
+			if o.reviewing(t) && t.wtOK {
+				r = o.runInWorktree(ctx, t, fix, nil, fixPrompt(t.text, v))
+			} else {
+				r = o.runStep(ctx, t, fix, nil, o.opts.Dir, fixPrompt(t.text, v))
+			}
 			results[fix.ID] = r
 			if !r.ok {
 				allOK = false
@@ -561,10 +673,16 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		}
 	}
 	fmt.Fprintf(&b, "%d/%d subtasks ok", done, len(plan.Subtasks))
-	if !approved {
+	switch {
+	case !verified:
+		b.WriteString("; checks still fail (" + strings.Join(t.cfg.Verify.Commands, ", ") + ")")
+	case !approved:
 		b.WriteString("; reviewer still has concerns: " + clip(lastAdvice, 200))
-	} else if oc.ReviewBeforeDone && hasEdits(plan) {
+	case oc.ReviewBeforeDone && hasEdits(plan):
 		b.WriteString("; reviewer approved")
+	}
+	if verified && verifying && hasEdits(plan) {
+		b.WriteString("; checks pass")
 	}
 	if len(t.kept) > 0 {
 		b.WriteString("; conflicts kept on " + strings.Join(t.kept, ", "))
@@ -663,7 +781,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 			edits++
 		}
 	}
-	useWT := t.wtOK && threads > 1 && edits > 1
+	useWT := t.wtOK && ((threads > 1 && edits > 1) || (o.reviewing(t) && edits > 0))
 	if useWT {
 		if t.lfs {
 			o.logf("git lfs repo: worktrees keep LFS files as pointers")
@@ -689,6 +807,17 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 	var mu sync.Mutex
 	done := map[string]bool{}
 	started := map[string]bool{}
+	if t.resumed && t.state != nil {
+		// Subtasks that already succeeded before the interruption: their
+		// changes are in the working tree, their results feed dependents.
+		for _, st := range p.Subtasks {
+			if r, ok := t.state.Results[st.ID]; ok && r.OK {
+				results[st.ID] = stepResult{ok: true, final: r.Final}
+				done[st.ID], started[st.ID] = true, true
+				o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, OK: true, Text: "done before the interruption"})
+			}
+		}
+	}
 	sem := make(chan struct{}, threads)
 	t.writeSem = make(chan struct{}, 1) // writers in the main tree run one at a time
 	writeSem := t.writeSem
@@ -775,7 +904,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				case st.Kind.ReadOnly():
 					r = o.runStep(ctx, t, st, deps, o.opts.Dir, "")
 				case useWT:
-					r = o.runInWorktree(ctx, t, st, deps)
+					r = o.runInWorktree(ctx, t, st, deps, "")
 				default:
 					select {
 					case writeSem <- struct{}{}:
@@ -793,6 +922,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				results[st.ID] = r
 				done[st.ID] = true
 				mu.Unlock()
+				t.state.setResult(st.ID, r)
 			}()
 		}
 		select {
@@ -805,7 +935,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 }
 
 // runInWorktree runs a writing subtask in its own worktree and merges it.
-func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, deps []string) stepResult {
+func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, deps []string, prompt string) stepResult {
 	g := git{t.root}
 	t.mergeMu.Lock()
 	base := t.snapshot
@@ -819,7 +949,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		case <-ctx.Done():
 			return stepResult{err: "cancelled"}
 		}
-		return o.runStep(ctx, t, st, deps, o.opts.Dir, "")
+		return o.runStep(ctx, t, st, deps, o.opts.Dir, prompt)
 	}
 	defer s.release()
 	path := s.path
@@ -828,20 +958,67 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	if rel, err := filepath.Rel(t.root, o.opts.Dir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
 		dir = filepath.Join(path, rel)
 	}
-	r := o.runStep(ctx, t, st, deps, dir, "")
+	r := o.runStep(ctx, t, st, deps, dir, prompt)
 	if !r.ok {
 		return r
 	}
 	wg := git{path}
-	commit, changed, err := wg.commitAll("switchyard: " + st.Title)
-	if err != nil {
-		o.mergeEvent(t, st.ID, false, "commit failed: "+err.Error())
-		r.ok, r.err = false, "commit failed: "+err.Error()
-		return r
-	}
-	if !changed {
-		o.mergeEvent(t, st.ID, true, "no file changes")
-		return r
+	var commit string
+	for round := 1; ; round++ {
+		c, changed, err := wg.commitAll("switchyard: " + st.Title)
+		if err != nil {
+			o.mergeEvent(t, st.ID, false, "commit failed: "+err.Error())
+			r.ok, r.err = false, "commit failed: "+err.Error()
+			return r
+		}
+		if !changed && round == 1 {
+			o.mergeEvent(t, st.ID, true, "no file changes")
+			return r
+		}
+		commit = c
+		if !o.reviewing(t) {
+			break
+		}
+		// The person reviews the agent's changes before they land.
+		files, err := g.changeSet(base, commit)
+		if err != nil || len(files) == 0 {
+			break
+		}
+		o.logf("%s: waiting for you to review %d changed file(s)", st.ID, len(files))
+		dec := o.opts.Approver.ReviewChanges(ctx, ChangeSet{StepID: st.ID, Title: st.Title, Summary: r.final, Round: round, Files: files})
+		if ctx.Err() != nil {
+			r.ok, r.err = false, "cancelled during your review"
+			return r
+		}
+		if dec.Feedback != "" && round < 3 {
+			o.logf("%s: you asked for changes: %s", st.ID, clip(dec.Feedback, 200))
+			again := stepPrompt(t.text, st, deps, "", "", false) + "\nYou already changed files in this directory for this subtask. The user reviewed your changes and asks:\n" +
+				dec.Feedback + "\nUpdate your changes accordingly, then reply with a short summary.\n"
+			r = o.runStep(ctx, t, st, deps, dir, again)
+			if !r.ok {
+				return r
+			}
+			continue
+		}
+		if len(dec.Apply) == 0 {
+			branch := o.saveBranch(t, st.ID, commit)
+			o.mergeEvent(t, st.ID, false, "rejected by you; the changes are kept on "+branch)
+			t.notes = append(t.notes, fmt.Sprintf("the user rejected the changes of %s (kept on branch %s)", st.ID, branch))
+			r.ok, r.err = false, "changes rejected by you"
+			return r
+		}
+		if len(dec.Apply) < len(files) {
+			full := commit
+			pc, err := g.partialCommit(base, commit, dec.Apply, "switchyard: "+st.Title+" (files you accepted)")
+			if err != nil {
+				r.ok, r.err = false, "could not apply the selected files: "+err.Error()
+				return r
+			}
+			commit = pc
+			branch := o.saveBranch(t, st.ID+"-full", full)
+			o.logf("%s: applying %d of %d files; the full change is kept on %s", st.ID, len(dec.Apply), len(files), branch)
+		}
+		break
 	}
 	t.mergeMu.Lock()
 	defer t.mergeMu.Unlock()
@@ -884,6 +1061,16 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	return r
 }
 
+// saveBranch keeps a commit on a branch for the person to look at later
+// without counting it as a conflict.
+func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
+	branch := fmt.Sprintf("sy/%s/%s/%s", o.opts.Log.Session(), t.id, stepID)
+	if _, err := (git{t.root}).out("branch", "-f", branch, commit); err != nil {
+		return commit[:min(12, len(commit))]
+	}
+	return branch
+}
+
 func (o *Orchestrator) keepBranch(t *task, stepID, commit string) string {
 	branch := fmt.Sprintf("sy/%s/%s/%s", o.opts.Log.Session(), t.id, stepID)
 	if _, err := (git{t.root}).out("branch", "-f", branch, commit); err != nil {
@@ -921,7 +1108,7 @@ func errorSignature(s string) string {
 // "error repeats" escalation. prompt overrides the generated step prompt.
 func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []string, dir, prompt string) stepResult {
 	oc := t.cfg.Orchestrator
-	step := router.Step{ID: st.ID, Title: st.Title, Kind: st.Kind, Prompt: st.Prompt, Files: st.Files, MainProvider: t.mainProv}
+	step := router.Step{ID: st.ID, Title: st.Title, Kind: st.Kind, Prompt: st.Prompt, Files: st.Files, MainProvider: t.mainProv, UserRole: st.Role}
 	var prevErr, advice, lastSig string
 	failures, limitRetries := 0, 0
 	for attempt := 1; ; attempt++ {
@@ -930,6 +1117,9 @@ func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []
 			p = stepPrompt(t.text, st, deps, prevErr, advice, st.Kind.ReadOnly())
 			if t.lfs && t.pool != "" && strings.HasPrefix(dir, t.pool) {
 				p += lfsNote
+			}
+			if cmds := t.cfg.Verify.Commands; len(cmds) > 0 && !st.Kind.ReadOnly() {
+				p += "\nBefore you finish, run the repo's checks (" + strings.Join(cmds, "; ") + ") and fix what your change broke.\n"
 			}
 		} else if advice != "" || prevErr != "" {
 			p += "\n\nPREVIOUS ATTEMPT FAILED WITH:\n" + clip(prevErr, 2000) + "\n\nREVIEWER ADVICE:\n" + advice
@@ -1042,7 +1232,14 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 		Provider: d.Provider, Model: d.Model, Effort: d.Effort, Prompt: prompt, Dir: dir,
 		ReadOnly: step.Kind.ReadOnly(), Timeout: t.cfg.Orchestrator.AgentTimeout.D(),
 	}
+	if !spec.ReadOnly {
+		spec.AllowedCommands = t.cfg.Verify.Commands
+	}
 	res := rn.Run(actx, spec, o.emit)
+	if res.SessionID != "" {
+		o.rememberSession(agentID, AgentSession{Provider: d.Provider, Model: d.Model, Effort: d.Effort, Role: d.Role,
+			SessionID: res.SessionID, Dir: dir, Final: res.Final, Title: step.Title, Task: t.text})
+	}
 	o.opts.Tracker.AddUsage(d.Provider, res.Tokens)
 	t.addTokens(d.Provider, res.Tokens)
 	if !step.Kind.ReadOnly() {
