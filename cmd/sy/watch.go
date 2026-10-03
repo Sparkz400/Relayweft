@@ -660,6 +660,7 @@ func (w *watcher) round(ctx context.Context, e watchEntry, client *gh.Client, p 
 	orc := orchestrator.New(orchestrator.Options{
 		Dir: co.Dir, Store: store, Runners: watchRunners, Tracker: w.tracker, Log: log, Events: events,
 		ForceProvider: c.provider, Approver: w.ap, TaskIDPrefix: fmt.Sprintf("watch%d-", w.seq),
+		NoAutoLearn: true, // co.Dir is a temporary checkout, not the repository
 	})
 	res := orc.RunWith(ctx, watchTask(e, p, items), orchestrator.TaskOptions{Unattended: w.unattended})
 	close(events)

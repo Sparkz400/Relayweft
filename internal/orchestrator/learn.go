@@ -95,9 +95,10 @@ func ApplyLearned(store *config.Store, dir string) ([]string, error) {
 
 // autoLearn refreshes the learned routes at task start when routing.learn
 // is auto, at most once a day, and layers them over the live config. Bench
-// and demo runs never change them.
+// and demo runs, and runs in a temporary checkout (NoAutoLearn), never
+// change them.
 func (o *Orchestrator) autoLearn() {
-	if o.opts.Bench != "" || o.opts.Mode == "demo" || o.opts.NoGit || o.opts.Store.Get().LearnMode() != config.LearnAuto {
+	if o.opts.Bench != "" || o.opts.Mode == "demo" || o.opts.NoGit || o.opts.NoAutoLearn || o.opts.Store.Get().LearnMode() != config.LearnAuto {
 		return
 	}
 	dir := o.logDir()

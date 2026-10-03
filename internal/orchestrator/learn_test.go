@@ -98,6 +98,34 @@ func TestAutoLearnAtTaskStart(t *testing.T) {
 	}
 }
 
+// NoAutoLearn (a temporary checkout, sy watch) never learns.
+func TestNoAutoLearn(t *testing.T) {
+	isolateUserConfig(t)
+	dir := gitRepo(t)
+	set := both(func(s runner.Spec) runner.Result {
+		if r, ok := twoEdits(s); ok {
+			return r
+		}
+		return runner.Result{Final: "done"}
+	})
+	o, rec := newOrc(t, dir, set, func(c *config.Config) {
+		c.Routing.Learn = config.LearnAuto
+		c.Orchestrator.ReviewBeforePlan, c.Orchestrator.ReviewBeforeDone = false, false
+	})
+	o.opts.NoAutoLearn = true
+	seedRoutes(t, o.logDir(), dir)
+	if res := o.Run(context.Background(), longTask); !res.OK {
+		t.Fatalf("task failed: %+v", res)
+	}
+	root, _ := repoRoot(dir)
+	if l, _ := config.LoadLearned(root); !l.Updated.IsZero() || len(l.Routes) != 0 {
+		t.Fatalf("learned with NoAutoLearn: %+v", l)
+	}
+	if n := countLogs(rec.all(), event.Log, "learned route for"); n != 0 {
+		t.Fatalf("%d learned-route logs", n)
+	}
+}
+
 func TestApplyLearnedFollowsTheMode(t *testing.T) {
 	isolateUserConfig(t)
 	dir := gitRepo(t)

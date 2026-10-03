@@ -149,11 +149,27 @@ func SaveLearned(l *Learned) error {
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// A temporary file of its own (two sy writing at once must not share
+	// one), in the same folder so the rename is atomic.
+	f, err := os.CreateTemp(filepath.Dir(p), filepath.Base(p)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	tmp := f.Name()
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp, 0o644) // CreateTemp makes it 0600
+	}
+	if werr == nil {
+		werr = os.Rename(tmp, p)
+	}
+	if werr != nil {
+		os.Remove(tmp)
+	}
+	return werr
 }
 
 // ResetLearned forgets a repo's learned routes.

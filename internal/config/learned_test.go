@@ -62,6 +62,39 @@ func TestLearnedFileRoundTripAndCanonicalKey(t *testing.T) {
 	}
 }
 
+// SaveLearned writes through a temporary file of its own: concurrent saves
+// (or a leftover at a fixed temporary name) do not get in each other's way,
+// and no temporary file is left behind.
+func TestSaveLearnedConcurrently(t *testing.T) {
+	isolateTrust(t)
+	root := t.TempDir()
+	p := LearnedPath(root)
+	if err := os.MkdirAll(p+".tmp", 0o755); err != nil { // in the way of a fixed name
+		t.Fatal(err)
+	}
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			errs <- SaveLearned(&Learned{Root: root, Updated: time.Now(), Routes: map[string]LearnedRoute{event.RoleWorker: sonnetHigh}})
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := LoadLearned(root); err != nil || got.Routes[event.RoleWorker].Spec() != "claude:sonnet:high" {
+		t.Fatalf("loaded %+v %v", got, err)
+	}
+	if st, err := os.Stat(p); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o644) {
+		t.Fatalf("file %v %v", st, err)
+	}
+	left, _ := filepath.Glob(p + ".tmp-*")
+	if len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
+	}
+}
+
 // Learned routes sit above your config and below the repo file and flags:
 // an explicit setting always wins.
 func TestLearnedLayering(t *testing.T) {

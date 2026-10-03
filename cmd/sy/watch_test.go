@@ -457,6 +457,31 @@ func TestWatchRefusesWhenBranchMoved(t *testing.T) {
 	}
 }
 
+// With routing.learn: auto, a round (in a temporary checkout) never
+// learns routes: the checkout's few records are not the repository's.
+func TestWatchRoundDoesNotLearn(t *testing.T) {
+	_, api, _, wr := watchSetup(t)
+	cd, _ := os.UserConfigDir()
+	write(t, filepath.Join(cd, "switchyard"), config.FileName, "orchestrator: {review_before_done: false}\nwatch: {max_rounds: 2}\nrouting: {learn: auto}\n")
+	learned := filepath.Dir(config.LearnedPath("x"))
+	before, _ := os.ReadDir(learned)
+	api.set(func() {
+		api.comments = `[{"id":2,"path":"a.txt","line":1,"body":"rename it","user":{"login":"rev"},"author_association":"MEMBER"}]`
+	})
+	var out bytes.Buffer
+	w := newWatcher(true)
+	w.out = &out
+	if err := w.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if wr.steps() != 1 {
+		t.Fatalf("no round ran:\n%s", out.String())
+	}
+	if after, _ := os.ReadDir(learned); len(after) != len(before) {
+		t.Fatalf("a watch round learned routes: %d files in %s, before %d", len(after), learned, len(before))
+	}
+}
+
 // A round whose changes touch .github/ is never pushed: workflows run with
 // the repository's secrets. The items are handled (running it again would
 // do the same).

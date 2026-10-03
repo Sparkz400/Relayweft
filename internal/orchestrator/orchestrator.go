@@ -61,6 +61,10 @@ type Options struct {
 	TaskIDPrefix string
 	// Approver asks a person to approve plans and changes (nil = approve).
 	Approver Approver
+	// NoAutoLearn skips routing.learn: auto at task start: Dir is a
+	// temporary checkout (sy watch), whose few records must not replace
+	// the repository's learned routes.
+	NoAutoLearn bool
 }
 
 // TaskOptions adjust one task run.
