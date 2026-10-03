@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -129,5 +131,121 @@ func TestPrintSchedule(t *testing.T) {
 	printSchedule(&w, "linux", "/usr/local/bin/sy", "/home/me/my app", "/home/me/my app/tasks.txt", clock, true, now)
 	if out := w.String(); !strings.Contains(out, "30 2 * * * cd '/home/me/my app' && /usr/local/bin/sy run --file '/home/me/my app/tasks.txt'") {
 		t.Errorf("cron output:\n%s", out)
+	}
+}
+
+// pasteToCmd is what an interactive cmd.exe hands the program for a line:
+// it toggles quoting at every ", and outside quotes runs & | < > as
+// operators (returned in ops) and removes the ^ escape.
+func pasteToCmd(line string) (out, ops string) {
+	var b, o strings.Builder
+	q := false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case c == '"':
+			q = !q
+		case !q && c == '^' && i+1 < len(line):
+			i++
+			b.WriteByte(line[i])
+			continue
+		case !q && strings.IndexByte("&|<>", c) >= 0:
+			o.WriteByte(c)
+		}
+		b.WriteByte(c)
+	}
+	return b.String(), o.String()
+}
+
+// msvcrtArgs splits a command line by the MSVCRT/UCRT rules (2n
+// backslashes + " = n backslashes + toggle, 2n+1 = n + literal ", "" in
+// quotes = literal ").
+func msvcrtArgs(line string) []string {
+	var args []string
+	p := 0
+	for {
+		for p < len(line) && (line[p] == ' ' || line[p] == '\t') {
+			p++
+		}
+		if p >= len(line) {
+			return args
+		}
+		var b strings.Builder
+		q := false
+		for {
+			copyChar, slashes := true, 0
+			for p < len(line) && line[p] == '\\' {
+				p++
+				slashes++
+			}
+			if p < len(line) && line[p] == '"' {
+				if slashes%2 == 0 {
+					if q && p+1 < len(line) && line[p+1] == '"' {
+						p++
+					} else {
+						copyChar, q = false, !q
+					}
+				}
+				slashes /= 2
+			}
+			b.WriteString(strings.Repeat(`\`, slashes))
+			if p >= len(line) || (!q && (line[p] == ' ' || line[p] == '\t')) {
+				break
+			}
+			if copyChar {
+				b.WriteByte(line[p])
+			}
+			p++
+		}
+		args = append(args, b.String())
+	}
+}
+
+// The printed schtasks line works when pasted into cmd.exe for paths with
+// & and a drive root: cmd runs no operator of it, schtasks gets the whole
+// /tr command, and that command quotes every path for its own cmd /c.
+func TestPrintScheduleWindowsQuoting(t *testing.T) {
+	now := time.Date(2026, 10, 3, 14, 0, 0, 0, time.Local)
+	clock := time.Date(0, 1, 1, 2, 30, 0, 0, time.UTC)
+	for _, c := range []struct{ exe, dir, file string }{
+		{`C:\Tools\sy.exe`, `C:\src\R&D`, `C:\src\R&D\tasks.txt`},
+		{`C:\Program Files (x86)\sy\sy.exe`, `C:\`, `C:\tasks.txt`},
+		{`C:\a^b\sy.exe`, `C:\x|y <z>`, `C:\x|y <z>\t (1).txt`},
+	} {
+		var w bytes.Buffer
+		printSchedule(&w, "windows", c.exe, c.dir, c.file, clock, true, now)
+		var line string
+		for _, l := range strings.Split(w.String(), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(l), "schtasks /create") {
+				line = strings.TrimSpace(l)
+			}
+		}
+		got, ops := pasteToCmd(line)
+		if ops != "" {
+			t.Errorf("%s: cmd.exe runs %q of the pasted line:\n%s", c.dir, ops, line)
+			continue
+		}
+		argv := msvcrtArgs(got)
+		i := slices.Index(argv, "/tr")
+		if i < 0 || i+2 != len(argv) {
+			t.Errorf("%s: schtasks argv %q", c.dir, argv)
+			continue
+		}
+		want := `cmd /c cd /d "` + c.dir + `" && "` + c.exe + `" run --file "` + c.file + `" > "` + filepath.Join(c.dir, "sy-scheduled.log") + `" 2>&1`
+		if argv[i+1] != want {
+			t.Errorf("%s: /tr = %s\nwant    %s", c.dir, argv[i+1], want)
+		}
+		if argv[3] != "Switchyard 02:30" {
+			t.Errorf("/tn = %q", argv[3])
+		}
+	}
+	// A path with % has no safe command line: none is printed.
+	var w bytes.Buffer
+	printSchedule(&w, "windows", `C:\Tools\sy.exe`, `C:\src\100%`, `C:\src\100%\tasks.txt`, clock, true, now)
+	if out := w.String(); strings.Contains(out, "schtasks /create") || !strings.Contains(out, "contains %") {
+		t.Errorf("%% path:\n%s", out)
+	}
+	if got := argvTrail(`C:\`); got != `C:\\` {
+		t.Errorf("argvTrail = %s", got)
 	}
 }

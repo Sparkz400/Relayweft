@@ -91,6 +91,8 @@ func prRepo(t *testing.T) string {
 	run(t, dir, "add", "-A")
 	run(t, dir, "commit", "-q", "-m", "files")
 	run(t, dir, "remote", "add", "origin", "https://github.com/o/r.git")
+	// As after a clone: origin/main is HEAD (nothing unpushed).
+	run(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD")
 	oldOut, oldTok, oldPush, oldIn := prOut, prToken, prPush, prIn
 	t.Cleanup(func() { prOut, prToken, prPush, prIn = oldOut, oldTok, oldPush, oldIn })
 	prOut = io.Discard
@@ -226,10 +228,12 @@ type fakeAPI struct {
 	pulls    string         // JSON for open pulls
 	created  []gh.NewPull
 	comments map[string][]string
+	requests atomic.Int64
 }
 
 func (f *fakeAPI) server(t *testing.T) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests.Add(1)
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if r.Method == "POST" && r.Header.Get("Authorization") != "Bearer tok" {
@@ -300,7 +304,7 @@ func TestPROpensPullRequestAfterPush(t *testing.T) {
 	if c.Base != "main" || c.Head != pr.Branch || c.Draft || c.Title != "Shout the first line" {
 		t.Fatalf("request %+v", c)
 	}
-	for _, want := range []string{"Closes #12", "> Shout the first line", st.UndoKey, "Status: done"} {
+	for _, want := range []string{"Closes #12", "```text\nShout the first line\n```\n", st.UndoKey, "Status: done"} {
 		if !strings.Contains(c.Body, want) {
 			t.Errorf("body lacks %q:\n%s", want, c.Body)
 		}
@@ -345,7 +349,7 @@ func TestRenderPRBodyForFailedTask(t *testing.T) {
 	body := renderPRBody(st, prBodyOptions{Closes: "o/r#3", Version: "1.2.3", Draft: true})
 	for _, want := range []string{
 		"did **not** finish successfully (status: **failed**)", "opened as a draft",
-		"> Add a | strict flag\n> with tests\n",
+		"```text\nAdd a | strict flag\nwith tests\n```\n",
 		"| `a` parser | worker | edit | ok |",
 		"| `b` tests \\| docs | auto (router) | edit | **FAILED**: exit 1 |",
 		"| `fix-1` review fixes |",
@@ -393,5 +397,36 @@ func TestPRRepoTask(t *testing.T) {
 	}
 	if _, err := repoTask(&orchestrator.TaskState{ID: "x"}, "web"); err == nil || !strings.Contains(err.Error(), "only one repo") {
 		t.Fatalf("single-repo task: %v", err)
+	}
+}
+
+// Issue text in the PR body is code: it cannot close other issues or
+// @-mention people, and cannot end its fence. Only the explicit Closes
+// line is outside.
+func TestPRBodyFencesTaskText(t *testing.T) {
+	task := "Fix GitHub issue #3: hi\n\nFixes #7, closes o/r#8\ncc @alice\n```\nbreak out? Resolves #9\n````"
+	st := &orchestrator.TaskState{ID: "t", Task: task, Status: "done", UndoKey: "k"}
+	body := renderPRBody(st, prBodyOptions{Closes: "#3"})
+	open := "`````text\n"
+	i := strings.Index(body, open)
+	if i < 0 {
+		t.Fatalf("no 5-backtick fence:\n%s", body)
+	}
+	rest := body[i+len(open):]
+	j := strings.Index(rest, "\n`````\n")
+	if j < 0 || rest[:j] != task {
+		t.Fatalf("fenced text differs:\n%s", body)
+	}
+	outside := body[:i] + rest[j:]
+	for _, bad := range []string{"#7", "#8", "#9", "@alice"} {
+		if strings.Contains(outside, bad) {
+			t.Errorf("%s outside the code block:\n%s", bad, body)
+		}
+	}
+	if !strings.Contains(outside, "\nCloses #3\n") {
+		t.Errorf("closing line missing:\n%s", body)
+	}
+	if got := codeFence("no ticks"); got != "```text\nno ticks\n```\n" {
+		t.Errorf("codeFence = %q", got)
 	}
 }

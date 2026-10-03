@@ -151,9 +151,9 @@ func cmdRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		if tasks, err = iss.load(fs, d); errors.Is(err, errNoIssues) {
-			return nil
-		} else if err != nil {
+		// The issues are read (and a batch's clean tree checked) when the
+		// run starts, after a scheduled wait: see below.
+		if err := iss.prepare(fs, d); err != nil {
 			return err
 		}
 	} else if *file != "" {
@@ -195,8 +195,18 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer h.close()
+	if iss.active() {
+		if err := iss.checkWorkspace(c.workspace); err != nil {
+			return err
+		}
+	}
 	what := "the task"
-	if len(tasks) > 1 {
+	switch {
+	case iss.batch():
+		what = "the issue batch"
+	case iss.active():
+		what = "the issue"
+	case len(tasks) > 1:
 		what = fmt.Sprintf("%d tasks", len(tasks))
 	}
 	release, err := waitUntilDue(h.ctx, os.Stdout, &sf, h.cfg, h.orc.Tracker(), c.allowSleep, what)
@@ -204,6 +214,13 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer release()
+	if iss.active() {
+		if tasks, err = iss.fetch(); errors.Is(err, errNoIssues) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
 	failed := 0
 	for i, task := range tasks {
 		if h.ctx.Err() != nil {

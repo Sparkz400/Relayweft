@@ -321,3 +321,26 @@ func TestTokenSources(t *testing.T) {
 		t.Fatal("enterprise token used for github.com")
 	}
 }
+
+// A github.com token never goes to an Enterprise host.
+func TestEnterpriseHostNeverGetsDotComToken(t *testing.T) {
+	old := GHCLIToken
+	defer func() { GHCLIToken = old }()
+	var asked string
+	GHCLIToken = func(host string) string { asked = host; return "" }
+	t.Setenv("GITHUB_TOKEN", "dotcom")
+	t.Setenv("GH_TOKEN", "dotcom2")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "")
+	t.Setenv("GITHUB_ENTERPRISE_TOKEN", "")
+	if tok, src := Token("ghe.example.com"); tok != "" || asked != "ghe.example.com" {
+		t.Fatalf("enterprise host got %q from %s (gh asked for %q)", tok, src, asked)
+	}
+	GHCLIToken = func(host string) string { return "gh-" + host }
+	if tok, src := Token("ghe.example.com"); tok != "gh-ghe.example.com" || src != "gh auth token" {
+		t.Fatalf("%q %q", tok, src)
+	}
+	t.Setenv("GITHUB_ENTERPRISE_TOKEN", "ent")
+	if tok, src := Token("ghe.example.com"); tok != "ent" || src != "GITHUB_ENTERPRISE_TOKEN" {
+		t.Fatalf("%q %q", tok, src)
+	}
+}

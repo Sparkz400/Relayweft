@@ -15,18 +15,26 @@ import (
 //   - --issue N|URL reads the issue (title, body, labels; comments with
 //     --with-comments) and runs "Fix GitHub issue #N: <title>" plus the body
 //     as the task. Public repositories need no token.
-//   - --issues label:<name> runs the open issues with that label one after
-//     another, unattended, oldest first; pull requests and issues an open
-//     pull request already closes ("Closes #N") are skipped.
+//   - --issues label:<name> --pr runs the open issues with that label one
+//     after another, unattended, oldest first; pull requests and issues an
+//     open pull request already closes ("Closes #N") are skipped. A batch
+//     needs --pr: without pull requests each task's changes would pile up
+//     in the working tree.
 //   - --pr turns each successful task into a pull request (the sy pr flow,
 //     without asking) whose body says "Closes #N", and comments the link on
-//     the issue (--comment=false turns that off).
+//     the issue (--comment=false turns that off). Nobody reviews that pull
+//     request before it is pushed, so it is refused (the work stays in the
+//     working tree and a batch stops) when it would carry more than the
+//     agents' work: files no agent reported changing, or commits of HEAD
+//     not on origin/<base>. A multi-repo workspace is refused up front.
 //   - A batch never discards your work: it starts only on a clean working
 //     tree, and after a task's pull request is open the task's changes are
 //     taken out of the working tree with sy undo (they live on in the PR
 //     branch, and `sy undo --redo <key>` puts them back), so the next issue
 //     starts from HEAD. If that is not possible, or a task left changes
 //     without a pull request, the batch stops.
+//   - With --at/--in/--when-reset the issues are read, and the working tree
+//     checked, when the run starts, not when it is scheduled.
 
 // issueFlags are sy run's GitHub issue flags and what they resolved to.
 type issueFlags struct {
@@ -41,10 +49,13 @@ type issueFlags struct {
 	draftSet     bool
 	api          string
 
-	dir    string
-	origin gh.Repo // the origin remote's repository (zero if none)
-	items  []issueItem
-	pulls  int
+	dir       string
+	origin    gh.Repo // the origin remote's repository (zero if none)
+	originErr error
+	ref       gh.IssueRef // --issue, resolved by prepare
+	label     string      // --issues label
+	items     []issueItem
+	pulls     int
 }
 
 type issueItem struct {
@@ -58,7 +69,7 @@ type issueItem struct {
 func registerIssueFlags(fs *flag.FlagSet) *issueFlags {
 	f := &issueFlags{}
 	fs.StringVar(&f.issue, "issue", "", "run a GitHub issue (number or URL) as the task")
-	fs.StringVar(&f.issues, "issues", "", "label:<name>: run the open issues with this label one after another, unattended")
+	fs.StringVar(&f.issues, "issues", "", "label:<name>: run the open issues with this label one after another, unattended (needs --pr)")
 	fs.IntVar(&f.limit, "limit", 5, "with --issues: at most this many issues")
 	fs.BoolVar(&f.withComments, "with-comments", false, "with --issue(s): include the issue's comments in the task")
 	fs.BoolVar(&f.pr, "pr", false, "with --issue(s): open a pull request (Closes #N) after each successful task")
@@ -75,52 +86,86 @@ func (f *issueFlags) batch() bool  { return f.issues != "" }
 // errNoIssues means a batch found nothing to do.
 var errNoIssues = errors.New("no issues to run")
 
-// load resolves the repository and reads the issue(s); it returns the task
-// texts in order.
+// load is prepare and fetch in one go.
 func (f *issueFlags) load(fs *flag.FlagSet, dir string) ([]string, error) {
+	if err := f.prepare(fs, dir); err != nil {
+		return nil, err
+	}
+	return f.fetch()
+}
+
+// prepare checks the flags and resolves the repository, without reading
+// any issue: a scheduled run reads them when it starts (fetch).
+func (f *issueFlags) prepare(fs *flag.FlagSet, dir string) error {
 	fs.Visit(func(fl *flag.Flag) {
 		if fl.Name == "draft" {
 			f.draftSet = true
 		}
 	})
 	if f.issue != "" && f.issues != "" {
-		return nil, errors.New("give either --issue or --issues, not both")
+		return errors.New("give either --issue or --issues, not both")
 	}
 	if fs.NArg() > 0 {
-		return nil, errors.New("give either --issue/--issues or a task, not both")
+		return errors.New("give either --issue/--issues or a task, not both")
 	}
 	if f.limit < 1 {
-		return nil, errors.New("--limit must be at least 1")
+		return errors.New("--limit must be at least 1")
 	}
 	f.dir = dir
 	ent := gh.EnterpriseHost()
-	var originErr error
 	if u, err := prGit(dir, nil, nil, "remote", "get-url", "origin"); err != nil {
-		originErr = fmt.Errorf("%s has no git remote `origin` on GitHub", dir)
+		f.originErr = fmt.Errorf("%s has no git remote `origin` on GitHub", dir)
 	} else {
 		u = strings.TrimSpace(u)
 		if f.api != "" {
 			ent = hostOf(u)
 		}
-		f.origin, originErr = gh.ParseRemote(u, ent)
+		f.origin, f.originErr = gh.ParseRemote(u, ent)
 	}
 	if f.issue != "" {
 		ref, err := gh.ParseIssueRef(f.issue, ent)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		repo := ref.Repo
-		if repo.IsZero() {
-			if originErr != nil {
-				return nil, fmt.Errorf("%w; give the issue as a URL", originErr)
+		if ref.Repo.IsZero() {
+			if f.originErr != nil {
+				return fmt.Errorf("%w; give the issue as a URL", f.originErr)
 			}
-			repo = f.origin
+			ref.Repo = f.origin
 		}
-		if f.pr && originErr != nil {
-			return nil, fmt.Errorf("--pr: %w", originErr)
+		if f.pr && f.originErr != nil {
+			return fmt.Errorf("--pr: %w", f.originErr)
 		}
-		c := f.client(repo)
-		it, err := f.fetch(c, repo, ref.Number)
+		f.ref = ref
+		return nil
+	}
+	label, ok := strings.CutPrefix(f.issues, "label:")
+	if label = strings.TrimSpace(label); !ok || label == "" {
+		return fmt.Errorf("--issues %q: want label:<name>", f.issues)
+	}
+	if !f.pr {
+		return errors.New("--issues needs --pr: each task's changes go to its pull request so the next issue starts from HEAD (for one issue without a pull request use --issue N)")
+	}
+	f.label = label
+	return f.originErr
+}
+
+// checkWorkspace refuses --pr for a multi-repo workspace: sy undo takes a
+// task's changes out of every repo, but one pull request only holds the
+// primary repo's (sy pr --repo opens the others by hand).
+func (f *issueFlags) checkWorkspace(repos []orchestrator.Repo) error {
+	if !f.pr || len(repos) == 0 {
+		return nil
+	}
+	return errors.New("--pr with --issue/--issues does not work in a multi-repo workspace (workspace.repos or --repo): a task's pull request would hold only this repo's changes. Run the issue without --pr, then open each repo's pull request with sy pr <task> [--repo <name>]")
+}
+
+// fetch reads the issue(s) and returns the task texts in order. A batch
+// checks for a clean working tree first.
+func (f *issueFlags) fetch() ([]string, error) {
+	if f.issue != "" {
+		c := f.client(f.ref.Repo)
+		it, err := f.fetchOne(c, f.ref.Repo, f.ref.Number)
 		if err != nil {
 			return nil, err
 		}
@@ -129,18 +174,11 @@ func (f *issueFlags) load(fs *flag.FlagSet, dir string) ([]string, error) {
 	}
 
 	// Batch.
-	label, ok := strings.CutPrefix(f.issues, "label:")
-	if label = strings.TrimSpace(label); !ok || label == "" {
-		return nil, fmt.Errorf("--issues %q: want label:<name>", f.issues)
-	}
-	if originErr != nil {
-		return nil, originErr
-	}
-	if err := cleanTree(dir); err != nil {
+	if err := cleanTree(f.dir); err != nil {
 		return nil, err
 	}
 	c := f.client(f.origin)
-	open, err := c.OpenIssues(f.origin, label, 0)
+	open, err := c.OpenIssues(f.origin, f.label, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +196,7 @@ func (f *issueFlags) load(fs *flag.FlagSet, dir string) ([]string, error) {
 			fmt.Printf("skipping #%d: an open pull request already closes it\n", is.Number)
 			continue
 		}
-		it, err := f.fetch(c, f.origin, is.Number)
+		it, err := f.fetchOne(c, f.origin, is.Number)
 		if err != nil {
 			return nil, err
 		}
@@ -166,10 +204,10 @@ func (f *issueFlags) load(fs *flag.FlagSet, dir string) ([]string, error) {
 		tasks = append(tasks, it.task)
 	}
 	if len(tasks) == 0 {
-		fmt.Printf("no open issues labelled %q in %s without an open pull request\n", label, f.origin)
+		fmt.Printf("no open issues labelled %q in %s without an open pull request\n", f.label, f.origin)
 		return nil, errNoIssues
 	}
-	fmt.Printf("%d issue(s) labelled %q to run:", len(tasks), label)
+	fmt.Printf("%d issue(s) labelled %q to run:", len(tasks), f.label)
 	for _, it := range f.items {
 		fmt.Printf(" #%d", it.issue.Number)
 	}
@@ -188,8 +226,8 @@ func (f *issueFlags) client(repo gh.Repo) *gh.Client {
 	return c
 }
 
-// fetch reads one issue (and its comments) and builds the task text.
-func (f *issueFlags) fetch(c *gh.Client, repo gh.Repo, n int) (issueItem, error) {
+// fetchOne reads one issue (and its comments) and builds the task text.
+func (f *issueFlags) fetchOne(c *gh.Client, repo gh.Repo, n int) (issueItem, error) {
 	is, err := c.Issue(repo, n)
 	if err != nil {
 		return issueItem{}, fmt.Errorf("read issue %s#%d: %w", repo, n, err)
@@ -253,7 +291,7 @@ func (f *issueFlags) afterTask(i int, res orchestrator.TaskResult) (stop bool) {
 			if s := slugify(it.issue.Title, 32); s != "" {
 				branch += "-" + s
 			}
-			pr, err = makePR(st, prOptions{base: f.base, branch: branch, draft: f.draft, draftSet: f.draftSet, yes: true, closes: it.closes, api: f.api})
+			pr, err = makePR(st, prOptions{base: f.base, branch: branch, draft: f.draft, draftSet: f.draftSet, yes: true, unattended: true, closes: it.closes, api: f.api})
 			if err != nil {
 				fmt.Printf("pull request for #%d failed: %v\n", it.issue.Number, err)
 				pr = nil // a branch that was not pushed is no pull request
@@ -270,10 +308,10 @@ func (f *issueFlags) afterTask(i int, res orchestrator.TaskResult) (stop bool) {
 			}
 		}
 	}
-	if !f.batch() || !f.pr {
+	if !f.batch() {
 		return false
 	}
-	// Batch with --pr: the next issue must start from a clean tree.
+	// Batch (always --pr): the next issue must start from a clean tree.
 	if pr != nil && res.UndoKey != "" {
 		if _, err := orchestrator.Undo(f.dir, res.UndoKey, false, false); err != nil {
 			fmt.Printf("could not take #%d's changes out of the working tree (%v); stopping the batch. They are on branch %s.\n", it.issue.Number, err, pr.Branch)
@@ -292,9 +330,11 @@ func (f *issueFlags) afterTask(i int, res orchestrator.TaskResult) (stop bool) {
 	return false
 }
 
-// cleanTree fails when dir has uncommitted changes or untracked files.
+// cleanTree fails when dir has uncommitted changes, untracked files or
+// changed submodules. The flags override config (status.showUntrackedFiles,
+// submodule.<name>.ignore) that would hide some of them.
 func cleanTree(dir string) error {
-	s, err := prGit(dir, nil, nil, "status", "--porcelain")
+	s, err := prGit(dir, nil, nil, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
 	if err != nil {
 		return fmt.Errorf("--issues needs a git repository: %w", err)
 	}

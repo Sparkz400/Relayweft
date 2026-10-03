@@ -60,6 +60,12 @@ type prOptions struct {
 	noPush   bool
 	yes      bool
 	closes   string // "#12" or "owner/repo#12": adds "Closes ..." to the body
+	// unattended: nobody looks at the preview (sy run --issue(s) --pr).
+	// The PR is refused when it would carry more than the agents' work:
+	// files no agent reported changing (your own edits made while the task
+	// ran, a secrets file) or commits of HEAD that are not on origin/<base>.
+	// A multi-repo task is refused too (one PR could not hold it).
+	unattended bool
 }
 
 // prResult is what sy pr created.
@@ -262,6 +268,13 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 		base = detectBase(root, client, repo)
 	}
 	body := renderPRBody(st, prBodyOptions{Closes: o.closes, Version: version, Draft: draft})
+	unreported, unrepErr := unreportedFiles(root, st.UndoKey)
+	ahead, aheadErr := aheadCount(root, base)
+	if o.unattended {
+		if err := unattendedPRCheck(st, base, unreported, unrepErr, ahead, aheadErr, o.noPush); err != nil {
+			return nil, err
+		}
+	}
 
 	// Preview.
 	fmt.Fprintf(out, "\nPull request from task %s (%s):\n  %s\n\n", st.ID, st.Status, oneLine(st.Task, 200))
@@ -283,8 +296,14 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 			kind = "draft pull request"
 		}
 		fmt.Fprintf(out, "into:   %s %s on %s (git push -u origin %s)\n", kind, base, repo, branch)
-		if n := aheadOf(root, base); n > 0 {
-			fmt.Fprintf(out, "note:   HEAD has %d commit(s) that are not on origin/%s; the pull request includes them\n", n, base)
+		if ahead > 0 {
+			fmt.Fprintf(out, "WARNING: HEAD has %d commit(s) that are not on origin/%s; the pull request includes them\n", ahead, base)
+		}
+	}
+	if len(unreported) > 0 {
+		fmt.Fprintf(out, "WARNING: %d file(s) changed while the task ran that no agent reported changing (your own edits? check them before you push):\n", len(unreported))
+		for _, f := range unreported {
+			fmt.Fprintln(out, "  ! "+f)
 		}
 	}
 	if st.Status != "done" {
@@ -429,15 +448,61 @@ func detectBase(root string, client *gh.Client, repo gh.Repo) string {
 	return "main"
 }
 
-// aheadOf counts HEAD's commits that origin/<base> lacks (0 when unknown).
-func aheadOf(root, base string) int {
+// aheadCount counts HEAD's commits that origin/<base> lacks; an error
+// means it is unknown (no origin/<base> ref: never fetched).
+func aheadCount(root, base string) (int, error) {
 	s, err := prGit(root, nil, nil, "rev-list", "--count", "refs/remotes/origin/"+base+"..HEAD")
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("no origin/%s to compare HEAD with (git fetch origin)", base)
 	}
 	var n int
 	fmt.Sscanf(strings.TrimSpace(s), "%d", &n)
-	return n
+	return n, nil
+}
+
+// unreportedFiles are the files the task changed although no agent reported
+// changing them (orchestrator.UndoPlan.Unreported), sorted.
+func unreportedFiles(root, key string) ([]string, error) {
+	plan, err := orchestrator.PreviewUndo(root, key, false)
+	if plan.Task.Key == "" {
+		// Undone already (sy undo): the redo preview has the same files.
+		plan, err = orchestrator.PreviewUndo(root, key, true)
+	}
+	if plan.Task.Key == "" {
+		return nil, err
+	}
+	out := append([]string(nil), plan.Unreported...)
+	sort.Strings(out)
+	return out, nil
+}
+
+// unattendedPRCheck refuses a pull request nobody reviewed when it would
+// carry more than the agents' own work. The task's changes stay in the
+// working tree either way.
+func unattendedPRCheck(st *orchestrator.TaskState, base string, unreported []string, unrepErr error, ahead int, aheadErr error, noPush bool) error {
+	if len(st.Repos) > 0 {
+		return fmt.Errorf("task %s changed several repos; an unattended run opens no pull requests for multi-repo tasks (open them with sy pr %s and sy pr %s --repo <name>)", st.ID, st.ID, st.ID)
+	}
+	if unrepErr != nil {
+		return fmt.Errorf("cannot tell which files the agents changed (%v); not opening a pull request nobody reviewed (check, then run sy pr %s)", unrepErr, st.ID)
+	}
+	if len(unreported) > 0 {
+		list := unreported
+		if len(list) > 10 {
+			list = append(list[:10:10], fmt.Sprintf("... %d more", len(unreported)-10))
+		}
+		return fmt.Errorf("not opening a pull request nobody reviewed: %d file(s) changed while the task ran that no agent reported changing (your own edits?): %s. The changes stay in the working tree; check them, then run sy pr %s", len(unreported), strings.Join(list, ", "), st.ID)
+	}
+	if noPush {
+		return nil
+	}
+	if aheadErr != nil {
+		return fmt.Errorf("not opening a pull request nobody reviewed: cannot tell whether HEAD has unpushed commits: %v", aheadErr)
+	}
+	if ahead > 0 {
+		return fmt.Errorf("not opening a pull request nobody reviewed: HEAD has %d commit(s) that are not on origin/%s and the pull request would include them (push them or check out %s first, then run sy pr %s)", ahead, base, base, st.ID)
+	}
+	return nil
 }
 
 func hostOf(remote string) string {
@@ -644,9 +709,11 @@ func renderPRBody(st *orchestrator.TaskState, o prBodyOptions) string {
 		b.WriteString(".\n\n")
 	}
 	b.WriteString("## Task\n\n")
-	for _, l := range strings.Split(strings.TrimSpace(clipText(st.Task, 4000)), "\n") {
-		b.WriteString(strings.TrimRight("> "+l, " ") + "\n")
-	}
+	// A fenced block, not a quote: the task (an issue's text, written by
+	// anyone) must not close other issues ("Fixes #7"), @-mention people or
+	// render markup in the PR. Closing keywords and mentions do nothing in
+	// code. The fence is longer than any backtick run in the text.
+	b.WriteString(codeFence(strings.TrimSpace(clipText(st.Task, 4000))))
 	if st.Plan != nil && len(st.Plan.Subtasks) > 0 {
 		b.WriteString("\n## Plan\n\n")
 		if s := strings.TrimSpace(st.Plan.Summary); s != "" {
@@ -731,6 +798,21 @@ func checksFrom(summary string) string {
 		}
 	}
 	return ""
+}
+
+// codeFence puts text in a fenced code block that the text cannot end.
+func codeFence(text string) string {
+	longest, run := 0, 0
+	for _, r := range text {
+		if r == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", max(3, longest+1))
+	return fence + "text\n" + text + "\n" + fence + "\n"
 }
 
 func mdLine(s string) string { return oneLine(s, 500) }

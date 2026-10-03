@@ -73,16 +73,6 @@ func background(cmd *exec.Cmd) {
 // lower is a no-op: the priority class is set at creation.
 func lower(int) {}
 
-// CmdQuote quotes an argument for a cmd.exe command line: anything with
-// spaces or cmd metacharacters is wrapped in double quotes (embedded quotes
-// doubled), which also protects & | < > ^ ( ) from cmd.
-func CmdQuote(a string) string {
-	if a != "" && !strings.ContainsAny(a, " \t\"&|<>^()%!,;=") {
-		return a
-	}
-	return `"` + strings.ReplaceAll(a, `"`, `""`) + `"`
-}
-
 var job windows.Handle
 
 // guard puts sy itself into a job object with KILL_ON_JOB_CLOSE. Children
