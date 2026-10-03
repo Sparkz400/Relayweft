@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# Pull requests from forks run here too: the token only needs to read.
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:

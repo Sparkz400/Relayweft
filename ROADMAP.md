@@ -48,8 +48,8 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - talking to a running agent
   - follow-ups that survive restarts
 - **Release v0.1.0** (3 Oct 2026): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
-  - The repository is private, so downloads need a GitHub login.
-  - `sy update` needs `GITHUB_TOKEN` or `GH_TOKEN`, and Scoop and winget can't install until the repo is public.
+  - The repository is public: release downloads, `sy update` and the Scoop install need no login.
+  - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
@@ -219,7 +219,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 2. **1.1 Real Codex run.** Run `codex exec --json -m gpt-6-luna "say hi" > codex.jsonl` on your logged-in PC and send the file; it becomes a test fixture. Also check whether the output contains `rate_limits`; if it does, the quota switch then works for Codex too. Also run `codex exec resume --last "and now say bye"` once, to confirm that follow-ups work with your Codex version.
 3. **Run `sy bench` on ~10 real, multi-file tasks from your own repos, with Codex.** This decides the Phase 3 exit criterion. After a week of use, run `sy tune`.
 4. **Releases:**
-   - To let others install `sy` without a GitHub login, make the repository public. Then submit the rendered winget manifests to microsoft/winget-pkgs.
+   - Submit the rendered winget manifests to microsoft/winget-pkgs (needs a fork of winget-pkgs on your account).
    - After each release, render the manifests (`packaging/render-manifests.sh X.Y.Z`).
    - For signed binaries, buy a code-signing certificate (see `packaging/README.md`).
 5. **Open Phase 4 items:**
