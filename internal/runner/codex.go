@@ -165,6 +165,9 @@ func (p *codexParser) typed(l codexLine) []event.Event {
 		if l.Error != nil && msg == "" {
 			msg = l.Error.Message
 		}
+		if msg == "" {
+			msg = "codex: error" // never an empty, silently ignored failure
+		}
 		if transient(msg) {
 			// Codex reports its own retries as "error" events; the run goes on.
 			return []event.Event{{Kind: event.Thinking, Text: "retrying: " + msg}}
@@ -295,6 +298,9 @@ func (p *codexParser) legacy(raw json.RawMessage) []event.Event {
 			p.final = m.LastAgentMessage
 		}
 	case "error", "stream_error":
+		if m.Message == "" {
+			m.Message = "codex: " + m.Type
+		}
 		p.fatal = m.Message
 		return []event.Event{{Kind: event.Error, Text: m.Message}}
 	}

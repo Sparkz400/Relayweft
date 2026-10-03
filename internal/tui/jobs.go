@@ -50,7 +50,7 @@ func parseFollowUp(text string) (agent, msg string, ok bool) {
 	}
 	i := strings.IndexAny(rest, " \t\n")
 	if i < 0 {
-		return rest, "", true
+		i = len(rest) // "@agent" alone: same checks, empty message
 	}
 	agent = rest[:i]
 	if !isAgentID(agent) {

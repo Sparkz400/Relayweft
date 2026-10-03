@@ -71,28 +71,7 @@ func (g git) changeSet(from, to string) ([]FileChange, error) {
 		return nil, err
 	}
 	nums, _ := g.run(nil, nil, "diff", "--numstat", "--no-renames", "-z", from, to)
-	type count struct {
-		add, del int
-		bin      bool
-	}
-	counts := map[string]count{}
-	// numstat -z: "<add>\t<del>\t<path>\x00" per file.
-	for _, rec := range strings.Split(nums, "\x00") {
-		f := strings.SplitN(rec, "\t", 3)
-		if len(f) != 3 {
-			continue
-		}
-		a, errA := strconv.Atoi(f[0])
-		d, _ := strconv.Atoi(f[1])
-		counts[f[2]] = count{a, d, errA != nil}
-	}
-	var out []FileChange
-	fields := strings.Split(strings.TrimRight(status, "\x00"), "\x00")
-	for i := 0; i+1 < len(fields); i += 2 {
-		path := fields[i+1]
-		c := counts[path]
-		out = append(out, FileChange{Path: path, Status: fields[i][:1], Added: c.add, Deleted: c.del, Binary: c.bin})
-	}
+	out := parseChangeList(status, nums)
 	// One git diff for all files (a process per file is slow on Windows);
 	// git prints the files in the same order as --name-status.
 	all, _ := g.run(nil, nil, "diff", "--no-renames", from, to)
@@ -113,6 +92,37 @@ func (g git) changeSet(from, to string) ([]FileChange, error) {
 		out[i].Patch = p
 	}
 	return out, nil
+}
+
+// parseChangeList reads `git diff --name-status -z` and `--numstat -z`
+// output (both with --no-renames) into file changes without patches.
+func parseChangeList(status, nums string) []FileChange {
+	type count struct {
+		add, del int
+		bin      bool
+	}
+	counts := map[string]count{}
+	// numstat -z: "<add>\t<del>\t<path>\x00" per file.
+	for _, rec := range strings.Split(nums, "\x00") {
+		f := strings.SplitN(rec, "\t", 3)
+		if len(f) != 3 {
+			continue
+		}
+		a, errA := strconv.Atoi(f[0])
+		d, _ := strconv.Atoi(f[1])
+		counts[f[2]] = count{a, d, errA != nil}
+	}
+	var out []FileChange
+	fields := strings.Split(strings.TrimRight(status, "\x00"), "\x00")
+	for i := 0; i+1 < len(fields); i += 2 {
+		path := fields[i+1]
+		if fields[i] == "" || path == "" {
+			continue // malformed record: never slice an empty status
+		}
+		c := counts[path]
+		out = append(out, FileChange{Path: path, Status: fields[i][:1], Added: c.add, Deleted: c.del, Binary: c.bin})
+	}
+	return out
 }
 
 // splitPatch splits a multi-file diff at its "diff --git" headers.

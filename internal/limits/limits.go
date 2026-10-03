@@ -60,11 +60,19 @@ func ParseReset(text string, now time.Time) (time.Time, bool) {
 	if m := reTryIn.FindStringSubmatch(text); m != nil && (m[1] != "" || m[2] != "") {
 		h, _ := strconv.Atoi(m[1])
 		mi, _ := strconv.Atoi(m[2])
-		return now.Add(time.Duration(h)*time.Hour + time.Duration(mi)*time.Minute), true
+		// More than a year is nonsense (and would overflow time.Duration
+		// into a reset time in the past).
+		const maxH = 366 * 24
+		if h <= maxH && mi <= maxH*60 {
+			return now.Add(time.Duration(h)*time.Hour + time.Duration(mi)*time.Minute), true
+		}
 	}
 	if m := reTryAtClock.FindStringSubmatch(text); m != nil {
 		h, _ := strconv.Atoi(m[1])
 		mi, _ := strconv.Atoi(m[2])
+		if h > 23 || mi > 59 {
+			return time.Time{}, false // not a clock time ("try again at 70:00")
+		}
 		switch strings.ToLower(m[3]) {
 		case "pm":
 			if h < 12 {

@@ -80,13 +80,14 @@ func NormalizePlan(p Plan) (Plan, error) {
 	}
 	// The fixed agent ids are reserved so a subtask never collides with them.
 	seen := map[string]bool{"main": true, "reviewer": true, "judge": true}
+	ids := map[string]bool{} // the subtasks' own ids: the only valid dependencies
 	for i := range p.Subtasks {
 		st := &p.Subtasks[i]
 		st.ID = slug(st.ID)
 		for n := i + 1; st.ID == "" || seen[st.ID]; n++ {
 			st.ID = fmt.Sprintf("t%d", n)
 		}
-		seen[st.ID] = true
+		seen[st.ID], ids[st.ID] = true, true
 		switch strings.ToLower(string(st.Kind)) {
 		case "explore", "explorer", "search", "read":
 			st.Kind = router.KindExplore
@@ -108,7 +109,7 @@ func NormalizePlan(p Plan) (Plan, error) {
 		var deps []string
 		for _, d := range st.DependsOn {
 			d = slug(d)
-			if seen[d] && d != st.ID {
+			if ids[d] && d != st.ID {
 				deps = append(deps, d)
 			}
 		}
