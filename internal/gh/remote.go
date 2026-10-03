@@ -1,5 +1,6 @@
 // Package gh is the small part of the GitHub REST API Switchyard uses:
-// read issues, list open pull requests, open a pull request and comment.
+// read issues, list open pull requests, open a pull request and comment,
+// and watch and review pull requests (pulls.go).
 // It needs no gh CLI; a token comes from GITHUB_TOKEN, GH_TOKEN or, when
 // installed, `gh auth token`.
 package gh

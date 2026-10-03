@@ -50,6 +50,41 @@ type TaskState struct {
 	// Repos are the extra repos of a multi-repo task (workspace.go); the
 	// plan's subtasks name them. A resume works in the same repos.
 	Repos []Repo `json:"repos,omitempty"`
+	// Authors counts the writing agents that finished ok, per provider
+	// (sy review asks the other one).
+	Authors map[string]int `json:"authors,omitempty"`
+}
+
+// noteAuthor counts a writing agent of provider that finished ok.
+func (s *TaskState) noteAuthor(provider string) {
+	if s == nil || provider == "" {
+		return
+	}
+	stateMu.Lock()
+	if s.Authors == nil {
+		s.Authors = map[string]int{}
+	}
+	s.Authors[provider]++
+	stateMu.Unlock()
+	s.save()
+}
+
+// Author is the provider that wrote most of the task's changes; "" when
+// none was recorded or both wrote as much.
+func (s TaskState) Author() string {
+	best, n, tie := "", 0, false
+	for p, c := range s.Authors {
+		switch {
+		case c > n:
+			best, n, tie = p, c, false
+		case c == n:
+			tie = true
+		}
+	}
+	if tie {
+		return ""
+	}
+	return best
 }
 
 // stateDir is where task states live; tests point it elsewhere.

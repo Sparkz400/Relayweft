@@ -65,6 +65,10 @@ func extractJSON(s string, v any) error {
 	return fmt.Errorf("no JSON object in reply")
 }
 
+// ExtractJSON is extractJSON for other model replies (sy review's
+// findings).
+func ExtractJSON(s string, v any) error { return extractJSON(s, v) }
+
 // ParsePlan reads and normalizes a planner reply.
 func ParsePlan(reply string) (Plan, error) { return parsePlanFor(reply, nil) }
 

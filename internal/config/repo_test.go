@@ -145,6 +145,27 @@ func TestRepoFileBudgetOnlyStricterAndWorkspaceNeedsTrust(t *testing.T) {
 	}
 }
 
+// A repo file may lower sy watch's round cap, never raise it.
+func TestRepoFileWatchRoundsOnlyLower(t *testing.T) {
+	isolateTrust(t)
+	for repo, want := range map[string]int{"watch: {max_rounds: 99}\n": 3, "watch: {max_rounds: 1}\n": 1, "watch: {max_rounds: 0}\n": 0} {
+		root := t.TempDir()
+		os.WriteFile(filepath.Join(root, RepoFileName), []byte(repo), 0o644)
+		s := NewStore(Default(), filepath.Join(t.TempDir(), "user.yaml"))
+		if _, err := s.ApplyRepo(root); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Get().Watch.MaxRounds; got != want {
+			t.Errorf("%q: max_rounds = %d, want %d", repo, got, want)
+		}
+	}
+	c := Default()
+	c.Watch.MaxRounds = -1
+	if err := c.Validate(); err == nil {
+		t.Error("negative watch.max_rounds accepted")
+	}
+}
+
 // Trust survives reaching the same file through a symlinked folder.
 func TestTrustThroughSymlink(t *testing.T) {
 	isolateTrust(t)

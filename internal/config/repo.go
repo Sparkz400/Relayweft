@@ -127,6 +127,10 @@ func ApplyRepo(c *Config, dir string) (RepoInfo, error) {
 	}
 	// A repo file may tighten your budget, never loosen it (trusted or not).
 	c.Budget = stricterBudget(guarded.Budget, c.Budget)
+	// Likewise the follow-up rounds sy watch may run unattended.
+	if c.Watch.MaxRounds > guarded.Watch.MaxRounds || c.Watch.MaxRounds < 0 {
+		c.Watch.MaxRounds = guarded.Watch.MaxRounds
+	}
 	if err := c.Validate(); err != nil {
 		return info, fmt.Errorf("%s: %w", p, err)
 	}

@@ -189,6 +189,14 @@ func (b BudgetCfg) Any() bool {
 	return b.TaskTokens > 0 || b.TaskUSD > 0 || b.DayTokens > 0 || b.DayUSD > 0
 }
 
+// WatchCfg controls sy watch: the pull requests sy opened get follow-up
+// tasks for failed checks and review comments.
+type WatchCfg struct {
+	// MaxRounds caps the follow-up tasks per pull request (0 = none: sy
+	// watch only reports).
+	MaxRounds int `yaml:"max_rounds"`
+}
+
 // Config is the whole file.
 type Config struct {
 	Roles         map[string]RoleCfg     `yaml:"roles"`
@@ -201,6 +209,7 @@ type Config struct {
 	MCP           MCPCfg                 `yaml:"mcp,omitempty"`
 	Workspace     WorkspaceCfg           `yaml:"workspace,omitempty"`
 	Budget        BudgetCfg              `yaml:"budget"`
+	Watch         WatchCfg               `yaml:"watch"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`
@@ -331,6 +340,9 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.MCP.validate()...)
 	if b := c.Budget; b.TaskTokens < 0 || b.TaskUSD < 0 || b.DayTokens < 0 || b.DayUSD < 0 {
 		errs = append(errs, "budget limits must be >= 0 (0 = off)")
+	}
+	if c.Watch.MaxRounds < 0 {
+		errs = append(errs, "watch.max_rounds must be >= 0")
 	}
 	if w := c.Budget.WarnAt; w < 0 || w > 1 {
 		errs = append(errs, "budget.warn_at must be between 0 and 1")
