@@ -65,6 +65,10 @@ func extractJSON(s string, v any) error {
 	return fmt.Errorf("no JSON object in reply")
 }
 
+// ExtractJSON is extractJSON for other model replies (sy review's
+// findings).
+func ExtractJSON(s string, v any) error { return extractJSON(s, v) }
+
 // ParsePlan reads and normalizes a planner reply.
 func ParsePlan(reply string) (Plan, error) { return parsePlanFor(reply, nil) }
 
@@ -266,7 +270,9 @@ Reply with ONLY this JSON in a json code block:
 `, runner.MarkerErrorReview, attempts, task, st.Title, st.Prompt, clip(errText, 4000))
 }
 
-func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat, diff string, mergeNotes []string, verifyReport string) string {
+// finalReviewPrompt is the final checkpoint's prompt; docs is the repo's
+// conventions, already fenced as untrusted data (docsContext).
+func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat, diff string, mergeNotes []string, verifyReport, docs string) string {
 	var b strings.Builder
 	b.WriteString(runner.MarkerFinalReview + " You are the reviewer at the final checkpoint. Do NOT modify files; you may read the repository and run read-only checks.\n")
 	b.WriteString("Decide whether the task is done correctly.\n\nTASK:\n" + task + "\n\nPLAN SUMMARY:\n" + p.Summary + "\n\nSUBTASK RESULTS:\n")
@@ -289,6 +295,7 @@ func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat,
 	} else {
 		b.WriteString("\n(No git diff available; inspect the files directly.)\n")
 	}
+	b.WriteString(docs)
 	b.WriteString(`
 Reply with ONLY this JSON in a json code block:
 {"approve": true|false, "advice": "what must change (empty if approved)", "issues": ["..."]}

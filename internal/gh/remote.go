@@ -1,5 +1,6 @@
 // Package gh is the small part of the GitHub REST API Switchyard uses:
-// read issues, list open pull requests, open a pull request and comment.
+// read issues, list open pull requests, open a pull request and comment,
+// and watch and review pull requests (pulls.go).
 // It needs no gh CLI; a token comes from GITHUB_TOKEN, GH_TOKEN or, when
 // installed, `gh auth token`.
 package gh
@@ -52,6 +53,22 @@ func (r Repo) APIBase() string {
 		return "https://api.github.com"
 	}
 	return "https://" + r.Host + "/api/v3"
+}
+
+// APIServes reports whether the API base URL api belongs to host: the
+// same host name (any port), or api.github.com for github.com. A token is
+// for one host, so a client for api only gets the token of a host it
+// serves.
+func APIServes(api, host string) bool {
+	u, err := url.Parse(api)
+	if err != nil || u.Hostname() == "" || host == "" {
+		return false
+	}
+	h := u.Hostname()
+	if isDotCom(host) {
+		return strings.EqualFold(h, "api.github.com") || isDotCom(h)
+	}
+	return strings.EqualFold(h, host)
 }
 
 func isDotCom(host string) bool {

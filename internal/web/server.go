@@ -136,8 +136,20 @@ func (s *Server) Serve(ln net.Listener) error {
 	if s.addr == "" {
 		s.Bind(ln)
 	}
+	// httpSrv is shared with Shutdown, which may run at once (an editor
+	// client that closes its pipe right away).
+	s.mu.Lock()
+	select {
+	case <-s.stop:
+		s.mu.Unlock()
+		ln.Close()
+		return nil
+	default:
+	}
 	s.httpSrv = s.newHTTPServer()
-	err := s.httpSrv.Serve(ln)
+	hs := s.httpSrv
+	s.mu.Unlock()
+	err := hs.Serve(ln)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
@@ -177,9 +189,12 @@ func (s *Server) Shutdown() {
 	}
 	s.stopOnce.Do(func() { close(s.stop) })
 	s.hub.closeAll()
-	if s.httpSrv != nil {
+	s.mu.Lock()
+	hs := s.httpSrv
+	s.mu.Unlock()
+	if hs != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		s.httpSrv.Shutdown(ctx)
+		hs.Shutdown(ctx)
 		cancel()
 	}
 }

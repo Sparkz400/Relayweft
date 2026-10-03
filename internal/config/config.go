@@ -110,6 +110,9 @@ type RoutingCfg struct {
 	Judge                bool     `yaml:"judge"`
 	JudgeBelowConfidence float64  `yaml:"judge_below_confidence"`
 	SwitchAtUtilization  float64  `yaml:"switch_at_utilization"`
+	// Learn and LearnMinSamples control the learned routes (learned.go).
+	Learn           string `yaml:"learn"`             // auto | suggest | off ("" = suggest)
+	LearnMinSamples int    `yaml:"learn_min_samples"` // runs (after the age decay) a route needs; 0 = 8
 }
 
 // OrchestratorCfg tunes the task lifecycle.
@@ -182,11 +185,73 @@ type BudgetCfg struct {
 	DayTokens  int64   `yaml:"day_tokens" json:"day_tokens"`
 	DayUSD     float64 `yaml:"day_usd" json:"day_usd"`
 	WarnAt     float64 `yaml:"warn_at" json:"warn_at"` // warn once at this share of a limit (0 = no warning)
+	// Team is a day budget several machines share through a folder.
+	Team TeamBudgetCfg `yaml:"team" json:"team"`
 }
 
 // Any reports whether any budget limit is set.
 func (b BudgetCfg) Any() bool {
-	return b.TaskTokens > 0 || b.TaskUSD > 0 || b.DayTokens > 0 || b.DayUSD > 0
+	return b.TaskTokens > 0 || b.TaskUSD > 0 || b.DayTokens > 0 || b.DayUSD > 0 || b.Team.Limited()
+}
+
+// TeamBudgetCfg is a day budget shared by several machines: each one
+// writes its own usage export (the `sy stats --json` format) to a shared
+// folder (OneDrive, a network share) after every task, and checks the
+// combined day total of every machine there before an agent starts. Dir
+// is where sy writes, so a repo file's dir applies only after `sy trust`.
+type TeamBudgetCfg struct {
+	Dir       string  `yaml:"dir" json:"dir"` // "" = off; ~ and environment variables ($X, %X%) are expanded
+	DayTokens int64   `yaml:"day_tokens" json:"day_tokens"`
+	DayUSD    float64 `yaml:"day_usd" json:"day_usd"`
+}
+
+// Limited reports whether the team folder is set and has a limit.
+func (t TeamBudgetCfg) Limited() bool {
+	return t.Dir != "" && (t.DayTokens > 0 || t.DayUSD > 0)
+}
+
+var reWinEnv = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_()]*)%`)
+
+// Folder is Dir with ~ and environment variables expanded ("" when off).
+// It must be absolute: a relative folder would depend on where sy started.
+func (t TeamBudgetCfg) Folder() (string, error) {
+	d := strings.TrimSpace(t.Dir)
+	if d == "" {
+		return "", nil
+	}
+	d = reWinEnv.ReplaceAllStringFunc(d, func(m string) string {
+		if v, ok := os.LookupEnv(m[1 : len(m)-1]); ok {
+			return v
+		}
+		return m
+	})
+	d = os.ExpandEnv(d)
+	if d == "~" || strings.HasPrefix(d, "~/") || strings.HasPrefix(d, `~\`) {
+		if h, err := os.UserHomeDir(); err == nil {
+			d = filepath.Join(h, d[1:])
+		}
+	}
+	if !filepath.IsAbs(d) {
+		return "", fmt.Errorf("budget.team.dir %q is not an absolute path", t.Dir)
+	}
+	return filepath.Clean(d), nil
+}
+
+// ContextCfg controls what the planner and the final reviewer learn from
+// the repo's own documents (CONTRIBUTING, the PR template, CI workflows,
+// AGENTS.md...). The summary is built without a model call and is shown
+// as untrusted repo data: none of it becomes a command.
+type ContextCfg struct {
+	RepoDocs      bool `yaml:"repo_docs"`
+	RepoDocsMaxKB int  `yaml:"repo_docs_max_kb"` // total size of the summary (0 = 8)
+}
+
+// WatchCfg controls sy watch: the pull requests sy opened get follow-up
+// tasks for failed checks and review comments.
+type WatchCfg struct {
+	// MaxRounds caps the follow-up tasks per pull request (0 = none: sy
+	// watch only reports).
+	MaxRounds int `yaml:"max_rounds"`
 }
 
 // Config is the whole file.
@@ -201,9 +266,14 @@ type Config struct {
 	MCP           MCPCfg                 `yaml:"mcp,omitempty"`
 	Workspace     WorkspaceCfg           `yaml:"workspace,omitempty"`
 	Budget        BudgetCfg              `yaml:"budget"`
+	Context       ContextCfg             `yaml:"context"`
+	Watch         WatchCfg               `yaml:"watch"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`
+	// Learned are the learned routes in effect, per role (learned.go): set
+	// by Store.ApplyLearned, read by the router for its reasons, never saved.
+	Learned map[string]LearnedRoute `yaml:"-" json:"-"`
 }
 
 // Default returns the built-in configuration.
@@ -332,6 +402,15 @@ func (c *Config) Validate() error {
 	if b := c.Budget; b.TaskTokens < 0 || b.TaskUSD < 0 || b.DayTokens < 0 || b.DayUSD < 0 {
 		errs = append(errs, "budget limits must be >= 0 (0 = off)")
 	}
+	if tb := c.Budget.Team; tb.DayTokens < 0 || tb.DayUSD < 0 {
+		errs = append(errs, "budget.team limits must be >= 0 (0 = off)")
+	}
+	if c.Context.RepoDocsMaxKB < 0 {
+		errs = append(errs, "context.repo_docs_max_kb must be >= 0 (0 = 8)")
+	}
+	if c.Watch.MaxRounds < 0 {
+		errs = append(errs, "watch.max_rounds must be >= 0")
+	}
 	if w := c.Budget.WarnAt; w < 0 || w > 1 {
 		errs = append(errs, "budget.warn_at must be between 0 and 1")
 	}
@@ -339,6 +418,14 @@ func (c *Config) Validate() error {
 	case "", "auto", "unicode", "ascii":
 	default:
 		errs = append(errs, "theme must be auto, unicode or ascii")
+	}
+	switch c.Routing.Learn {
+	case "", LearnAuto, LearnSuggest, LearnOff:
+	default:
+		errs = append(errs, "routing.learn must be auto, suggest or off")
+	}
+	if c.Routing.LearnMinSamples < 0 {
+		errs = append(errs, "routing.learn_min_samples must be >= 0 (0 = 8)")
 	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
@@ -356,6 +443,7 @@ func (c *Config) Clone() *Config {
 	if err != nil {
 		panic(err)
 	}
+	out.Learned = cloneLearned(c.Learned) // not in the YAML
 	return out
 }
 
@@ -408,10 +496,14 @@ type Store struct {
 	mu   sync.RWMutex
 	cfg  *Config
 	path string
-	// base is the config without the repo file (what Save writes), nil
-	// when no repo file was applied.
+	// base is the config without the repo file and the learned routes
+	// (what Save writes), nil when neither was applied.
 	base *Config
 	repo RepoInfo
+	// learned are the learned routes (learned.go) and pinned the roles
+	// set explicitly (repo file, flags, session edits), which they skip.
+	learned *Learned
+	pinned  map[string]bool
 }
 
 // ApplyRepo layers the project's .switchyard.yaml (if any) over the live
@@ -420,13 +512,18 @@ func (s *Store) ApplyRepo(dir string) (RepoInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	base := s.cfg.Clone()
-	live := s.cfg.Clone()
+	if s.base != nil {
+		base = s.base.Clone() // without learned routes: they go back on below
+	}
+	live := base.Clone()
 	info, err := ApplyRepo(live, dir)
 	if err != nil {
 		return info, err
 	}
-	if info.Path != "" {
+	if info.Path != "" || s.base != nil {
 		s.base, s.cfg = base, live
+		s.pinRepoRoles(base, live)
+		s.layerLearned()
 	}
 	s.repo = info
 	return info, nil
@@ -448,7 +545,7 @@ func (s *Store) SaveRepo(dir string) (string, error) {
 	if p == "" {
 		p = filepath.Join(dir, RepoFileName)
 	}
-	if err := SaveRepo(s.cfg, p); err != nil {
+	if err := SaveRepo(s.unlearnedLocked(), p); err != nil { // learned routes stay yours
 		return "", err
 	}
 	if s.base == nil {
@@ -498,6 +595,7 @@ func (s *Store) Update(fn func(c *Config) error) error {
 			s.base = nb
 		}
 	}
+	s.pinEdited(next) // an edited role wins over its learned route
 	s.cfg = next
 	return nil
 }
@@ -513,7 +611,8 @@ func (s *Store) Save() error {
 }
 
 // SetRoute changes one role's route on one provider.
-func (s *Store) SetRoute(role, provider string, r Route) error {
+func (s *Store) SetRoute(role, provider string, r Route) (err error) {
+	defer s.pinIfOK(role, &err) // set explicitly, even to the value it had
 	return s.Update(func(c *Config) error {
 		rc, ok := c.Roles[role]
 		if !ok {
@@ -530,7 +629,8 @@ func (s *Store) SetRoute(role, provider string, r Route) error {
 }
 
 // SetPrefer changes which provider a role prefers.
-func (s *Store) SetPrefer(role, prefer string) error {
+func (s *Store) SetPrefer(role, prefer string) (err error) {
+	defer s.pinIfOK(role, &err)
 	return s.Update(func(c *Config) error {
 		rc, ok := c.Roles[role]
 		if !ok {

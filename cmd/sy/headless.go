@@ -39,6 +39,10 @@ type headless struct {
 	stop   context.CancelFunc
 }
 
+// headlessRunners builds the agents of sy run and sy resume (tests swap in
+// fakes).
+var headlessRunners = runner.New
+
 func startHeadless(c *common, quiet bool, ap orchestrator.Approver) (*headless, error) {
 	store, dir, err := c.setup()
 	if err != nil {
@@ -54,7 +58,7 @@ func startHeadless(c *common, quiet bool, ap orchestrator.Approver) (*headless, 
 	}
 	h := &headless{cfg: cfg, log: log, events: make(chan event.Event, 4096), flush: make(chan chan struct{}), done: make(chan struct{})}
 	h.orc = orchestrator.New(orchestrator.Options{
-		Dir: dir, Store: store, Runners: runner.New, Tracker: limits.NewTracker(), Log: log,
+		Dir: dir, Store: store, Runners: headlessRunners, Tracker: limits.NewTracker(), Log: log,
 		Events: h.events, ForceProvider: c.provider, Approver: ap,
 		Repos: c.workspace,
 	})
@@ -138,6 +142,7 @@ func cmdRun(args []string) error {
 	quiet := fs.Bool("quiet", false, "only print routing, results and errors")
 	file := fs.String("file", "", "run the tasks in this file one after another, unattended (one per line, or blocks separated by a line with ---)")
 	approve := fs.Bool("approve", false, "ask on the terminal before a plan runs (and per change when orchestrator.review_changes is on)")
+	estimate := fs.Bool("estimate", false, "plan only: print the plan with its estimated tokens, time and $, then stop (nothing runs, the tree is untouched)")
 	iss := registerIssueFlags(fs)
 	var sf scheduleFlags
 	sf.register(fs)
@@ -171,6 +176,12 @@ func cmdRun(args []string) error {
 		tasks = []string{task}
 	} else {
 		return errors.New(`usage: sy run [flags] "task"   or   sy run --file tasks.txt`)
+	}
+	if *estimate {
+		if *file != "" || *single != "" || sf.set() || iss.active() || len(tasks) != 1 {
+			return errors.New(`--estimate takes one task: sy run --estimate "task"`)
+		}
+		return runEstimate(&c, *quiet, tasks[0])
 	}
 	var single0 struct {
 		prov  string
@@ -463,8 +474,19 @@ func (a *termApprover) ask(ctx context.Context, prompt string) (string, bool) {
 	}
 }
 
-func (a *termApprover) printPlan(p orchestrator.Plan) {
-	fmt.Fprintf(a.out, "\nPlan: %s\n", p.Summary)
+func (a *termApprover) printPlan(p orchestrator.Plan, est func(orchestrator.Plan) orchestrator.PlanEstimate) {
+	var e *orchestrator.PlanEstimate
+	if est != nil {
+		pe := est(p) // again after every edit
+		e = &pe
+	}
+	printPlan(a.out, p, e)
+}
+
+// printPlan writes a plan, with each step's estimate and the total when e
+// is set.
+func printPlan(w io.Writer, p orchestrator.Plan, e *orchestrator.PlanEstimate) {
+	fmt.Fprintf(w, "\nPlan: %s\n", p.Summary)
 	for i, st := range p.Subtasks {
 		role := st.Role
 		if role == "" {
@@ -481,15 +503,34 @@ func (a *termApprover) printPlan(p orchestrator.Plan) {
 			}
 			deps += " in " + repo
 		}
-		fmt.Fprintf(a.out, "  %d. [%s, %s] %s%s\n", i+1, st.Kind, role, st.Title, deps)
+		fmt.Fprintf(w, "  %d. [%s, %s] %s%s\n", i+1, st.Kind, role, st.Title, deps)
+		if e == nil {
+			continue
+		}
+		if se, ok := e.Step(st.ID); ok {
+			fmt.Fprintf(w, "       ~ %s on %s: %s\n", se.Role, se.Route, se.Line())
+		}
+	}
+	if e != nil {
+		printEstimateTotal(w, *e)
 	}
 }
 
 func (a *termApprover) ApprovePlan(ctx context.Context, task string, p orchestrator.Plan) (orchestrator.Plan, bool) {
+	return a.approvePlan(ctx, p, nil)
+}
+
+// ApprovePlanEstimate implements orchestrator.EstimateApprover: the plan
+// is shown with each step's estimate and the total.
+func (a *termApprover) ApprovePlanEstimate(ctx context.Context, task string, p orchestrator.Plan, est func(orchestrator.Plan) orchestrator.PlanEstimate) (orchestrator.Plan, bool) {
+	return a.approvePlan(ctx, p, est)
+}
+
+func (a *termApprover) approvePlan(ctx context.Context, p orchestrator.Plan, est func(orchestrator.Plan) orchestrator.PlanEstimate) (orchestrator.Plan, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for {
-		a.printPlan(p)
+		a.printPlan(p, est)
 		q := "Run it? [y]es, [n]o, d N (drop step), r N role (set role; auto = router), p N text (new prompt), s N (show prompt): "
 		if len(p.Repos) > 0 {
 			q = strings.Replace(q, "s N (show prompt)", "s N (show prompt), o N repo (move to repo)", 1)
@@ -665,4 +706,7 @@ func (a *termApprover) ApproveBudget(ctx context.Context, r orchestrator.BudgetR
 	}
 }
 
-var _ orchestrator.Approver = (*termApprover)(nil)
+var (
+	_ orchestrator.Approver         = (*termApprover)(nil)
+	_ orchestrator.EstimateApprover = (*termApprover)(nil)
+)

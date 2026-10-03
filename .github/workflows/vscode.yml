@@ -1,0 +1,34 @@
+name: vscode
+
+# The VS Code extension in editors/vscode: type-check, build and unit
+# tests. Packaging (npm run package, @vscode/vsce) is not run here.
+on:
+  push:
+    paths:
+      - 'editors/vscode/**'
+      - '.github/workflows/vscode.yml'
+  pull_request:
+    paths:
+      - 'editors/vscode/**'
+      - '.github/workflows/vscode.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: node --test "out/test/*.test.js"

@@ -52,6 +52,11 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - MCP servers
   - multi-repo tasks
   - `sy pr`, and GitHub issues as tasks
+  - `sy watch` and `sy review`
+  - learned routes, plan cost estimates
+  - team budgets and stats export
+  - the repo's own conventions as context
+  - a VS Code extension
 - **Release v0.1.0** (3 Oct 2026): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
   - The repository is public: release downloads, `sy update` and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
@@ -205,6 +210,13 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.13 | ✅ **`sy pr`**: a finished task becomes a branch, a commit and a GitHub pull request, with the plan, checks and cost in the description. Your index, working tree and branches are never touched. A multi-repo task gets one PR per repo (`--repo`). |
 | 4.14 | ✅ **Issues → tasks**: `sy run --issue 42` works on a GitHub issue. `--issues label:sy --pr` works through labelled issues one after another, opens a PR for each with "Closes #N", and comments on the issue. Combined with scheduled runs, this works overnight. |
 | 4.15 | ✅ **Budgets**: token and $ limits per task and per day (`budget:`). `sy` asks before going over; unattended runs stop instead. |
+| 4.16 | ✅ **Watch PRs**: `sy watch [--every 15m]` turns failed checks and review comments on PRs sy opened into a follow-up task on the PR branch (separate checkout, never forced, `watch.max_rounds`). |
+| 4.17 | ✅ **`sy review <PR>`**: a read-only second-opinion review by the other provider; `--post` posts it as one comment review, inline where possible. |
+| 4.18 | ✅ **Learned routing**: `sy tune --apply` (or `routing.learn: auto`) stores per-repo routes from your logs and bench, on clear evidence only; explicit settings always win, and decisions say when a learned route was used. |
+| 4.19 | ✅ **Team budgets and stats export**: `sy stats --json` / `--merge`, and `budget.team` over a shared folder. |
+| 4.20 | ✅ **Repo conventions as context**: CONTRIBUTING, the PR template, CODEOWNERS, CI commands and AGENTS.md go to the planner and reviewer as untrusted text; `sy pr` fills the PR template. |
+| 4.21 | ✅ **Cost estimate before approval**: per step and total, against the remaining budget; `sy run --estimate`. |
+| 4.22 | ✅ **VS Code extension** (`editors/vscode`): a thin client for `sy web --client` with the agent tree, plan approval and hunk review in the diff editor. Built and unit-tested; not yet tried in a real VS Code window. |
 
 ---
 

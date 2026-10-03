@@ -61,6 +61,10 @@ type Options struct {
 	TaskIDPrefix string
 	// Approver asks a person to approve plans and changes (nil = approve).
 	Approver Approver
+	// NoAutoLearn skips routing.learn: auto at task start: Dir is a
+	// temporary checkout (sy watch), whose few records must not replace
+	// the repository's learned routes.
+	NoAutoLearn bool
 }
 
 // TaskOptions adjust one task run.
@@ -97,6 +101,10 @@ type Orchestrator struct {
 
 	day dayCache // today's finished tasks, for the budget (budget.go)
 	cur *task    // the running task (RunWith), for BudgetStatus
+	// The other machines' totals for the team budget (team.go), and the
+	// team folder problems already logged.
+	team       teamCache
+	teamWarned map[string]bool
 }
 
 // New creates an orchestrator.
@@ -284,6 +292,7 @@ type task struct {
 	keepBefore bool       // resumed: undo keeps the original "before" snapshot
 	repoMap    string     // context hand-off (handoff.go)
 	repoNotes  string
+	repoDocs   string // the repo's own conventions (repodocs; untrusted)
 
 	// Multi-repo tasks (workspace.go). The task holds the primary repo's
 	// state; each extra repo's git state is held in a *task of its own.
@@ -502,6 +511,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	}()
 
 	began := time.Now()
+	o.autoLearn() // routing.learn: auto (learn.go)
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
 	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
@@ -673,6 +683,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		t.repoMap = repoMap(t.root)
 		t.repoNotes = repoNotes(t.root)
 	}
+	t.repoDocs = repoDocs(cfg, t.root)
 	if err := o.prepareExtras(t); err != nil {
 		return TaskResult{Summary: "not started: " + err.Error()}
 	}
@@ -743,7 +754,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		o.emit(event.Event{Kind: event.Phase, Text: "approve-plan"})
 		o.logf("waiting for you to approve the plan (%d subtasks)", len(plan.Subtasks))
 		plan.Repos = t.workspaceNames()
-		p, ok := o.opts.Approver.ApprovePlan(ctx, t.text, plan)
+		p, ok := o.approvePlan(ctx, t, plan) // with the dry-run estimate (estimate.go)
 		if ctx.Err() != nil {
 			return TaskResult{Summary: "cancelled at plan approval"}
 		}
@@ -804,7 +815,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 				o.emit(event.Event{Kind: event.Phase, Text: "review"})
 				stat, diff := t.workspaceDiff(40_000)
 				var ok bool
-				v, ok = o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes, report))
+				v, ok = o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes, report, t.docsContext()))
 				if ctx.Err() != nil {
 					return TaskResult{Summary: "cancelled during final review"}
 				}
@@ -872,7 +883,7 @@ func looksRead(s string) bool { return reReadTask.MatchString(s) }
 // step, so a chatty planner never blocks progress.
 func (o *Orchestrator) plan(ctx context.Context, t *task, advice string, prev *Plan) (Plan, bool) {
 	step := router.Step{ID: "plan", Title: "Plan the task", Kind: router.KindPlan, Prompt: t.text}
-	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev)+t.planContext())
+	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev)+t.planContext()+t.docsContext())
 	t.mainProv = d.Provider
 	if !res.OK() {
 		msg := "planner failed"
@@ -1528,7 +1539,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 
 	dc := d
 	o.emit(event.Event{Kind: event.Route, AgentID: agentID, ParentID: parent, Provider: d.Provider, Model: d.Model, Role: d.Role, Decision: &dc})
-	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeDecision, TaskID: t.id, Agent: agentID, Step: step.ID, Attempt: attempt,
+	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeDecision, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, Rule: d.Rule, Reason: d.Reason,
 		Confidence: d.Confidence, Fallback: d.Fallback, Judged: d.Judged})
 	title := step.Title
@@ -1574,6 +1585,9 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	t.addTokens(d.Provider, res.Tokens)
 	if !step.Kind.ReadOnly() {
 		t.noteFiles(dir, res.Files)
+		if res.OK() {
+			t.state.noteAuthor(d.Provider)
+		}
 	}
 	why := "at usage limit"
 	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && (reAuth.MatchString(res.Err.Error()) || strings.Contains(res.Err.Error(), "not found on PATH")) {
@@ -1593,7 +1607,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 		o.emit(event.Event{Kind: event.ProviderState, Provider: d.Provider, Until: until, Text: fmt.Sprintf("%s %s until %s; /limit %s reset to retry", d.Provider, why, until.Format("15:04"), d.Provider)})
 	}
 	tk := res.Tokens
-	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Attempt: attempt,
+	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit,
 		Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files, Text: clip(res.Final, 500)})
 	// Over budget now? Only noted: this agent's work is done, and a task

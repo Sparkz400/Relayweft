@@ -31,6 +31,10 @@ type Client struct {
 	rejected bool
 }
 
+// Rejected reports whether the token got a 401, so later reads went on
+// without it (and a private repository then looks like a 404).
+func (c *Client) Rejected() bool { return c.rejected }
+
 // NewClient returns a client for base with the given token ("" = none).
 // The default transport is kept on purpose: it honours HTTPS_PROXY.
 func NewClient(base, token string) *Client {
@@ -81,19 +85,36 @@ func (c *Client) note(format string, args ...any) {
 // do sends one request; in (if not nil) is sent as JSON and the answer is
 // decoded into out (if not nil).
 func (c *Client) do(method, path string, in, out any) error {
+	resp, err := c.send(method, path, "application/vnd.github+json", in)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("GitHub %s %s: bad response: %w", method, path, err)
+	}
+	return nil
+}
+
+// send sends one request and returns a 2xx response (the caller closes
+// its body); any other status is an *APIError.
+func (c *Client) send(method, path, accept string, in any) (*http.Response, error) {
 	var body []byte
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		body = b
 	}
 	req, err := http.NewRequest(method, c.Base+path, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "switchyard")
 	if in != nil {
@@ -109,16 +130,17 @@ func (c *Client) do(method, path string, in, out any) error {
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("GitHub %s %s: %w", method, path, err)
+		return nil, fmt.Errorf("GitHub %s %s: %w", method, path, err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized && authed && method == http.MethodGet {
 		// A stale token must not block reading a public repository.
+		resp.Body.Close()
 		c.note("note: GitHub rejected the token (401); continuing without it")
 		c.rejected = true
-		return c.do(method, path, in, out)
+		return c.send(method, path, accept, in)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		defer resp.Body.Close()
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		ae := &APIError{Status: resp.StatusCode, Method: method, Path: path, Message: apiMessage(data)}
 		switch resp.StatusCode {
@@ -141,15 +163,9 @@ func (c *Client) do(method, path string, in, out any) error {
 				ae.Hint = "The token may lack the needed permission (pull requests / issues: write)"
 			}
 		}
-		return ae
+		return nil, ae
 	}
-	if out == nil {
-		return nil
-	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("GitHub %s %s: bad response: %w", method, path, err)
-	}
-	return nil
+	return resp, nil
 }
 
 // apiMessage pulls "message" and the per-field "errors" out of an error body.
@@ -190,6 +206,7 @@ type Label struct {
 // User is a GitHub account.
 type User struct {
 	Login string `json:"login"`
+	Type  string `json:"type"` // User, Bot, Organization
 }
 
 // Issue is a GitHub issue (pull requests are issues too; PullRequest is
@@ -223,14 +240,25 @@ type Comment struct {
 
 // Pull is a pull request.
 type Pull struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	Body    string `json:"body"`
-	HTMLURL string `json:"html_url"`
-	Draft   bool   `json:"draft"`
-	Head    struct {
-		Ref string `json:"ref"`
-	} `json:"head"`
+	Number  int     `json:"number"`
+	Title   string  `json:"title"`
+	Body    string  `json:"body"`
+	HTMLURL string  `json:"html_url"`
+	Draft   bool    `json:"draft"`
+	State   string  `json:"state"`  // open or closed
+	Merged  bool    `json:"merged"` // set in single-pull answers only
+	User    User    `json:"user"`
+	Head    PullEnd `json:"head"`
+	Base    PullEnd `json:"base"`
+}
+
+// PullEnd is a pull request's head or base: a branch of a repository.
+type PullEnd struct {
+	Ref  string `json:"ref"`
+	SHA  string `json:"sha"`
+	Repo *struct {
+		FullName string `json:"full_name"`
+	} `json:"repo"` // nil when the head's fork was deleted
 }
 
 // NewPull is a pull request to open.

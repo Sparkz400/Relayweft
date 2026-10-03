@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -145,6 +146,27 @@ func TestRepoFileBudgetOnlyStricterAndWorkspaceNeedsTrust(t *testing.T) {
 	}
 }
 
+// A repo file may lower sy watch's round cap, never raise it.
+func TestRepoFileWatchRoundsOnlyLower(t *testing.T) {
+	isolateTrust(t)
+	for repo, want := range map[string]int{"watch: {max_rounds: 99}\n": 3, "watch: {max_rounds: 1}\n": 1, "watch: {max_rounds: 0}\n": 0} {
+		root := t.TempDir()
+		os.WriteFile(filepath.Join(root, RepoFileName), []byte(repo), 0o644)
+		s := NewStore(Default(), filepath.Join(t.TempDir(), "user.yaml"))
+		if _, err := s.ApplyRepo(root); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Get().Watch.MaxRounds; got != want {
+			t.Errorf("%q: max_rounds = %d, want %d", repo, got, want)
+		}
+	}
+	c := Default()
+	c.Watch.MaxRounds = -1
+	if err := c.Validate(); err == nil {
+		t.Error("negative watch.max_rounds accepted")
+	}
+}
+
 // Trust survives reaching the same file through a symlinked folder.
 func TestTrustThroughSymlink(t *testing.T) {
 	isolateTrust(t)
@@ -161,5 +183,79 @@ func TestTrustThroughSymlink(t *testing.T) {
 	data, _ := os.ReadFile(f)
 	if !IsTrusted(f, data) {
 		t.Fatal("trusted through the link, not trusted by its real path")
+	}
+}
+
+// budget.team.dir decides where sy writes: from a repo file it needs trust,
+// whatever YAML reaches it, while the file's team limits may only tighten.
+func TestRepoFileTeamDirNeedsTrust(t *testing.T) {
+	isolateTrust(t)
+	for name, body := range map[string]string{
+		"plain":     "budget: {team: {dir: /evil/share, day_usd: 3, day_tokens: 900000}}\n",
+		"merge key": "x: &a\n  budget: {team: {dir: /evil/share, day_usd: 3}}\n<<: *a\n",
+		"alias":     "x: &d /evil/share\nbudget: {team: {dir: *d, day_usd: 3}}\n",
+		"alias key": "x: &k budget\n*k : {team: {dir: /evil/share, day_usd: 3}}\n",
+		"loosen":    "budget: {team: {dir: /evil/share, day_usd: 50}}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			repo := filepath.Join(root, RepoFileName)
+			os.WriteFile(repo, []byte(body), 0o644)
+			user := Default()
+			user.Budget.Team = TeamBudgetCfg{Dir: "/mine/share", DayUSD: 10}
+			s := NewStore(user, filepath.Join(t.TempDir(), "user.yaml"))
+			info, err := s.ApplyRepo(root)
+			if err != nil {
+				t.Skipf("yaml rejected the file: %v", err) // also safe
+			}
+			tb := s.Get().Budget.Team
+			if tb.Dir != "/mine/share" {
+				t.Fatalf("untrusted team dir applied: %+v", tb)
+			}
+			if !contains(info.Ignored, "budget.team.dir") {
+				t.Fatalf("ignored %v: the team dir must be reported", info.Ignored)
+			}
+			if tb.DayUSD > 10 || (name != "loosen" && tb.DayUSD != 3) {
+				t.Fatalf("team day_usd = %v (want the stricter one)", tb.DayUSD)
+			}
+		})
+	}
+	// Trusted, the folder applies; the limits still only tighten.
+	root := t.TempDir()
+	repo := filepath.Join(root, RepoFileName)
+	os.WriteFile(repo, []byte("budget: {team: {dir: /team/share, day_usd: 50}}\n"), 0o644)
+	if cmds, _ := CommandSettings(repo); len(cmds) != 1 || !strings.Contains(cmds[0], "/team/share") {
+		t.Fatalf("sy trust must show the team dir: %v", cmds)
+	}
+	if err := Trust(repo); err != nil {
+		t.Fatal(err)
+	}
+	user := Default()
+	user.Budget.Team = TeamBudgetCfg{Dir: "/mine/share", DayUSD: 10}
+	s := NewStore(user, filepath.Join(t.TempDir(), "user.yaml"))
+	if _, err := s.ApplyRepo(root); err != nil {
+		t.Fatal(err)
+	}
+	if tb := s.Get().Budget.Team; tb.Dir != "/team/share" || tb.DayUSD != 10 {
+		t.Fatalf("trusted: %+v", tb)
+	}
+}
+
+func TestTeamFolder(t *testing.T) {
+	t.Setenv("SY_TEAM_TEST", filepath.Join(t.TempDir(), "share"))
+	for _, d := range []string{"$SY_TEAM_TEST/x", "%SY_TEAM_TEST%/x", "${SY_TEAM_TEST}/x"} {
+		got, err := TeamBudgetCfg{Dir: d}.Folder()
+		if err != nil || got != filepath.Join(os.Getenv("SY_TEAM_TEST"), "x") {
+			t.Errorf("%s -> %q %v", d, got, err)
+		}
+	}
+	if _, err := (TeamBudgetCfg{Dir: "relative/share"}).Folder(); err == nil {
+		t.Error("a relative team dir was accepted")
+	}
+	if got, err := (TeamBudgetCfg{}).Folder(); got != "" || err != nil {
+		t.Errorf("off: %q %v", got, err)
+	}
+	if (TeamBudgetCfg{DayUSD: 1}).Limited() || !(BudgetCfg{Team: TeamBudgetCfg{Dir: "/x", DayTokens: 1}}).Any() {
+		t.Error("Limited/Any")
 	}
 }

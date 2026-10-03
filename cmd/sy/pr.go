@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/gh"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
@@ -35,6 +36,8 @@ import (
 //   - The pull request is opened through the GitHub REST API with a token
 //     from GITHUB_TOKEN, GH_TOKEN or `gh auth token`; without one, sy
 //     writes the body to a file and prints the compare URL instead.
+//   - An opened pull request is recorded for sy watch (watch.go), which
+//     follows up on its failed checks and review comments.
 
 // Package vars so tests can drive sy pr without a terminal, network or gh.
 var (
@@ -105,6 +108,7 @@ forced). The PR is opened with a token from GITHUB_TOKEN, GH_TOKEN or
 `+"`gh auth token`"+`; without one the body is written to a file and the compare
 URL is printed. A task that did not finish ok is opened as a draft.
 A multi-repo task gets one PR per repo: --repo <name> picks an extra repo.
+An opened pull request is followed up by sy watch (failed checks, reviews).
 `)
 	}
 	var id string
@@ -268,7 +272,7 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 	if base == "" {
 		base = detectBase(root, client, repo)
 	}
-	body := renderPRBody(st, prBodyOptions{Closes: o.closes, Version: version, Draft: draft})
+	body := renderPRBody(st, prBodyOptions{Closes: o.closes, Version: version, Draft: draft, Template: prTemplate(root)})
 	unreported, unrepErr := unreportedFiles(root, st.UndoKey)
 	ahead, aheadErr := aheadCount(root, base)
 	if o.unattended {
@@ -354,6 +358,15 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 	}
 	res.URL, res.Number = pr.HTMLURL, pr.Number
 	fmt.Fprintf(out, "opened pull request #%d: %s\n", pr.Number, pr.HTMLURL)
+	err = recordWatch(watchEntry{
+		Root: root, Host: repo.Host, Owner: repo.Owner, Name: repo.Name, Number: pr.Number, URL: pr.HTMLURL, Title: title,
+		Branch: branch, Head: commit, Base: base, TaskID: st.ID, Author: st.Author(), API: o.api, Added: time.Now(),
+	})
+	if err != nil {
+		fmt.Fprintf(out, "note: not recorded for sy watch: %v\n", err)
+	} else {
+		fmt.Fprintln(out, "sy watch follows up on its failed checks and review comments")
+	}
 	return res, nil
 }
 
@@ -696,30 +709,72 @@ type prBodyOptions struct {
 	Closes  string // "#12" or "owner/repo#12"
 	Version string
 	Draft   bool
+	// Template is the repo's pull request template: its headings are
+	// filled from the task instead of the default layout (prtemplate.go).
+	Template string
+}
+
+// prParts are the pieces of a pull request description, as Markdown.
+type prParts struct {
+	warning string // the task did not finish ok ("" otherwise)
+	task    string // the task text, fenced
+	summary string // the plan's one-line summary
+	plan    string // the steps table ("" without a plan)
+	result  string // status, summary, checks and cost
+	checks  string // the checks line alone ("" when none ran)
+	footer  string
 }
 
 // renderPRBody writes the pull request description: the task, the plan
-// with each step's result, checks, cost and how to undo it locally.
+// with each step's result, checks, cost and how to undo it locally; laid
+// out by the repo's template when it has one.
 func renderPRBody(st *orchestrator.TaskState, o prBodyOptions) string {
-	var b strings.Builder
-	if st.Status != "done" {
-		fmt.Fprintf(&b, "> [!WARNING]\n> This task did **not** finish successfully (status: **%s**). Review it carefully", st.Status)
-		if o.Draft {
-			b.WriteString("; it is opened as a draft")
-		}
-		b.WriteString(".\n\n")
+	p := renderPRParts(st, o)
+	body := ""
+	if o.Template != "" {
+		body = fillPRTemplate(o.Template, p)
 	}
-	b.WriteString("## Task\n\n")
+	if body == "" {
+		var b strings.Builder
+		b.WriteString(p.warning)
+		b.WriteString("## Task\n\n" + p.task)
+		if p.plan != "" {
+			b.WriteString("\n## Plan\n\n")
+			if p.summary != "" {
+				b.WriteString(p.summary + "\n\n")
+			}
+			b.WriteString(p.plan)
+		}
+		b.WriteString("\n## Result\n\n" + p.result)
+		b.WriteString(p.footer)
+		body = b.String()
+	}
+	// Everything above may quote untrusted text (task, plan, errors, the
+	// template): defuse it, then add the one reference sy means.
+	out := defuseGitHubRefs(body)
+	if o.Closes != "" {
+		out += fmt.Sprintf("\nCloses %s\n", o.Closes)
+	}
+	return out
+}
+
+func renderPRParts(st *orchestrator.TaskState, o prBodyOptions) prParts {
+	var p prParts
+	if st.Status != "done" {
+		p.warning = fmt.Sprintf("> [!WARNING]\n> This task did **not** finish successfully (status: **%s**). Review it carefully", st.Status)
+		if o.Draft {
+			p.warning += "; it is opened as a draft"
+		}
+		p.warning += ".\n\n"
+	}
 	// A fenced block, not a quote: the task (an issue's text, written by
 	// anyone) must not close other issues ("Fixes #7"), @-mention people or
 	// render markup in the PR. Closing keywords and mentions do nothing in
 	// code. The fence is longer than any backtick run in the text.
-	b.WriteString(codeFence(strings.TrimSpace(clipText(st.Task, 4000))))
+	p.task = codeFence(strings.TrimSpace(clipText(st.Task, 4000)))
 	if st.Plan != nil && len(st.Plan.Subtasks) > 0 {
-		b.WriteString("\n## Plan\n\n")
-		if s := strings.TrimSpace(st.Plan.Summary); s != "" {
-			b.WriteString(s + "\n\n")
-		}
+		var b strings.Builder
+		p.summary = strings.TrimSpace(st.Plan.Summary)
 		b.WriteString("| Step | Role | Kind | Result |\n|---|---|---|---|\n")
 		seen := map[string]bool{}
 		row := func(id, title, role, kind string) {
@@ -759,8 +814,9 @@ func renderPRBody(st *orchestrator.TaskState, o prBodyOptions) string {
 			}
 			row(id, title, "auto (router)", "fix")
 		}
+		p.plan = b.String()
 	}
-	b.WriteString("\n## Result\n\n")
+	var b strings.Builder
 	status := st.Status
 	if status != "done" {
 		status = "**" + strings.ToUpper(status) + "**"
@@ -770,23 +826,19 @@ func renderPRBody(st *orchestrator.TaskState, o prBodyOptions) string {
 		fmt.Fprintf(&b, "- Summary: %s\n", mdLine(st.Summary))
 	}
 	if c := checksFrom(st.Summary); c != "" {
-		fmt.Fprintf(&b, "- Checks: %s\n", c)
+		p.checks = fmt.Sprintf("- Checks: %s\n", c)
+		b.WriteString(p.checks)
 	}
 	if st.CostLine != "" {
 		fmt.Fprintf(&b, "- Cost: %s\n", mdLine(st.CostLine))
 	}
+	p.result = b.String()
 	v := o.Version
 	if v == "" {
 		v = "dev"
 	}
-	fmt.Fprintf(&b, "\n---\n<sub>Made with Switchyard (`sy` %s). Task `%s`; undo key `%s` (`sy undo %s` reverts it in the working tree it ran in).</sub>\n", v, st.ID, st.UndoKey, st.UndoKey)
-	// Everything above may quote untrusted text (task, plan, errors):
-	// defuse it, then add the one reference sy means.
-	out := defuseGitHubRefs(b.String())
-	if o.Closes != "" {
-		out += fmt.Sprintf("\nCloses %s\n", o.Closes)
-	}
-	return out
+	p.footer = fmt.Sprintf("\n---\n<sub>Made with Switchyard (`sy` %s). Task `%s`; undo key `%s` (`sy undo %s` reverts it in the working tree it ran in).</sub>\n", v, st.ID, st.UndoKey, st.UndoKey)
+	return p
 }
 
 // reCloseRef finds GitHub closing keywords followed by an issue reference

@@ -49,6 +49,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/pause", s.handlePause)
 	mux.HandleFunc("POST /api/kill", s.handleKill)
 	mux.HandleFunc("POST /api/approvals/{id}/plan", s.handlePlan)
+	mux.HandleFunc("POST /api/approvals/{id}/estimate", s.handleEstimate)
 	mux.HandleFunc("POST /api/approvals/{id}/changes", s.handleChanges)
 	mux.HandleFunc("POST /api/approvals/{id}/budget", s.handleBudget)
 	mux.HandleFunc("POST /api/schedule", s.handleSchedule)
@@ -277,6 +278,26 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		msg = fmt.Sprintf("plan approved: %d subtasks", len(p.Subtasks))
 	}
 	writeJSON(w, map[string]any{"message": msg, "plan": p})
+}
+
+// handleEstimate re-estimates a waiting plan as edited on the page.
+func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Plan orchestrator.Plan `json:"plan"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	e, err := s.ap.EstimatePlan(r.PathValue("id"), req.Plan)
+	if err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, errNoRequest) {
+			code = http.StatusGone
+		}
+		fail(w, code, err)
+		return
+	}
+	writeJSON(w, e)
 }
 
 func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {

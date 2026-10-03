@@ -1,0 +1,10 @@
+# Only out/ (without tests), media/, package.json, README.md and LICENSE
+# go into the .vsix. The extension has no runtime npm dependencies.
+src/**
+out/test/**
+**/*.map
+**/*.ts
+tsconfig.json
+.gitignore
+node_modules/**
+package-lock.json

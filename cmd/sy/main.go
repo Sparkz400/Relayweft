@@ -71,6 +71,10 @@ func main() {
 		err = cmdUndo(args)
 	case "pr":
 		err = cmdPR(args)
+	case "watch":
+		err = cmdWatch(args)
+	case "review":
+		err = cmdReview(args)
 	case "bench":
 		err = cmdBench(args)
 	case "tune":
@@ -128,6 +132,7 @@ Usage:
   sy run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
   sy run --file tasks.txt    run a list of tasks one after another, unattended
   sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
+  sy run --estimate "task"   plan only: print the plan with estimated tokens, time and $ per step, run nothing
   sy run --issue <N|URL> [--with-comments] [--pr]   run a GitHub issue as the task; --pr opens a PR (Closes #N)
   sy run --issues label:<name> [--limit 5] --pr     run open labelled issues one after another, unattended
                              (needs --pr and a clean working tree; each task's changes go to its PR branch and
@@ -135,6 +140,11 @@ Usage:
                              or if a PR would hold files no agent reported or commits not on origin)
   sy pr [task] [--base main] [--branch name] [--draft] [--title t] [--no-push] [--yes]
                              branch + commit + GitHub pull request from a finished task (index/worktree untouched)
+  sy watch [--every 15m] [--dir repo]   follow up on the PRs sy opened: failed checks and review comments get
+                             a task on the PR branch in a separate checkout, pushed (never forced) with a reply
+  sy watch --list | --forget <n>          list the watched pull requests, or stop watching one
+  sy review <PR> [--provider codex|claude] [--post] [--yes]   read-only agent review of a pull request
+                             (default: the provider that did not write it); --post: one comment review, inline
   sy run --at 02:30 | --in 3h | --when-reset claude|codex|any  [--file tasks.txt | "task"]
                              start later, unattended (PC kept awake; --allow-sleep to opt out)
   sy schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)
@@ -142,7 +152,10 @@ Usage:
   sy resume [task id]        continue an interrupted task (default: the last one here)
   sy report [task id] [--out f.html] [--md] [--open]   one shareable page per task (default: the last one here)
   sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline
+  sy stats --json [--since 7d] [--out f.json] [--name label] [--with-tasks]   this machine's usage as a JSON export
+  sy stats --merge a.json b.json ... | <folder>   combined tables of several machines' exports, per machine too
   sy tune [--here] [--since 7d]    routing suggestions from your logs
+  sy tune --apply | --learned | --reset   update, show or forget this repo's learned routes (routing.learn)
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
   sy doctor                  check CLIs, versions, git and terminal
   sy init [--global] [--force] [--print]   write the commented default config
@@ -247,6 +260,11 @@ func (c *common) setup() (*config.Store, string, error) {
 	if len(info.Ignored) > 0 {
 		fmt.Fprintf(os.Stderr, "note: %s sets %s, which run commands; they are ignored until you review and trust the file: sy trust\n",
 			info.Path, strings.Join(info.Ignored, ", "))
+	}
+	// Learned routes sit between your config and the repo file: the roles
+	// the file (above) or a flag (below) sets keep that setting.
+	if _, err := orchestrator.ApplyLearned(store, dir); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: learned routes not used:", err)
 	}
 	for _, r := range c.routes {
 		role, spec, ok := strings.Cut(r, "=")
@@ -483,8 +501,10 @@ func printEvent(e event.Event, quiet bool) {
 	}
 }
 
+// oneLine is s on one line of at most n bytes, without control characters
+// (it often prints text from agents, GitHub or other machines).
 func oneLine(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
+	s = strings.Join(strings.Fields(sessionlog.StripControl(s)), " ")
 	if len(s) > n {
 		return s[:n] + "…"
 	}
@@ -496,10 +516,34 @@ func cmdStats(args []string) error {
 	cfgPath := fs.String("config", "", "config file")
 	here := fs.Bool("here", false, "only sessions run in the current directory")
 	since := fs.String("since", "", "only records newer than this (e.g. 24h, 7d)")
-	fs.Parse(args)
+	var ex statsExportFlags
+	ex.register(fs)
+	// Flags may follow the --merge files.
+	var files []string
+	for rest := args; ; rest = fs.Args()[1:] {
+		fs.Parse(rest)
+		if fs.NArg() == 0 {
+			break
+		}
+		files = append(files, fs.Arg(0))
+	}
+	if err := ex.check(files); err != nil {
+		return err
+	}
 	cfg, _, err := config.Load(*cfgPath)
 	if err != nil {
 		return err
+	}
+	if ex.merge {
+		var from time.Time
+		if *since != "" {
+			d, err := parseSince(*since)
+			if err != nil {
+				return err
+			}
+			from = time.Now().Add(-d)
+		}
+		return mergeExports(cfg, files, from)
 	}
 	recs, err := sessionlog.ReadDir(cfg.SessionDir())
 	if err != nil {
@@ -515,6 +559,9 @@ func cmdStats(args []string) error {
 			return err
 		}
 		f.Since = time.Now().Add(-d)
+	}
+	if ex.json {
+		return ex.export(recs, f)
 	}
 	st := sessionlog.Aggregate(recs, f)
 	st.DayLimitUSD, st.DayLimitTokens = cfg.Budget.DayUSD, cfg.Budget.DayTokens

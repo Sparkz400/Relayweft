@@ -86,6 +86,8 @@ routing:
   judge: false                     # rule-less cases ask the judge model (costs a little quota)
   judge_below_confidence: 0.65
   switch_at_utilization: 0.9       # move work to the other provider once one reports this share of its limit used (0 = off)
+  learn: suggest                   # learned routes per repo: auto (refresh daily at task start) | suggest (only `sy tune --apply`) | off
+  learn_min_samples: 8             # runs (recent ones count more) a route needs before it is learned
 
 orchestrator:
   max_threads: 3                   # parallel agents at once
@@ -163,6 +165,28 @@ budget:
   day_tokens: 0
   day_usd: 0
   warn_at: 0.8                     # warn once when a limit is this full
+  # A day budget shared by several machines: each writes its own usage
+  # (<machine id>.json, the `sy stats --json` format, no task texts) to this
+  # folder after every task, and checks every machine's total for today
+  # before an agent starts. A OneDrive or network folder; ~ and %VAR% work.
+  team:
+    dir: ""                        # "" = off
+    day_tokens: 0
+    day_usd: 0
+
+# What the planner and the final reviewer learn from the repo's own docs:
+# CONTRIBUTING, the PR template, CODEOWNERS, CI workflow commands (as hints,
+# never run), AGENTS.md / CLAUDE.md. Summarized without a model call and
+# marked as untrusted repo data in the prompt.
+context:
+  repo_docs: true
+  repo_docs_max_kb: 8              # total size of the summary
+
+# sy watch: after sy pr opened a pull request, failed checks and review
+# comments (changes requested) get a follow-up task on the PR's branch,
+# pushed to it (never forced). At most this many per pull request.
+watch:
+  max_rounds: 3
 
 # Text that means "usage limit reached" (case-insensitive regular expressions).
 limit_patterns:
