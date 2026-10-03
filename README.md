@@ -4,8 +4,11 @@ A Windows-first, animated terminal app that routes coding work between your **Ch
 
 ```
 sy            # start the TUI in your project
+sy web        # the same engine in your browser (sy app: in its own window)
 sy --demo     # see the whole thing animate with fake agents (no CLIs, no quota)
 ```
+
+![sy web: agent tree and live activity](docs/web/running.png)
 
 Switchyard uses **subscriptions only**. It never touches API keys or tokens; it drives the official `codex` and `claude` CLIs exactly as you would, with their normal login.
 
@@ -70,9 +73,13 @@ With the defaults, two more steps involve you or your repo's checks:
 ## Working with it every day
 
 - **Approve the plan.** The plan opens for you before anything runs. You can delete, reorder or reword subtasks, pin a subtask to a role, or cancel. Turn it off with `/approve off` or `orchestrator.approve_plan: false`. Small tasks (one step) skip it.
-- **Review changes before they land** (opt-in: `/review-changes on` or `orchestrator.review_changes: true`). Each writing agent's result is shown file by file with its diff. You can accept everything, accept only some files, reject it, or send it back with feedback; the agent then continues in its own worktree and you see the new result. Rejected or partly-accepted work is kept on a `sy/...` branch.
+- **Review changes before they land** (opt-in: `/review-changes on` or `orchestrator.review_changes: true`). Each writing agent's result is shown file by file with its diff. You can accept everything, accept only some files or only some hunks of a file, reject it, or send it back with feedback. With feedback, the agent continues in its own worktree and you see the new result. Rejected or partly-accepted work is kept on a `sy/...` branch.
+- **Edit the plan's order.** In the plan view, `x` edits a step's dependencies. Cycles are refused.
 - **Agents run your tests.** `sy init` detects your checks (`go test`, `npm test`/`pnpm`/`yarn`, `pytest`, `cargo test`, `dotnet test`, Maven, Gradle) and writes them to `verify.commands`. Claude workers may run exactly these commands without asking, Codex workers already can in their sandbox, and Switchyard runs them itself before the final review. Change them with `/verify`.
-- **Follow up.** `@worker-id also handle the empty case` (or `@ message` for the last agent) continues that agent's own CLI conversation (`codex exec resume` / `claude --resume`), so it remembers what it did. If the conversation can't be resumed, a fresh agent on the same route gets the earlier task and answer as context.
+- **Follow up.** `@worker-id also handle the empty case` (or `@ message` for the last agent) continues that agent's own CLI conversation (`codex exec resume` / `claude --resume`), so it remembers what it did.
+  - If the conversation can't be resumed, a fresh agent on the same route gets the earlier task and answer as context.
+  - Agents are remembered per project across restarts.
+  - Sending `@agent` to an agent that is **still running** delivers the message when its current turn ends, before its work is merged.
 - **Queue tasks.** Submitting while a task runs queues the new one (`/queue` to list, `/queue rm <n>`, `/queue clear`). Queued tasks run one after another, unattended: no approvals. Headless, use `sy run --file tasks.txt`, one task per line or blocks separated by `---`.
 - **History and resume.** Every task's plan and per-step results are saved as it runs. If `sy`, the terminal or the PC dies mid-task, `sy resume` (or `/resume`) continues it: finished steps are skipped and the rest runs, then verify and review. `sy history` (or `/history`) lists recent tasks with status and cost.
 - **Notifications.** A desktop notification (a Windows toast, macOS Notification Center or `notify-send`) when a task that ran at least `notify.min_task` (1 minute) finishes or fails, when a provider hits its limit, and when `sy` waits for your approval.
@@ -160,6 +167,9 @@ sy history [--all] [-n 20]            recent tasks: status, steps done, cost; ma
 sy resume [task id] [--force]         continue an interrupted task (default: the last one in this directory)
 sy tune [--here] [--since 7d]         routing suggestions from your own logs, as ready-to-paste commands
 sy update [--check] [--yes]           update sy to the latest GitHub release (checksum-verified)
+sy web / sy app [--port N] [--demo]   the browser UI / the same in its own window
+sy init --repo                        write this repo's .switchyard.yaml (shared settings)
+sy trust [--revoke]                   review and trust the commands in this repo's .switchyard.yaml
 sy undo [--list] [--redo] [--yes] [task]   revert a task's changes (preview first), or put them back
 sy bench [--init] [--file bench.yaml] [--only a,b]   routed vs single agents on your own tasks
 sy bench --starter <dir>              a ready-made 5-task Python benchmark repo
@@ -190,7 +200,9 @@ Every task in a git repo records the working tree before and after it ran. The s
 
 It uses real quota, so it asks first.
 
-No tasks of your own yet? `sy bench --starter bench-starter` creates a small Python repo with five tasks (two bug fixes, a parser feature, a CLI flag and a read-only question), each with a check script. Then run `cd bench-starter && sy bench`. It needs Python 3.
+No tasks of your own yet? `sy bench --starter bench-starter` creates a small Python repo with five tasks (two bug fixes, a parser feature, a CLI flag and a read-only question), each with a check script. Then run `cd bench-starter && sy bench`. It needs Python 3. The `routed-nohandoff` mode runs the same routes without the context hand-off, to measure what it saves.
+
+First results (Claude only): [docs/bench](docs/bench/2026-10-03-starter-claude.md). On tasks this small a single agent is faster and cheaper. Skipping the review of one-step plans, now the default, cut routed time by 32% and tokens by 23%.
 
 ### Tune: let your logs pick the routes
 
@@ -272,9 +284,41 @@ Switchyard should never be what tips a PC over.
 - **Killing.** Each agent runs in its own process group (Unix) or is killed with `taskkill /T` (Windows). On Windows, `sy` also puts itself in a kill-on-close job object, so no agent outlives `sy`, even after a crash.
 - **Session log.** Append-only JSONL in `%AppData%\switchyard\sessions` (`~/.config/switchyard/sessions` on Linux; `~/Library/Application Support/switchyard/sessions` on macOS). It records every decision, agent run (tokens, time, outcome), review, merge and limit hit. `sy stats` reads it; demo mode never writes it.
 
+## The browser UI: `sy web` and `sy app`
+
+`sy web` runs the same engine as the TUI behind a page in your browser. `sy app` opens that page in its own window, using Edge or Chrome in app mode, so you need nothing extra. The page has:
+- the agent tree;
+- a filterable activity log;
+- the plan editor (drag to reorder, edit prompts, kinds, roles and dependencies);
+- change review with per-hunk checkboxes;
+- routes and models, settings, history and resume, the queue, and stats with `sy tune` suggestions;
+- dark and light themes.
+
+The server listens on 127.0.0.1 only. Every run gets a new random token, which goes in the link `sy` opens for you. Requests from other sites and other host names are refused.
+
+| | |
+|---|---|
+| ![plan approval](docs/web/plan-approval.png) | ![change review](docs/web/change-review.png) |
+
 ## Configuration
 
 `sy` looks for `./switchyard.yaml`, then `<user config dir>/switchyard/switchyard.yaml`, then falls back to the built-in default (the file in this repo). Partial files work: anything you leave out keeps its default. See [`switchyard.yaml`](switchyard.yaml) for every option with comments.
+
+### Per-repo settings: `.switchyard.yaml`
+
+A `.switchyard.yaml` in a repository holds the settings for that repo (in the repo root, or in the project folder). It is layered over your own config: built-in defaults < your config < the repo file < command-line flags. It only needs what the repo cares about; roles merge per key, so `roles: {worker: {prefer: claude}}` keeps the worker's routes.
+
+- Create one with `sy init --repo`, which detects the test commands, or with `/save repo` from the TUI. Commit it to share.
+- **Commands need your trust.** The parts that run commands on your machine are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers` and `log_dir`. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
+
+### Hooks
+
+Your own commands run around every task (`hooks:` in the config):
+- `before_task`: if it fails, the task does not start.
+- `after_merge`: after each agent's changes land in your tree.
+- `after_task`: after every end (done, failed or cancelled).
+
+They run in the project folder through the system shell. They get `SY_TASK`, `SY_TASK_ID`, `SY_DIR`, `SY_STATUS`, `SY_SUMMARY`, `SY_STEP` and `SY_FILES`. Typical uses are a formatter after every merge or a linter after the task.
 
 ## Development
 
