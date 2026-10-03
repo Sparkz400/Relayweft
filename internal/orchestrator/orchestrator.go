@@ -1091,10 +1091,7 @@ func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
 }
 
 func (o *Orchestrator) keepBranch(t *task, stepID, commit string) string {
-	branch := fmt.Sprintf("sy/%s/%s/%s", o.opts.Log.Session(), t.id, stepID)
-	if _, err := (git{t.root}).out("branch", "-f", branch, commit); err != nil {
-		return commit[:min(12, len(commit))]
-	}
+	branch := o.saveBranch(t, stepID, commit)
 	t.kept = append(t.kept, branch)
 	return branch
 }

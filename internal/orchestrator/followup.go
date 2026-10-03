@@ -65,10 +65,16 @@ func (o *Orchestrator) Sessions() []AgentSession {
 }
 
 // Session returns the remembered session of an agent. "" or "last" picks
-// the newest one.
+// the newest agent that worked on a step (not a reviewer or the judge),
+// else the newest one.
 func (o *Orchestrator) Session(agentID string) (AgentSession, bool) {
 	if agentID == "" || agentID == "last" {
 		all := o.Sessions()
+		for _, s := range all {
+			if s.Role != event.RoleReviewer && s.Role != event.RoleJudge && s.Role != event.RolePlanner {
+				return s, true
+			}
+		}
 		if len(all) == 0 {
 			return AgentSession{}, false
 		}

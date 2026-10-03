@@ -419,3 +419,34 @@ func TestCodexRateLimitsBecomeQuota(t *testing.T) {
 		t.Errorf("unexpected events %+v", evs)
 	}
 }
+
+func TestSessionIDsAndResumeArgs(t *testing.T) {
+	var r Result
+	cp := &codexParser{}
+	feed(t, cp, "codex_exec.jsonl")
+	cp.Finish(&r)
+	if r.SessionID != "0199a213-81c0-7800-8aa1-bbab2a035a53" {
+		t.Errorf("codex session = %q", r.SessionID)
+	}
+	cfg := config.Default()
+	cx := strings.Join(CodexArgs(cfg.Providers[event.Codex], Spec{Model: "m", Effort: "high", Dir: "/w", Resume: "T1"}), " ")
+	if !strings.HasPrefix(cx, "exec resume --json") || !strings.HasSuffix(cx, "T1 -") || strings.Contains(cx, "--sandbox") || strings.Contains(cx, "-C ") {
+		t.Errorf("codex resume args: %s", cx)
+	}
+	cl := ClaudeArgs(cfg.Providers[event.Claude], Spec{Model: "opus", Resume: "S1", AllowedCommands: []string{"go test ./..."}})
+	j := strings.Join(cl, " ")
+	if !strings.Contains(j, "--resume S1") || !strings.Contains(j, "Bash(go test ./...)") || !strings.Contains(j, "Bash(go test ./... *)") {
+		t.Errorf("claude args: %q", cl)
+	}
+}
+
+func TestClaudeSessionID(t *testing.T) {
+	p := &claudeParser{}
+	p.Line([]byte(`{"type":"system","subtype":"init","session_id":"abc-123","model":"opus"}`))
+	p.Line([]byte(`{"type":"result","subtype":"success","result":"OK","session_id":"abc-123","usage":{"input_tokens":1,"output_tokens":1}}`))
+	var r Result
+	p.Finish(&r)
+	if r.SessionID != "abc-123" {
+		t.Errorf("claude session = %q", r.SessionID)
+	}
+}
