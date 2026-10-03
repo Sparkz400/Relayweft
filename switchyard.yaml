@@ -85,6 +85,7 @@ routing:
   sensitive_paths: [auth, login, password, secret, payment, billing, migration, migrations, crypto, security]
   judge: false                     # rule-less cases ask the judge model (costs a little quota)
   judge_below_confidence: 0.65
+  switch_at_utilization: 0.9       # move work to the other provider once one reports this share of its limit used (0 = off)
 
 orchestrator:
   max_threads: 3                   # parallel agents at once
@@ -99,6 +100,15 @@ orchestrator:
   max_attempts: 3                  # per subtask, not counting limit fallbacks
   agent_timeout: 30m
   small_task_words: 12             # tasks shorter than this skip planning and run as one worker step
+
+  # Machine protection: sy should never be what tips your PC over.
+  low_priority: true               # agents and git run below normal CPU priority
+  max_cpu_percent: 90              # while the machine is busier than this, no new agent starts (0 = off)
+  min_free_memory_mb: 1024         # ... or has less free RAM than this (0 = off)
+  busy_max_wait: 2m                # start anyway after waiting this long
+  min_free_disk_gb: 10             # never create a pool worktree below this much free disk (falls back to your tree)
+  pool_warn_gb: 20                 # warn when this repo's worktree pool grows beyond this
+  pool_max_idle: 336h              # pool worktrees unused this long are removed (14 days; 0 = keep)
 
 # Text that means "usage limit reached" (case-insensitive regular expressions).
 limit_patterns:

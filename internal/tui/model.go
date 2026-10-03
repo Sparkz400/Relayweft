@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/harmonica"
 	"github.com/sparkz400/switchyard/internal/config"
+	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 )
@@ -150,6 +152,7 @@ type Model struct {
 	taskStart  time.Time
 	result     string
 	resultOK   bool
+	cost       string
 	cancelTask context.CancelFunc
 	cancelling bool
 	taskDone   chan struct{}
@@ -391,6 +394,14 @@ func (m *Model) handleEvent(e event.Event) {
 		}
 		main.ended = time.Now()
 		m.addLog(logLine{ts: e.Timestamp, kind: e.Kind, text: fmt.Sprintf("%s task finished in %s: %s", mark, time.Since(m.taskStart).Round(time.Second), e.Text)})
+		m.cost = ""
+		if e.Cost != nil {
+			m.cost = e.Cost.Summary()
+			m.addLog(logLine{ts: e.Timestamp, kind: event.Log, text: "cost: " + m.cost})
+		}
+		if !m.opt.Demo {
+			m.addLog(logLine{ts: e.Timestamp, kind: event.Log, text: "not happy with the result? /undo shows what undoing this task would change"})
+		}
 		m.focus = focusPrompt
 		m.input.Focus()
 		return
@@ -660,8 +671,19 @@ func (m *Model) focusable() []string {
 	return append(ids, orchestrator.AgentReviewer)
 }
 
-// Update implements tea.Model.
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+// Update implements tea.Model. A panic is written to a crash log, then
+// re-raised so Bubble Tea restores the terminal before sy exits.
+func (m *Model) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
+	defer func() {
+		if r := recover(); r != nil {
+			diag.Crash("tui update", r, debug.Stack())
+			panic(r)
+		}
+	}()
+	return m.update(msg)
+}
+
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -677,6 +699,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitEvents(m.opt.Events)
 	case submitMsg:
 		m.startTask(string(msg))
+		return m, nil
+	case undoMsg:
+		for _, l := range msg {
+			m.addLog(logLine{kind: event.Log, text: l})
+		}
 		return m, nil
 	case submitCheckMsg:
 		text, ok := m.input.confirm(msg)

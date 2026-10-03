@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
 )
 
@@ -21,6 +22,7 @@ var helpText = []string{
 	"/limit <codex|claude> [reset|set]    clear or set a provider's usage-limit state",
 	"/threads <n> · /parallel on|off · /review on|off · /judge on|off",
 	"/pause · /resume · /kill <agent> · /cancel · /clear · /usage",
+	"/undo [yes] · /redo [yes]          preview, then revert (or re-apply) the last task's changes",
 	"roles: " + strings.Join(event.Roles, ", "),
 	"keys (agents focused): tab next · k k kill · p pause · x cancel · l log · m models · q quit",
 	"anywhere: ctrl+x cancel task · ctrl+o models · alt+enter new line in the prompt · pasting multi-line text never submits",
@@ -164,6 +166,13 @@ func (m *Model) command(line string) tea.Cmd {
 			}
 			say("%s: %d calls · %s in / %s out%s%s", p, s.Calls, sessionlog.Human(s.Tokens.Input), sessionlog.Human(s.Tokens.Output), q, lim)
 		}
+	case "undo", "redo":
+		if m.running {
+			say("a task is running - cancel it first (ctrl+x), then /%s", cmd)
+			return nil
+		}
+		say("%s: checking the working tree...", cmd)
+		return undoCmd(m.opt.Dir, cmd == "redo", len(args) == 1 && args[0] == "yes")
 	case "quit", "exit", "q":
 		_, c := m.tryQuit()
 		return c
@@ -194,4 +203,51 @@ func onOff(args []string) (bool, bool) {
 		return false, true
 	}
 	return false, false
+}
+
+// undoMsg carries the lines an undo or redo produced.
+type undoMsg []string
+
+// undoCmd previews or applies an undo/redo off the UI thread: snapshots and
+// restores in a big repo can take a while.
+func undoCmd(dir string, redo, apply bool) tea.Cmd {
+	return func() tea.Msg {
+		verb := map[bool]string{true: "redo", false: "undo"}[redo]
+		var out []string
+		say := func(format string, a ...any) { out = append(out, fmt.Sprintf(format, a...)) }
+		if apply {
+			plan, err := orchestrator.Undo(dir, "", redo, false)
+			if err != nil {
+				say("%s failed, nothing was changed: %v", verb, err)
+				return undoMsg(out)
+			}
+			say("%s done: %d file(s) for task %q (%s)", verb, len(plan.Changes), oneLine(plan.Task.Task, 60), plan.Task.Key)
+			if !redo {
+				say("changed your mind? /redo yes puts the task's changes back")
+			}
+			return undoMsg(out)
+		}
+		plan, err := orchestrator.PreviewUndo(dir, "", redo)
+		if err != nil {
+			say("%v", err)
+			return undoMsg(out)
+		}
+		say("%s task %q from %s would change %d file(s):", verb, oneLine(plan.Task.Task, 60), plan.Task.When.Format("Jan 2 15:04"), len(plan.Changes))
+		for i, c := range plan.Changes {
+			if i == 15 {
+				say("  ... and %d more", len(plan.Changes)-15)
+				break
+			}
+			say("  %s", c)
+		}
+		if len(plan.Edited) > 0 {
+			say("you edited %d of these after the task; your edits are kept (3-way merge, nothing is written on a conflict)", len(plan.Edited))
+		}
+		if len(plan.Unreported) > 0 {
+			say("no agent reported changing %s - possibly your own edits during the task; `sy undo --agent-files-only` leaves them alone",
+				strings.Join(plan.Unreported, ", "))
+		}
+		say("type /%s yes to apply", verb)
+		return undoMsg(out)
+	}
 }

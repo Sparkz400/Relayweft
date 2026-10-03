@@ -194,3 +194,18 @@ func (t *Tracker) Share(p string) float64 {
 	}
 	return float64(t.state[p].Tokens.Total()) / float64(total)
 }
+
+// Utilization returns the provider-reported share of its limit in use. A
+// reading whose window has already reset is ignored.
+func (t *Tracker) Utilization(p string) (float64, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s, ok := t.state[p]
+	if !ok || s.Quota == nil {
+		return 0, false
+	}
+	if !s.Quota.ResetsAt.IsZero() && !t.now().Before(s.Quota.ResetsAt) {
+		return 0, false
+	}
+	return s.Quota.Utilization, true
+}

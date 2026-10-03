@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -78,10 +79,32 @@ func TryLock(path string) (unlock func(), ok bool) {
 	return func() { f.Close() }, true
 }
 
+// lowPriority runs agents and git below normal CPU priority (set from
+// orchestrator.low_priority). Their children inherit it, so a busy agent
+// tree slows itself down instead of the rest of the machine.
+var lowPriority atomic.Bool
+
+func init() { lowPriority.Store(true) }
+
+// SetLowPriority turns low-priority children on or off.
+func SetLowPriority(on bool) { lowPriority.Store(on) }
+
 // Prepare configures cmd so cancelling its context kills the whole tree.
 func Prepare(cmd *exec.Cmd) {
 	prepare(cmd)
 	cmd.WaitDelay = 5 * time.Second
+}
+
+// Background configures a short helper command (git): no console window and,
+// with LowPriority, below-normal priority. Call Started after Start.
+func Background(cmd *exec.Cmd) { background(cmd) }
+
+// Started applies settings that need a running process (Unix nice). Errors
+// are ignored: priority is best effort.
+func Started(cmd *exec.Cmd) {
+	if lowPriority.Load() && cmd.Process != nil {
+		lower(cmd.Process.Pid)
+	}
 }
 
 // Guard makes sure child processes die with this process (a Windows job

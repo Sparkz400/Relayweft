@@ -10,10 +10,15 @@ import (
 type state struct {
 	limited map[string]bool
 	share   map[string]float64
+	util    map[string]float64
 }
 
 func (s state) Limited(p string) bool  { return s.limited[p] }
 func (s state) Share(p string) float64 { return s.share[p] }
+func (s state) Utilization(p string) (float64, bool) {
+	u, ok := s.util[p]
+	return u, ok
+}
 
 func newRouter(st state) *Router {
 	cfg := config.Default()
@@ -143,5 +148,30 @@ func TestPlannerPreferOtherDoesNotRecurse(t *testing.T) {
 	}
 	if d := r.Route(Step{Kind: KindReview}); d.Provider == "" {
 		t.Error("no provider")
+	}
+}
+
+func TestQuotaPreempt(t *testing.T) {
+	r := newRouter(state{util: map[string]float64{event.Codex: 0.95}})
+	d := r.Route(Step{Kind: KindEdit, Prompt: "fix it"})
+	if d.Provider != event.Claude || d.Rule != RuleQuota || !d.Fallback || d.Role != event.RoleWorker {
+		t.Fatalf("near-limit codex should hand the worker to claude: %+v", d)
+	}
+	// Both nearly full: stay where the role prefers if the other is fuller.
+	r = newRouter(state{util: map[string]float64{event.Codex: 0.92, event.Claude: 0.97}})
+	if d := r.Route(Step{Kind: KindEdit, Prompt: "fix it"}); d.Provider != event.Codex || d.Rule == RuleQuota {
+		t.Fatalf("other provider is fuller, should stay: %+v", d)
+	}
+	// Below the threshold nothing changes.
+	r = newRouter(state{util: map[string]float64{event.Codex: 0.5}})
+	if d := r.Route(Step{Kind: KindEdit, Prompt: "fix it"}); d.Provider != event.Codex {
+		t.Fatalf("%+v", d)
+	}
+	// Off when the threshold is 0.
+	cfg := config.Default()
+	cfg.Routing.SwitchAtUtilization = 0
+	r = &Router{Cfg: func() *config.Config { return cfg }, State: state{util: map[string]float64{event.Codex: 0.99}}}
+	if d := r.Route(Step{Kind: KindEdit, Prompt: "fix it"}); d.Provider != event.Codex {
+		t.Fatalf("switching disabled but switched: %+v", d)
 	}
 }

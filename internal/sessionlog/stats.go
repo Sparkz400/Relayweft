@@ -48,6 +48,7 @@ type Stats struct {
 	Approved  int
 	Merges    int
 	MergeFail int
+	Recent    []Record // newest task_end records (with cost), newest first
 }
 
 // Filter selects records.
@@ -110,6 +111,7 @@ func Aggregate(recs []Record, f Filter) Stats {
 		case TypeTask:
 			taskMode[r.Session+"/"+r.TaskID] = r.Mode
 		case TypeTaskEnd:
+			s.Recent = append(s.Recent, r)
 			mode := r.Mode
 			if mode == "" {
 				mode = taskMode[r.Session+"/"+r.TaskID]
@@ -151,6 +153,10 @@ func Aggregate(recs []Record, f Filter) Stats {
 		s.Modes = append(s.Modes, m)
 	}
 	sort.Slice(s.Modes, func(i, j int) bool { return s.Modes[i].Mode < s.Modes[j].Mode })
+	sort.Slice(s.Recent, func(i, j int) bool { return s.Recent[i].TS.After(s.Recent[j].TS) })
+	if len(s.Recent) > 10 {
+		s.Recent = s.Recent[:10]
+	}
 	return s
 }
 
@@ -211,6 +217,41 @@ func (s Stats) Print(w io.Writer) {
 		}
 		tw.Flush()
 	}
+	s.printRecent(w)
+}
+
+// printRecent lists the newest tasks with what each one cost.
+func (s Stats) printRecent(w io.Writer) {
+	if len(s.Recent) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\nRecent tasks (fresh tokens; $ is Claude's API-equivalent price, not billed on a subscription)")
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "  WHEN\tMODE\tOK\tWALL\tCODEX\tCLAUDE\t$\tTASK")
+	for _, r := range s.Recent {
+		ok := "yes"
+		if r.OK == nil || !*r.OK {
+			ok = "no"
+		}
+		var cx, cl int64
+		var usd float64
+		if r.Cost != nil {
+			cx = r.Cost.PerProvider[event.Codex].Total()
+			cl = r.Cost.PerProvider[event.Claude].Total()
+			usd = r.Cost.CostUSD
+		}
+		task := strings.Join(strings.Fields(r.Task), " ")
+		if len(task) > 50 {
+			task = task[:50] + "..."
+		}
+		mode := r.Mode
+		if r.Bench != "" {
+			mode += " (bench)"
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%s\n", r.TS.Format("Jan 2 15:04"), mode, ok,
+			(time.Duration(r.DurationMS) * time.Millisecond).Round(time.Second), human(cx), human(cl), usd, task)
+	}
+	tw.Flush()
 }
 
 func roles(m map[string]int) string {

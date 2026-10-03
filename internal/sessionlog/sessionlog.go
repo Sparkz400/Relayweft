@@ -53,6 +53,9 @@ type Record struct {
 	Tokens     *event.TokenUsage `json:"tokens,omitempty"`
 	DurationMS int64             `json:"duration_ms,omitempty"`
 	Files      []string          `json:"files,omitempty"`
+	Cost       *event.TaskCost   `json:"cost,omitempty"`  // task_end
+	Bench      string            `json:"bench,omitempty"` // task name in a `sy bench` run
+	Passed     *bool             `json:"passed,omitempty"`
 }
 
 // Bool returns a pointer for Record.OK.

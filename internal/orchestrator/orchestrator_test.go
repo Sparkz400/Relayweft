@@ -18,6 +18,7 @@ import (
 	"github.com/sparkz400/switchyard/internal/router"
 	"github.com/sparkz400/switchyard/internal/runner"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/switchyard/internal/sysload"
 )
 
 type recorder struct {
@@ -75,6 +76,8 @@ func newOrc(t *testing.T, dir string, set runner.Set, edit func(*config.Config))
 		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "sy.yaml")),
 		Runners: func(*config.Config) runner.Set { return set }, Tracker: limits.NewTracker(),
 		Log: log, Events: ch, NoGit: dir == "",
+		// Tests must not depend on how busy the machine running them is.
+		Load: func() sysload.Sample { return sysload.Sample{} },
 	})
 	return o, rec
 }

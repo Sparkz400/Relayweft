@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
@@ -92,6 +94,16 @@ func (m *Model) route(provider, model string) string {
 
 // View implements tea.Model.
 func (m *Model) View() string {
+	defer func() {
+		if r := recover(); r != nil {
+			diag.Crash("tui view", r, debug.Stack())
+			panic(r)
+		}
+	}()
+	return m.view()
+}
+
+func (m *Model) view() string {
 	if m.width == 0 {
 		return "starting switchyard…"
 	}
@@ -677,6 +689,9 @@ func (m *Model) viewBack(cw int) string {
 			g = th.fg(th.FailColor).Render(th.G.Fail + " ")
 		}
 		text += g + th.fg(th.Text).Render(m.result)
+		if m.cost != "" {
+			text += th.fg(th.Muted).Render(" · " + m.cost)
+		}
 	case m.phase == "review" || m.phase == "fix":
 		text += th.fg(th.Reviewer).Render(m.phase + "…")
 	default:

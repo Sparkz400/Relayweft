@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -20,6 +21,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sparkz400/switchyard/internal/config"
+	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/limits"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
@@ -40,6 +42,13 @@ func main() {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		sub, args = args[0], args[1:]
 	}
+	switch sub {
+	case "version", "--version", "help", "-h", "--help":
+	default:
+		startDiag(sub)
+		defer diag.Close()
+	}
+	defer crashGuard()
 	var err error
 	switch sub {
 	case "":
@@ -56,6 +65,12 @@ func main() {
 		err = cmdInit(args)
 	case "clean":
 		err = cmdClean(args)
+	case "bugreport":
+		err = cmdBugreport(args)
+	case "undo":
+		err = cmdUndo(args)
+	case "bench":
+		err = cmdBench(args)
 	case "version", "--version":
 		fmt.Println("switchyard", version)
 	case "help", "-h", "--help":
@@ -66,6 +81,8 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
+		diag.Logf("exit with error: %v", err)
+		diag.Close()
 		if errors.Is(err, errTaskFailed) {
 			os.Exit(1)
 		}
@@ -91,7 +108,10 @@ Usage:
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
   sy doctor                  check CLIs, versions, git and terminal
   sy init [--global] [--force] [--print]   write the commented default config
-  sy clean [--dir <path>]    remove this repo's pooled agent worktrees
+  sy clean [--dir <path>] [--idle 72h]   remove this repo's pooled worktrees (or all idle ones)
+  sy undo [--list] [--redo] [--yes] [task]   revert (or re-apply) a task's changes, with preview
+  sy bench [--file bench.yaml] [--init]      compare routed Switchyard vs single agents on your tasks
+  sy bugreport               zip logs, config and diagnostics into one file to send
   sy version
 
 Flags (TUI and run):
@@ -240,6 +260,9 @@ func cmdTUI(args []string) error {
 	}
 	_ = proc.Guard()
 	cfg := store.Get()
+	if !*demo {
+		prunePoolsInBackground(cfg)
+	}
 
 	events := make(chan event.Event, 4096)
 	var log *sessionlog.Writer
@@ -291,6 +314,7 @@ func cmdRun(args []string) error {
 	}
 	_ = proc.Guard()
 	cfg := store.Get()
+	prunePoolsInBackground(cfg)
 	log, err := sessionlog.Open(cfg.SessionDir(), dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "warning: session log disabled:", err)
@@ -332,7 +356,11 @@ func cmdRun(args []string) error {
 	if !res.OK {
 		status = "FAILED"
 	}
-	fmt.Printf("\n%s in %s · %s tokens · %s\n", status, res.Duration.Round(time.Second), sessionlog.Human(res.Tokens.Total()), res.Summary)
+	fmt.Printf("\n%s in %s · %s\n", status, res.Duration.Round(time.Second), res.Summary)
+	fmt.Printf("cost: %s\n", res.Cost.Summary())
+	if res.UndoKey != "" {
+		fmt.Printf("undo: sy undo %s   (preview first; your later edits are kept)\n", res.UndoKey)
+	}
 	if log != nil {
 		fmt.Println("session log:", log.Path())
 	}
@@ -464,7 +492,13 @@ func parseSince(s string) (time.Duration, error) {
 func cmdClean(args []string) error {
 	fs := flag.NewFlagSet("sy clean", flag.ExitOnError)
 	dir := fs.String("dir", ".", "project directory")
+	idle := fs.Duration("idle", 0, "instead: remove every repo's pool worktrees unused for this long (e.g. 72h)")
 	fs.Parse(args)
+	if *idle > 0 {
+		n, freed := orchestrator.PrunePools(*idle)
+		fmt.Printf("removed %d idle pooled worktree(s), freed %s\n", n, orchestrator.HumanBytes(freed))
+		return nil
+	}
 	n, err := orchestrator.CleanPool(*dir)
 	if err != nil {
 		return err
@@ -477,7 +511,13 @@ func cmdDoctor(args []string) error {
 	fs := flag.NewFlagSet("sy doctor", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "config file")
 	fs.Parse(args)
-	cfg, path, err := config.Load(*cfgPath)
+	return runDoctor(os.Stdout, *cfgPath)
+}
+
+// runDoctor checks the setup and writes a report to w (also used by
+// sy bugreport).
+func runDoctor(w io.Writer, cfgPath string) error {
+	cfg, path, err := config.Load(cfgPath)
 	if err != nil {
 		return err
 	}
@@ -490,25 +530,25 @@ func cmdDoctor(args []string) error {
 	warn := stRev.Render("warn")
 	problems := 0
 	if _, err := os.Stat(path); err == nil {
-		fmt.Printf("%s config      %s\n", ok(true), path)
+		fmt.Fprintf(w, "%s config      %s\n", ok(true), path)
 	} else {
-		fmt.Printf("%s config      built-in defaults (run `sy init` to create %s)\n", stMuted.Render("info"), path)
+		fmt.Fprintf(w, "%s config      built-in defaults (run `sy init` to create %s)\n", stMuted.Render("info"), path)
 	}
 	for _, e := range badPath {
-		fmt.Printf("%s PATH        stray quote in entry %s - repaired for sy; remove it in Environment Variables (sysdm.cpl)\n", warn, e)
+		fmt.Fprintf(w, "%s PATH        stray quote in entry %s - repaired for sy; remove it in Environment Variables (sysdm.cpl)\n", warn, e)
 	}
 	for _, p := range event.Providers {
 		pc := cfg.Providers[p]
 		bin, err := proc.Resolve(pc.Command)
 		if err != nil {
 			problems++
-			fmt.Printf("%s %-11s %q not found on PATH", ok(false), p, pc.Command)
+			fmt.Fprintf(w, "%s %-11s %q not found on PATH", ok(false), p, pc.Command)
 			if p == event.Codex {
-				fmt.Print(" - npm install -g @openai/codex, then `codex login`")
+				fmt.Fprint(w, " - npm install -g @openai/codex, then `codex login`")
 			} else {
-				fmt.Print(" - npm install -g @anthropic-ai/claude-code, then run `claude` once to log in")
+				fmt.Fprint(w, " - npm install -g @anthropic-ai/claude-code, then run `claude` once to log in")
 			}
-			fmt.Println()
+			fmt.Fprintln(w)
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -516,7 +556,7 @@ func cmdDoctor(args []string) error {
 		cancel()
 		v := strings.TrimSpace(string(out))
 		if verr != nil {
-			fmt.Printf("%s %-11s %s (version check failed: %v)\n", warn, p, bin, verr)
+			fmt.Fprintf(w, "%s %-11s %s (version check failed: %v)\n", warn, p, bin, verr)
 			continue
 		}
 		mark := ok(true)
@@ -525,46 +565,47 @@ func cmdDoctor(args []string) error {
 			mark = warn
 			note = stMuted.Render(fmt.Sprintf("  (tested with %s; output format may differ)", pc.TestedVersion))
 		}
-		fmt.Printf("%s %-11s %s  %s%s\n", mark, p, v, bin, note)
+		fmt.Fprintf(w, "%s %-11s %s  %s%s\n", mark, p, v, bin, note)
 		if p == event.Codex {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			out, err := exec.CommandContext(ctx, bin, "login", "status").CombinedOutput()
 			cancel()
 			s := oneLine(string(out), 100)
 			if err != nil {
-				fmt.Printf("%s codex login %s - run `codex login`\n", warn, s)
+				fmt.Fprintf(w, "%s codex login %s - run `codex login`\n", warn, s)
 			} else {
-				fmt.Printf("%s codex login %s\n", ok(true), s)
+				fmt.Fprintf(w, "%s codex login %s\n", ok(true), s)
 			}
 		}
 	}
 	if a, b, err := orchestrator.GitVersion(); err != nil {
-		fmt.Printf("%s git         not found - worktrees and diffs disabled\n", warn)
+		fmt.Fprintf(w, "%s git         not found - worktrees and diffs disabled\n", warn)
 	} else if orchestrator.SupportsMergeTree() {
-		fmt.Printf("%s git         %d.%d (parallel worktrees supported)\n", ok(true), a, b)
+		fmt.Fprintf(w, "%s git         %d.%d (parallel worktrees supported)\n", ok(true), a, b)
 	} else {
-		fmt.Printf("%s git         %d.%d - parallel writing agents need git >= 2.38\n", warn, a, b)
+		fmt.Fprintf(w, "%s git         %d.%d - parallel writing agents need git >= 2.38\n", warn, a, b)
 	}
 	if files, tips := orchestrator.PerfTips("."); len(tips) > 0 {
-		fmt.Printf("%s repo        %d tracked files - for faster snapshots run here: %s\n", warn, files, strings.Join(tips, " && "))
+		fmt.Fprintf(w, "%s repo        %d tracked files - for faster snapshots run here: %s\n", warn, files, strings.Join(tips, " && "))
 	}
 	theme := tui.NewTheme(cfg.Theme)
 	tname := "unicode"
 	if theme.ASCII {
 		tname = "ascii (legacy console detected; use Windows Terminal for the full look)"
 	}
-	fmt.Printf("%s terminal    theme %s\n", ok(true), tname)
+	fmt.Fprintf(w, "%s terminal    theme %s\n", ok(true), tname)
 	dir := cfg.SessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		problems++
-		fmt.Printf("%s logs        %s: %v\n", ok(false), dir, err)
+		fmt.Fprintf(w, "%s logs        %s: %v\n", ok(false), dir, err)
 	} else {
-		fmt.Printf("%s logs        %s\n", ok(true), dir)
+		fmt.Fprintf(w, "%s logs        %s\n", ok(true), dir)
 	}
+	problems += doctorMachine(w, cfg, ok, warn)
 	if problems > 0 {
 		return fmt.Errorf("%d problem(s) found", problems)
 	}
-	fmt.Println("\nReady. Try `sy --demo` for the look, then `sy` in a git repo.")
+	fmt.Fprintln(w, "\nReady. Try `sy --demo` for the look, then `sy` in a git repo.")
 	return nil
 }
 
