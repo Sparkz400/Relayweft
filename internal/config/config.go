@@ -137,6 +137,7 @@ type OrchestratorCfg struct {
 	MinFreeDiskGB        float64  `yaml:"min_free_disk_gb"`
 	PoolWarnGB           float64  `yaml:"pool_warn_gb"`
 	PoolMaxIdle          Duration `yaml:"pool_max_idle"`
+	SnapshotMaxFileMB    int      `yaml:"snapshot_max_file_mb"`
 }
 
 // VerifyCfg lists the repo's own checks (tests, build, lint). Agents may

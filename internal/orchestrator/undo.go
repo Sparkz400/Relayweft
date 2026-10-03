@@ -55,6 +55,9 @@ type UndoPlan struct {
 	// reported changing them: possibly your own edits made while it ran.
 	// AgentOnly undo leaves them alone.
 	Unreported []string
+	// Skipped are submodule (gitlink) changes: undo cannot check out
+	// another commit of a submodule, so they are left as they are.
+	Skipped []string
 }
 
 // undoPrefix is the ref namespace of one working tree.
@@ -194,21 +197,31 @@ func PreviewUndo(dir, key string, redo bool) (UndoPlan, error) {
 		from, to = t.Before, t.After
 	}
 	g := git{root}
-	out, err := g.run(nil, nil, "diff", "--name-status", "--no-renames", "-z", from, to)
+	entries, err := g.rawDiff(from, to, nil)
 	if err != nil {
 		return UndoPlan{}, err
 	}
 	plan := UndoPlan{Task: t}
 	agents, known := g.agentFiles(t.After)
-	fields := strings.Split(strings.TrimRight(out, "\x00"), "\x00")
-	for i := 0; i+1 < len(fields); i += 2 {
-		status, path := fields[i][:1], fields[i+1]
-		plan.Changes = append(plan.Changes, status+" "+path)
-		if clean, err := g.unchangedSince(from, path); err == nil && !clean {
-			plan.Edited = append(plan.Edited, path)
+	var paths []string
+	for _, e := range entries {
+		if !e.gitlink() {
+			paths = append(paths, e.path)
 		}
-		if known && !agents[path] {
-			plan.Unreported = append(plan.Unreported, path)
+	}
+	// One batch hash for every file (a process per file is slow on Windows).
+	ids, _, idErr := g.worktreeIDs(paths)
+	for _, e := range entries {
+		if e.gitlink() {
+			plan.Skipped = append(plan.Skipped, e.path)
+			continue
+		}
+		plan.Changes = append(plan.Changes, e.status+" "+e.path)
+		if idErr == nil && ids[e.path] != e.want() {
+			plan.Edited = append(plan.Edited, e.path)
+		}
+		if known && !agents[e.path] {
+			plan.Unreported = append(plan.Unreported, e.path)
 		}
 	}
 	return plan, nil
