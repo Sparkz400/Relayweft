@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"time"
 
@@ -164,12 +165,24 @@ func SaveLearned(l *Learned) error {
 		werr = os.Chmod(tmp, 0o644) // CreateTemp makes it 0600
 	}
 	if werr == nil {
-		werr = os.Rename(tmp, p)
+		werr = renameRetry(tmp, p)
 	}
 	if werr != nil {
 		os.Remove(tmp)
 	}
 	return werr
+}
+
+// renameRetry is os.Rename, retried briefly on Windows: replacing a file
+// that another process is renaming or reading at that moment fails there
+// with "Access is denied" for a few milliseconds.
+func renameRetry(from, to string) error {
+	err := os.Rename(from, to)
+	for i := 0; err != nil && runtime.GOOS == "windows" && i < 40; i++ {
+		time.Sleep(25 * time.Millisecond)
+		err = os.Rename(from, to)
+	}
+	return err
 }
 
 // ResetLearned forgets a repo's learned routes.
