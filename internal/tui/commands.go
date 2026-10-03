@@ -29,6 +29,7 @@ var helpText = []string{
 	"/review-changes on|off               show each agent's changes (per file or hunk) before they land",
 	"/verify [<command>|clear]            list, add or clear the checks run before the final review",
 	"/queue · /queue clear · /queue rm <n>   tasks waiting to run",
+	"/schedule <02:30|in 2h|reset claude> <task> · /schedule · /schedule rm <n>   run a task later, unattended",
 	"/resume [<id>] · /history            continue an interrupted task · list the last 10 tasks",
 	"/threads <n> · /parallel on|off · /review on|off (reviewer checkpoints) · /judge on|off",
 	"/pause · /unpause · /kill <agent> · /cancel · /clear · /usage",
@@ -49,6 +50,10 @@ func (m *Model) command(line string) tea.Cmd {
 	say := func(format string, a ...any) { m.addLog(logLine{kind: event.Log, text: fmt.Sprintf(format, a...)}) }
 	rest := strings.TrimSpace(strings.TrimPrefix(line, f[0]))
 	if m.phase2Command(cmd, args, rest, say) {
+		return nil
+	}
+	if cmd == "schedule" {
+		m.scheduleCommand(args, say)
 		return nil
 	}
 	switch cmd {

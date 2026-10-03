@@ -19,10 +19,12 @@ import (
 
 // fakeApprover answers with functions.
 type fakeApprover struct {
-	plan   func(Plan) (Plan, bool)
-	review func(ChangeSet) ChangeDecision
-	mu     sync.Mutex
-	seen   []ChangeSet
+	plan    func(Plan) (Plan, bool)
+	review  func(ChangeSet) ChangeDecision
+	budget  func(BudgetRequest) bool // nil: stop
+	mu      sync.Mutex
+	seen    []ChangeSet
+	budgets []BudgetRequest
 }
 
 func (f *fakeApprover) ApprovePlan(ctx context.Context, task string, p Plan) (Plan, bool) {
@@ -40,6 +42,13 @@ func (f *fakeApprover) ReviewChanges(ctx context.Context, cs ChangeSet) ChangeDe
 		return ChangeDecision{Apply: cs.AllPaths()}
 	}
 	return f.review(cs)
+}
+
+func (f *fakeApprover) ApproveBudget(ctx context.Context, r BudgetRequest) bool {
+	f.mu.Lock()
+	f.budgets = append(f.budgets, r)
+	f.mu.Unlock()
+	return f.budget != nil && f.budget(r)
 }
 
 func withApprover(o *Orchestrator, a Approver) *Orchestrator {

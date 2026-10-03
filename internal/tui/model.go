@@ -121,6 +121,9 @@ type Options struct {
 	// Approver, when set (and also passed to the orchestrator), shows plan
 	// approval and change review in the TUI.
 	Approver *Approver
+	// AllowSleep: do not keep the machine awake while scheduled tasks
+	// wait or run.
+	AllowSleep bool
 }
 
 // Model is the Bubble Tea model.
@@ -172,7 +175,9 @@ type Model struct {
 	approvals   []*approvalReq // waiting for the person; the first is on screen
 	overlay     overlay        // plan approval or change review
 	overlayArm  time.Time      // the overlay takes keys from then on
-	queue       []job          // tasks typed while one ran
+	queue       []job          // tasks typed while one ran, and scheduled ones (schedule.go)
+	current     job            // the job running now (when running)
+	awake       func()         // releases the keep-awake while scheduled work is pending
 	interrupted *orchestrator.TaskState
 	complete    struct { // tab completion of @agent ids
 		active       bool
@@ -268,6 +273,10 @@ type submitMsg string
 // no CLI keeps running after sy exits.
 func (m *Model) Shutdown() {
 	m.queue = nil
+	if m.awake != nil {
+		m.awake()
+		m.awake = nil
+	}
 	if m.cancelTask != nil {
 		m.cancelTask()
 	}
@@ -705,6 +714,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.animate()
 		m.pruneApprovals()
+		m.tickSchedule()
 		return m, tick()
 	case approvalMsg:
 		if msg.req.ctx.Err() == nil {

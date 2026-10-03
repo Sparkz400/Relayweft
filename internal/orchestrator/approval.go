@@ -17,6 +17,10 @@ type Approver interface {
 	ApprovePlan(ctx context.Context, task string, p Plan) (Plan, bool)
 	// ReviewChanges shows one agent's changes before they are applied.
 	ReviewChanges(ctx context.Context, cs ChangeSet) ChangeDecision
+	// ApproveBudget asks whether the task may go on past a budget limit:
+	// true lets it run past that limit until it ends, false stops it.
+	// Unattended tasks never ask (they stop).
+	ApproveBudget(ctx context.Context, r BudgetRequest) bool
 }
 
 // FileChange is one file in a change set.

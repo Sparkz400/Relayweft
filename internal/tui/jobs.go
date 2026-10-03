@@ -13,6 +13,7 @@ import (
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/notify"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/switchyard/internal/schedule"
 )
 
 // job is something the TUI runs as a task: a new task, a resumed one or a
@@ -23,7 +24,8 @@ type job struct {
 	agent      string                    // follow-up target; "" = the newest agent
 	session    orchestrator.AgentSession // the target, resolved when typed
 	resume     *orchestrator.TaskState
-	unattended bool // queued: never waits for approvals
+	unattended bool      // queued: never waits for approvals
+	at         time.Time // scheduled start (zero = as soon as possible)
 }
 
 func (j job) label() string {
@@ -140,6 +142,7 @@ func (m *Model) startJob(j job) {
 	}
 	m.resetTree()
 	m.running = true
+	m.current = j
 	m.taskText = j.label()
 	m.taskStart = time.Now()
 	m.result = ""
@@ -166,15 +169,26 @@ func (m *Model) startJob(j job) {
 	}
 }
 
-// startNext runs the next queued job, if any.
+// startNext runs the next queued job that may start now, if any: one
+// without a start time, or a scheduled one whose time has come.
 func (m *Model) startNext() {
-	if m.running || len(m.queue) == 0 {
+	if m.running || len(m.queue) == 0 || m.orc.Running() {
 		return
 	}
-	j := m.queue[0]
-	m.queue = m.queue[1:]
-	m.addLog(logLine{kind: event.Log, text: fmt.Sprintf("starting queued task (%d left): %s", len(m.queue), oneLine(j.label(), 80))})
-	m.startJob(j)
+	now := time.Now()
+	for i, j := range m.queue {
+		if !j.at.IsZero() && now.Before(j.at) {
+			continue
+		}
+		m.queue = append(m.queue[:i:i], m.queue[i+1:]...)
+		what := "queued"
+		if !j.at.IsZero() {
+			what = "scheduled"
+		}
+		m.addLog(logLine{kind: event.Log, text: fmt.Sprintf("starting %s task (%d left): %s", what, len(m.queue), oneLine(j.label(), 80))})
+		m.startJob(j)
+		return
+	}
 }
 
 // sendNotify is notify.Send; tests replace it.
@@ -383,7 +397,11 @@ func (m *Model) queueCommand(args []string, say func(string, ...any)) {
 		}
 		say("queued (%d), run one after another, unattended:", len(m.queue))
 		for i, j := range m.queue {
-			say("  %d. %s", i+1, oneLine(j.label(), 100))
+			when := ""
+			if !j.at.IsZero() {
+				when = "[at " + schedule.Clock(j.at, time.Now()) + "] "
+			}
+			say("  %d. %s%s", i+1, when, oneLine(j.label(), 100))
 		}
 	case args[0] == "clear":
 		n := len(m.queue)

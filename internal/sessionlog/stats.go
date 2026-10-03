@@ -50,6 +50,10 @@ type Stats struct {
 	MergeFail int
 	Recent    []Record    // newest task_end records (with cost), newest first
 	Days      []*DayStats // last 7 local calendar days that had tasks, newest first
+	// DayLimitUSD and DayLimitTokens are the daily budget (config budget.day_*;
+	// 0 = none), set by the caller to show it in the per-day table.
+	DayLimitUSD    float64 `json:"day_limit_usd,omitempty"`
+	DayLimitTokens int64   `json:"day_limit_tokens,omitempty"`
 }
 
 // DayStats totals one calendar day of tasks, so a day of heavy use (and what
@@ -292,11 +296,38 @@ func (s Stats) printDays(w io.Writer) {
 	}
 	fmt.Fprintf(w, "\nPer day (last %d days; $ is Claude's API-equivalent price)\n", statsDays)
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "  DATE\tTASKS\tOK\tCODEX\tCLAUDE\t$")
+	limited := s.DayLimitUSD > 0 || s.DayLimitTokens > 0
+	head := "  DATE\tTASKS\tOK\tCODEX\tCLAUDE\t$"
+	if limited {
+		head += "\tDAILY BUDGET"
+	}
+	fmt.Fprintln(tw, head)
 	for _, d := range s.Days {
-		fmt.Fprintf(tw, "  %s\t%d\t%d\t%s\t%s\t%.2f\n", d.Date, d.Tasks, d.OK, human(d.Codex), human(d.Claude), d.USD)
+		line := fmt.Sprintf("  %s\t%d\t%d\t%s\t%s\t%.2f", d.Date, d.Tasks, d.OK, human(d.Codex), human(d.Claude), d.USD)
+		if limited {
+			line += "\t" + s.dayBudget(d)
+		}
+		fmt.Fprintln(tw, line)
 	}
 	tw.Flush()
+}
+
+// dayBudget is a day's use of the daily budget, e.g. "42% of $5.00".
+func (s Stats) dayBudget(d *DayStats) string {
+	var parts []string
+	mark := func(p float64) string {
+		if p >= 100 {
+			return fmt.Sprintf("%.0f%%!", p)
+		}
+		return fmt.Sprintf("%.0f%%", p)
+	}
+	if s.DayLimitUSD > 0 {
+		parts = append(parts, fmt.Sprintf("%s of $%.2f", mark(d.USD/s.DayLimitUSD*100), s.DayLimitUSD))
+	}
+	if s.DayLimitTokens > 0 {
+		parts = append(parts, fmt.Sprintf("%s of %s tok", mark(float64(d.Codex+d.Claude)/float64(s.DayLimitTokens)*100), human(s.DayLimitTokens)))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // printRecent lists the newest tasks with what each one cost.

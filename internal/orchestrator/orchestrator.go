@@ -91,6 +91,9 @@ type Orchestrator struct {
 
 	sessions map[string]AgentSession // finished agents, for follow-ups
 	told     map[string][]string     // messages for running agents (Tell)
+
+	day dayCache // today's finished tasks, for the budget (budget.go)
+	cur *task    // the running task (RunWith), for BudgetStatus
 }
 
 // New creates an orchestrator.
@@ -196,6 +199,12 @@ func (o *Orchestrator) emit(e event.Event) {
 	switch e.Kind {
 	case event.Quota:
 		if e.Quota != nil {
+			// Logged when it changes: `sy run --when-reset` reads the
+			// reset time back from the logs.
+			if sessionlog.QuotaChanged(o.opts.Tracker.Snapshot(e.Provider).Quota, *e.Quota) {
+				q := *e.Quota
+				o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeQuota, Provider: e.Provider, Quota: &q})
+			}
 			o.opts.Tracker.SetQuota(e.Provider, *e.Quota)
 		}
 	case event.Route:
@@ -280,6 +289,7 @@ type task struct {
 	repos    []*task // extra repos (nil for a single-repo task)
 	useWT    bool    // this repo's writers use pooled worktrees (execute)
 	notesMu  sync.Mutex
+	budget   *taskBudget // nil outside RunWith (budget.go)
 }
 
 // approving reports whether this task asks a person to approve its plan.
@@ -469,6 +479,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		if !finished {
 			o.mu.Lock()
 			o.running = false
+			o.cur = nil
 			o.mu.Unlock()
 		}
 		if r != nil {
@@ -535,6 +546,9 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
 
 	t.quotaBefore = o.quotaNow()
+	// tctx is ctx plus a stop by the budget (budget.go); ctx alone tells
+	// whether the person cancelled.
+	tctx := o.startBudget(ctx, t)
 	var res TaskResult
 	if refused == "" {
 		// A resumed task keeps the repos it started with.
@@ -550,7 +564,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		}
 	}
 	if refused == "" {
-		if err := o.runHooks(ctx, t, "before_task", cfg.Hooks.BeforeTask, nil); err != nil {
+		if err := o.runHooks(tctx, t, "before_task", cfg.Hooks.BeforeTask, nil); err != nil {
 			refused = "not started: " + err.Error()
 			if t.state != nil {
 				t.state.Status = "failed"
@@ -561,7 +575,11 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		o.emit(event.Event{Kind: event.Error, Text: refused})
 		res = TaskResult{Summary: refused}
 	} else {
-		res = o.run(ctx, t)
+		res = o.run(tctx, t)
+	}
+	if why := t.budgetStopped(); why != "" && ctx.Err() == nil {
+		res.OK = false
+		res.Summary = "stopped by budget: " + why
 	}
 	o.snapshotAfter(t)
 	res.Duration = time.Since(began)
@@ -602,6 +620,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	cost := res.Cost
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTaskEnd, TaskID: t.id, Task: text, Mode: o.opts.Mode,
 		OK: sessionlog.Bool(res.OK), Text: res.Summary, Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Cost: &cost, Bench: o.opts.Bench})
+	o.endBudget(t, cost)
 	// Clear the running flag before announcing the end, so a task submitted
 	// right after TaskDone is never refused.
 	o.mu.Lock()
@@ -1439,6 +1458,9 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	if ctx.Err() != nil {
 		return event.Decision{}, runner.Result{Err: ctx.Err(), Killed: true}
 	}
+	if !o.checkBudget(ctx, t, fmt.Sprintf("start %s (%s)", agentID, step.Title)) {
+		return event.Decision{}, runner.Result{Err: errBudget, Killed: true}
+	}
 	if step.Kind != router.KindJudge {
 		// The judge runs inside its parent's slot; holding it would only
 		// make the parent wait for itself.
@@ -1531,13 +1553,16 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 			until = time.Now().Add(t.cfg.Providers[d.Provider].LimitCooldown.D())
 		}
 		o.opts.Tracker.MarkLimited(d.Provider, until)
-		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err)})
+		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err), Until: &until})
 		o.emit(event.Event{Kind: event.ProviderState, Provider: d.Provider, Until: until, Text: fmt.Sprintf("%s %s until %s; /limit %s reset to retry", d.Provider, why, until.Format("15:04"), d.Provider)})
 	}
 	tk := res.Tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit,
 		Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files, Text: clip(res.Final, 500)})
+	// Over budget now? Stopping cancels the task; this agent's result
+	// still counts.
+	o.checkBudget(ctx, t, "go on after "+agentID+" finished")
 	return d, res
 }
 
