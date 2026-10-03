@@ -157,6 +157,7 @@ Flags (TUI and run):
   --prefer role=codex|claude|other|auto  override a role's provider choice (repeatable; role "all" ok)
   --provider codex|claude    force every role onto one provider
   --threads <n>  --no-parallel  --no-review  --judge
+  --repo name=path           another git repo tasks may change too (repeatable; multi-repo tasks)
   --ascii | --unicode        force the ASCII or Unicode theme
   --demo  --speed <x>        demo mode (TUI only); speed multiplies animation pace
 
@@ -181,6 +182,8 @@ type common struct {
 	judge      bool
 	ascii      bool
 	unicode    bool
+	repos      multiFlag           // --repo name=path (multi-repo tasks)
+	workspace  []orchestrator.Repo // resolved by setup
 }
 
 func (c *common) register(fs *flag.FlagSet) {
@@ -195,6 +198,7 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.BoolVar(&c.judge, "judge", false, "enable the LLM judge for unclear routing")
 	fs.BoolVar(&c.ascii, "ascii", false, "ASCII theme")
 	fs.BoolVar(&c.unicode, "unicode", false, "Unicode theme")
+	fs.Var(&c.repos, "repo", "name=path: another git repo the tasks may change (repeatable; multi-repo tasks)")
 }
 
 // setup loads config and applies flag overrides.
@@ -285,6 +289,10 @@ func (c *common) setup() (*config.Store, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	// Multi-repo workspace: config (paths relative to dir), then --repo.
+	if c.workspace, err = orchestrator.ResolveWorkspace(dir, store.Get().Workspace.Repos, c.repos); err != nil {
+		return nil, "", err
+	}
 	return store, dir, nil
 }
 
@@ -328,6 +336,7 @@ func cmdTUI(args []string) error {
 	orc := orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: runners, Tracker: limits.NewTracker(), Log: log,
 		Events: events, ForceProvider: c.provider, NoGit: *demo, Mode: mode, Approver: ap,
+		Repos: c.workspace,
 	})
 	m := tui.New(tui.Options{
 		Orc: orc, Events: events, Dir: dir, Theme: tui.NewTheme(cfg.Theme), Demo: *demo,

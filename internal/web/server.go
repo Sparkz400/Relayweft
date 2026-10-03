@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -365,7 +364,7 @@ func (s *Server) snapshot() stateView {
 	}
 	oc := cfg.Orchestrator
 	v := stateView{
-		Version: s.opt.Version, Dir: s.opt.Dir, Project: filepath.Base(s.opt.Dir), Demo: s.opt.Demo, DemoTask: s.opt.DemoTask,
+		Version: s.opt.Version, Dir: s.opt.Dir, Project: orchestrator.WorkspaceLabel(s.opt.Dir, s.orc.Repos()), Demo: s.opt.Demo, DemoTask: s.opt.DemoTask,
 		ConfigPath: s.store.Path(), SessionLog: s.opt.SessionLog, Paused: s.orc.Paused(),
 		Approvals: s.ap.Pending(), Providers: provs, Agents: s.orc.RunningAgents(), Now: time.Now(),
 		Settings: settingsView{

@@ -169,7 +169,7 @@ func (m *Model) viewPanel(W, H int) string {
 
 func (m *Model) viewHeader(W int) string {
 	th := m.th
-	left := th.bold(th.Main).Render(" "+th.G.Logo+" SWITCHYARD") + th.fg(th.Muted).Render(" · "+filepath.Base(m.opt.Dir))
+	left := th.bold(th.Main).Render(" "+th.G.Logo+" SWITCHYARD") + th.fg(th.Muted).Render(" · "+m.projectLabel(filepath.Base(m.opt.Dir)))
 	phase := m.phase
 	if m.running {
 		phase += " · " + dur(time.Since(m.taskStart))

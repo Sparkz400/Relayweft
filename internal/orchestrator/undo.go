@@ -58,6 +58,22 @@ type UndoPlan struct {
 	// Skipped are submodule (gitlink) changes: undo cannot check out
 	// another commit of a submodule, so they are left as they are.
 	Skipped []string
+	// Multi-repo tasks (workspace.go): Repo and Dir name an extra repo's
+	// plan; the primary's plan lists them in Others. Missing are extra
+	// repos whose folder no longer exists (left out).
+	Repo    string
+	Dir     string
+	Others  []UndoPlan
+	Missing []string
+}
+
+// TotalChanges counts the changed files of every repo.
+func (p UndoPlan) TotalChanges() int {
+	n := len(p.Changes)
+	for _, o := range p.Others {
+		n += len(o.Changes)
+	}
+	return n
 }
 
 // undoPrefix is the ref namespace of one working tree.
@@ -187,7 +203,19 @@ func (g git) agentFiles(after string) (map[string]bool, bool) {
 }
 
 // PreviewUndo shows what undoing (redo=false) or redoing a task would change.
+// For a multi-repo task started here, Others previews its extra repos.
 func PreviewUndo(dir, key string, redo bool) (UndoPlan, error) {
+	plan, err := previewOne(dir, key, redo)
+	if err != nil {
+		return plan, err
+	}
+	root, _ := repoRoot(dir)
+	plan.Others, plan.Missing, err = workspaceUndoPlans(root, plan.Task, redo)
+	return plan, err
+}
+
+// previewOne is PreviewUndo for one repo.
+func previewOne(dir, key string, redo bool) (UndoPlan, error) {
 	t, root, err := findTask(dir, key, redo)
 	if err != nil {
 		return UndoPlan{}, err
@@ -230,14 +258,45 @@ func PreviewUndo(dir, key string, redo bool) (UndoPlan, error) {
 // Undo reverts a task's changes in the working tree (key "" = newest task
 // not undone yet); redo puts them back. With agentOnly, files no agent
 // reported (possibly edits you made while the task ran) are left alone.
+//
+// A multi-repo task is undone in every repo it changed: nothing is written
+// unless every repo's preview works, and if one repo fails the repos done
+// before it are put back.
 func Undo(dir, key string, redo, agentOnly bool) (UndoPlan, error) {
 	plan, err := PreviewUndo(dir, key, redo)
 	if err != nil {
 		return plan, err
 	}
-	root, _ := repoRoot(dir)
-	g := git{root}
-	t := plan.Task
+	all := append([]UndoPlan{plan}, plan.Others...)
+	dirs := append([]string{dir}, make([]string, len(plan.Others))...)
+	only := make([][]string, len(all))
+	for i, p := range all {
+		if i > 0 {
+			dirs[i] = p.Dir
+		}
+		if only[i], err = agentOnlyPaths(p, agentOnly); err != nil {
+			if i > 0 {
+				err = fmt.Errorf("repo %s: %w", p.Repo, err)
+			}
+			return plan, err
+		}
+	}
+	for i, p := range all {
+		if err := undoOne(dirs[i], p.Task, redo, only[i]); err != nil {
+			for j := i - 1; j >= 0; j-- { // put the repos done so far back
+				undoOne(dirs[j], all[j].Task, !redo, only[j])
+			}
+			if i > 0 {
+				err = fmt.Errorf("repo %s: %w", p.Repo, err)
+			}
+			return plan, err
+		}
+	}
+	return plan, nil
+}
+
+// agentOnlyPaths is the path list of an --agent-files-only undo (nil = all).
+func agentOnlyPaths(plan UndoPlan, agentOnly bool) ([]string, error) {
 	var only []string
 	if agentOnly && len(plan.Unreported) > 0 {
 		skip := map[string]bool{}
@@ -250,15 +309,22 @@ func Undo(dir, key string, redo, agentOnly bool) (UndoPlan, error) {
 			}
 		}
 		if len(only) == 0 {
-			return plan, fmt.Errorf("every changed file is unreported; nothing to do with --agent-files-only")
+			return nil, fmt.Errorf("every changed file is unreported; nothing to do with --agent-files-only")
 		}
 	}
+	return only, nil
+}
+
+// undoOne undoes (or redoes) task t in the repo containing dir.
+func undoOne(dir string, t UndoTask, redo bool, only []string) error {
+	root, _ := repoRoot(dir)
+	g := git{root}
 	if redo {
 		if err := g.applyDiff(t.Before, t.After, only...); err != nil {
-			return plan, err
+			return err
 		}
 		g.deleteSnapshot(t.Key, "undone")
-		return plan, nil
+		return nil
 	}
 	// Keep the exact pre-undo state so nothing is ever lost.
 	if snap, err := g.snapshot("switchyard before undo of " + t.Key); err == nil {
@@ -266,9 +332,9 @@ func Undo(dir, key string, redo, agentOnly bool) (UndoPlan, error) {
 	}
 	if err := g.applyDiff(t.After, t.Before, only...); err != nil {
 		g.deleteSnapshot(t.Key, "undone")
-		return plan, err
+		return err
 	}
-	return plan, nil
+	return nil
 }
 
 // trimUndo keeps the newest undoKeep tasks of a working tree.

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +56,7 @@ func startHeadless(c *common, quiet bool, ap orchestrator.Approver) (*headless, 
 	h.orc = orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: runner.New, Tracker: limits.NewTracker(), Log: log,
 		Events: h.events, ForceProvider: c.provider, Approver: ap,
+		Repos: c.workspace,
 	})
 	h.ctx, h.stop = signal.NotifyContext(context.Background(), os.Interrupt)
 	go func() {
@@ -442,6 +444,13 @@ func (a *termApprover) printPlan(p orchestrator.Plan) {
 		if len(st.DependsOn) > 0 {
 			deps = " after " + strings.Join(st.DependsOn, ",")
 		}
+		if len(p.Repos) > 0 { // multi-repo task: where the step works
+			repo := st.Repo
+			if repo == "" {
+				repo = p.Repos[0]
+			}
+			deps += " in " + repo
+		}
 		fmt.Fprintf(a.out, "  %d. [%s, %s] %s%s\n", i+1, st.Kind, role, st.Title, deps)
 	}
 }
@@ -451,7 +460,11 @@ func (a *termApprover) ApprovePlan(ctx context.Context, task string, p orchestra
 	defer a.mu.Unlock()
 	for {
 		a.printPlan(p)
-		ans, ok := a.ask(ctx, "Run it? [y]es, [n]o, d N (drop step), r N role (set role; auto = router), p N text (new prompt), s N (show prompt): ")
+		q := "Run it? [y]es, [n]o, d N (drop step), r N role (set role; auto = router), p N text (new prompt), s N (show prompt): "
+		if len(p.Repos) > 0 {
+			q = strings.Replace(q, "s N (show prompt)", "s N (show prompt), o N repo (move to repo)", 1)
+		}
+		ans, ok := a.ask(ctx, q)
 		if !ok {
 			return p, false
 		}
@@ -498,6 +511,13 @@ func (a *termApprover) ApprovePlan(ctx context.Context, task string, p orchestra
 			p.Subtasks[i].Prompt = strings.TrimSpace(arg)
 		case "s":
 			fmt.Fprintf(a.out, "\n%s\n", p.Subtasks[i].Prompt)
+		case "o":
+			arg = strings.TrimSpace(arg)
+			if !slices.Contains(p.Repos, arg) {
+				fmt.Fprintln(a.out, "repos:", strings.Join(p.Repos, ", "))
+				continue
+			}
+			p.Subtasks[i].Repo = arg
 		default:
 			fmt.Fprintln(a.out, "unknown answer")
 		}

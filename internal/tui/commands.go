@@ -245,7 +245,7 @@ func undoCmd(dir string, redo, apply bool) tea.Cmd {
 				say("%s failed, nothing was changed: %v", verb, err)
 				return undoMsg(out)
 			}
-			say("%s done: %d file(s) for task %q (%s)", verb, len(plan.Changes), oneLine(plan.Task.Task, 60), plan.Task.Key)
+			say("%s done: %d file(s) for task %q (%s)", verb, plan.TotalChanges(), oneLine(plan.Task.Task, 60), plan.Task.Key)
 			if !redo {
 				say("changed your mind? /redo yes puts the task's changes back")
 			}
@@ -263,6 +263,9 @@ func undoCmd(dir string, redo, apply bool) tea.Cmd {
 				break
 			}
 			say("  %s", c)
+		}
+		for _, o := range plan.Others { // multi-repo task: undone together
+			say("  and in repo %s: %d file(s)", o.Repo, len(o.Changes))
 		}
 		if len(plan.Edited) > 0 {
 			say("you edited %d of these after the task; your edits are kept (3-way merge, nothing is written on a conflict)", len(plan.Edited))

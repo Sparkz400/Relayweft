@@ -222,8 +222,12 @@ func (a *Approver) ReviewChanges(ctx context.Context, cs orchestrator.ChangeSet)
 // An approved plan is normalized first; a plan that cannot run is an error
 // and the request stays open.
 func (a *Approver) AnswerPlan(id string, p orchestrator.Plan, ok bool) (orchestrator.Plan, error) {
-	if _, err := a.find(id, "plan"); err != nil {
+	r, err := a.find(id, "plan")
+	if err != nil {
 		return p, err
+	}
+	if r.Plan != nil {
+		p.Repos = r.Plan.Repos // a multi-repo task's repos are not the page's to change
 	}
 	if ok {
 		np, err := orchestrator.NormalizePlan(clonePlan(p))

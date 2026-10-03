@@ -158,6 +158,14 @@ type HooksCfg struct {
 	Timeout    Duration `yaml:"timeout,omitempty"`
 }
 
+// WorkspaceCfg makes every task of the project a multi-repo task: Repos
+// maps a short name to another git repository (a path relative to the
+// project folder), e.g. {frontend: ../web}. Only paths, so a repo file may
+// set it without `sy trust`; each repo's own commands still need trust.
+type WorkspaceCfg struct {
+	Repos map[string]string `yaml:"repos,omitempty"`
+}
+
 // NotifyCfg controls desktop notifications.
 type NotifyCfg struct {
 	Enabled bool     `yaml:"enabled"`
@@ -174,6 +182,7 @@ type Config struct {
 	Notify        NotifyCfg              `yaml:"notify"`
 	Hooks         HooksCfg               `yaml:"hooks"`
 	MCP           MCPCfg                 `yaml:"mcp,omitempty"`
+	Workspace     WorkspaceCfg           `yaml:"workspace,omitempty"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`
