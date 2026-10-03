@@ -22,6 +22,7 @@ var helpText = []string{
 	"/route <role> <provider>:<model>[:effort]   e.g. /route worker claude:sonnet:high",
 	"/prefer <role|all> <codex|claude|other|auto>",
 	"/save                                write the current settings to " + config.FileName,
+	"/save repo                           write routes, verify, hooks and approvals to this repo's " + config.RepoFileName,
 	"/single <provider>:<model>[:effort] <task>  run one agent only (baseline for sy stats)",
 	"/limit <codex|claude> [reset|set]    clear or set a provider's usage-limit state",
 	"/approve on|off                      show the plan for editing before anything runs",
@@ -95,6 +96,15 @@ func (m *Model) command(line string) tea.Cmd {
 		m.dirty = true
 		say("prefer %s for %s (unsaved; /save to keep)", args[1], args[0])
 	case "save":
+		if len(args) == 1 && args[0] == "repo" {
+			p, err := m.store.SaveRepo(m.opt.Dir)
+			if err != nil {
+				say("save failed: %v", err)
+			} else {
+				say("saved this repo's settings (routes, verify, hooks, approvals) to %s - commit it to share", p)
+			}
+			return nil
+		}
 		if err := m.store.Save(); err != nil {
 			say("save failed: %v", err)
 		} else {

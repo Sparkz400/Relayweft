@@ -213,6 +213,13 @@ func (m *Model) checkInterrupted() {
 	if m.opt.Demo {
 		return
 	}
+	if r := m.store.Repo(); r.Path != "" {
+		msg := "using this repo's settings from " + r.Path
+		if len(r.Ignored) > 0 {
+			msg += " (its " + strings.Join(r.Ignored, ", ") + " run commands and are ignored until you run `sy trust`)"
+		}
+		m.addLog(logLine{kind: event.Log, text: msg})
+	}
 	s := orchestrator.LastInterrupted(m.opt.Dir)
 	if s == nil {
 		return
