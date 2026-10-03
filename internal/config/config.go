@@ -114,28 +114,29 @@ type RoutingCfg struct {
 
 // OrchestratorCfg tunes the task lifecycle.
 type OrchestratorCfg struct {
-	MaxThreads          int      `yaml:"max_threads"`
-	Parallel            bool     `yaml:"parallel"`
-	Worktrees           bool     `yaml:"worktrees"`
-	WorktreeMaxFiles    int      `yaml:"worktree_max_files"`
-	ReviewBeforePlan    bool     `yaml:"review_before_plan"`
-	ReviewOnRepeatError bool     `yaml:"review_on_repeat_error"`
-	ReviewBeforeDone    bool     `yaml:"review_before_done"`
-	MaxPlanRevisions    int      `yaml:"max_plan_revisions"`
-	MaxFixRounds        int      `yaml:"max_fix_rounds"`
-	MaxAttempts         int      `yaml:"max_attempts"`
-	AgentTimeout        Duration `yaml:"agent_timeout"`
-	SmallTaskWords      int      `yaml:"small_task_words"`
-	ApprovePlan         bool     `yaml:"approve_plan"`
-	ReviewChanges       bool     `yaml:"review_changes"`
-	Handoff             bool     `yaml:"handoff"`
-	LowPriority         bool     `yaml:"low_priority"`
-	MaxCPUPercent       int      `yaml:"max_cpu_percent"`
-	MinFreeMemoryMB     int      `yaml:"min_free_memory_mb"`
-	BusyMaxWait         Duration `yaml:"busy_max_wait"`
-	MinFreeDiskGB       float64  `yaml:"min_free_disk_gb"`
-	PoolWarnGB          float64  `yaml:"pool_warn_gb"`
-	PoolMaxIdle         Duration `yaml:"pool_max_idle"`
+	MaxThreads           int      `yaml:"max_threads"`
+	Parallel             bool     `yaml:"parallel"`
+	Worktrees            bool     `yaml:"worktrees"`
+	WorktreeMaxFiles     int      `yaml:"worktree_max_files"`
+	ReviewBeforePlan     bool     `yaml:"review_before_plan"`
+	ReviewSingleStepPlan bool     `yaml:"review_single_step_plan"`
+	ReviewOnRepeatError  bool     `yaml:"review_on_repeat_error"`
+	ReviewBeforeDone     bool     `yaml:"review_before_done"`
+	MaxPlanRevisions     int      `yaml:"max_plan_revisions"`
+	MaxFixRounds         int      `yaml:"max_fix_rounds"`
+	MaxAttempts          int      `yaml:"max_attempts"`
+	AgentTimeout         Duration `yaml:"agent_timeout"`
+	SmallTaskWords       int      `yaml:"small_task_words"`
+	ApprovePlan          bool     `yaml:"approve_plan"`
+	ReviewChanges        bool     `yaml:"review_changes"`
+	Handoff              bool     `yaml:"handoff"`
+	LowPriority          bool     `yaml:"low_priority"`
+	MaxCPUPercent        int      `yaml:"max_cpu_percent"`
+	MinFreeMemoryMB      int      `yaml:"min_free_memory_mb"`
+	BusyMaxWait          Duration `yaml:"busy_max_wait"`
+	MinFreeDiskGB        float64  `yaml:"min_free_disk_gb"`
+	PoolWarnGB           float64  `yaml:"pool_warn_gb"`
+	PoolMaxIdle          Duration `yaml:"pool_max_idle"`
 }
 
 // VerifyCfg lists the repo's own checks (tests, build, lint). Agents may

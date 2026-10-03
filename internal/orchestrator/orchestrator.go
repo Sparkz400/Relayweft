@@ -618,8 +618,10 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 			return TaskResult{Summary: "planning failed: " + p.Summary}
 		}
 		plan = p
-		// 2. Review the plan.
-		if oc.ReviewBeforePlan {
+		// 2. Review the plan. A one-step plan is skipped unless asked for:
+		// on the bench every one was approved, and the final review still
+		// checks the work.
+		if oc.ReviewBeforePlan && (len(plan.Subtasks) > 1 || oc.ReviewSingleStepPlan) {
 			for rev := 0; ; rev++ {
 				o.emit(event.Event{Kind: event.Phase, Text: "review-plan"})
 				v, ok := o.review(ctx, t, "plan", planReviewPrompt(t.text, plan))

@@ -93,6 +93,7 @@ orchestrator:
   worktrees: true                  # parallel writing agents get their own git worktree (pooled, reused between tasks; `sy clean` removes them)
   worktree_max_files: 0            # >0: repos with more tracked files skip worktrees (writers take turns in your tree)
   review_before_plan: true
+  review_single_step_plan: false   # also review one-step plans (sy bench: 10/10 approved, +1 strong-model call each)
   review_on_repeat_error: true
   review_before_done: true
   max_plan_revisions: 1

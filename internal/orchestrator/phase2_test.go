@@ -508,3 +508,28 @@ func TestHooks(t *testing.T) {
 		t.Fatalf("failing hook: %+v ran=%v", res, ran)
 	}
 }
+
+// One-step plans skip the plan review by default (sy bench: never rejected).
+func TestSingleStepPlanSkipsPlanReview(t *testing.T) {
+	reviews := 0
+	set := both(func(s runner.Spec) runner.Result {
+		switch {
+		case strings.Contains(s.Prompt, runner.MarkerPlanReview):
+			reviews++
+			return approve()
+		case strings.Contains(s.Prompt, runner.MarkerFinalReview):
+			return approve()
+		case strings.Contains(s.Prompt, runner.MarkerPlan):
+			return runner.Result{Final: planJSON(map[string]any{"id": "w", "title": "work", "kind": "edit", "prompt": "work"})}
+		}
+		return runner.Result{Final: "done"}
+	})
+	o, _ := newOrc(t, "", set, nil)
+	if res := o.Run(context.Background(), longTask); !res.OK || reviews != 0 {
+		t.Fatalf("res %+v, plan reviews %d", res, reviews)
+	}
+	o2, _ := newOrc(t, "", set, func(c *config.Config) { c.Orchestrator.ReviewSingleStepPlan = true })
+	if res := o2.Run(context.Background(), longTask); !res.OK || reviews != 1 {
+		t.Fatalf("opt-in: res %+v, plan reviews %d", res, reviews)
+	}
+}
