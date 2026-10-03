@@ -28,6 +28,7 @@ type testEnv struct {
 	srv  *Server
 	ts   *httptest.Server
 	base string
+	sess string // a session secret minted through the bootstrap flow
 
 	mu     sync.Mutex
 	events []event.Event
@@ -81,7 +82,42 @@ func newEnv(t *testing.T, mutate func(c *config.Config)) *testEnv {
 		srv.Shutdown()
 		ts.Close()
 	})
+	env.sess = env.newSession()
 	return env
+}
+
+// bootstrapOf extracts the bootstrap from a link.
+func bootstrapOf(t *testing.T, link string) string {
+	t.Helper()
+	i := strings.Index(link, "/#b=")
+	if i < 0 {
+		t.Fatalf("link %q has no #b= fragment", link)
+	}
+	return link[i+4:]
+}
+
+// trade posts a bootstrap to /api/session.
+func (e *testEnv) trade(bootstrap string) (int, string) {
+	e.t.Helper()
+	res, data := e.do("POST", "/api/session", map[string]string{"bootstrap": bootstrap}, map[string]string{SessionHeader: ""})
+	var v struct {
+		Session string `json:"session"`
+	}
+	json.Unmarshal(data, &v)
+	if len(res.Header.Values("Set-Cookie")) > 0 {
+		e.t.Errorf("Set-Cookie sent: %v", res.Header.Values("Set-Cookie"))
+	}
+	return res.StatusCode, v.Session
+}
+
+// newSession goes through the page's bootstrap flow.
+func (e *testEnv) newSession() string {
+	e.t.Helper()
+	code, sess := e.trade(bootstrapOf(e.t, e.srv.NewLink()))
+	if code != 200 || len(sess) < 48 {
+		e.t.Fatalf("session: %d %q", code, sess)
+	}
+	return sess
 }
 
 func (e *testEnv) do(method, path string, body any, hdr map[string]string) (*http.Response, []byte) {
@@ -95,7 +131,7 @@ func (e *testEnv) do(method, path string, body any, hdr map[string]string) (*htt
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set(TokenHeader, e.srv.Token())
+	req.Header.Set(SessionHeader, e.sess)
 	for k, v := range hdr {
 		if k == "Host" {
 			req.Host = v // the client ignores a Host header
@@ -174,76 +210,91 @@ func (e *testEnv) agentRan(id string) bool {
 
 func TestSecurityChecks(t *testing.T) {
 	env := newEnv(t, nil)
-	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
-	// No token: refused, for the page and the API.
-	for _, p := range []string{"/", "/api/state", "/api/events", "/assets/app.js"} {
+	// The page and its assets are public, hold no secrets and set no
+	// cookies.
+	for _, p := range []string{"/", "/assets/app.js", "/assets/app.css"} {
 		res, err := http.Get(env.base + p)
 		if err != nil {
 			t.Fatal(err)
 		}
+		body, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		if res.StatusCode != http.StatusUnauthorized {
-			t.Errorf("GET %s without token: %d, want 401", p, res.StatusCode)
+		if res.StatusCode != 200 || len(res.Header.Values("Set-Cookie")) > 0 {
+			t.Errorf("GET %s: %d cookies=%v", p, res.StatusCode, res.Header.Values("Set-Cookie"))
+		}
+		if bytes.Contains(body, []byte(env.sess)) {
+			t.Errorf("%s contains the session", p)
+		}
+		if p == "/" {
+			if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
+				t.Errorf("CSP = %q", csp)
+			}
+			if rp := res.Header.Get("Referrer-Policy"); rp != "no-referrer" {
+				t.Errorf("Referrer-Policy = %q", rp)
+			}
 		}
 	}
-	// A wrong token in the URL is refused too.
-	res, err := noRedirect.Get(env.base + "/?t=nope")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Errorf("wrong token: %d", res.StatusCode)
+	// The old token URL does nothing special.
+	if res, _ := env.do("GET", "/?t=whatever", nil, map[string]string{SessionHeader: ""}); res.StatusCode != 200 || len(res.Header.Values("Set-Cookie")) > 0 {
+		t.Errorf("/?t=: %d %v", res.StatusCode, res.Header.Values("Set-Cookie"))
 	}
 
-	// The token URL sets the cookie and redirects to a clean URL.
-	res, err = noRedirect.Get(env.base + "/?t=" + env.srv.Token())
-	if err != nil {
-		t.Fatal(err)
+	// Every API route needs the session: none, a wrong one, and a cookie
+	// carrying the right one are all refused.
+	routes := [][2]string{
+		{"GET", "/api/state"}, {"GET", "/api/events"}, {"POST", "/api/task"}, {"POST", "/api/cancel"}, {"POST", "/api/pause"},
+		{"POST", "/api/kill"}, {"POST", "/api/approvals/a1/plan"}, {"POST", "/api/approvals/a1/changes"}, {"GET", "/api/routes"},
+		{"POST", "/api/routes"}, {"POST", "/api/config/save"}, {"POST", "/api/settings"}, {"GET", "/api/history"},
+		{"POST", "/api/resume"}, {"GET", "/api/queue"}, {"POST", "/api/queue/remove"}, {"POST", "/api/queue/clear"},
+		{"GET", "/api/stats"}, {"GET", "/api/sessions"}, {"POST", "/api/limit"}, {"POST", "/api/demo/review"},
 	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/" {
-		t.Fatalf("token URL: %d %q", res.StatusCode, res.Header.Get("Location"))
-	}
-	var cookie *http.Cookie
-	for _, c := range res.Cookies() {
-		if c.Name == env.srv.cookieName() {
-			cookie = c
+	for _, rt := range routes {
+		var body any
+		if rt[0] == "POST" {
+			body = map[string]any{}
+		}
+		for name, hdr := range map[string]map[string]string{
+			"none":   {SessionHeader: ""},
+			"wrong":  {SessionHeader: strings.Repeat("0", 64)},
+			"cookie": {SessionHeader: "", "Cookie": "sy_" + portOf(env.srv.Addr()) + "=" + env.sess},
+		} {
+			if res, _ := env.do(rt[0], rt[1], body, hdr); res.StatusCode != http.StatusUnauthorized {
+				t.Errorf("%s %s with %s session: %d, want 401", rt[0], rt[1], name, res.StatusCode)
+			}
 		}
 	}
-	if cookie == nil || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Value != env.srv.Token() {
-		t.Fatalf("cookie = %+v", cookie)
+	// The stream takes the session as ?s= (EventSource cannot set headers);
+	// other routes do not.
+	if res, _ := env.do("GET", "/api/state?s="+env.sess, nil, map[string]string{SessionHeader: ""}); res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("?s= on /api/state: %d, want 401", res.StatusCode)
 	}
-	req, _ := http.NewRequest("GET", env.base+"/", nil)
-	req.AddCookie(cookie)
-	res, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	page, _ := io.ReadAll(res.Body)
-	res.Body.Close()
-	if res.StatusCode != 200 || !strings.Contains(string(page), "/assets/app.js") {
-		t.Fatalf("page with cookie: %d", res.StatusCode)
-	}
-	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
-		t.Errorf("CSP = %q", csp)
+	// A bearer header works for scripts.
+	if r, _ := env.do("GET", "/api/state", nil, map[string]string{SessionHeader: "", "Authorization": "Bearer " + env.sess}); r.StatusCode != 200 {
+		t.Errorf("bearer: %d", r.StatusCode)
 	}
 
-	// DNS rebinding: a foreign Host is refused even with the token.
+	// DNS rebinding: a foreign Host is refused even with the session.
 	r, _ := env.do("GET", "/api/state", nil, map[string]string{"Host": "evil.example:" + portOf(env.srv.Addr())})
 	if r.StatusCode != http.StatusForbidden {
 		t.Errorf("foreign Host: %d, want 403", r.StatusCode)
 	}
-	// localhost with the right port is fine.
+	r, _ = env.do("GET", "/", nil, map[string]string{"Host": "evil.example:" + portOf(env.srv.Addr())})
+	if r.StatusCode != http.StatusForbidden {
+		t.Errorf("foreign Host for the page: %d, want 403", r.StatusCode)
+	}
 	r, _ = env.do("GET", "/api/state", nil, map[string]string{"Host": "localhost:" + portOf(env.srv.Addr())})
 	if r.StatusCode != 200 {
 		t.Errorf("localhost Host: %d", r.StatusCode)
 	}
-	// Cross-site requests are refused.
+	// Cross-site requests are refused, also the session trade.
 	r, _ = env.do("POST", "/api/pause", map[string]bool{"paused": true}, map[string]string{"Origin": "http://evil.example"})
 	if r.StatusCode != http.StatusForbidden {
 		t.Errorf("foreign Origin: %d, want 403", r.StatusCode)
+	}
+	r, _ = env.do("POST", "/api/session", map[string]string{"bootstrap": "x"}, map[string]string{"Origin": "http://127.0.0.1:9999"})
+	if r.StatusCode != http.StatusForbidden {
+		t.Errorf("session from another port's page: %d, want 403", r.StatusCode)
 	}
 	r, _ = env.do("POST", "/api/pause", map[string]bool{"paused": true}, map[string]string{"Sec-Fetch-Site": "cross-site"})
 	if r.StatusCode != http.StatusForbidden {
@@ -258,13 +309,92 @@ func TestSecurityChecks(t *testing.T) {
 	if r.StatusCode != http.StatusUnsupportedMediaType {
 		t.Errorf("form post: %d, want 415", r.StatusCode)
 	}
-	// A bearer token works for scripts.
-	r, _ = env.do("GET", "/api/state", nil, map[string]string{TokenHeader: "", "Authorization": "Bearer " + env.srv.Token()})
-	if r.StatusCode != 200 {
-		t.Errorf("bearer: %d", r.StatusCode)
-	}
 	if !env.state().Paused {
 		t.Error("pause did not apply")
+	}
+}
+
+func TestBootstrapSingleUseAndExpiry(t *testing.T) {
+	env := newEnv(t, nil)
+	var warned []string
+	var mu sync.Mutex
+	env.srv.opt.Warn = func(s string) { mu.Lock(); warned = append(warned, s); mu.Unlock() }
+
+	link := env.srv.NewLink()
+	if !strings.HasPrefix(link, "http://127.0.0.1:") || strings.Contains(link, "?") {
+		t.Fatalf("link = %s", link)
+	}
+	b := bootstrapOf(t, link)
+	if len(b) < 48 {
+		t.Fatalf("bootstrap too short: %q", b)
+	}
+	code, s1 := env.trade(b)
+	if code != 200 || s1 == "" || s1 == b {
+		t.Fatalf("first use: %d %q", code, s1)
+	}
+	// A stolen bootstrap used after the page did: refused, and sy warns.
+	if code, s := env.trade(b); code != http.StatusUnauthorized || s != "" {
+		t.Fatalf("second use: %d %q", code, s)
+	}
+	mu.Lock()
+	if len(warned) != 1 || !strings.Contains(warned[0], "used twice") {
+		t.Errorf("warnings = %v", warned)
+	}
+	mu.Unlock()
+	// The session works; another tab needs its own bootstrap and gets
+	// its own session, and both keep working.
+	if r, _ := env.do("GET", "/api/state", nil, map[string]string{SessionHeader: s1}); r.StatusCode != 200 {
+		t.Errorf("session 1: %d", r.StatusCode)
+	}
+	s2 := env.newSession()
+	if s2 == s1 {
+		t.Fatal("two tabs share a session")
+	}
+	for _, s := range []string{s1, s2, env.sess} {
+		if r, _ := env.do("GET", "/api/state", nil, map[string]string{SessionHeader: s}); r.StatusCode != 200 {
+			t.Errorf("session %s…: %d", s[:6], r.StatusCode)
+		}
+	}
+	// Unknown and expired bootstraps are refused (an expired one does not
+	// warn: it was never used).
+	if code, _ := env.trade(strings.Repeat("ab", 32)); code != http.StatusUnauthorized {
+		t.Errorf("unknown bootstrap: %d", code)
+	}
+	if code, _ := env.trade(""); code != http.StatusUnauthorized {
+		t.Errorf("empty bootstrap: %d", code)
+	}
+	old := bootstrapOf(t, env.srv.NewLink())
+	env.srv.auth.mu.Lock()
+	env.srv.auth.now = func() time.Time { return time.Now().Add(bootstrapTTL + time.Second) }
+	env.srv.auth.mu.Unlock()
+	if code, _ := env.trade(old); code != http.StatusUnauthorized {
+		t.Errorf("expired bootstrap: %d", code)
+	}
+	mu.Lock()
+	if len(warned) != 1 {
+		t.Errorf("an expired link warned: %v", warned)
+	}
+	mu.Unlock()
+}
+
+func TestSessionsAreBounded(t *testing.T) {
+	a := newAuth()
+	var first string
+	for i := 0; i < maxSessions+3; i++ {
+		s, err := a.trade(a.newBootstrap())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = s
+		}
+		time.Sleep(time.Millisecond) // distinct creation times
+	}
+	if len(a.sessions) != maxSessions {
+		t.Fatalf("%d sessions kept", len(a.sessions))
+	}
+	if a.sessionOK(first) {
+		t.Error("the oldest session survived")
 	}
 }
 
@@ -284,11 +414,93 @@ func TestListenIsLoopbackOnly(t *testing.T) {
 	if host != "127.0.0.1" {
 		t.Fatalf("listening on %s", ln.Addr())
 	}
-	if !strings.HasPrefix(env.srv.URL(), "http://127.0.0.1:") || !strings.Contains(env.srv.URL(), "/?t="+env.srv.Token()) {
-		t.Fatalf("URL = %s", env.srv.URL())
+}
+
+func TestResumeRejectsBadIDs(t *testing.T) {
+	env := newEnv(t, nil)
+	for _, id := range []string{"../../etc/passwd", "..", "a/b", `a\b`, "x..y", "C:evil", "a b"} {
+		res, data := env.do("POST", "/api/resume", map[string]string{"id": id}, nil)
+		if res.StatusCode != http.StatusBadRequest || !strings.Contains(string(data), "invalid task id") {
+			t.Errorf("id %q: %d %s", id, res.StatusCode, data)
+		}
 	}
-	if len(env.srv.Token()) < 32 {
-		t.Fatalf("token too short: %q", env.srv.Token())
+	for _, id := range []string{"20261003-abc-task-1", "s1.task_2"} {
+		if !validTaskID(id) {
+			t.Errorf("%q rejected", id)
+		}
+	}
+}
+
+func TestEventStreamClientCap(t *testing.T) {
+	env := newEnv(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	open := func() *http.Response {
+		req, _ := http.NewRequestWithContext(ctx, "GET", env.base+"/api/events?s="+env.sess, nil)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	for i := 0; i < maxClients; i++ {
+		res := open()
+		if res.StatusCode != 200 {
+			t.Fatalf("stream %d: %d", i, res.StatusCode)
+		}
+		defer res.Body.Close()
+	}
+	waitFor(t, "the streams", func() bool { n, _, _ := env.srv.hub.connections(); return n == maxClients })
+	res := open()
+	res.Body.Close()
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("stream over the cap: %d, want 503", res.StatusCode)
+	}
+}
+
+// TestEventStreamOutlivesReadTimeout: the real server's ReadTimeout must not
+// end a long-lived event stream.
+func TestEventStreamOutlivesReadTimeout(t *testing.T) {
+	env := newEnv(t, nil)
+	hs := env.srv.newHTTPServer()
+	hs.ReadTimeout = 300 * time.Millisecond
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.srv.Bind(ln) // Host checks now expect this port
+	go hs.Serve(ln)
+	defer hs.Close()
+	req, _ := http.NewRequest("GET", "http://"+ln.Addr().String()+"/api/events?s="+env.sess, nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("stream: %d", res.StatusCode)
+	}
+	time.Sleep(800 * time.Millisecond)
+	env.srv.notice("info", "still here")
+	sc := bufio.NewScanner(res.Body)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	done := make(chan bool, 1)
+	go func() {
+		for sc.Scan() {
+			if strings.Contains(sc.Text(), "still here") {
+				done <- true
+				return
+			}
+		}
+		done <- false
+	}()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("the stream ended")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event after the read timeout")
 	}
 }
 
@@ -677,7 +889,7 @@ func TestEventStreamReplay(t *testing.T) {
 		return false
 	})
 	req, _ := http.NewRequest("GET", env.base+"/api/events", nil)
-	req.Header.Set(TokenHeader, env.srv.Token())
+	req.Header.Set(SessionHeader, env.sess)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	res, err := http.DefaultClient.Do(req.WithContext(ctx))
@@ -736,7 +948,7 @@ func TestDesktopAlertOnlyWithoutPage(t *testing.T) {
 	}
 	defer func() { sendNotify = old }()
 	env.srv.desktopAlert("no page", "x")
-	c, _ := env.srv.hub.subscribe()
+	c, _, _ := env.srv.hub.subscribe()
 	env.srv.desktopAlert("with page", "x")
 	env.srv.hub.unsubscribe(c)
 	waitFor(t, "the alert", func() bool { mu.Lock(); defer mu.Unlock(); return len(got) >= 1 })
@@ -750,7 +962,7 @@ func TestDesktopAlertOnlyWithoutPage(t *testing.T) {
 
 func TestHubDropsSlowClient(t *testing.T) {
 	h := newHub()
-	c, _ := h.subscribe()
+	c, _, _ := h.subscribe()
 	for i := 0; i < clientBuffer+5; i++ {
 		h.publish([]byte("x"), true, false)
 	}

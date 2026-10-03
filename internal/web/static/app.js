@@ -106,9 +106,57 @@ const ROLES = ['planner', 'worker', 'worker_high', 'explorer', 'researcher', 're
 const PLAN_ROLES = ['', 'planner', 'worker', 'worker_high', 'explorer', 'researcher'];
 const PLAN_KINDS = ['explore', 'research', 'edit'];
 
+// ---------- session ----------
+// The link sy prints carries a single-use bootstrap in the URL fragment
+// (#b=...), which never reaches a server. The page trades it for a session
+// secret, kept in this tab's sessionStorage (it survives a reload of this
+// tab only). There are no cookies.
+const SESSION_KEY = 'sy-session';
+let SESSION = null;
+const sess = {
+  get() { try { return sessionStorage.getItem(SESSION_KEY); } catch (e) { return SESSION; } },
+  set(v) { SESSION = v; try { sessionStorage.setItem(SESSION_KEY, v); } catch (e) { /* in memory only */ } },
+  clear() { SESSION = null; try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ } },
+};
+async function startSession() {
+  const m = /(?:^#|&)b=([0-9a-f]+)/.exec(location.hash || '');
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  if (m) {
+    try {
+      const res = await fetch('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bootstrap: m[1] }) });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.session) { sess.set(data.session); return true; }
+      // A fresh link failed: an older session of this tab may still work.
+      if (sess.get() && await sessionWorks()) return true;
+      lock(data.error || 'This link does not work any more.');
+      return false;
+    } catch (e) {
+      lock('sy is not reachable - is it still running?');
+      return false;
+    }
+  }
+  SESSION = sess.get();
+  if (SESSION && await sessionWorks()) return true;
+  lock(SESSION ? 'This page\'s session ended (sy was restarted).' : null);
+  return false;
+}
+async function sessionWorks() {
+  SESSION = sess.get();
+  try {
+    const r = await fetch('/api/state', { headers: { 'X-Switchyard-Session': SESSION } });
+    return r.ok;
+  } catch (e) { return false; }
+}
+function lock(why) {
+  if (es) { es.close(); es = null; }
+  sess.clear();
+  if (why) { why = String(why); $('#locked-why').textContent = why.charAt(0).toUpperCase() + why.slice(1) + (/[.?!)]$/.test(why) ? '' : '.'); }
+  $('#locked').hidden = false;
+}
+
 // ---------- API ----------
 async function api(method, path, body) {
-  const opt = { method, headers: {}, credentials: 'same-origin' };
+  const opt = { method, headers: { 'X-Switchyard-Session': SESSION || '' } };
   if (body !== undefined) {
     opt.headers['Content-Type'] = 'application/json';
     opt.body = JSON.stringify(body);
@@ -121,6 +169,7 @@ async function api(method, path, body) {
   }
   let data = null;
   try { data = await res.json(); } catch (e) { /* not JSON */ }
+  if (res.status === 401) { lock('This page\'s session ended (sy was restarted).'); throw new Error('no session'); }
   if (!res.ok) throw new Error((data && data.error) || res.status + ' ' + res.statusText);
   return data;
 }
@@ -367,7 +416,7 @@ function reviewerEvent(e, ts) {
 let es = null;
 function connect() {
   if (es) es.close();
-  es = new EventSource('/api/events');
+  es = new EventSource('/api/events?s=' + encodeURIComponent(SESSION || ''));
   es.addEventListener('state', (m) => { applySnap(JSON.parse(m.data)); });
   es.addEventListener('reset', () => {
     S.replaying = true;
@@ -398,6 +447,15 @@ function connect() {
   es.onerror = () => {
     S.connected = false;
     renderBanner();
+    // EventSource hides the status: ask whether the session still works
+    // (sy restarted = 401 = lock; sy gone = keep retrying).
+    clearTimeout(S.probe);
+    S.probe = setTimeout(async () => {
+      try {
+        const r = await fetch('/api/state', { headers: { 'X-Switchyard-Session': SESSION || '' } });
+        if (r.status === 401) lock('This page\'s session ended (sy was restarted).');
+      } catch (e) { /* sy is down; EventSource retries */ }
+    }, 1000);
   };
 }
 
@@ -1580,8 +1638,7 @@ resetTree();
 wire();
 renderLog();
 renderGraph(true);
-connect();
 setFilter(S.filter);
-p0();
+startSession().then((ok) => { if (ok) { connect(); p0(); } });
 function p0() { prompt().focus(); autosize(); }
 })();

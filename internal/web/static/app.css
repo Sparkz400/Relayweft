@@ -524,3 +524,11 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin:
   .topbar { gap: 10px; }
   .brand-text { display: none; }
 }
+
+/* ---------- no session ---------- */
+.locked { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: var(--bg-grad), var(--bg); padding: 20px; animation: fade .2s ease; }
+.locked-card { max-width: 460px; text-align: center; padding: 34px 32px 28px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow); }
+.locked-card .logo { width: 48px; height: 48px; padding: 9px; }
+.locked-card h2 { margin: 16px 0 8px; font-size: 18px; letter-spacing: -.01em; }
+.locked-card p { margin: 8px 0 0; color: var(--text-2); }
+.locked-card p.muted { color: var(--muted); font-size: 13px; }

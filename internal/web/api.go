@@ -33,6 +33,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(static))))
 
+	mux.HandleFunc("POST /api/session", s.handleSession)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.snapshot()) })
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("POST /api/task", s.handleTask)
@@ -116,8 +117,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
-	c, replay := s.hub.subscribe()
+	c, replay, err := s.hub.subscribe()
+	if err != nil {
+		fail(w, http.StatusServiceUnavailable, err)
+		return
+	}
 	defer s.hub.unsubscribe(c)
+	// The stream is long-lived: no read deadline for it.
+	http.NewResponseController(w).SetReadDeadline(time.Time{})
 	var buf bytes.Buffer
 	buf.WriteString("retry: 1500\n\n")
 	buf.Write(frame("state", s.snapshot()))
@@ -576,6 +583,10 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
+		if !validTaskID(req.ID) {
+			fail(w, http.StatusBadRequest, fmt.Errorf("invalid task id %q", req.ID))
+			return
+		}
 		var err error
 		if t, err = orchestrator.LoadTask(req.ID); err != nil {
 			fail(w, http.StatusNotFound, err)

@@ -6,8 +6,6 @@ package web
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -36,8 +34,8 @@ type Options struct {
 	DemoTask   string
 	Version    string
 	SessionLog string
-	// Token authenticates the page; "" generates a random one.
-	Token string
+	// Warn prints a security warning on sy's terminal (a link used twice).
+	Warn func(string)
 }
 
 // Server is the web UI backend.
@@ -46,7 +44,7 @@ type Server struct {
 	orc   *orchestrator.Orchestrator
 	store *config.Store
 	ap    *Approver
-	token string
+	auth  *auth
 	hub   *hub
 
 	addr    string // host:port the server listens on
@@ -86,16 +84,8 @@ func New(o Options) (*Server, error) {
 	if o.Orc == nil || o.Approver == nil {
 		return nil, errors.New("web: Orc and Approver are required")
 	}
-	tok := o.Token
-	if tok == "" {
-		b := make([]byte, 24)
-		if _, err := rand.Read(b); err != nil {
-			return nil, err
-		}
-		tok = hex.EncodeToString(b)
-	}
 	s := &Server{
-		opt: o, orc: o.Orc, store: o.Orc.Store(), ap: o.Approver, token: tok, hub: newHub(),
+		opt: o, orc: o.Orc, store: o.Orc.Store(), ap: o.Approver, auth: newAuth(), hub: newHub(),
 		phase: "idle", stateKick: make(chan struct{}, 1), stop: make(chan struct{}), pumpDone: make(chan struct{}),
 	}
 	if !o.Demo {
@@ -112,9 +102,6 @@ func New(o Options) (*Server, error) {
 	go s.stateLoop()
 	return s, nil
 }
-
-// Token returns the access token.
-func (s *Server) Token() string { return s.token }
 
 // Listen binds 127.0.0.1:port (0 = a free port). The server never listens
 // on other interfaces.
@@ -133,21 +120,34 @@ func (s *Server) Bind(ln net.Listener) { s.addr = ln.Addr().String() }
 // Addr is host:port.
 func (s *Server) Addr() string { return s.addr }
 
-// URL is the address to open: it carries the token once, the page then
-// keeps it in a cookie.
-func (s *Server) URL() string { return "http://" + s.addr + "/?t=" + s.token }
+// NewLink returns a fresh link to open: a single-use bootstrap in the URL
+// fragment (never sent to the server), valid for bootstrapTTL.
+func (s *Server) NewLink() string { return "http://" + s.addr + "/#b=" + s.auth.newBootstrap() }
 
 // Serve serves HTTP on ln until Shutdown.
 func (s *Server) Serve(ln net.Listener) error {
 	if s.addr == "" {
 		s.Bind(ln)
 	}
-	s.httpSrv = &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	s.httpSrv = s.newHTTPServer()
 	err := s.httpSrv.Serve(ln)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+// newHTTPServer configures timeouts: requests must arrive quickly and idle
+// keep-alive connections are closed. The event stream clears its own read
+// deadline, and there is no write timeout (the stream is long-lived).
+func (s *Server) newHTTPServer() *http.Server {
+	return &http.Server{
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+	}
 }
 
 // Shutdown cancels the running task (the queue is dropped), unblocks every

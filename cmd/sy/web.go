@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -67,7 +69,8 @@ func startWeb(c *common, port int, demo bool, speed float64) (*webServer, error)
 		Dir: dir, Store: store, Runners: runners, Tracker: limits.NewTracker(), Log: w.log,
 		Events: w.events, ForceProvider: c.provider, NoGit: demo, Mode: mode, Approver: ap,
 	})
-	opt := web.Options{Orc: orc, Events: w.events, Approver: ap, Dir: dir, Demo: demo, Version: version, SessionLog: w.log.Path()}
+	opt := web.Options{Orc: orc, Events: w.events, Approver: ap, Dir: dir, Demo: demo, Version: version, SessionLog: w.log.Path(),
+		Warn: func(msg string) { fmt.Fprintln(os.Stderr, "\n"+msg) }}
 	if demo {
 		opt.DemoTask = demoTask
 	}
@@ -92,6 +95,15 @@ func (w *webServer) stop() {
 	w.log.Close()
 }
 
+// printNewLinks prints a fresh link for every line read (Enter), until
+// the input ends.
+func printNewLinks(in io.Reader, out io.Writer, newLink func() string) {
+	sc := bufio.NewScanner(in)
+	for sc.Scan() {
+		fmt.Fprintf(out, "open: %s\n", newLink())
+	}
+}
+
 func runWeb(name string, args []string, app bool) error {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
 	fs.Usage = func() {
@@ -113,10 +125,11 @@ func runWeb(name string, args []string, app bool) error {
 		return err
 	}
 	defer w.stop()
-	url := w.srv.URL()
+	url := w.srv.NewLink()
 	fmt.Printf("Switchyard %s on http://%s\n", map[bool]string{true: "app", false: "web UI"}[app], w.srv.Addr())
 	fmt.Printf("open: %s\n", url)
-	fmt.Println("(the link carries a one-time access token for this run - do not share it; Ctrl+C stops sy)")
+	fmt.Println("(a private link: it works once, within 2 minutes. Press Enter here for a new one, e.g. for another tab; Ctrl+C stops sy)")
+	go printNewLinks(os.Stdin, os.Stdout, w.srv.NewLink)
 	if !*noOpen {
 		if app {
 			how, err := web.OpenAppWindow(url)

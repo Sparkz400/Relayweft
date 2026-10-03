@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 )
@@ -13,6 +14,7 @@ const (
 	maxReplay      = 8000
 	keepBeforeTask = 300
 	clientBuffer   = 4096
+	maxClients     = 16
 )
 
 // hub fans server-sent events out to every connected page and keeps the
@@ -73,15 +75,20 @@ func (h *hub) publish(f []byte, record, taskStart bool) {
 	}
 }
 
+var errTooManyClients = errors.New("too many open pages - close some Switchyard tabs")
+
 // subscribe registers a client and returns the replay to send first.
-func (h *hub) subscribe() (*client, [][]byte) {
+func (h *hub) subscribe() (*client, [][]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if len(h.clients) >= maxClients {
+		return nil, nil, errTooManyClients
+	}
 	c := &client{ch: make(chan []byte, clientBuffer)}
 	h.clients[c] = struct{}{}
 	h.everConnected = true
 	h.lastSeen = time.Now()
-	return c, append([][]byte(nil), h.replay...)
+	return c, append([][]byte(nil), h.replay...), nil
 }
 
 func (h *hub) unsubscribe(c *client) {
