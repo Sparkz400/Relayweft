@@ -82,6 +82,8 @@ func TestRepoFileWorkspaceMissingRepoAndSubfolder(t *testing.T) {
 	if err := config.Trust(repoFile); err != nil {
 		t.Fatal(err)
 	}
+	// The warning may name the file through its resolved folder (macOS: /private/var).
+	realRepoFile, _ := filepath.EvalSymlinks(repoFile)
 	parse := func(args ...string) (*common, error) {
 		fs := flag.NewFlagSet("sy run", flag.ContinueOnError)
 		var c common
@@ -101,7 +103,7 @@ func TestRepoFileWorkspaceMissingRepoAndSubfolder(t *testing.T) {
 		if len(c.workspace) != 1 || c.workspace[0].Name != "web" || !sameDir(c.workspace[0].Dir, web) {
 			t.Errorf("from %s: workspace = %+v", d, c.workspace)
 		}
-		if len(c.workspaceSkipped) != 1 || !strings.Contains(c.workspaceSkipped[0], "workspace.repos.gone") || !strings.Contains(c.workspaceSkipped[0], repoFile) {
+		if len(c.workspaceSkipped) != 1 || !strings.Contains(c.workspaceSkipped[0], "workspace.repos.gone") || !(strings.Contains(c.workspaceSkipped[0], repoFile) || strings.Contains(c.workspaceSkipped[0], realRepoFile)) {
 			t.Errorf("from %s: skipped = %q", d, c.workspaceSkipped)
 		}
 	}
