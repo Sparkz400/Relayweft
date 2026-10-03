@@ -1,0 +1,40 @@
+name: Bug report
+description: Something in sy does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! The fastest way to a fix: run `sy bugreport` and attach the zip it writes
+        (logs, config and `sy doctor` output; no API keys - sy never has any).
+        Security problems: please use **Security → Report a vulnerability** instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. sy in a repo with ...\n2. task: ...\n3. ..."
+  - type: input
+    id: version
+    attributes:
+      label: sy version
+      placeholder: "sy version"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: input
+    id: clis
+    attributes:
+      label: codex / claude CLI versions
+      placeholder: "codex --version, claude --version"

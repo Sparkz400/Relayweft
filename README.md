@@ -26,7 +26,7 @@ Switchyard uses **subscriptions only**. It never touches API keys or tokens; it 
 2. **Install Git 2.38+** from <https://git-scm.com/>.
 3. **Install Switchyard**, one of:
    - Download `sy-windows-amd64.exe` from the [latest release](https://github.com/sparkz400/switchyard/releases/latest), rename it to `sy.exe` and put it on your PATH. Later, `sy update` replaces it with the newest release (checksum-verified).
-   - Scoop or winget, once a release has been published (manifests in `packaging/`, see `packaging/README.md`).
+   - Scoop: `scoop install https://raw.githubusercontent.com/sparkz400/switchyard/main/packaging/scoop/sy.json`. winget follows once the package is accepted into winget-pkgs; see `packaging/README.md`.
    - From source with **Go 1.24+**:
      ```powershell
      git clone https://github.com/sparkz400/switchyard
