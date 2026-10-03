@@ -40,13 +40,18 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - `sy tune` (rule tuning, judge cost vs gain, models from your config)
   - context hand-off
   - cost per task and per day
-- **Phase 4 (mostly done):**
+- **Phase 4 (done except 4.3, more providers):**
   - `sy web` and `sy app`
   - per-repo `.switchyard.yaml` with `sy trust`
   - hooks
   - hunk-level review
   - talking to a running agent
   - follow-ups that survive restarts
+  - scheduled runs and budgets
+  - `sy report`
+  - MCP servers
+  - multi-repo tasks
+  - `sy pr`, and GitHub issues as tasks
 - **Release v0.1.0** (3 Oct 2026): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
   - The repository is public: release downloads, `sy update` and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
@@ -197,6 +202,9 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.10 | ✅ **Task reports**: `sy report` writes one self-contained HTML (or `--md` Markdown) page per task: plan and results, routing decisions with rule and reason, reviews, checks, the diff and the cost. Everything is escaped, and a CSP blocks scripts. |
 | 4.11 | ✅ **MCP servers**: an `mcp:` config section passes MCP servers to both CLIs per role (Claude: a temporary `--mcp-config` file; Codex: `-c mcp_servers.*`). `${VAR}` comes from your environment, repo files need `sy trust`, and `sy doctor` checks the commands. |
 | 4.12 | ✅ **Multi-repo tasks**: `--repo name=path` or `workspace: repos:` in `.switchyard.yaml`. The planner assigns each subtask a repo; writers run in that repo's worktree pool or main tree; each repo's own (trusted) checks run there; the final review sees every repo's diff; one `sy undo <key>` reverts every repo; history and resume keep the repos. |
+| 4.13 | ✅ **`sy pr`**: a finished task becomes a branch, a commit and a GitHub pull request, with the plan, checks and cost in the description. Your index, working tree and branches are never touched. A multi-repo task gets one PR per repo (`--repo`). |
+| 4.14 | ✅ **Issues → tasks**: `sy run --issue 42` works on a GitHub issue. `--issues label:sy --pr` works through labelled issues one after another, opens a PR for each with "Closes #N", and comments on the issue. Combined with scheduled runs, this works overnight. |
+| 4.15 | ✅ **Budgets**: token and $ limits per task and per day (`budget:`). `sy` asks before going over; unattended runs stop instead. |
 
 ---
 
