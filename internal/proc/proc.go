@@ -67,16 +67,36 @@ func cleanPathList(s string) (string, []string) {
 // lock is held until unlock is called or the process exits, so a crashed sy
 // never leaves a stale lock behind. Two TryLock calls on the same path fail
 // even within one process.
+//
+// A lock file may be deleted while it is held (sy clean does that). A lock
+// taken on a file that is no longer at path is worthless, so TryLock checks
+// that the locked file is still the one at path and retries otherwise.
 func TryLock(path string) (unlock func(), ok bool) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	for try := 0; try < 3; try++ {
+		f, err := openLock(path)
+		if err != nil {
+			return nil, false
+		}
+		if !tryLock(f) {
+			f.Close()
+			return nil, false
+		}
+		if stillAt(f, path) {
+			return func() { f.Close() }, true
+		}
+		f.Close() // deleted (and maybe recreated) under us: try the new file
+	}
+	return nil, false
+}
+
+// stillAt reports whether the open file f is the file currently at path.
+func stillAt(f *os.File, path string) bool {
+	a, err := f.Stat()
 	if err != nil {
-		return nil, false
+		return false
 	}
-	if !tryLock(f) {
-		f.Close()
-		return nil, false
-	}
-	return func() { f.Close() }, true
+	b, err := os.Stat(path)
+	return err == nil && os.SameFile(a, b)
 }
 
 // lowPriority runs agents and git below normal CPU priority (set from
@@ -105,6 +125,7 @@ func Started(cmd *exec.Cmd) {
 	if lowPriority.Load() && cmd.Process != nil {
 		lower(cmd.Process.Pid)
 	}
+	noteStart(cmd)
 }
 
 // Guard makes sure child processes die with this process (a Windows job

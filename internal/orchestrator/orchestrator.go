@@ -384,10 +384,14 @@ func (o *Orchestrator) snapshotBefore(t *task) {
 	}
 	t.root = root
 	o.logf("snapshotting the working tree (git add -A on a temporary index)")
-	snap, err := (git{root}).snapshot(subject("switchyard before: ", t.text))
+	snap, big, err := (git{root}).snapshotSkipping(subject("switchyard before: ", t.text))
 	if err != nil {
 		o.logf("git snapshot failed, worktrees and undo disabled: %v", err)
 		return
+	}
+	if len(big) > 0 {
+		o.logf("left %d untracked file(s) over %d MB out of the snapshot (agents in worktrees do not see them, undo does not cover them): %s",
+			len(big), snapshotMaxFile.Load()>>20, clip(strings.Join(big, ", "), 300))
 	}
 	t.useGit = true
 	t.snapshot, t.start = snap, snap
@@ -453,6 +457,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
 	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
+	snapshotMaxFile.Store(int64(max(0, cfg.Orchestrator.SnapshotMaxFileMB)) << 20)
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
 	t.unattended = opts.Unattended
@@ -1054,19 +1059,20 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		return r
 	}
 	wg := git{path}
-	var commit string
+	var commit, agentHead string
 	for round := 1; ; round++ {
-		c, changed, err := wg.commitAll("switchyard: " + st.Title)
+		sc, err := wg.commitWork(base, "switchyard: "+st.Title)
 		if err != nil {
 			o.mergeEvent(t, st.ID, false, "commit failed: "+err.Error())
 			r.ok, r.err = false, "commit failed: "+err.Error()
 			return r
 		}
-		if !changed && round == 1 {
+		o.slotWarnings(t, st.ID, sc, &agentHead)
+		if !sc.Changed && round == 1 {
 			o.mergeEvent(t, st.ID, true, "no file changes")
 			return r
 		}
-		commit = c
+		commit = sc.Commit
 		if !o.reviewing(t) {
 			break
 		}
@@ -1144,7 +1150,12 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		r.ok, r.err = false, err.Error()
 		return r
 	}
-	if err := g.applyDiff(t.snapshot, merged); err != nil {
+	skipped, err := g.applyDiffReport(t.snapshot, merged)
+	if len(skipped) > 0 {
+		o.logf("%s: submodule changes are not applied to your tree: %s", st.ID, strings.Join(skipped, ", "))
+		t.notes = append(t.notes, fmt.Sprintf("%s changed submodule(s) %s; Switchyard does not apply submodule changes", st.ID, strings.Join(skipped, ", ")))
+	}
+	if err != nil {
 		branch := o.keepBranch(t, st.ID, commit)
 		o.mergeEvent(t, st.ID, false, fmt.Sprintf("could not apply to working tree (%v); kept on %s", err, branch))
 		t.notes = append(t.notes, fmt.Sprintf("%s could not be applied to the working tree; its changes are on branch %s", st.ID, branch))
@@ -1168,14 +1179,93 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	return r
 }
 
-// saveBranch keeps a commit on a branch for the person to look at later
-// without counting it as a conflict.
-func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
-	branch := fmt.Sprintf("sy/%s/%s/%s", o.opts.Log.Session(), t.id, stepID)
-	if _, err := (git{t.root}).out("branch", "-f", branch, commit); err != nil {
-		return commit[:min(12, len(commit))]
+// slotWarnings reports what an agent did in its worktree that Switchyard
+// cannot carry over as is. agentHead remembers the HEAD already saved.
+func (o *Orchestrator) slotWarnings(t *task, stepID string, sc slotCommit, agentHead *string) {
+	if sc.Head != "" && sc.Head != *agentHead {
+		*agentHead = sc.Head
+		branch := o.saveBranch(t, stepID+"-agent-head", sc.Head)
+		o.logf("%s: the agent moved git HEAD in its worktree (committed or switched branches); its files are merged as usual, and its own commits are kept on %s", stepID, branch)
+		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeMerge, TaskID: t.id, Step: stepID, Text: "agent moved HEAD; kept on " + branch})
 	}
-	return branch
+	if len(sc.Nested) > 0 {
+		o.logf("%s: left out nested git repositories the agent created (their files are not merged): %s", stepID, strings.Join(sc.Nested, ", "))
+		t.mergeMu.Lock()
+		t.notes = append(t.notes, fmt.Sprintf("%s created nested git repositories (%s); they were not merged", stepID, strings.Join(sc.Nested, ", ")))
+		t.mergeMu.Unlock()
+	}
+	if len(sc.Sparse) > 0 {
+		o.logf("%s: files written outside your sparse checkout are dropped: %s", stepID, clip(strings.Join(sc.Sparse, ", "), 300))
+		t.mergeMu.Lock()
+		t.notes = append(t.notes, fmt.Sprintf("%s wrote files outside the sparse checkout (%s); they were dropped", stepID, clip(strings.Join(sc.Sparse, ", "), 300)))
+		t.mergeMu.Unlock()
+	}
+}
+
+// saveBranch keeps a commit on a branch for the person to look at later
+// without counting it as a conflict. Branches are only ever created, never
+// moved: an existing name gets a numbered suffix.
+func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
+	g := git{t.root}
+	base := "sy/" + refPart(o.opts.Log.Session()) + "/" + refPart(t.id) + "/" + refPart(stepID)
+	for i := 1; i <= 20; i++ {
+		name := base
+		if i > 1 {
+			name = fmt.Sprintf("%s-%d", base, i)
+		}
+		if created, exists := createBranch(g, name, commit); created {
+			return name
+		} else if !exists {
+			break
+		}
+	}
+	// Last resort; the commit must stay referenced either way.
+	name := "sy/kept-" + commit[:min(12, len(commit))]
+	if created, _ := createBranch(g, name, commit); created {
+		return name
+	}
+	g.out("update-ref", "refs/switchyard/kept/"+commit, commit)
+	return commit[:min(12, len(commit))]
+}
+
+// createBranch creates refs/heads/name at commit unless it exists; a branch
+// already at commit counts as created.
+func createBranch(g git, name, commit string) (created, exists bool) {
+	ref := "refs/heads/" + name
+	if _, err := g.out("update-ref", "--create-reflog", ref, commit, ""); err == nil {
+		return true, false
+	}
+	cur, err := g.out("rev-parse", "-q", "--verify", ref+"^{commit}")
+	if err != nil {
+		return false, false
+	}
+	return cur == commit, true
+}
+
+// refPart makes s usable as one component of a branch name.
+func refPart(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	p := b.String()
+	for strings.Contains(p, "..") {
+		p = strings.ReplaceAll(p, "..", ".")
+	}
+	p = strings.Trim(p, ".-")
+	p = strings.TrimSuffix(p, ".lock")
+	if len(p) > 60 {
+		p = strings.TrimRight(p[:60], ".-")
+	}
+	if p == "" {
+		p = "x"
+	}
+	return p
 }
 
 func (o *Orchestrator) keepBranch(t *task, stepID, commit string) string {

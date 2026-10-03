@@ -134,6 +134,7 @@ type OrchestratorCfg struct {
 	MinFreeMemoryMB     int      `yaml:"min_free_memory_mb"`
 	BusyMaxWait         Duration `yaml:"busy_max_wait"`
 	MinFreeDiskGB       float64  `yaml:"min_free_disk_gb"`
+	SnapshotMaxFileMB   int      `yaml:"snapshot_max_file_mb"`
 	PoolWarnGB          float64  `yaml:"pool_warn_gb"`
 	PoolMaxIdle         Duration `yaml:"pool_max_idle"`
 }

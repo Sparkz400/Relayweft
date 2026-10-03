@@ -88,6 +88,9 @@ Without a task, the newest task that is not undone yet is used.
 		}
 		fmt.Println("  " + c)
 	}
+	if len(plan.Skipped) > 0 {
+		fmt.Printf("\nSubmodule changes are left as they are (update them with git submodule): %s\n", strings.Join(plan.Skipped, ", "))
+	}
 	if len(plan.Edited) > 0 {
 		fmt.Printf("\nYou edited %d of these files after the task; your edits are kept (3-way merge).\nIf an edit overlaps, nothing at all is changed and you are told which file.\n", len(plan.Edited))
 	}
