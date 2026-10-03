@@ -42,7 +42,7 @@ func cmdTune(args []string) error {
 		}
 		f.Since = time.Now().Add(-d)
 	}
-	printTune(os.Stdout, tuneTasks(recs, f), sessionlog.Suggest(recs, f))
+	printTune(os.Stdout, tuneTasks(recs, f), sessionlog.SuggestFor(recs, f, sessionlog.CatalogFrom(cfg)))
 	fmt.Println("\nlogs:", cfg.SessionDir())
 	return nil
 }

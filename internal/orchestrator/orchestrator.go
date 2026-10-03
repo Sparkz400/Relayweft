@@ -881,11 +881,15 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 	if t.resumed && t.state != nil {
 		// Subtasks that already succeeded before the interruption: their
 		// changes are in the working tree, their results feed dependents.
-		for _, st := range p.Subtasks {
+		for i, st := range p.Subtasks {
 			if r, ok := t.state.Results[st.ID]; ok && r.OK {
 				results[st.ID] = stepResult{ok: true, final: r.Final}
 				done[st.ID], started[st.ID] = true, true
 				o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, OK: true, Text: "done before the interruption"})
+			} else if !st.Kind.ReadOnly() {
+				// It may have been running when sy stopped: its agent may
+				// have left half-done edits in the tree.
+				p.Subtasks[i].Prompt += "\n\nNOTE: an earlier attempt at this subtask was interrupted (sy stopped). Files it was editing may be partly changed: check the current state of the files before you edit, and finish or redo the work."
 			}
 		}
 	}

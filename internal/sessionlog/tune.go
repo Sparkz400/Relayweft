@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
 )
 
@@ -41,20 +42,78 @@ const (
 // the first to move when one provider keeps running out of quota.
 var cheapRoles = []string{event.RoleExplorer, event.RoleResearcher, event.RoleJudge}
 
-// cheapModel is the fast-tier route per provider, matching default.yaml.
-var cheapModel = map[string]string{event.Codex: "gpt-6-luna:low", event.Claude: "haiku"}
+// Catalog is what the suggestions may propose: the fast route per
+// provider, the effort ladders and which models are fast-tier. CatalogFrom
+// reads it from the config; DefaultCatalog matches default.yaml.
+type Catalog struct {
+	Cheap   map[string]string   // provider -> "model[:effort]"
+	Efforts map[string][]string // provider -> ladder, lowest first
+	Fast    map[string]bool     // model ids of the fast tier
+}
 
-// efforts is the effort ladder per provider. It stops below the
-// premium levels (codex max/ultra) because a tuning hint should not quietly
+// DefaultCatalog matches default.yaml. Its ladders stop below the premium
+// levels (codex max/ultra) because a tuning hint should not quietly
 // multiply quota use.
-var efforts = map[string][]string{
-	event.Codex:  {"low", "medium", "high", "xhigh"},
-	event.Claude: {"low", "medium", "high", "xhigh", "max"},
+var DefaultCatalog = Catalog{
+	Cheap: map[string]string{event.Codex: "gpt-6-luna:low", event.Claude: "haiku"},
+	Efforts: map[string][]string{
+		event.Codex:  {"low", "medium", "high", "xhigh"},
+		event.Claude: {"low", "medium", "high", "xhigh", "max"},
+	},
+}
+
+// premiumEfforts are left out of the ladders read from the config.
+var premiumEfforts = map[string]bool{"max": true, "ultra": true}
+
+// CatalogFrom builds the catalog from the user's config: the explorer
+// route is the fast route, models marked tier: fast are fast, and each
+// provider's efforts form its ladder.
+func CatalogFrom(cfg *config.Config) Catalog {
+	c := Catalog{Cheap: map[string]string{}, Efforts: map[string][]string{}, Fast: map[string]bool{}}
+	for name, p := range cfg.Providers {
+		for _, m := range p.Models {
+			if m.Tier == "fast" {
+				c.Fast[m.ID] = true
+			}
+		}
+		var ladder []string
+		for _, e := range p.Efforts {
+			if !premiumEfforts[e] || (name == event.Claude && e == "max") {
+				ladder = append(ladder, e)
+			}
+		}
+		if len(ladder) > 0 {
+			c.Efforts[name] = ladder
+		}
+	}
+	if ex, ok := cfg.Roles[event.RoleExplorer]; ok {
+		for prov, r := range map[string]config.Route{event.Codex: ex.Codex, event.Claude: ex.Claude} {
+			if r.Model != "" {
+				c.Cheap[prov] = strings.TrimSuffix(r.Model+":"+r.Effort, ":")
+			}
+		}
+	}
+	for k, v := range DefaultCatalog.Cheap {
+		if c.Cheap[k] == "" {
+			c.Cheap[k] = v
+		}
+	}
+	for k, v := range DefaultCatalog.Efforts {
+		if len(c.Efforts[k]) == 0 {
+			c.Efforts[k] = v
+		}
+	}
+	return c
 }
 
 // Suggest reads the logs and proposes routing changes. Each heuristic is
 // independent; results are sorted by severity.
 func Suggest(recs []Record, f Filter) []Suggestion {
+	return SuggestFor(recs, f, DefaultCatalog)
+}
+
+// SuggestFor is Suggest with the models and efforts of a config.
+func SuggestFor(recs []Record, f Filter, cat Catalog) []Suggestion {
 	var kept []Record
 	for _, r := range recs {
 		if f.keep(r) {
@@ -63,7 +122,7 @@ func Suggest(recs []Record, f Filter) []Suggestion {
 	}
 	var out []Suggestion
 	for _, h := range []func([]Record) []Suggestion{
-		routedVsSingle, failingRoutes, escalations, finalReviews, limitPressure, judgeAdvice, cheaperReadOnly,
+		routedVsSingle, cat.failingRoutes, escalations, cat.finalReviews, limitPressure, judgeAdvice, cat.cheaperReadOnly,
 	} {
 		out = append(out, h(kept)...)
 	}
@@ -85,8 +144,10 @@ func pct(a, b int) float64 {
 
 // nextEffort is one step up the provider's ladder, "high" for the CLI
 // default, or "" when already at the top.
-func nextEffort(provider, effort string) string {
-	ladder := efforts[provider]
+func nextEffort(provider, effort string) string { return DefaultCatalog.nextEffort(provider, effort) }
+
+func (c Catalog) nextEffort(provider, effort string) string {
+	ladder := c.Efforts[provider]
 	if effort == "" {
 		return "high"
 	}
@@ -120,7 +181,9 @@ func (c counter) top() string {
 }
 
 // failingRoutes flags role+provider+model combinations that fail often.
-func failingRoutes(recs []Record) []Suggestion {
+func failingRoutes(recs []Record) []Suggestion { return DefaultCatalog.failingRoutes(recs) }
+
+func (c Catalog) failingRoutes(recs []Record) []Suggestion {
 	type agg struct {
 		role, prov, model string
 		runs, fails       int
@@ -158,7 +221,7 @@ func failingRoutes(recs []Record) []Suggestion {
 			sev = SevHigh
 		}
 		var cmds []string
-		if e := nextEffort(g.prov, g.effort.top()); e != "" {
+		if e := c.nextEffort(g.prov, g.effort.top()); e != "" {
 			cmds = append(cmds, fmt.Sprintf("/route %s %s", g.role, routeSpec(g.prov, g.model, e)))
 		}
 		cmds = append(cmds, fmt.Sprintf("/prefer %s %s", g.role, event.Other(g.prov)))
@@ -237,7 +300,9 @@ func escalations(recs []Record) []Suggestion {
 // finalReviews flags a high rejection rate at the final review: the work
 // reaches review unfinished, so either the worker is too weak or it needs
 // more fix rounds.
-func finalReviews(recs []Record) []Suggestion {
+func finalReviews(recs []Record) []Suggestion { return DefaultCatalog.finalReviews(recs) }
+
+func (c Catalog) finalReviews(recs []Record) []Suggestion {
 	n, rejected := 0, 0
 	worker := counter{}
 	for _, r := range recs {
@@ -262,7 +327,7 @@ func finalReviews(recs []Record) []Suggestion {
 	var cmds []string
 	if w := worker.top(); w != "" {
 		p := strings.SplitN(w, "|", 3)
-		if e := nextEffort(p[0], p[2]); e != "" {
+		if e := c.nextEffort(p[0], p[2]); e != "" {
 			cmds = append(cmds, fmt.Sprintf("/route worker %s", routeSpec(p[0], p[1], e)))
 		}
 	}
@@ -340,7 +405,9 @@ func isCheapModel(model string) bool {
 
 // cheaperReadOnly flags read-only roles that always succeed with little
 // context on a strong model: a fast model would do the same for less.
-func cheaperReadOnly(recs []Record) []Suggestion {
+func cheaperReadOnly(recs []Record) []Suggestion { return DefaultCatalog.cheaperReadOnly(recs) }
+
+func (c Catalog) cheaperReadOnly(recs []Record) []Suggestion {
 	type agg struct {
 		role, prov, model string
 		runs, fails       int
@@ -371,8 +438,8 @@ func cheaperReadOnly(recs []Record) []Suggestion {
 	var out []Suggestion
 	for _, k := range keys {
 		g := groups[k]
-		cheap, ok := cheapModel[g.prov]
-		if g.runs < minRuns || g.fails > 0 || isCheapModel(g.model) || !ok {
+		cheap, ok := c.Cheap[g.prov]
+		if g.runs < minRuns || g.fails > 0 || isCheapModel(g.model) || c.Fast[g.model] || !ok || strings.HasPrefix(cheap, g.model+":") || cheap == g.model {
 			continue
 		}
 		avg := g.tokens / int64(g.runs)
@@ -396,11 +463,23 @@ func judgeAdvice(recs []Record) []Suggestion {
 	key := func(r Record) string { return fmt.Sprintf("%s|%s|%s|%d", r.Session, r.TaskID, r.Step, r.Attempt) }
 	dec := map[string]Record{}
 	var jRuns, jFails, dRuns, dFails int
+	var judgeTokens, workerTokens int64
+	var judgeCalls, workerRuns int
 	for _, r := range recs {
 		switch r.Type {
 		case TypeDecision:
 			dec[key(r)] = r
 		case TypeAgentEnd:
+			if r.Tokens != nil {
+				switch r.Role {
+				case event.RoleJudge:
+					judgeTokens += r.Tokens.Total()
+					judgeCalls++
+				case event.RoleWorker, event.RoleWorkerHigh:
+					workerTokens += r.Tokens.Total()
+					workerRuns++
+				}
+			}
 			d, ok := dec[key(r)]
 			if !ok || r.LimitHit {
 				continue
@@ -420,6 +499,17 @@ func judgeAdvice(recs []Record) []Suggestion {
 		}
 	}
 	dRate, jRate := pct(dFails, dRuns), pct(jFails, jRuns)
+	// What the judge costs (its own calls) against what it saves: the
+	// failures it avoided, each roughly one more worker run.
+	cost := judgeTokens
+	var saved int64
+	if workerRuns > 0 && dRate > jRate {
+		saved = int64((dRate - jRate) * float64(jRuns) * float64(workerTokens/int64(workerRuns)))
+	}
+	costLine := ""
+	if judgeCalls > 0 {
+		costLine = fmt.Sprintf(" The judge used %s fresh tokens in %d calls; the failures it avoided would have cost about %s.", human(cost), judgeCalls, human(saved))
+	}
 	switch {
 	case jRuns == 0 && dRuns >= minRuns && dRate >= failRateHigh:
 		return []Suggestion{{
@@ -434,8 +524,22 @@ func judgeAdvice(recs []Record) []Suggestion {
 			Severity: SevInfo,
 			Title:    "the judge does not improve routing",
 			Detail: fmt.Sprintf("judged steps failed %d of %d (%.0f%%), default-rule worker steps %d of %d (%.0f%%). Turning it off saves a model call per unclear step.",
-				jFails, jRuns, jRate*100, dFails, dRuns, dRate*100),
+				jFails, jRuns, jRate*100, dFails, dRuns, dRate*100) + costLine,
 			Commands: []string{"/judge off"},
+		}}
+	case jRuns >= minJudged && dRuns >= minRuns && cost > saved:
+		return []Suggestion{{
+			Severity: SevInfo,
+			Title:    "the judge costs more than it saves",
+			Detail: fmt.Sprintf("judged steps fail less (%.0f%% vs %.0f%%), but not by enough to pay for the judge.", jRate*100, dRate*100) + costLine +
+				" Lower routing.judge_below_confidence so it runs less often, or turn it off.",
+			Commands: []string{"/judge off"},
+		}}
+	case jRuns >= minJudged && dRuns >= minRuns:
+		return []Suggestion{{
+			Severity: SevInfo,
+			Title:    "the judge pays off",
+			Detail:   fmt.Sprintf("judged steps fail %.0f%% vs %.0f%% for default-rule steps.", jRate*100, dRate*100) + costLine + " Keep it on.",
 		}}
 	}
 	return nil

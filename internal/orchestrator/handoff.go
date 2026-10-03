@@ -111,11 +111,43 @@ func repoNotes(root string) string {
 	if err != nil {
 		return ""
 	}
-	entries := splitNotes(string(data))
-	if len(entries) > notesInclude {
-		entries = entries[len(entries)-notesInclude:]
+	var fresh []string
+	for _, e := range splitNotes(string(data)) {
+		if !staleNote(root, e, time.Now()) {
+			fresh = append(fresh, e)
+		}
 	}
-	return strings.Join(entries, "\n")
+	if len(fresh) > notesInclude {
+		fresh = fresh[len(fresh)-notesInclude:]
+	}
+	return strings.Join(fresh, "\n")
+}
+
+// notesMaxAge drops notes older than this from the prompts.
+const notesMaxAge = 60 * 24 * time.Hour
+
+// staleNote reports whether a note no longer describes the repo: it is
+// old, or none of the files it lists exist any more (a refactor moved
+// them).
+func staleNote(root, e string, now time.Time) bool {
+	if len(e) >= 12 {
+		if d, err := time.Parse("2006-01-02", e[2:12]); err == nil && now.Sub(d) > notesMaxAge {
+			return true
+		}
+	}
+	_, files, ok := strings.Cut(e, "\n  files: ")
+	if !ok {
+		return false
+	}
+	for _, f := range strings.Split(strings.TrimSpace(files), ", ") {
+		if strings.HasPrefix(f, "+") {
+			return false // "+N more": can't tell
+		}
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(f))); err == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func splitNotes(s string) []string {

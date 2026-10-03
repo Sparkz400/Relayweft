@@ -194,6 +194,23 @@ func steps(n, fails int, rule string, judged bool, task string) []Record {
 	return out
 }
 
+func withTokens(recs []Record, n int64) []Record {
+	for i := range recs {
+		if recs[i].Type == TypeAgentEnd {
+			recs[i].Tokens = &event.TokenUsage{Output: n}
+		}
+	}
+	return recs
+}
+
+func judgeCalls(n int, tokens int64) []Record {
+	var out []Record
+	for i := 0; i < n; i++ {
+		out = append(out, Record{TS: t0, Session: "s", TaskID: "b", Step: fmt.Sprint("s", i, "-judge"), Type: TypeAgentEnd, Role: "judge", OK: Bool(true), Tokens: &event.TokenUsage{Output: tokens}})
+	}
+	return out
+}
+
 func TestJudgeAdvice(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -205,7 +222,9 @@ func TestJudgeAdvice(t *testing.T) {
 		{"judge already on", append(steps(10, 3, "default", false, "a"), steps(1, 0, "default", true, "b")...), ""},
 		{"judge no better", append(steps(10, 2, "default", false, "a"), steps(10, 2, "default", true, "b")...), "info: the judge does not improve routing /judge off"},
 		{"old logs: rule judge", append(steps(10, 2, "default", false, "a"), steps(10, 3, "judge", false, "b")...), "/judge off"},
-		{"judge better", append(steps(10, 3, "default", false, "a"), steps(10, 1, "default", true, "b")...), ""},
+		{"judge better, free", append(steps(10, 3, "default", false, "a"), steps(10, 1, "default", true, "b")...), "info: the judge pays off"},
+		{"judge better but costly", append(withTokens(steps(10, 3, "default", false, "a"), 1000), append(withTokens(steps(10, 1, "default", true, "b"), 1000), judgeCalls(10, 5000)...)...), "info: the judge costs more than it saves /judge off"},
+		{"judge better and cheap", append(withTokens(steps(10, 3, "default", false, "a"), 50000), append(withTokens(steps(10, 1, "default", true, "b"), 50000), judgeCalls(10, 500)...)...), "info: the judge pays off"},
 		{"too few judged", append(steps(10, 2, "default", false, "a"), steps(9, 5, "default", true, "b")...), ""},
 	} {
 		got := titles(judgeAdvice(tc.recs))

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRepoMap(t *testing.T) {
@@ -30,6 +31,7 @@ func TestRepoMap(t *testing.T) {
 
 func TestRepoNotes(t *testing.T) {
 	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "a.go"), []byte("x"), 0o644)
 	if repoNotes(root) != "" {
 		t.Fatal("notes before any task")
 	}
@@ -46,5 +48,25 @@ func TestRepoNotes(t *testing.T) {
 	}
 	if repoNotes(t.TempDir()) != "" {
 		t.Fatal("notes leaked to another repo")
+	}
+}
+
+func TestStaleNotes(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "kept.go"), []byte("x"), 0o644)
+	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		e     string
+		stale bool
+	}{
+		{"- 2026-10-01: t\n  result: ok\n  files: kept.go, gone.go", false},
+		{"- 2026-10-01: t\n  result: ok\n  files: gone.go", true},
+		{"- 2026-10-01: t\n  result: ok", false},
+		{"- 2026-01-01: t\n  result: ok\n  files: kept.go", true},
+		{"- 2026-10-01: t\n  result: ok\n  files: gone.go, +3 more", false},
+	} {
+		if got := staleNote(root, c.e, now); got != c.stale {
+			t.Errorf("staleNote(%q) = %v", c.e, got)
+		}
 	}
 }

@@ -33,6 +33,7 @@ const benchExample = `# sy bench: compare Switchyard (routed) with single agents
 
 modes:
   - routed                          # Switchyard with your switchyard.yaml routes
+  # - routed-nohandoff              # the same without the context hand-off (repo map, notes), to measure it
   - single:codex:gpt-6.1-sol:high   # one agent, no planning or review
   - single:claude:opus:high
 
@@ -114,16 +115,17 @@ func cmdBench(args []string) error {
 	type modeSpec struct {
 		name, provider string
 		route          config.Route
+		noHandoff      bool
 	}
 	var modes []modeSpec
 	for _, m := range bf.Modes {
-		if m == "routed" {
-			modes = append(modes, modeSpec{name: m})
+		if m == "routed" || m == "routed-nohandoff" {
+			modes = append(modes, modeSpec{name: m, noHandoff: m == "routed-nohandoff"})
 			continue
 		}
 		spec, ok := strings.CutPrefix(m, "single:")
 		if !ok {
-			return fmt.Errorf("mode %q: want routed or single:<provider>:<model>[:effort]", m)
+			return fmt.Errorf("mode %q: want routed, routed-nohandoff or single:<provider>:<model>[:effort]", m)
 		}
 		prov, route, err := config.ParseRouteSpec(spec)
 		if err != nil {
@@ -230,8 +232,15 @@ func cmdBench(args []string) error {
 					printEvent(e, true)
 				}
 			}()
+			runStore := store
+			if m.noHandoff {
+				// Same routes without the context hand-off, to measure it.
+				cfgNo := store.Get()
+				cfgNo.Orchestrator.Handoff = false
+				runStore = config.NewStore(cfgNo, store.Path())
+			}
 			orc := orchestrator.New(orchestrator.Options{
-				Dir: ws.Path, Store: store, Runners: benchRunners, Tracker: tracker, Log: log,
+				Dir: ws.Path, Store: runStore, Runners: benchRunners, Tracker: tracker, Log: log,
 				Events: events, ForceProvider: c.provider, Mode: map[bool]string{true: "routed", false: "single"}[m.provider == ""],
 				Bench: t.Name, TaskIDPrefix: fmt.Sprintf("bench%d-", n),
 			})
