@@ -51,3 +51,16 @@ routed                   5/5     1m15s     0          152k        1.49
 routed-nohandoff         5/5     1m24s     0          157k        1.56
 single:claude:opus:high  5/5     26s       0          71k         0.92
 ```
+
+## After the change (same tasks, routed only)
+
+```
+MODE    PASSED  AVG WALL  CODEX TOK  CLAUDE TOK  ≈$ API-EQUIV
+routed  5/5     51s       0          117k        1.14
+```
+
+Skipping the review of one-step plans cut the routed mode's average wall
+time from 1m15s to 51s (-32%) and its tokens from 152k to 117k (-23%). All
+5 tasks still pass. A single agent is still faster on tasks this small
+(26s, 71k tokens). The planner and the final review are the remaining
+overhead.
