@@ -31,6 +31,10 @@ type Client struct {
 	rejected bool
 }
 
+// Rejected reports whether the token got a 401, so later reads went on
+// without it (and a private repository then looks like a 404).
+func (c *Client) Rejected() bool { return c.rejected }
+
 // NewClient returns a client for base with the given token ("" = none).
 // The default transport is kept on purpose: it honours HTTPS_PROXY.
 func NewClient(base, token string) *Client {

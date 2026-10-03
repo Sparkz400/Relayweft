@@ -470,6 +470,12 @@ func (w *watcher) check(ctx context.Context, e watchEntry) (watchEntry, bool) {
 		return e, false
 	}
 	p, err := client.Pull(repo, e.Number)
+	if gh.IsNotFound(err) && client.Rejected() {
+		// Without the token a private repository looks like a 404 too:
+		// keep watching until the token works again.
+		w.note(&e, "skipped: GitHub rejected the token, so the pull request could not be read (create a new token or run `gh auth login`)")
+		return e, false
+	}
 	if gh.IsNotFound(err) {
 		w.note(&e, "not found on GitHub: no longer watched")
 		return e, true

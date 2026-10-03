@@ -553,7 +553,9 @@ func TestWatchListForgetAndClosed(t *testing.T) {
 	defer func() { prToken = old }()
 	prToken = func(string) (string, string) { return "tok", "test" }
 	out.Reset()
-	w := &watcher{out: &out, viewers: map[string]string{}, only: ""}
+	// Only this one: o/r#5 has no test server and must not reach GitHub.
+	root101 := watched(t)[len(watched(t))-1].Root
+	w := &watcher{out: &out, viewers: map[string]string{}, only: root101}
 	w.c.register(newFlagSet())
 	w.tracker = newTracker()
 	if err := w.pass(context.Background()); err != nil {
@@ -630,5 +632,36 @@ func TestWatchAPIOnlyForItsHost(t *testing.T) {
 		if got := gh.APIServes(c.api, c.host); got != c.want {
 			t.Errorf("APIServes(%q, %q) = %v", c.api, c.host, got)
 		}
+	}
+}
+
+// A rejected token makes a private repository look like a 404: the pull
+// request stays watched instead of being forgotten.
+func TestWatchKeepsPRWhenTokenRejected(t *testing.T) {
+	isolate(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+			return
+		}
+		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+	root := t.TempDir()
+	if err := recordWatch(watchEntry{Root: root, Host: "github.com", Owner: "o", Name: "private", Number: 7, Branch: "sy/a", API: srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	old := prToken
+	defer func() { prToken = old }()
+	prToken = func(string) (string, string) { return "stale", "test" }
+	var out bytes.Buffer
+	w := &watcher{out: &out, viewers: map[string]string{}, only: root}
+	w.c.register(newFlagSet())
+	w.tracker = newTracker()
+	if err := w.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if prs := watched(t); len(prs) != 1 || !strings.Contains(out.String(), "rejected the token") {
+		t.Fatalf("dropped after a rejected token: %+v\n%s", prs, out.String())
 	}
 }
