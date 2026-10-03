@@ -119,7 +119,8 @@ const sess = {
   clear() { SESSION = null; try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ } },
 };
 async function startSession() {
-  const m = /(?:^#|&)b=([0-9a-f]+)/.exec(location.hash || '');
+  // Some openers (VS Code's openExternal) percent-encode the "=".
+  const m = /(?:^#|&)b=([0-9a-f]+)/.exec((location.hash || '').replace(/%3D/gi, '='));
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   if (m) {
     try {

@@ -1,0 +1,150 @@
+{
+  "name": "switchyard",
+  "displayName": "Switchyard",
+  "description": "A thin VS Code client for Switchyard (sy web): the agent tree, the activity log, plan approval, follow-ups and hunk-by-hunk review in VS Code's diff editor.",
+  "version": "0.1.0",
+  "publisher": "sparkz400",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sparkz400/switchyard.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "AI"
+  ],
+  "keywords": [
+    "switchyard",
+    "codex",
+    "claude",
+    "agents"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "switchyard.start", "title": "Start", "category": "Switchyard", "icon": "$(play)" },
+      { "command": "switchyard.stop", "title": "Stop", "category": "Switchyard", "icon": "$(debug-stop)" },
+      { "command": "switchyard.runTask", "title": "Run Task…", "category": "Switchyard", "icon": "$(add)" },
+      { "command": "switchyard.cancelTask", "title": "Cancel Running Task", "category": "Switchyard", "icon": "$(stop-circle)" },
+      { "command": "switchyard.approvePlan", "title": "Approve or Edit Plan…", "category": "Switchyard", "icon": "$(checklist)" },
+      { "command": "switchyard.followUp", "title": "Follow Up with Agent…", "category": "Switchyard", "icon": "$(comment-discussion)" },
+      { "command": "switchyard.undoLastTask", "title": "Undo Last Task…", "category": "Switchyard", "icon": "$(discard)" },
+      { "command": "switchyard.openInBrowser", "title": "Open in Browser", "category": "Switchyard", "icon": "$(link-external)" },
+      { "command": "switchyard.showLog", "title": "Show Activity Log", "category": "Switchyard", "icon": "$(output)" },
+      { "command": "switchyard.answerApproval", "title": "Answer Approval…", "category": "Switchyard" },
+      { "command": "switchyard.reviewChanges", "title": "Review Changes…", "category": "Switchyard", "icon": "$(diff)" },
+      { "command": "switchyard.review.openFile", "title": "Open Diff", "category": "Switchyard Review", "icon": "$(diff)" },
+      { "command": "switchyard.review.acceptHunk", "title": "Accept Hunk at Cursor", "category": "Switchyard Review", "icon": "$(check)" },
+      { "command": "switchyard.review.rejectHunk", "title": "Reject Hunk at Cursor", "category": "Switchyard Review", "icon": "$(close)" },
+      { "command": "switchyard.review.toggleHunk", "title": "Toggle Hunk", "category": "Switchyard Review" },
+      { "command": "switchyard.review.acceptFile", "title": "Accept File", "category": "Switchyard Review", "icon": "$(check-all)" },
+      { "command": "switchyard.review.rejectFile", "title": "Reject File", "category": "Switchyard Review", "icon": "$(circle-slash)" },
+      { "command": "switchyard.review.submit", "title": "Apply Selected Changes", "category": "Switchyard Review", "icon": "$(git-commit)" },
+      { "command": "switchyard.review.rejectAll", "title": "Reject All Changes", "category": "Switchyard Review", "icon": "$(trash)" },
+      { "command": "switchyard.review.feedback", "title": "Send Back with Feedback…", "category": "Switchyard Review", "icon": "$(feedback)" },
+      { "command": "switchyard.plan.approveEdited", "title": "Approve This Plan", "category": "Switchyard" },
+      { "command": "switchyard.plan.reject", "title": "Reject Plan (Cancel Task)", "category": "Switchyard" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "switchyard", "title": "Switchyard", "icon": "media/switchyard.svg" }
+      ]
+    },
+    "views": {
+      "switchyard": [
+        { "id": "switchyard.agents", "name": "Agents" },
+        { "id": "switchyard.review", "name": "Review" }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "switchyard.agents",
+        "contents": "Switchyard is not running for this folder.\n[Start Switchyard](command:switchyard.start)\nIt runs `sy web --client` in the workspace folder. Set `switchyard.path` if `sy` is not on your PATH.",
+        "when": "!switchyard.running"
+      },
+      {
+        "view": "switchyard.review",
+        "contents": "No changes are waiting for your review. Turn on \"review changes\" in sy (or `orchestrator.review_changes` in its config) to review each agent's changes here before they land."
+      }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "switchyard.start", "when": "view == switchyard.agents && !switchyard.running", "group": "navigation@1" },
+        { "command": "switchyard.runTask", "when": "view == switchyard.agents && switchyard.running", "group": "navigation@1" },
+        { "command": "switchyard.cancelTask", "when": "view == switchyard.agents && switchyard.taskRunning", "group": "navigation@2" },
+        { "command": "switchyard.openInBrowser", "when": "view == switchyard.agents && switchyard.running", "group": "navigation@3" },
+        { "command": "switchyard.showLog", "when": "view == switchyard.agents", "group": "navigation@4" },
+        { "command": "switchyard.followUp", "when": "view == switchyard.agents && switchyard.running", "group": "1_task@1" },
+        { "command": "switchyard.undoLastTask", "when": "view == switchyard.agents", "group": "1_task@2" },
+        { "command": "switchyard.stop", "when": "view == switchyard.agents && switchyard.running", "group": "2_proc@1" },
+        { "command": "switchyard.review.submit", "when": "view == switchyard.review && switchyard.reviewPending", "group": "navigation@1" },
+        { "command": "switchyard.review.feedback", "when": "view == switchyard.review && switchyard.reviewPending", "group": "navigation@2" },
+        { "command": "switchyard.review.rejectAll", "when": "view == switchyard.review && switchyard.reviewPending", "group": "navigation@3" }
+      ],
+      "view/item/context": [
+        { "command": "switchyard.followUp", "when": "view == switchyard.agents && viewItem =~ /^agent/", "group": "inline" },
+        { "command": "switchyard.approvePlan", "when": "view == switchyard.agents && viewItem == approval.plan", "group": "inline" },
+        { "command": "switchyard.reviewChanges", "when": "view == switchyard.agents && viewItem == approval.changes", "group": "inline" },
+        { "command": "switchyard.review.openFile", "when": "view == switchyard.review && viewItem =~ /^reviewFile/", "group": "inline@1" },
+        { "command": "switchyard.review.acceptFile", "when": "view == switchyard.review && viewItem =~ /^reviewFile/", "group": "inline@2" },
+        { "command": "switchyard.review.rejectFile", "when": "view == switchyard.review && viewItem =~ /^reviewFile/", "group": "inline@3" }
+      ],
+      "editor/title": [
+        { "command": "switchyard.review.acceptHunk", "when": "resourceScheme == switchyard-review", "group": "navigation@1" },
+        { "command": "switchyard.review.rejectHunk", "when": "resourceScheme == switchyard-review", "group": "navigation@2" },
+        { "command": "switchyard.review.submit", "when": "resourceScheme == switchyard-review", "group": "navigation@3" }
+      ],
+      "commandPalette": [
+        { "command": "switchyard.review.toggleHunk", "when": "false" },
+        { "command": "switchyard.review.openFile", "when": "false" },
+        { "command": "switchyard.review.acceptFile", "when": "false" },
+        { "command": "switchyard.review.rejectFile", "when": "false" },
+        { "command": "switchyard.review.acceptHunk", "when": "resourceScheme == switchyard-review" },
+        { "command": "switchyard.review.rejectHunk", "when": "resourceScheme == switchyard-review" },
+        { "command": "switchyard.plan.approveEdited", "when": "switchyard.planEditorActive" },
+        { "command": "switchyard.plan.reject", "when": "switchyard.planEditorActive" },
+        { "command": "switchyard.answerApproval", "when": "false" }
+      ]
+    },
+    "configuration": {
+      "title": "Switchyard",
+      "properties": {
+        "switchyard.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Path to the `sy` executable (`sy.exe` on Windows). Empty: look for `sy` on PATH, then in `~/go/bin` and Scoop's shims."
+        },
+        "switchyard.args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "scope": "machine-overridable",
+          "markdownDescription": "Extra arguments for `sy web --client`, one per item (no shell quoting), e.g. `[\"--threads\", \"2\"]` or `[\"--demo\"]`."
+        },
+        "switchyard.notifyApprovals": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when a plan, a change set or a budget question waits for you."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "typecheck": "tsc --noEmit -p ./",
+    "test": "npm run build && node --test \"out/test/*.test.js\"",
+    "package": "npm run build && npx --yes @vscode/vsce@4 package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/vscode": "~1.90.0",
+    "typescript": "~5.9.3"
+  }
+}
