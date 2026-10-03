@@ -31,7 +31,10 @@ import (
 const RepoFileName = ".switchyard.yaml"
 
 // commandKeys are the top-level keys that need trust.
-var commandKeys = []string{"verify", "hooks", "providers", "log_dir", "mcp"}
+// workspace is here too: its repos are folders agents may write to, and
+// a path (absolute, or a UNC share on Windows) must not come from a repo
+// file nobody reviewed.
+var commandKeys = []string{"verify", "hooks", "providers", "log_dir", "mcp", "workspace"}
 
 // RepoInfo describes the repo file applied to a config.
 type RepoInfo struct {
@@ -122,6 +125,8 @@ func ApplyRepo(c *Config, dir string) (RepoInfo, error) {
 			}
 		}
 	}
+	// A repo file may tighten your budget, never loosen it (trusted or not).
+	c.Budget = stricterBudget(guarded.Budget, c.Budget)
 	if err := c.Validate(); err != nil {
 		return info, fmt.Errorf("%s: %w", p, err)
 	}
@@ -147,8 +152,36 @@ func restoreCommandSettings(c, before *Config) []string {
 	if !reflect.DeepEqual(c.MCP, before.MCP) {
 		changed = append(changed, "mcp")
 	}
-	c.Verify, c.Hooks, c.Providers, c.LogDir, c.MCP = before.Verify, before.Hooks, before.Providers, before.LogDir, before.MCP
+	if !reflect.DeepEqual(c.Workspace, before.Workspace) {
+		changed = append(changed, "workspace")
+	}
+	c.Verify, c.Hooks, c.Providers, c.LogDir, c.MCP, c.Workspace = before.Verify, before.Hooks, before.Providers, before.LogDir, before.MCP, before.Workspace
 	return changed
+}
+
+// stricterBudget keeps the tighter of two budgets per limit (0 = no limit).
+func stricterBudget(mine, repo BudgetCfg) BudgetCfg {
+	tighterI := func(a, b int64) int64 {
+		if a <= 0 || (b > 0 && b < a) {
+			return b
+		}
+		return a
+	}
+	tighterF := func(a, b float64) float64 {
+		if a <= 0 || (b > 0 && b < a) {
+			return b
+		}
+		return a
+	}
+	out := mine
+	out.TaskTokens = tighterI(mine.TaskTokens, repo.TaskTokens)
+	out.DayTokens = tighterI(mine.DayTokens, repo.DayTokens)
+	out.TaskUSD = tighterF(mine.TaskUSD, repo.TaskUSD)
+	out.DayUSD = tighterF(mine.DayUSD, repo.DayUSD)
+	if repo.WarnAt > 0 && (mine.WarnAt <= 0 || repo.WarnAt < mine.WarnAt) {
+		out.WarnAt = repo.WarnAt
+	}
+	return out
 }
 
 // mergeMap decodes each entry of a mapping node on top of the existing

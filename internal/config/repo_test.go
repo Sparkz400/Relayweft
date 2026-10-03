@@ -123,3 +123,24 @@ func TestRepoFileAliasesCannotBypassTrust(t *testing.T) {
 		})
 	}
 }
+
+// A repo file may only tighten the budget, and its workspace needs trust.
+func TestRepoFileBudgetOnlyStricterAndWorkspaceNeedsTrust(t *testing.T) {
+	isolateTrust(t)
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, RepoFileName), []byte("budget: {task_usd: 0, day_usd: 9, task_tokens: 1000}\nworkspace: {repos: {victim: /abs/other}}\n"), 0o644)
+	user := Default()
+	user.Budget.TaskUSD, user.Budget.DayUSD = 1, 5
+	s := NewStore(user, filepath.Join(t.TempDir(), "user.yaml"))
+	info, err := s.ApplyRepo(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := s.Get().Budget
+	if b.TaskUSD != 1 || b.DayUSD != 5 || b.TaskTokens != 1000 {
+		t.Fatalf("budget = %+v (want the stricter of each)", b)
+	}
+	if len(s.Get().Workspace.Repos) != 0 || !contains(info.Ignored, "workspace") {
+		t.Fatalf("untrusted workspace: %+v ignored %v", s.Get().Workspace, info.Ignored)
+	}
+}

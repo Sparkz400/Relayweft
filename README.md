@@ -256,7 +256,7 @@ It has the task text, status, timing and mode; the plan (each subtask's kind, ro
 
 ### Budgets
 
-Cap what one task and one day may use (`budget:` in `switchyard.yaml`, 0 = off):
+Cap what one task and one day may use (`budget:` in `switchyard.yaml`, 0 = off; a repo's `.switchyard.yaml` can only make these stricter):
 
 ```yaml
 budget: {task_tokens: 0, task_usd: 2, day_tokens: 0, day_usd: 10, warn_at: 0.8}
@@ -415,7 +415,7 @@ sy --repo web=../web                     # TUI; also sy run, sy web, sy app, sy 
 sy run --repo web=../web --repo docs=../docs "add a 'nickname' field to the user API and show it on the profile page"
 ```
 
-or for every task of the project, in its `.switchyard.yaml` (or your config; paths are relative to the project folder, and no `sy trust` is needed because these are only folders):
+or for every task of the project, in its `.switchyard.yaml` (or your config; paths are relative to the project folder). Agents write to these folders, so a repo file's `workspace` applies only after `sy trust`:
 
 ```yaml
 workspace:

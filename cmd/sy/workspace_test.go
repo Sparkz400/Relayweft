@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"github.com/sparkz400/switchyard/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,9 +48,16 @@ func TestRepoFlag(t *testing.T) {
 		t.Errorf("missing path: %v", err)
 	}
 
-	// From .switchyard.yaml (no trust needed: it only names folders).
+	// From .switchyard.yaml: folders agents write to, so only once trusted.
 	rel, _ := filepath.Rel(api, web)
-	os.WriteFile(filepath.Join(api, ".switchyard.yaml"), []byte("workspace:\n  repos:\n    web: "+filepath.ToSlash(rel)+"\n"), 0o644)
+	repoFile := filepath.Join(api, ".switchyard.yaml")
+	os.WriteFile(repoFile, []byte("workspace:\n  repos:\n    web: "+filepath.ToSlash(rel)+"\n"), 0o644)
+	if c, err := parse(); err != nil || len(c.workspace) != 0 {
+		t.Fatalf("untrusted workspace applied: %+v %v", c, err)
+	}
+	if err := config.Trust(repoFile); err != nil {
+		t.Fatal(err)
+	}
 	c, err = parse()
 	if err != nil || len(c.workspace) != 1 || c.workspace[0].Name != "web" {
 		t.Fatalf("config workspace: %+v %v", c, err)

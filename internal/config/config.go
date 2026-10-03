@@ -160,8 +160,8 @@ type HooksCfg struct {
 
 // WorkspaceCfg makes every task of the project a multi-repo task: Repos
 // maps a short name to another git repository (a path relative to the
-// project folder), e.g. {frontend: ../web}. Only paths, so a repo file may
-// set it without `sy trust`; each repo's own commands still need trust.
+// project folder), e.g. {frontend: ../web}. Agents write to these folders,
+// so a repo file's workspace applies only after `sy trust`.
 type WorkspaceCfg struct {
 	Repos map[string]string `yaml:"repos,omitempty"`
 }
