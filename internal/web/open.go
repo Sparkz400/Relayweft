@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 )
@@ -84,9 +85,11 @@ func appCommand(goos, url string, getenv func(string) string, exists func(string
 		}
 	case "darwin":
 		home := getenv("HOME")
+		// macOS paths: always forward slashes (path, not filepath, so the
+		// result does not depend on the OS this is built or tested on).
 		for _, app := range []string{"Google Chrome", "Microsoft Edge", "Chromium", "Brave Browser"} {
-			for _, dir := range []string{"/Applications", filepath.Join(home, "Applications")} {
-				if exists(filepath.Join(dir, app+".app")) {
+			for _, dir := range []string{"/Applications", path.Join(home, "Applications")} {
+				if exists(path.Join(dir, app+".app")) {
 					return "open", append([]string{"-na", app, "--args"}, appArgs...), app, true
 				}
 			}
