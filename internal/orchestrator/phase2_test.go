@@ -331,3 +331,59 @@ func TestChangeReviewFeedbackNeverApplies(t *testing.T) {
 		}
 	}
 }
+
+// A resume works from the state on disk: a task another sy finished since
+// is not run again.
+func TestResumeRefusesFinishedTask(t *testing.T) {
+	ran := false
+	set := both(func(s runner.Spec) runner.Result { ran = true; return runner.Result{Final: "x"} })
+	o, _ := newOrc(t, "", set, nil)
+	st := &TaskState{ID: "stale-test", Task: longTask, Status: "running", Created: time.Now(),
+		Plan: &Plan{Summary: "p", Subtasks: []Subtask{{ID: "a", Title: "a", Kind: router.KindEdit, Prompt: "a"}}}}
+	st.save()
+	stale := *st
+	st.Status = "done" // another sy finished it
+	st.save()
+	res := o.RunWith(context.Background(), "", TaskOptions{Resume: &stale})
+	if res.OK || ran || !strings.Contains(res.Summary, "is done now") {
+		t.Fatalf("stale resume ran: %+v ran=%v", res, ran)
+	}
+	// While another sy holds the lock, it is refused too.
+	st.Status = "running"
+	st.save()
+	unlock, ok := st.lock()
+	if !ok {
+		t.Fatal("lock")
+	}
+	res = o.RunWith(context.Background(), "", TaskOptions{Resume: st})
+	unlock()
+	if res.OK || ran || !strings.Contains(res.Summary, "another sy") {
+		t.Fatalf("locked resume ran: %+v", res)
+	}
+}
+
+func TestChangeSetLiteralPaths(t *testing.T) {
+	dir := gitRepo(t)
+	g := git{dir}
+	base := headOf(t, dir)
+	os.WriteFile(filepath.Join(dir, "[id].tsx"), []byte("page\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "i.tsx"), []byte("other\n"), 0o644)
+	g.out("add", "-A")
+	g.out("commit", "-qm", "x")
+	files, err := g.changeSet(base, headOf(t, dir))
+	if err != nil || len(files) != 2 {
+		t.Fatalf("files %+v %v", files, err)
+	}
+	for _, f := range files {
+		if strings.Count(f.Patch, "diff --git") != 1 {
+			t.Errorf("%s patch has %d files:\n%s", f.Path, strings.Count(f.Patch, "diff --git"), f.Patch)
+		}
+	}
+	pc, err := g.partialCommit(base, headOf(t, dir), []string{"[id].tsx"}, "only one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names, _ := g.out("diff", "--name-only", base, pc); names != "[id].tsx" {
+		t.Fatalf("partial commit has %q", names)
+	}
+}

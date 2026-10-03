@@ -44,7 +44,8 @@ func checkoutWorkers() int { return max(1, min(4, runtime.NumCPU()/2)) }
 func (g git) run(env []string, stdin []byte, args ...string) (string, error) {
 	// Parallel checkout for worktree creation, slot resets and restores into
 	// the main tree; git ignores it elsewhere.
-	args = append([]string{"-c", "checkout.workers=" + strconv.Itoa(checkoutWorkers())}, args...)
+	// Paths are always literal: "[id].tsx" must not also match "i.tsx".
+	args = append([]string{"--literal-pathspecs", "-c", "checkout.workers=" + strconv.Itoa(checkoutWorkers())}, args...)
 	if runtime.GOOS == "windows" {
 		// Worktrees live under %LOCALAPPDATA%; deep repos exceed MAX_PATH.
 		args = append([]string{"-c", "core.longpaths=true"}, args...)

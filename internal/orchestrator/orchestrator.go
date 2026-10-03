@@ -63,6 +63,9 @@ type TaskOptions struct {
 	Unattended bool
 	// Resume continues an interrupted task from its saved state.
 	Resume *TaskState
+	// Force resumes a task that is no longer marked running (it finished,
+	// failed or was cancelled): its unfinished steps run again.
+	Force bool
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -262,6 +265,7 @@ type task struct {
 	unattended bool       // no approvals (queued task)
 	state      *TaskState // persisted progress (nil in bench runs)
 	resumed    bool       // continuing an interrupted task
+	keepBefore bool       // resumed: undo keeps the original "before" snapshot
 	repoMap    string     // context hand-off (handoff.go)
 	repoNotes  string
 }
@@ -386,7 +390,7 @@ func (o *Orchestrator) snapshotBefore(t *task) {
 	}
 	t.useGit = true
 	t.snapshot, t.start = snap, snap
-	if o.opts.Bench == "" {
+	if o.opts.Bench == "" && !t.keepBefore {
 		git{root}.recordSnapshot(t.key, "before", snap)
 	}
 }
@@ -451,22 +455,58 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
 	t.unattended = opts.Unattended
+	refused := ""
 	if o.opts.Bench == "" && o.opts.Mode != "demo" {
 		t.state = opts.Resume
 		if t.state == nil {
-			t.state = &TaskState{ID: t.key, Task: text, Dir: o.opts.Dir, Mode: o.opts.Mode, Created: time.Now()}
+			t.state = &TaskState{ID: t.key, Task: text, Dir: o.opts.Dir, Mode: o.opts.Mode, Created: time.Now(), UndoKey: t.key}
 		} else {
 			t.resumed = true
 		}
-		t.state.Status = "running"
-		t.state.save()
-		defer t.state.lock()()
+		// The lock comes first: two sy processes must never run one task.
+		unlock, ok := t.state.lock()
+		if !ok {
+			refused = fmt.Sprintf("task %s is running in another sy", t.state.ID)
+			t.state = nil
+		} else {
+			defer unlock()
+			if t.resumed {
+				// The state on disk is the truth: another sy may have
+				// resumed and finished it since this one was loaded.
+				fresh, err := LoadTask(t.state.ID)
+				switch {
+				case err != nil:
+					refused = err.Error()
+				case fresh.Status != "running" && !opts.Force:
+					refused = fmt.Sprintf("task %s is %s now, not interrupted (sy resume --force runs its unfinished steps)", fresh.ID, fresh.Status)
+				}
+				if refused != "" {
+					t.state = nil
+				} else {
+					t.state = fresh
+					if fresh.UndoKey != "" {
+						// Undo covers the whole task, not just this part.
+						t.key, t.keepBefore = fresh.UndoKey, true
+					}
+				}
+			}
+		}
+		if t.state != nil {
+			t.state.Status = "running"
+			t.state.save()
+		}
 	}
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
 
 	t.quotaBefore = o.quotaNow()
-	res := o.run(ctx, t)
+	var res TaskResult
+	if refused != "" {
+		o.emit(event.Event{Kind: event.Error, Text: refused})
+		res = TaskResult{Summary: refused}
+	} else {
+		res = o.run(ctx, t)
+	}
 	o.snapshotAfter(t)
 	res.Duration = time.Since(began)
 	res.Tokens = t.tokens
@@ -513,6 +553,13 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	// Git setup.
 	o.snapshotBefore(t)
 	t.wtOK = o.worktreesAllowed(t)
+	if o.reviewing(t) && !t.wtOK {
+		why := "this folder is not a git repo"
+		if t.useGit {
+			why = "worktrees are off for this repo (git < 2.38 or more than worktree_max_files files)"
+		}
+		o.emit(event.Event{Kind: event.Error, Text: "change review is on, but " + why + ": agents write straight into your tree (sy undo still works in git repos)"})
+	}
 	if t.useGit && cfg.Orchestrator.Handoff {
 		t.repoMap = repoMap(t.root)
 		t.repoNotes = repoNotes(t.root)
@@ -578,7 +625,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	}
 
 	// 2b. The person approves (and may edit) the plan.
-	if !t.resumed && !small && o.approving(t) {
+	if !(t.resumed && t.state.Plan != nil) && !small && o.approving(t) {
 		o.emit(event.Event{Kind: event.Phase, Text: "approve-plan"})
 		o.logf("waiting for you to approve the plan (%d subtasks)", len(plan.Subtasks))
 		p, ok := o.opts.Approver.ApprovePlan(ctx, t.text, plan)
@@ -962,6 +1009,9 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	s, err := acquireSlot(t.root, base)
 	if err != nil {
 		o.logf("worktree for %s failed (%v); running in the main tree", st.ID, err)
+		if o.reviewing(t) {
+			o.emit(event.Event{Kind: event.Error, AgentID: st.ID, Text: "change review is not possible for " + st.ID + " (no worktree): its changes go straight into your tree; sy undo reverts the task"})
+		}
 		select { // one writer at a time in the main tree
 		case t.writeSem <- struct{}{}:
 			defer func() { <-t.writeSem }()
@@ -1021,6 +1071,10 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 				dec.Feedback + "\nUpdate your changes accordingly, then reply with a short summary.\n"
 			r = o.runStep(ctx, t, st, deps, dir, again)
 			if !r.ok {
+				// Keep the last reviewed version; the slot is reset for the
+				// next agent.
+				branch := o.saveBranch(t, st.ID, commit)
+				o.logf("%s: the rerun failed; your previous version is kept on %s", st.ID, branch)
 				return r
 			}
 			continue
@@ -1038,7 +1092,8 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			full := commit
 			pc, err := g.partialCommit(base, commit, dec.Apply, "switchyard: "+st.Title+" (files you accepted)")
 			if err != nil {
-				r.ok, r.err = false, "could not apply the selected files: "+err.Error()
+				branch := o.saveBranch(t, st.ID+"-full", full)
+				r.ok, r.err = false, "could not apply the selected files ("+err.Error()+"); the full change is on "+branch
 				return r
 			}
 			commit = pc

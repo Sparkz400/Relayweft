@@ -93,13 +93,11 @@ func (s *TaskState) setResult(id string, r stepResult) {
 	s.save()
 }
 
-// lock holds the task's lock file while it runs.
-func (s *TaskState) lock() func() {
+// lock takes the task's lock file for as long as it runs; ok is false when
+// another sy holds it.
+func (s *TaskState) lock() (unlock func(), ok bool) {
 	os.MkdirAll(stateDir(), 0o755)
-	if unlock, ok := proc.TryLock(filepath.Join(stateDir(), s.ID+".lock")); ok {
-		return unlock
-	}
-	return func() {}
+	return proc.TryLock(filepath.Join(stateDir(), s.ID+".lock"))
 }
 
 // Interrupted reports whether the task stopped without finishing and no

@@ -85,17 +85,43 @@ func (g git) changeSet(from, to string) ([]FileChange, error) {
 	for i := 0; i+1 < len(fields); i += 2 {
 		path := fields[i+1]
 		c := counts[path]
-		fc := FileChange{Path: path, Status: fields[i][:1], Added: c.add, Deleted: c.del, Binary: c.bin}
-		if !c.bin {
-			p, _ := g.run(nil, nil, "diff", from, to, "--", path)
-			if len(p) > maxPatch {
-				p = p[:maxPatch] + "\n... (diff truncated) ..."
-			}
-			fc.Patch = p
+		out = append(out, FileChange{Path: path, Status: fields[i][:1], Added: c.add, Deleted: c.del, Binary: c.bin})
+	}
+	// One git diff for all files (a process per file is slow on Windows);
+	// git prints the files in the same order as --name-status.
+	all, _ := g.run(nil, nil, "diff", "--no-renames", from, to)
+	chunks := splitPatch(all)
+	for i := range out {
+		if out[i].Binary {
+			continue
 		}
-		out = append(out, fc)
+		var p string
+		if len(chunks) == len(out) {
+			p = chunks[i]
+		} else {
+			p, _ = g.run(nil, nil, "diff", "--no-renames", from, to, "--", out[i].Path)
+		}
+		if len(p) > maxPatch {
+			p = p[:maxPatch] + "\n... (diff truncated) ..."
+		}
+		out[i].Patch = p
 	}
 	return out, nil
+}
+
+// splitPatch splits a multi-file diff at its "diff --git" headers.
+func splitPatch(s string) []string {
+	var out []string
+	for s != "" {
+		next := strings.Index(s[1:], "\ndiff --git ")
+		if next < 0 {
+			out = append(out, s)
+			break
+		}
+		out = append(out, s[:next+2])
+		s = s[next+2:]
+	}
+	return out
 }
 
 // partialCommit builds a commit on top of base that contains only the

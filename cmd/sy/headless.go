@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -352,7 +353,7 @@ func cmdResume(args []string) error {
 		return err
 	}
 	defer h.close()
-	res := h.orc.RunWith(h.ctx, st.Task, orchestrator.TaskOptions{Resume: st})
+	res := h.orc.RunWith(h.ctx, st.Task, orchestrator.TaskOptions{Resume: st, Force: *force})
 	h.report(res)
 	if !res.OK {
 		return errTaskFailed
@@ -370,36 +371,44 @@ func absDir(d string) (string, error) {
 	return filepath.Abs(d)
 }
 
-// termApprover asks on the terminal.
+// termApprover asks on the terminal. Parallel steps may ask at the same
+// time: one dialog runs at a time, and a single goroutine reads stdin, so
+// an answer always reaches the question on screen.
 type termApprover struct {
-	in  *bufio.Reader
-	out io.Writer
+	mu    sync.Mutex // one dialog at a time
+	lines chan string
+	out   io.Writer
 }
 
 func newTermApprover(in io.Reader, out io.Writer) *termApprover {
-	return &termApprover{in: bufio.NewReader(in), out: out}
+	a := &termApprover{lines: make(chan string), out: out}
+	go func() {
+		defer close(a.lines)
+		r := bufio.NewReader(in)
+		for {
+			s, err := r.ReadString('\n')
+			if s != "" || err == nil {
+				a.lines <- s
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return a
 }
 
 // ask reads one answer line; ok=false when stdin is closed or ctx ended.
 func (a *termApprover) ask(ctx context.Context, prompt string) (string, bool) {
 	fmt.Fprint(a.out, prompt)
-	type line struct {
-		s   string
-		err error
-	}
-	ch := make(chan line, 1)
-	go func() {
-		s, err := a.in.ReadString('\n')
-		ch <- line{s, err}
-	}()
 	select {
 	case <-ctx.Done():
 		return "", false
-	case l := <-ch:
-		if l.err != nil && l.s == "" {
+	case s, open := <-a.lines:
+		if !open {
 			return "", false
 		}
-		return strings.TrimSpace(l.s), true
+		return strings.TrimSpace(s), true
 	}
 }
 
@@ -419,6 +428,8 @@ func (a *termApprover) printPlan(p orchestrator.Plan) {
 }
 
 func (a *termApprover) ApprovePlan(ctx context.Context, task string, p orchestrator.Plan) (orchestrator.Plan, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	for {
 		a.printPlan(p)
 		ans, ok := a.ask(ctx, "Run it? [y]es, [n]o, d N (drop step), r N role (set role; auto = router), p N text (new prompt), s N (show prompt): ")
@@ -494,6 +505,8 @@ func without(xs []string, x string) []string {
 }
 
 func (a *termApprover) ReviewChanges(ctx context.Context, cs orchestrator.ChangeSet) orchestrator.ChangeDecision {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	keep := make([]bool, len(cs.Files))
 	for i := range keep {
 		keep[i] = true

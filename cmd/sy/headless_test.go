@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/router"
@@ -73,5 +75,27 @@ func TestTermApproverChanges(t *testing.T) {
 	d = newTermApprover(strings.NewReader("n\n"), &out).ReviewChanges(context.Background(), cs)
 	if len(d.Apply) != 0 || d.Feedback != "" {
 		t.Fatalf("reject %+v", d)
+	}
+}
+
+// Parallel steps reviewing at once get one answer each, in order.
+func TestTermApproverConcurrentReviews(t *testing.T) {
+	cs := orchestrator.ChangeSet{StepID: "x", Files: []orchestrator.FileChange{{Path: "a.go", Status: "M"}}}
+	a := newTermApprover(strings.NewReader("y\nn\n"), io.Discard)
+	got := make(chan orchestrator.ChangeDecision, 2)
+	for i := 0; i < 2; i++ {
+		go func() { got <- a.ReviewChanges(context.Background(), cs) }()
+	}
+	applied := 0
+	for i := 0; i < 2; i++ {
+		select {
+		case d := <-got:
+			applied += len(d.Apply)
+		case <-time.After(3 * time.Second):
+			t.Fatal("a concurrent review hung")
+		}
+	}
+	if applied != 1 {
+		t.Fatalf("want one accepted and one rejected review, applied %d", applied)
 	}
 }
