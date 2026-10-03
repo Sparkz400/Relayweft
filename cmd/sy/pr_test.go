@@ -414,8 +414,9 @@ func TestPRBodyFencesTaskText(t *testing.T) {
 	}
 	rest := body[i+len(open):]
 	j := strings.Index(rest, "\n`````\n")
-	if j < 0 || rest[:j] != task {
-		t.Fatalf("fenced text differs:\n%s", body)
+	// Same visible text; closing keywords and mentions carry a word joiner.
+	if j < 0 || strings.ReplaceAll(rest[:j], "\u2060", "") != task || reCloseRef.MatchString(rest[:j]) || reMention.MatchString(rest[:j]) {
+		t.Fatalf("fenced text differs or is still live:\n%s", body)
 	}
 	outside := body[:i] + rest[j:]
 	for _, bad := range []string{"#7", "#8", "#9", "@alice"} {
@@ -428,5 +429,33 @@ func TestPRBodyFencesTaskText(t *testing.T) {
 	}
 	if got := codeFence("no ticks"); got != "```text\nno ticks\n```\n" {
 		t.Errorf("codeFence = %q", got)
+	}
+}
+
+func TestDefuseGitHubRefs(t *testing.T) {
+	for _, in := range []string{
+		"Fixes #7", "this closes o/r#12 too", "Resolves: https://github.com/o/r/issues/3",
+		"fixed #1 and ping @octocat", "cc @org/team",
+	} {
+		out := defuseGitHubRefs(in)
+		if reCloseRef.MatchString(out) || reMention.MatchString(out) {
+			t.Errorf("%q -> %q still live", in, out)
+		}
+		if strings.ReplaceAll(out, "⁠", "") != in {
+			t.Errorf("%q -> %q changed the visible text", in, out)
+		}
+	}
+	for _, keep := range []string{"Fix GitHub issue #42: crash", "mail me at a@b.c", "prefix #7 alone"} {
+		if out := defuseGitHubRefs(keep); out != keep {
+			t.Errorf("%q changed to %q", keep, out)
+		}
+	}
+	st := &orchestrator.TaskState{ID: "s-t", Task: "Fixes #9, @evil", UndoKey: "k"}
+	body := renderPRBody(st, prBodyOptions{Closes: "#3"})
+	if !strings.HasSuffix(body, "\nCloses #3\n") || reCloseRef.MatchString(strings.TrimSuffix(body, "Closes #3\n")) || reMention.MatchString(body) {
+		t.Fatalf("body:\n%s", body)
+	}
+	if msg := defuseGitHubRefs(commitMessage(st, prTitle(st.Task))); reCloseRef.MatchString(msg) || reMention.MatchString(msg) {
+		t.Fatalf("commit message:\n%s", msg)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -231,9 +232,9 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 
 	title := o.title
 	if title == "" {
-		title = prTitle(st.Task)
+		title = defuseGitHubRefs(prTitle(st.Task))
 	}
-	commit, files, err := buildPRCommit(root, snap.Before, snap.After, commitMessage(st, title))
+	commit, files, err := buildPRCommit(root, snap.Before, snap.After, defuseGitHubRefs(commitMessage(st, title)))
 	if err != nil {
 		return nil, err
 	}
@@ -779,10 +780,32 @@ func renderPRBody(st *orchestrator.TaskState, o prBodyOptions) string {
 		v = "dev"
 	}
 	fmt.Fprintf(&b, "\n---\n<sub>Made with Switchyard (`sy` %s). Task `%s`; undo key `%s` (`sy undo %s` reverts it in the working tree it ran in).</sub>\n", v, st.ID, st.UndoKey, st.UndoKey)
+	// Everything above may quote untrusted text (task, plan, errors):
+	// defuse it, then add the one reference sy means.
+	out := defuseGitHubRefs(b.String())
 	if o.Closes != "" {
-		fmt.Fprintf(&b, "\nCloses %s\n", o.Closes)
+		out += fmt.Sprintf("\nCloses %s\n", o.Closes)
 	}
-	return b.String()
+	return out
+}
+
+// reCloseRef finds GitHub closing keywords followed by an issue reference
+// (#7, owner/repo#7 or an issues URL); reMention finds @user / @org/team.
+var (
+	reCloseRef = regexp.MustCompile(`(?i)\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(\s*:?\s*(?:[\w.-]+/[\w.-]+)?#\d|\s*:?\s*https?://[^\s]*/issues/\d)`)
+	reMention  = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9])`)
+)
+
+// defuseGitHubRefs stops text written by others (an issue's body, a task)
+// from closing issues or notifying people when it lands in a commit
+// message, a PR title or a squash commit built from the PR body: a word
+// joiner (U+2060, invisible) breaks the keyword and the @. The text reads
+// the same.
+func defuseGitHubRefs(s string) string {
+	s = reCloseRef.ReplaceAllStringFunc(s, func(m string) string {
+		return m[:1] + "\u2060" + m[1:]
+	})
+	return reMention.ReplaceAllString(s, "${1}@\u2060${2}")
 }
 
 // checksFrom pulls the verify results out of a task summary
