@@ -10,7 +10,7 @@ sy --demo     # see the whole thing animate with fake agents (no CLIs, no quota)
 
 ![sy web: agent tree and live activity](docs/web/running.png)
 
-Switchyard uses **subscriptions only**. It never touches API keys or tokens; it drives the official `codex` and `claude` CLIs exactly as you would, with their normal login.
+Switchyard uses **subscriptions only**. It never touches model API keys or tokens (only the optional GitHub features use a GitHub token); it drives the official `codex` and `claude` CLIs exactly as you would, with their normal login.
 
 ---
 
@@ -163,8 +163,12 @@ sy run "task"                         headless: same pipeline, events printed as
 sy run --single claude:opus "task"    single-agent baseline (for comparison in stats)
 sy run --file tasks.txt               run several tasks one after another, unattended
 sy run --approve "task"               approve the plan (and changes, with review_changes) on the terminal
+sy run --issue 12 [--pr]              run a GitHub issue as the task; --pr opens a pull request that closes it
+sy run --issues label:sy [--limit 5] --pr     run open labelled issues one after another, unattended
+sy pr [task] [--base main] [--draft] [--no-push] [--yes]   branch + commit + pull request from a finished task
 sy history [--all] [-n 20]            recent tasks: status, steps done, cost; marks interrupted ones
 sy resume [task id] [--force]         continue an interrupted task (default: the last one in this directory)
+sy report [task id] [--out f] [--md] [--open]   one shareable HTML (or Markdown) page about a task
 sy tune [--here] [--since 7d]         routing suggestions from your own logs, as ready-to-paste commands
 sy update [--check] [--yes]           update sy to the latest GitHub release (checksum-verified)
 sy web / sy app [--port N] [--demo]   the browser UI / the same in its own window
@@ -191,6 +195,16 @@ Every task in a git repo records the working tree before and after it ran. The s
 - Files you edited *after* the task keep your edits (3-way merge). If an edit overlaps the task's change, nothing at all is changed and you're told which file.
 - `sy undo --redo` (or `/redo`) puts the task's changes back. `sy undo --list` shows the last 30 tasks.
 - After every task, `sy run` prints the exact `sy undo <task>` command.
+
+### GitHub: issues in, PRs out
+
+- `sy pr` turns the last finished task (or `sy pr <task>` from `sy history`) into a pull request. The commit holds exactly the task's changes (its undo snapshots), so edits you made before the task stay out. It is built on top of `HEAD` on a temporary index: your index, working tree and current branch are not touched. If the changes no longer apply cleanly to `HEAD`, nothing is created.
+- It creates the branch `sy/<task>` (or `--branch`; an existing branch is never overwritten), runs `git push -u origin <branch>` with your own git credentials (never forced) and opens the PR through the GitHub API. The body has the task, the plan with each step's role and result, checks, cost and the undo key. A task that did not finish ok is marked and opened as a draft. You see a preview first (`--yes` skips it); `--no-push` only creates the local branch.
+- The token comes from `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`. Without one, sy writes the PR text to a file and prints the compare URL to open it in the browser. GitHub Enterprise: set `GH_HOST` (or `--api https://<host>/api/v3`); the token then comes from `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` or `gh auth token --hostname <host>`, never from the github.com variables.
+- The task text is shown in the PR body as a code block, so an issue's text cannot close other issues or @-mention anyone; only the explicit `Closes #N` line counts. The preview warns about files that changed while the task ran but that no agent reported changing (possibly your own edits) and about commits of `HEAD` that are not on `origin/<base>`, since both would be in the PR.
+- `sy run --issue 12` (or an issue URL) runs "Fix GitHub issue #12: <title>" with the issue's body and labels as the task (`--with-comments` adds the comments). Public repositories need no token. Add `--pr` to open a pull request with `Closes #12` when the task succeeds, plus a comment with its link on the issue (`--comment=false` skips it).
+- `sy run --issues label:sy --limit 5 --pr` works through the open issues with that label, oldest first, unattended (`--pr` is required: without PRs the tasks' changes would pile up in the working tree). It skips pull requests and issues an open PR already closes. It never discards your work: it starts only on a clean working tree, and after each PR it takes that task's changes back out of the working tree with `sy undo` (they live on in the PR branch; `sy undo --redo <key>` puts them back), so the next issue starts from `HEAD`. If that is not possible, or a task leaves changes without a PR, the batch stops. With `--at`/`--in`/`--when-reset` the issues are read and the working tree checked when the run starts.
+- Nobody reviews these PRs before they are pushed, so `--pr` (with `--issue` or `--issues`) refuses a PR that would carry more than the agents' work: files that changed while the task ran but that no agent reported changing, or commits of `HEAD` that are not on `origin/<base>` (also when there is no `origin/<base>` to compare with: `git fetch` first). The work stays in the working tree, the batch stops, and you can check it and run `sy pr`. A multi-repo workspace is refused up front: open its PRs with `sy pr <task> [--repo <name>]`.
 
 ### Bench: does Switchyard beat a single agent on *your* work?
 
@@ -224,6 +238,56 @@ When a task finishes, the TUI log, `sy run` and `sy stats` show what it used:
 > codex 12k · claude 40k fresh tokens · ≈$0.31 API-equivalent · claude limit 61%→64%
 
 "Fresh" means uncached input plus output. The $ figure is what Claude Code reports a task *would* cost on the API; on a subscription you are not billed it, but it is a good relative measure. The limit share comes from the provider's own quota reports.
+
+### Task reports
+
+`sy report` writes one self-contained page about a task, to share in a PR, an issue or a chat:
+
+```
+sy report                       # the last task in this directory
+sy report <task id> --open      # any task from `sy history`, opened in the browser
+sy report --md --out task.md    # Markdown instead of HTML
+```
+
+It has the task text, status, timing and mode; the plan (each subtask's kind, role, route, dependencies, result and the agent's final answer, collapsed); every routing decision with its rule, reason and confidence; reviewer verdicts; verify checks with pass/fail; the task's diff (its undo snapshots, before -> after), per file, syntax-colored, collapsible and size-capped; the cost (fresh tokens per provider, $ API-equivalent, limit before and after) and the undo command.
+
+- The default output is `<user config dir>/switchyard/reports/<task id>.html`; the path is printed.
+- The HTML is one file with inline CSS: light and dark follow the system, `<details>` sections open when printed, and nothing is loaded from anywhere. A Content-Security-Policy allows no script except the small print helper, and every piece of text is escaped: task text, agent output and diff lines are treated as untrusted.
+- A report holds only the task text, agent answers, routing log and the repo diff. It reads no environment variables or credentials. The diff is your repo's content, so check it before sharing a private repo's report.
+- Resumed tasks include the routing of every part. Without a session log (another machine, deleted logs) the report still has the plan, results and diff, with a note.
+
+### Budgets
+
+Cap what one task and one day may use (`budget:` in `switchyard.yaml`, 0 = off; a repo's `.switchyard.yaml` can only make these stricter):
+
+```yaml
+budget: {task_tokens: 0, task_usd: 2, day_tokens: 0, day_usd: 10, warn_at: 0.8}
+```
+
+Tokens are fresh tokens on both providers; $ is Claude's API-equivalent price. The day total is today's finished tasks (local time, from the session logs of every `sy`) plus the running one; it is re-read at most every minute while a task runs, so tasks other windows finish count too. Single-agent runs and follow-ups (`@agent`) count and are checked the same way, and a limit you change in the settings applies to the running task at its next check. Before each agent starts, `sy` checks the limits (an agent that crosses one while it works finishes, and its work is kept; a task whose last agent crossed a limit is done, not stopped):
+
+- at `warn_at` (80%) the log shows one warning per limit;
+- at a limit, a task you are watching asks: **continue** (until this task ends) or **stop**. The TUI shows a small prompt (y/n), `sy web` a dialog, `sy run --approve` asks on the terminal;
+- queued, scheduled and `--file` tasks, and `sy run` without `--approve`, never ask: they stop cleanly with "stopped by budget: …" and say how to raise the limit.
+- changes still waiting for your review when the budget stops a task are kept on a `sy/...` branch.
+
+Flags for one run: `--budget-task-tokens`, `--budget-task-usd`, `--budget-day-usd` (on `sy`, `sy run`, `sy web`). The TUI and web headers show e.g. `$0.42/$10 today`, and `sy stats` adds the daily budget to its per-day table.
+
+### Scheduled runs
+
+Start work later, for example overnight or when a usage window resets:
+
+```
+sy run --file tasks.txt --at 02:30        # today, or tomorrow if 02:30 has passed; also "2026-10-04 02:30" or RFC3339
+sy run --in 3h "update the dependencies"
+sy run --file tasks.txt --when-reset claude   # claude | codex | any
+```
+
+`--when-reset` uses the newest known reset time: Claude's quota reports and limit hits are logged, so a later `sy run` finds them. When it is unknown or already past, the run starts now and says so. While waiting, `sy` prints a countdown every minute (Ctrl+C cancels) and keeps the PC from sleeping until the run ends (Windows: `SetThreadExecutionState`; macOS: `caffeinate`); `--allow-sleep` turns that off. Scheduled runs are unattended: no approvals, and a budget limit stops them.
+
+In the TUI, `/schedule 02:30 <task>`, `/schedule in 2h <task>` or `/schedule reset claude <task>` puts the task in the queue with a start time; it runs when due, after any running task. `/schedule` lists them, `/schedule rm <n>` removes one. In `sy web`, the Queue panel has the same form, and scheduled items show their time and a remove button.
+
+`sy schedule --file tasks.txt --at 02:30 [--daily]` prints a ready Windows Task Scheduler (`schtasks /create …`) or cron command, so the OS starts `sy` even when no terminal is open. It installs nothing.
 
 ### Protecting your machine
 
@@ -309,7 +373,7 @@ The server listens on 127.0.0.1 only. Each link `sy` prints or opens works once,
 A `.switchyard.yaml` in a repository holds the settings for that repo (in the repo root, or in the project folder). It is layered over your own config: built-in defaults < your config < the repo file < command-line flags. It only needs what the repo cares about; roles merge per key, so `roles: {worker: {prefer: claude}}` keeps the worker's routes.
 
 - Create one with `sy init --repo`, which detects the test commands, or with `/save repo` from the TUI. Commit it to share.
-- **Commands need your trust.** The parts that run commands on your machine are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers` and `log_dir`. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
+- **Commands need your trust.** The parts that run commands or reach other folders are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers`, `log_dir`, `mcp` and `workspace`. A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
 
 ### Hooks
 
@@ -319,6 +383,58 @@ Your own commands run around every task (`hooks:` in the config):
 - `after_task`: after every end (done, failed or cancelled).
 
 They run in the project folder through the system shell. They get `SY_TASK`, `SY_TASK_ID`, `SY_DIR`, `SY_STATUS`, `SY_SUMMARY`, `SY_STEP` and `SY_FILES`. Typical uses are a formatter after every merge or a linter after the task.
+
+### MCP servers
+
+Give the agents [MCP](https://modelcontextprotocol.io) servers (docs search, a database, an issue tracker...) on both CLIs:
+
+```yaml
+mcp:
+  servers:
+    docs: {command: "npx", args: ["-y", "@some/mcp-server"], env: {API_KEY: "${DOCS_API_KEY}"}}
+    db:   {url: "http://localhost:8080/mcp", headers: {Authorization: "Bearer ${DB_TOKEN}"}}
+    feed: {url: "http://localhost:9000/sse", type: sse}    # SSE: Claude only
+    local: {command: "uvx", args: ["my-server"], providers: [claude]}   # one CLI only
+  roles: [worker, worker_high, explorer, researcher]   # the default
+  allow_tools: true     # default: pre-approve the servers' tools for Claude
+  strict: false         # true: Claude uses only these, not your own Claude MCP config
+```
+
+- **Roles.** By default the agents that do the work get the servers: `worker`, `worker_high`, `explorer` and `researcher`. The planner, reviewer and judge do not (they read the plan or the diff, and every server slows a run down). Set `roles` to change that.
+- **Claude Code** gets a temporary `{"mcpServers": {...}}` file (mode 0600, in its own temp folder, removed when the agent ends) through `--mcp-config <file>`, plus `--strict-mcp-config` with `strict: true`. With `allow_tools` (the default) `mcp__<server>` is added to `--allowedTools`, which allows every tool of that server. That also applies to read-only roles: a headless Claude cannot ask, so without it the tools would be denied. MCP tools can change things outside your repo, even for a read-only role: set `allow_tools: false` if a server can write somewhere you care about.
+- **Codex** gets `-c mcp_servers.<name>.command=...`, `.args=[...]`, `.env={...}`, or `.url=...` and `.http_headers={...}` for URL servers, as TOML values. Codex has no SSE client, so `type: sse` servers go to Claude only.
+- **Secrets.** `${VAR}` anywhere in a server's command, args, env, url or headers is filled in from your environment when the agent starts, so tokens need not be committed. The diag log shows server names only, `sy doctor` shows commands and URL hosts, never env or header values, and `sy bugreport` hides literal env and header values and URL queries. Codex gets env and header values that come from `${VAR}` through its environment, not its command line (`env_vars`, `bearer_token_env_var` and `env_http_headers` in its MCP config), so other processes cannot read them from the process list. Literal values, `${VAR}` in a command, args or url, and an env name your environment already has with another value (e.g. `OPENAI_API_KEY`) still go on Codex's command line (`-c`): use `${VAR}` in env or headers for secrets. Claude's config file lives in sy's cache dir while the agent runs; files a hard kill left behind are removed after a day.
+- **Per repo.** `mcp` in a repo's `.switchyard.yaml` starts programs, so it applies only after `sy trust`, which shows the servers. Trusted repo servers are added to your own.
+- `sy doctor` lists the servers, checks that each command is on PATH and names unset `${VAR}`s.
+
+The flags follow the CLIs' documentation at the time of writing (Claude Code 2.1, codex-cli 0.160). If a CLI changes them, check with `claude --help` and `codex --help`. URL servers on Codex need a version with streamable HTTP MCP support.
+
+### Multi-repo tasks
+
+One task can change several git repositories together, for example an API and the frontend that calls it. The project folder is the primary repo (named `primary`); name the others:
+
+```
+sy --repo web=../web                     # TUI; also sy run, sy web, sy app, sy resume
+sy run --repo web=../web --repo docs=../docs "add a 'nickname' field to the user API and show it on the profile page"
+```
+
+or for every task of the project, in its `.switchyard.yaml` (paths relative to that file's folder) or your config (paths relative to the project folder); `--repo` paths are relative to the current folder. Agents write to these folders, so a repo file's `workspace` applies only after `sy trust`:
+
+```yaml
+workspace:
+  repos:
+    web: ../web
+    docs: ../docs
+```
+
+Each repo must be a git work tree of its own: not the primary's repo, not inside or around the primary or another listed repo, and not a linked worktree of one of them. A bad `--repo` stops `sy` with a clear message; a repo from a config file that does not fit (say a teammate has no `../web`) is skipped with a warning, so `sy` still starts. What changes in a multi-repo task:
+
+- **Planning.** The planner always runs (no small-task shortcut) and sees every repo: its path, repo map and notes. Each subtask gets `"repo": "<name>"`; work that touches two repos is split into one subtask per repo, ordered with `depends_on` when needed. A plan naming an unknown repo is sent back to the planner (at most twice per task). The plan approval (TUI, `sy web`, `sy run --approve`) shows each step's repo; move a step with `o` in the TUI, the repo dropdown in `sy web`, or `o N name` on the terminal.
+- **Execution.** Every repo is snapshotted first. A writing agent works in its own repo: in a pool worktree of that repo (each repo has its own pool) or in its main tree, with that repo as its working directory, so agents in different repos run in parallel. Each repo has its own merges, conflict branches (shown as `web:sy/...`) and integration commit. Read-only agents run in their repo too and get every repo's path in their prompt.
+- **Checks and review.** The primary's `verify` commands run in the project folder; each other repo's own `verify` commands (from its `.switchyard.yaml`, only once trusted there with `sy trust --dir ../web`; your own config's commands are not used for other repos) run in that repo. The final review gets the diff of every repo, labelled. A fix round runs once per repo that changed or whose checks fail, inside that repo.
+- **Undo, history, resume.** Every repo records the task under the same key, so `sy undo <key>` (or `/undo`) in the project folder previews and undoes every repo together; if one repo cannot be undone, the others are put back (the error names any repo that could not be). A repo whose folder is gone or that no longer has the task's record (cloned again) is left out with a warning; a repo's part of a multi-repo task is kept as long as the project folder keeps the task. `sy undo --dir ../web <key>` undoes only that repo's part. The task state records the repos and each step's repo, so `sy history` and `sy resume` keep working; a resumed task uses the repos it started with, and if one of them is not there right now the task stays interrupted, so `sy resume` works once it is back.
+- Hooks still run in the project folder (`SY_FILES` may list files of any repo). Follow-ups (`@agent`) run in the project folder. The planner and reviewer run in the project folder too: they see the other repos through their prompt (repo maps, diffs); whether they can open files there depends on the CLI's own sandbox (Codex can read anywhere; Claude Code may ask, and is denied in read-only mode).
+- A project without extra repos works exactly as before.
 
 ## Development
 

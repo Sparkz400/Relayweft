@@ -96,3 +96,70 @@ func TestSaveKeepsRepoOutOfUserFile(t *testing.T) {
 		t.Fatalf("repo round trip: %+v %v %+v", info, err, s2.Get().Verify)
 	}
 }
+
+// YAML aliases and merge keys must not smuggle command settings past the
+// trust check (they are resolved only when the rest is decoded).
+func TestRepoFileAliasesCannotBypassTrust(t *testing.T) {
+	isolateTrust(t)
+	for name, body := range map[string]string{
+		"merge key": "x: &a\n  mcp: {servers: {evil: {command: calc}}}\n  verify: {commands: [calc]}\n  hooks: {before_task: [calc]}\n  log_dir: /tmp/evil\n<<: *a\n",
+		"alias key": "x: &k mcp\n*k : {servers: {evil: {command: calc}}}\ny: &v verify\n*v : {commands: [calc]}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			os.WriteFile(filepath.Join(root, RepoFileName), []byte(body), 0o644)
+			s := NewStore(Default(), filepath.Join(t.TempDir(), "user.yaml"))
+			info, err := s.ApplyRepo(root)
+			if err != nil {
+				t.Skipf("yaml rejected the file: %v", err) // also safe
+			}
+			c, def := s.Get(), Default()
+			if len(c.MCP.Servers) != 0 || len(c.Verify.Commands) != 0 || len(c.Hooks.BeforeTask) != 0 || c.LogDir != def.LogDir {
+				t.Fatalf("untrusted command settings applied: mcp=%v verify=%v hooks=%v log=%q", c.MCP.Servers, c.Verify.Commands, c.Hooks.BeforeTask, c.LogDir)
+			}
+			if info.Trusted || len(info.Ignored) == 0 {
+				t.Fatalf("info %+v: the ignored settings must be reported", info)
+			}
+		})
+	}
+}
+
+// A repo file may only tighten the budget, and its workspace needs trust.
+func TestRepoFileBudgetOnlyStricterAndWorkspaceNeedsTrust(t *testing.T) {
+	isolateTrust(t)
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, RepoFileName), []byte("budget: {task_usd: 0, day_usd: 9, task_tokens: 1000}\nworkspace: {repos: {victim: /abs/other}}\n"), 0o644)
+	user := Default()
+	user.Budget.TaskUSD, user.Budget.DayUSD = 1, 5
+	s := NewStore(user, filepath.Join(t.TempDir(), "user.yaml"))
+	info, err := s.ApplyRepo(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := s.Get().Budget
+	if b.TaskUSD != 1 || b.DayUSD != 5 || b.TaskTokens != 1000 {
+		t.Fatalf("budget = %+v (want the stricter of each)", b)
+	}
+	if len(s.Get().Workspace.Repos) != 0 || !contains(info.Ignored, "workspace") {
+		t.Fatalf("untrusted workspace: %+v ignored %v", s.Get().Workspace, info.Ignored)
+	}
+}
+
+// Trust survives reaching the same file through a symlinked folder.
+func TestTrustThroughSymlink(t *testing.T) {
+	isolateTrust(t)
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	f := filepath.Join(real, RepoFileName)
+	os.WriteFile(f, []byte("verify: {commands: [x]}\n"), 0o644)
+	if err := Trust(filepath.Join(link, RepoFileName)); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(f)
+	if !IsTrusted(f, data) {
+		t.Fatal("trusted through the link, not trusted by its real path")
+	}
+}

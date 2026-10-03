@@ -133,11 +133,36 @@ hooks:
   after_task: []                   # e.g. ["npm run lint"]
   timeout: 5m
 
+# MCP servers for the agents, passed to both CLIs on every run of the listed
+# roles. ${VAR} in any value is read from your environment when the agent
+# starts, so secrets stay out of this file. In a repo's .switchyard.yaml
+# this section applies only after `sy trust`. `sy doctor` checks it.
+# mcp:
+#   servers:
+#     docs: {command: npx, args: ["-y", "@some/mcp-server"], env: {API_KEY: "${DOCS_API_KEY}"}}
+#     db:   {url: "http://localhost:8080/mcp"}   # type: sse for SSE (Claude only)
+#   roles: [worker, worker_high, explorer, researcher]   # the default
+#   allow_tools: true    # pre-approve their tools for Claude (mcp__<server>)
+#   strict: false        # true: Claude uses only these, not your own MCP config
+
 # Desktop notifications (Windows toast, macOS, notify-send): a task finished
 # or failed, a provider hit its limit, or sy waits for your approval.
 notify:
   enabled: true
   min_task: 1m                     # skip "done" for tasks shorter than this
+
+# Spending caps (0 = off). tokens = fresh tokens on both providers; usd =
+# Claude's API-equivalent price (not billed on a subscription). Day totals
+# count today's finished tasks (local time, from the session logs) plus the
+# running one. At a limit, a task you watch asks whether to go on; queued,
+# scheduled and `sy run` tasks without --approve stop instead.
+# Flags: --budget-task-tokens, --budget-task-usd, --budget-day-usd.
+budget:
+  task_tokens: 0
+  task_usd: 0
+  day_tokens: 0
+  day_usd: 0
+  warn_at: 0.8                     # warn once when a limit is this full
 
 # Text that means "usage limit reached" (case-insensitive regular expressions).
 limit_patterns:

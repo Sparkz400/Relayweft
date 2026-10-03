@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +56,7 @@ func startHeadless(c *common, quiet bool, ap orchestrator.Approver) (*headless, 
 	h.orc = orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: runner.New, Tracker: limits.NewTracker(), Log: log,
 		Events: h.events, ForceProvider: c.provider, Approver: ap,
+		Repos: c.workspace,
 	})
 	h.ctx, h.stop = signal.NotifyContext(context.Background(), os.Interrupt)
 	go func() {
@@ -136,9 +138,25 @@ func cmdRun(args []string) error {
 	quiet := fs.Bool("quiet", false, "only print routing, results and errors")
 	file := fs.String("file", "", "run the tasks in this file one after another, unattended (one per line, or blocks separated by a line with ---)")
 	approve := fs.Bool("approve", false, "ask on the terminal before a plan runs (and per change when orchestrator.review_changes is on)")
+	iss := registerIssueFlags(fs)
+	var sf scheduleFlags
+	sf.register(fs)
 	fs.Parse(args)
 	var tasks []string
-	if *file != "" {
+	if iss.active() {
+		if *file != "" {
+			return errors.New("give either --file or --issue/--issues, not both")
+		}
+		d, err := absDir(c.dir)
+		if err != nil {
+			return err
+		}
+		// The issues are read (and a batch's clean tree checked) when the
+		// run starts, after a scheduled wait: see below.
+		if err := iss.prepare(fs, d); err != nil {
+			return err
+		}
+	} else if *file != "" {
 		data, err := os.ReadFile(*file)
 		if err != nil {
 			return err
@@ -165,8 +183,11 @@ func cmdRun(args []string) error {
 		}
 		single0.prov, single0.route = prov, route
 	}
+	// Task files and scheduled runs are unattended: nobody is there to
+	// answer, so they never ask (a budget limit stops them).
+	unattended := *file != "" || sf.set() || iss.batch()
 	var ap orchestrator.Approver
-	if *approve && *file == "" {
+	if *approve && !unattended {
 		ap = newTermApprover(os.Stdin, os.Stdout)
 	}
 	h, err := startHeadless(&c, *quiet, ap)
@@ -174,6 +195,32 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer h.close()
+	if iss.active() {
+		if err := iss.checkWorkspace(c.workspace); err != nil {
+			return err
+		}
+	}
+	what := "the task"
+	switch {
+	case iss.batch():
+		what = "the issue batch"
+	case iss.active():
+		what = "the issue"
+	case len(tasks) > 1:
+		what = fmt.Sprintf("%d tasks", len(tasks))
+	}
+	release, err := waitUntilDue(h.ctx, os.Stdout, &sf, h.cfg, h.orc.Tracker(), c.allowSleep, what)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if iss.active() {
+		if tasks, err = iss.fetch(); errors.Is(err, errNoIssues) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
 	failed := 0
 	for i, task := range tasks {
 		if h.ctx.Err() != nil {
@@ -186,11 +233,15 @@ func cmdRun(args []string) error {
 		if single0.prov != "" {
 			res = h.orc.RunSingle(h.ctx, task, single0.prov, single0.route)
 		} else {
-			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: *file != ""})
+			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: unattended})
 		}
 		h.report(res)
 		if !res.OK {
 			failed++
+		}
+		if iss.active() && h.ctx.Err() == nil && iss.afterTask(i, res) {
+			tasks = tasks[:i+1]
+			break
 		}
 	}
 	if h.log != nil {
@@ -423,6 +474,13 @@ func (a *termApprover) printPlan(p orchestrator.Plan) {
 		if len(st.DependsOn) > 0 {
 			deps = " after " + strings.Join(st.DependsOn, ",")
 		}
+		if len(p.Repos) > 0 { // multi-repo task: where the step works
+			repo := st.Repo
+			if repo == "" {
+				repo = p.Repos[0]
+			}
+			deps += " in " + repo
+		}
 		fmt.Fprintf(a.out, "  %d. [%s, %s] %s%s\n", i+1, st.Kind, role, st.Title, deps)
 	}
 }
@@ -432,7 +490,11 @@ func (a *termApprover) ApprovePlan(ctx context.Context, task string, p orchestra
 	defer a.mu.Unlock()
 	for {
 		a.printPlan(p)
-		ans, ok := a.ask(ctx, "Run it? [y]es, [n]o, d N (drop step), r N role (set role; auto = router), p N text (new prompt), s N (show prompt): ")
+		q := "Run it? [y]es, [n]o, d N (drop step), r N role (set role; auto = router), p N text (new prompt), s N (show prompt): "
+		if len(p.Repos) > 0 {
+			q = strings.Replace(q, "s N (show prompt)", "s N (show prompt), o N repo (move to repo)", 1)
+		}
+		ans, ok := a.ask(ctx, q)
 		if !ok {
 			return p, false
 		}
@@ -479,6 +541,13 @@ func (a *termApprover) ApprovePlan(ctx context.Context, task string, p orchestra
 			p.Subtasks[i].Prompt = strings.TrimSpace(arg)
 		case "s":
 			fmt.Fprintf(a.out, "\n%s\n", p.Subtasks[i].Prompt)
+		case "o":
+			arg = strings.TrimSpace(arg)
+			if !slices.Contains(p.Repos, arg) {
+				fmt.Fprintln(a.out, "repos:", strings.Join(p.Repos, ", "))
+				continue
+			}
+			p.Subtasks[i].Repo = arg
 		default:
 			fmt.Fprintln(a.out, "unknown answer")
 		}
@@ -568,6 +637,31 @@ func (a *termApprover) ReviewChanges(ctx context.Context, cs orchestrator.Change
 		default:
 			fmt.Fprintln(a.out, "unknown answer")
 		}
+	}
+}
+
+// ApproveBudget asks whether the task may go on past a budget limit.
+// Anything but yes stops it.
+func (a *termApprover) ApproveBudget(ctx context.Context, r orchestrator.BudgetRequest) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	fmt.Fprintf(a.out, "\nBudget reached: %s\n", r)
+	if r.Next != "" {
+		fmt.Fprintf(a.out, "  next: %s\n", r.Next)
+	}
+	fmt.Fprintf(a.out, "  (%s)\n", r.RaiseHint())
+	for {
+		ans, ok := a.ask(ctx, "Continue past the limit until this task ends? [y/N]: ")
+		if !ok {
+			return false
+		}
+		switch strings.ToLower(ans) {
+		case "y", "yes":
+			return true
+		case "", "n", "no", "q":
+			return false
+		}
+		fmt.Fprintln(a.out, "answer y or n")
 	}
 }
 

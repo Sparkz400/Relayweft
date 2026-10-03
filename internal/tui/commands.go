@@ -29,6 +29,7 @@ var helpText = []string{
 	"/review-changes on|off               show each agent's changes (per file or hunk) before they land",
 	"/verify [<command>|clear]            list, add or clear the checks run before the final review",
 	"/queue · /queue clear · /queue rm <n>   tasks waiting to run",
+	"/schedule <02:30|in 2h|reset claude> <task> · /schedule · /schedule rm <n>   run a task later, unattended",
 	"/resume [<id>] · /history            continue an interrupted task · list the last 10 tasks",
 	"/threads <n> · /parallel on|off · /review on|off (reviewer checkpoints) · /judge on|off",
 	"/pause · /unpause · /kill <agent> · /cancel · /clear · /usage",
@@ -49,6 +50,10 @@ func (m *Model) command(line string) tea.Cmd {
 	say := func(format string, a ...any) { m.addLog(logLine{kind: event.Log, text: fmt.Sprintf(format, a...)}) }
 	rest := strings.TrimSpace(strings.TrimPrefix(line, f[0]))
 	if m.phase2Command(cmd, args, rest, say) {
+		return nil
+	}
+	if cmd == "schedule" {
+		m.scheduleCommand(args, say)
 		return nil
 	}
 	switch cmd {
@@ -245,7 +250,7 @@ func undoCmd(dir string, redo, apply bool) tea.Cmd {
 				say("%s failed, nothing was changed: %v", verb, err)
 				return undoMsg(out)
 			}
-			say("%s done: %d file(s) for task %q (%s)", verb, len(plan.Changes), oneLine(plan.Task.Task, 60), plan.Task.Key)
+			say("%s done: %d file(s) for task %q (%s)", verb, plan.TotalChanges(), oneLine(plan.Task.Task, 60), plan.Task.Key)
 			if !redo {
 				say("changed your mind? /redo yes puts the task's changes back")
 			}
@@ -263,6 +268,9 @@ func undoCmd(dir string, redo, apply bool) tea.Cmd {
 				break
 			}
 			say("  %s", c)
+		}
+		for _, o := range plan.Others { // multi-repo task: undone together
+			say("  and in repo %s: %d file(s)", o.Repo, len(o.Changes))
 		}
 		if len(plan.Edited) > 0 {
 			say("you edited %d of these after the task; your edits are kept (3-way merge, nothing is written on a conflict)", len(plan.Edited))

@@ -357,13 +357,25 @@ func samePath(a, b string) bool { return canonPath(a) == canonPath(b) }
 // are case-insensitive.
 func canonPath(p string) string {
 	p = filepath.Clean(filepath.FromSlash(p))
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		p = r
-	}
+	p = evalExisting(p)
 	if runtime.GOOS == "windows" {
 		p = strings.ToLower(p)
 	}
 	return p
+}
+
+// evalExisting resolves symlinks in p's nearest existing ancestor and keeps
+// the rest, so a file an agent deleted still canonicalizes like its folder
+// (macOS: /var/... -> /private/var/...).
+func evalExisting(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	parent := filepath.Dir(p)
+	if parent == p {
+		return p
+	}
+	return filepath.Join(evalExisting(parent), filepath.Base(p))
 }
 
 // CleanPool removes the pooled worktrees of the repo containing dir that are

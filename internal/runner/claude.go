@@ -44,6 +44,8 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 	// extra_args go before --tools/--allowedTools, which are variadic and
 	// would swallow anything after them.
 	args = append(args, cfg.ExtraArgs...)
+	// Variadic too, but the permission mode always follows it.
+	args = append(args, claudeMCPArgs(s.MCP)...)
 	if s.ReadOnly {
 		// dontAsk denies anything not allowed; --tools removes the write tools entirely.
 		args = append(args, "--permission-mode", "dontAsk", "--tools", ReadOnlyTools)
@@ -59,7 +61,15 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 		// Exact command and with arguments (e.g. "go test ./pkg/...").
 		allowed = append(allowed, "Bash("+c+")", "Bash("+c+" *)")
 	}
-	if !s.ReadOnly && len(allowed) > 0 {
+	if s.ReadOnly {
+		// A read-only agent gets no write tools or commands, but MCP tools
+		// (mcp.allow_tools) are allowed for every role that has servers:
+		// dontAsk would deny them otherwise. They are not in --tools, which
+		// lists built-in tools only.
+		allowed = nil
+	}
+	allowed = append(allowed, claudeMCPTools(s.MCP)...)
+	if len(allowed) > 0 {
 		// Variadic flag: keep it last so it cannot swallow other arguments.
 		args = append(args, "--allowedTools", strings.Join(allowed, ","))
 	}

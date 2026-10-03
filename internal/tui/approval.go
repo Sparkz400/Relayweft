@@ -40,7 +40,8 @@ type approvalReq struct {
 	task    string
 	plan    *orchestrator.Plan      // set for plan approval
 	changes *orchestrator.ChangeSet // set for change review
-	reply   chan approvalReply      // buffered: answering never blocks
+	budget  *orchestrator.BudgetRequest
+	reply   chan approvalReply // buffered: answering never blocks
 }
 
 type approvalReply struct {
@@ -88,6 +89,13 @@ func (a *Approver) ReviewChanges(ctx context.Context, cs orchestrator.ChangeSet)
 		return orchestrator.ChangeDecision{}
 	}
 	return rep.decision
+}
+
+// ApproveBudget implements orchestrator.Approver: the person decides
+// whether the task goes on past a budget limit.
+func (a *Approver) ApproveBudget(ctx context.Context, r orchestrator.BudgetRequest) bool {
+	rep, ok := a.ask(&approvalReq{ctx: ctx, task: r.Task, budget: &r})
+	return ok && rep.ok
 }
 
 // approvalMsg delivers a request to the model.
@@ -145,10 +153,14 @@ func (m *Model) openApproval() {
 		return
 	}
 	r := m.approvals[0]
-	if r.plan != nil {
+	switch {
+	case r.plan != nil:
 		m.overlay = newPlanOverlay(r, m.th.ASCII)
 		m.alert("Switchyard needs you", "approve the plan: "+oneLine(r.task, 120))
-	} else {
+	case r.budget != nil:
+		m.overlay = &budgetOverlay{r: r}
+		m.alert("Switchyard needs you", "budget reached: "+r.budget.String())
+	default:
 		m.overlay = newReviewOverlay(r)
 		m.alert("Switchyard needs you", "review changes of "+r.changes.StepID)
 	}

@@ -76,9 +76,12 @@ Without a task, the newest task that is not undone yet is used.
 		return err
 	}
 	fmt.Printf("%s task %s from %s:\n  %s\n\n", verb, plan.Task.Key, plan.Task.When.Format("Mon Jan 2 15:04"), oneLine(plan.Task.Task, 200))
-	if len(plan.Changes) == 0 {
+	if plan.TotalChanges() == 0 {
 		fmt.Println("The task did not change any files; nothing to do.")
 		return nil
+	}
+	if len(plan.Others) > 0 {
+		fmt.Println("A multi-repo task: every repo it changed is undone together. This project folder:")
 	}
 	fmt.Printf("This changes %d file(s)  (M restore, A recreate, D delete):\n", len(plan.Changes))
 	for i, c := range plan.Changes {
@@ -102,6 +105,25 @@ Without a task, the newest task that is not undone yet is used.
 			fmt.Println("They are reverted too; add --agent-files-only to leave them alone.")
 		}
 	}
+	for _, o := range plan.Others {
+		fmt.Printf("\nRepo %s (%s): %d file(s)\n", o.Repo, o.Dir, len(o.Changes))
+		for i, c := range o.Changes {
+			if i == 40 {
+				fmt.Printf("  ... and %d more\n", len(o.Changes)-40)
+				break
+			}
+			fmt.Println("  " + c)
+		}
+		if len(o.Edited) > 0 {
+			fmt.Printf("  you edited %d of these after the task; your edits are kept (3-way merge)\n", len(o.Edited))
+		}
+		if len(o.Unreported) > 0 {
+			fmt.Printf("  no agent reported changing: %s\n", strings.Join(o.Unreported, ", "))
+		}
+	}
+	if len(plan.Missing) > 0 {
+		fmt.Printf("\nwarning: these repos of the task cannot be %s and are left out: %s\n", strings.ToLower(verb)+"ne", strings.Join(plan.Missing, ", "))
+	}
 	if !*yes {
 		fmt.Printf("\n%s these changes? [y/N] ", verb)
 		ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
@@ -111,7 +133,7 @@ Without a task, the newest task that is not undone yet is used.
 		}
 	}
 	if _, err := orchestrator.Undo(*dir, plan.Task.Key, *redo, *agentOnly); err != nil {
-		return fmt.Errorf("%s failed, nothing was changed: %w", strings.ToLower(verb), err)
+		return fmt.Errorf("%s failed: %w", strings.ToLower(verb), err)
 	}
 	fmt.Printf("%s done.\n", verb)
 	if !*redo {

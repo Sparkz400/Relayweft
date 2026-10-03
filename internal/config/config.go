@@ -158,10 +158,35 @@ type HooksCfg struct {
 	Timeout    Duration `yaml:"timeout,omitempty"`
 }
 
+// WorkspaceCfg makes every task of the project a multi-repo task: Repos
+// maps a short name to another git repository (a path relative to the
+// project folder), e.g. {frontend: ../web}. Agents write to these folders,
+// so a repo file's workspace applies only after `sy trust`.
+type WorkspaceCfg struct {
+	Repos map[string]string `yaml:"repos,omitempty"`
+}
+
 // NotifyCfg controls desktop notifications.
 type NotifyCfg struct {
 	Enabled bool     `yaml:"enabled"`
 	MinTask Duration `yaml:"min_task"` // only tasks that ran at least this long
+}
+
+// BudgetCfg caps what a task and a day may use (0 = off). Tokens are fresh
+// tokens (both providers); usd is Claude's API-equivalent price. When a
+// limit is reached, an attended task asks whether to go on; unattended
+// tasks (queued, scheduled, --file) and tasks without anyone to ask stop.
+type BudgetCfg struct {
+	TaskTokens int64   `yaml:"task_tokens" json:"task_tokens"`
+	TaskUSD    float64 `yaml:"task_usd" json:"task_usd"`
+	DayTokens  int64   `yaml:"day_tokens" json:"day_tokens"`
+	DayUSD     float64 `yaml:"day_usd" json:"day_usd"`
+	WarnAt     float64 `yaml:"warn_at" json:"warn_at"` // warn once at this share of a limit (0 = no warning)
+}
+
+// Any reports whether any budget limit is set.
+func (b BudgetCfg) Any() bool {
+	return b.TaskTokens > 0 || b.TaskUSD > 0 || b.DayTokens > 0 || b.DayUSD > 0
 }
 
 // Config is the whole file.
@@ -173,6 +198,9 @@ type Config struct {
 	Verify        VerifyCfg              `yaml:"verify"`
 	Notify        NotifyCfg              `yaml:"notify"`
 	Hooks         HooksCfg               `yaml:"hooks"`
+	MCP           MCPCfg                 `yaml:"mcp,omitempty"`
+	Workspace     WorkspaceCfg           `yaml:"workspace,omitempty"`
+	Budget        BudgetCfg              `yaml:"budget"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`
@@ -299,6 +327,13 @@ func (c *Config) Validate() error {
 	}
 	if c.Orchestrator.MaxThreads < 1 {
 		errs = append(errs, "orchestrator.max_threads must be >= 1")
+	}
+	errs = append(errs, c.MCP.validate()...)
+	if b := c.Budget; b.TaskTokens < 0 || b.TaskUSD < 0 || b.DayTokens < 0 || b.DayUSD < 0 {
+		errs = append(errs, "budget limits must be >= 0 (0 = off)")
+	}
+	if w := c.Budget.WarnAt; w < 0 || w > 1 {
+		errs = append(errs, "budget.warn_at must be between 0 and 1")
 	}
 	switch c.Theme {
 	case "", "auto", "unicode", "ascii":
@@ -431,6 +466,14 @@ func (s *Store) Get() *Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.cfg.Clone()
+}
+
+// Budget returns the live budget limits without cloning the whole config
+// (UIs read it every frame).
+func (s *Store) Budget() BudgetCfg {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.Budget
 }
 
 // Path returns where Save writes.

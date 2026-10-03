@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -23,14 +24,17 @@ import (
 //
 // A repo file comes from whoever pushed to the repo, so the parts that run
 // commands on your machine (verify commands, hooks, provider commands and
-// arguments, the log directory) apply only after you trust that exact
+// arguments, the log directory, MCP servers) apply only after you trust that exact
 // content with `sy trust`. Routes, preferences and toggles always apply.
 
 // RepoFileName is the per-repo settings file.
 const RepoFileName = ".switchyard.yaml"
 
 // commandKeys are the top-level keys that need trust.
-var commandKeys = []string{"verify", "hooks", "providers", "log_dir"}
+// workspace is here too: its repos are folders agents may write to, and
+// a path (absolute, or a UNC share on Windows) must not come from a repo
+// file nobody reviewed.
+var commandKeys = []string{"verify", "hooks", "providers", "log_dir", "mcp", "workspace"}
 
 // RepoInfo describes the repo file applied to a config.
 type RepoInfo struct {
@@ -84,6 +88,11 @@ func ApplyRepo(c *Config, dir string) (RepoInfo, error) {
 	if root.Kind != yaml.MappingNode {
 		return info, fmt.Errorf("%s: want a mapping at the top level", p)
 	}
+	// Snapshot of everything that runs commands. An untrusted file gets
+	// these restored after decoding, whatever YAML it used to reach them
+	// (aliases, merge keys "<<: *x", anchors): the key check below is only
+	// a first filter and must not be the only guard.
+	guarded := c.Clone()
 	rest := &yaml.Node{Kind: yaml.MappingNode}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		k, v := root.Content[i], root.Content[i+1]
@@ -109,10 +118,70 @@ func ApplyRepo(c *Config, dir string) (RepoInfo, error) {
 			return info, fmt.Errorf("%s: %w", p, err)
 		}
 	}
+	if !info.Trusted {
+		for _, k := range restoreCommandSettings(c, guarded) {
+			if !contains(info.Ignored, k) {
+				info.Ignored = append(info.Ignored, k)
+			}
+		}
+	}
+	// A repo file may tighten your budget, never loosen it (trusted or not).
+	c.Budget = stricterBudget(guarded.Budget, c.Budget)
 	if err := c.Validate(); err != nil {
 		return info, fmt.Errorf("%s: %w", p, err)
 	}
 	return info, nil
+}
+
+// restoreCommandSettings puts back the settings that run commands (the
+// commandKeys) from before, and returns the ones the file had changed.
+func restoreCommandSettings(c, before *Config) []string {
+	var changed []string
+	if !reflect.DeepEqual(c.Verify, before.Verify) {
+		changed = append(changed, "verify")
+	}
+	if !reflect.DeepEqual(c.Hooks, before.Hooks) {
+		changed = append(changed, "hooks")
+	}
+	if !reflect.DeepEqual(c.Providers, before.Providers) {
+		changed = append(changed, "providers")
+	}
+	if c.LogDir != before.LogDir {
+		changed = append(changed, "log_dir")
+	}
+	if !reflect.DeepEqual(c.MCP, before.MCP) {
+		changed = append(changed, "mcp")
+	}
+	if !reflect.DeepEqual(c.Workspace, before.Workspace) {
+		changed = append(changed, "workspace")
+	}
+	c.Verify, c.Hooks, c.Providers, c.LogDir, c.MCP, c.Workspace = before.Verify, before.Hooks, before.Providers, before.LogDir, before.MCP, before.Workspace
+	return changed
+}
+
+// stricterBudget keeps the tighter of two budgets per limit (0 = no limit).
+func stricterBudget(mine, repo BudgetCfg) BudgetCfg {
+	tighterI := func(a, b int64) int64 {
+		if a <= 0 || (b > 0 && b < a) {
+			return b
+		}
+		return a
+	}
+	tighterF := func(a, b float64) float64 {
+		if a <= 0 || (b > 0 && b < a) {
+			return b
+		}
+		return a
+	}
+	out := mine
+	out.TaskTokens = tighterI(mine.TaskTokens, repo.TaskTokens)
+	out.DayTokens = tighterI(mine.DayTokens, repo.DayTokens)
+	out.TaskUSD = tighterF(mine.TaskUSD, repo.TaskUSD)
+	out.DayUSD = tighterF(mine.DayUSD, repo.DayUSD)
+	if repo.WarnAt > 0 && (mine.WarnAt <= 0 || repo.WarnAt < mine.WarnAt) {
+		out.WarnAt = repo.WarnAt
+	}
+	return out
 }
 
 // mergeMap decodes each entry of a mapping node on top of the existing
@@ -158,6 +227,11 @@ func trustKey(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = path
+	}
+	// The same file through a symlinked folder (macOS: /var -> /private/var)
+	// must keep its trust.
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
 	}
 	return strings.ToLower(filepath.ToSlash(abs))
 }

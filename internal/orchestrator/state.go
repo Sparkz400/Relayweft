@@ -47,6 +47,9 @@ type TaskState struct {
 	Results  map[string]StepState `json:"results,omitempty"`
 	UndoKey  string               `json:"undo_key,omitempty"`
 	CostLine string               `json:"cost,omitempty"`
+	// Repos are the extra repos of a multi-repo task (workspace.go); the
+	// plan's subtasks name them. A resume works in the same repos.
+	Repos []Repo `json:"repos,omitempty"`
 }
 
 // stateDir is where task states live; tests point it elsewhere.

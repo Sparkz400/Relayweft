@@ -148,6 +148,10 @@ func (p *planOverlay) update(m *Model, k tea.KeyMsg) tea.Cmd {
 		if len(sts) > 0 {
 			sts[p.sel].Kind = cycleKind(sts[p.sel].Kind)
 		}
+	case "o": // multi-repo task: the repo the step works in
+		if len(sts) > 0 && len(p.plan.Repos) > 0 {
+			sts[p.sel].Repo = cycleRepo(p.plan, sts[p.sel].Repo)
+		}
 	case "r":
 		if len(sts) > 0 {
 			sts[p.sel].Role = cycleRole(sts[p.sel].Role)
@@ -303,6 +307,9 @@ func (p *planOverlay) view(m *Model, W, H int) string {
 		}
 		if len(st.DependsOn) > 0 {
 			title += th.fg(th.Muted).Render(" · after " + strings.Join(st.DependsOn, ", "))
+		}
+		if repo := planRepo(p.plan, st); repo != "" { // multi-repo task (o changes it)
+			title += th.fg(th.Router).Render(" · in " + repo)
 		}
 		row := cursor + th.fg(th.Text).Render(fit(st.ID, 12)) + " " + th.fg(th.Role(string(st.Kind))).Render(fit(string(st.Kind), 9)) + " " + rs.Render(fit(role, 12)) + " " + title
 		lines = append(lines, fit(row, iw))

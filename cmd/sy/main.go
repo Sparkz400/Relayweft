@@ -69,6 +69,8 @@ func main() {
 		err = cmdBugreport(args)
 	case "undo":
 		err = cmdUndo(args)
+	case "pr":
+		err = cmdPR(args)
 	case "bench":
 		err = cmdBench(args)
 	case "tune":
@@ -81,10 +83,14 @@ func main() {
 		err = cmdUpdate(args)
 	case "trust":
 		err = cmdTrust(args)
+	case "schedule":
+		err = cmdSchedule(args)
 	case "web":
 		err = cmdWeb(args)
 	case "app":
 		err = cmdApp(args)
+	case "report":
+		err = cmdReport(args)
 	case "version", "--version":
 		fmt.Println("switchyard", version)
 	case "help", "-h", "--help":
@@ -122,8 +128,19 @@ Usage:
   sy run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
   sy run --file tasks.txt    run a list of tasks one after another, unattended
   sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
+  sy run --issue <N|URL> [--with-comments] [--pr]   run a GitHub issue as the task; --pr opens a PR (Closes #N)
+  sy run --issues label:<name> [--limit 5] --pr     run open labelled issues one after another, unattended
+                             (needs --pr and a clean working tree; each task's changes go to its PR branch and
+                             are undone here so the next issue starts from HEAD; the batch stops if that fails,
+                             or if a PR would hold files no agent reported or commits not on origin)
+  sy pr [task] [--base main] [--branch name] [--draft] [--title t] [--no-push] [--yes]
+                             branch + commit + GitHub pull request from a finished task (index/worktree untouched)
+  sy run --at 02:30 | --in 3h | --when-reset claude|codex|any  [--file tasks.txt | "task"]
+                             start later, unattended (PC kept awake; --allow-sleep to opt out)
+  sy schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)
   sy history [--all] [-n 20]       recent tasks in this directory, with status and cost
   sy resume [task id]        continue an interrupted task (default: the last one here)
+  sy report [task id] [--out f.html] [--md] [--open]   one shareable page per task (default: the last one here)
   sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline
   sy tune [--here] [--since 7d]    routing suggestions from your logs
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
@@ -146,8 +163,10 @@ Flags (TUI and run):
   --prefer role=codex|claude|other|auto  override a role's provider choice (repeatable; role "all" ok)
   --provider codex|claude    force every role onto one provider
   --threads <n>  --no-parallel  --no-review  --judge
+  --repo name=path           another git repo tasks may change too (repeatable; multi-repo tasks)
   --ascii | --unicode        force the ASCII or Unicode theme
   --demo  --speed <x>        demo mode (TUI only); speed multiplies animation pace
+  --budget-task-tokens <n>  --budget-task-usd <$>  --budget-day-usd <$>   budget limits (0 = off; config: budget)
 
 Roles: planner, worker, worker_high, explorer, researcher, reviewer, judge
 `)
@@ -170,6 +189,15 @@ type common struct {
 	judge      bool
 	ascii      bool
 	unicode    bool
+	repos      multiFlag           // --repo name=path (multi-repo tasks)
+	workspace  []orchestrator.Repo // resolved by setup
+	// workspaceSkipped describes config repos setup left out.
+	workspaceSkipped []string
+	// Budget overrides (negative = not given) and the keep-awake opt-out.
+	budgetTaskTokens int64
+	budgetTaskUSD    float64
+	budgetDayUSD     float64
+	allowSleep       bool
 }
 
 func (c *common) register(fs *flag.FlagSet) {
@@ -184,6 +212,11 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.BoolVar(&c.judge, "judge", false, "enable the LLM judge for unclear routing")
 	fs.BoolVar(&c.ascii, "ascii", false, "ASCII theme")
 	fs.BoolVar(&c.unicode, "unicode", false, "Unicode theme")
+	fs.Var(&c.repos, "repo", "name=path: another git repo the tasks may change (repeatable; multi-repo tasks)")
+	fs.Int64Var(&c.budgetTaskTokens, "budget-task-tokens", -1, "stop or ask when a task used this many fresh tokens (0 = no limit; default: config budget.task_tokens)")
+	fs.Float64Var(&c.budgetTaskUSD, "budget-task-usd", -1, "stop or ask when a task cost this much, API-equivalent $ (0 = no limit)")
+	fs.Float64Var(&c.budgetDayUSD, "budget-day-usd", -1, "stop or ask when today's tasks cost this much, API-equivalent $ (0 = no limit)")
+	fs.BoolVar(&c.allowSleep, "allow-sleep", false, "let the PC sleep while scheduled tasks wait or run")
 }
 
 // setup loads config and applies flag overrides.
@@ -205,10 +238,12 @@ func (c *common) setup() (*config.Store, string, error) {
 		return nil, "", fmt.Errorf("--dir %s is not a directory", dir)
 	}
 	// The project's .switchyard.yaml, then flags on top.
+	userCfg := store.Get()
 	info, err := store.ApplyRepo(dir)
 	if err != nil {
 		return nil, "", err
 	}
+	fileRepos := repoFileWorkspace(userCfg, dir, info)
 	if len(info.Ignored) > 0 {
 		fmt.Fprintf(os.Stderr, "note: %s sets %s, which run commands; they are ignored until you review and trust the file: sy trust\n",
 			info.Path, strings.Join(info.Ignored, ", "))
@@ -269,12 +304,55 @@ func (c *common) setup() (*config.Store, string, error) {
 		if c.unicode {
 			cf.Theme = "unicode"
 		}
+		if c.budgetTaskTokens >= 0 {
+			cf.Budget.TaskTokens = c.budgetTaskTokens
+		}
+		if c.budgetTaskUSD >= 0 {
+			cf.Budget.TaskUSD = c.budgetTaskUSD
+		}
+		if c.budgetDayUSD >= 0 {
+			cf.Budget.DayUSD = c.budgetDayUSD
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, "", err
 	}
+	// Multi-repo workspace: config, then --repo. A config repo that does
+	// not fit this machine is skipped with a warning; a bad flag fails.
+	var entries []orchestrator.WorkspaceEntry
+	for name, p := range store.Get().Workspace.Repos {
+		e := orchestrator.WorkspaceEntry{Name: name, Path: p, Base: dir, Origin: "workspace.repos." + name}
+		if path != "" {
+			e.Origin = path + ": " + e.Origin
+		}
+		if fp, ok := fileRepos[name]; ok && fp == p {
+			e.Base, e.Origin = filepath.Dir(info.Path), info.Path+": workspace.repos."+name
+		}
+		entries = append(entries, e)
+	}
+	if c.workspace, c.workspaceSkipped, err = orchestrator.ResolveWorkspace(dir, entries, c.repos); err != nil {
+		return nil, "", err
+	}
+	for _, s := range c.workspaceSkipped {
+		fmt.Fprintln(os.Stderr, "warning: "+s)
+	}
 	return store, dir, nil
+}
+
+// repoFileWorkspace returns the workspace.repos the repo file itself sets
+// (only a trusted file's apply): their relative paths are taken from the
+// file's folder, not from --dir.
+func repoFileWorkspace(userCfg *config.Config, dir string, info config.RepoInfo) map[string]string {
+	if info.Path == "" || !info.Trusted {
+		return nil
+	}
+	probe := userCfg.Clone()
+	probe.Workspace.Repos = nil
+	if _, err := config.ApplyRepo(probe, dir); err != nil {
+		return nil
+	}
+	return probe.Workspace.Repos
 }
 
 func cmdTUI(args []string) error {
@@ -317,10 +395,12 @@ func cmdTUI(args []string) error {
 	orc := orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: runners, Tracker: limits.NewTracker(), Log: log,
 		Events: events, ForceProvider: c.provider, NoGit: *demo, Mode: mode, Approver: ap,
+		Repos: c.workspace, WorkspaceSkipped: c.workspaceSkipped,
 	})
 	m := tui.New(tui.Options{
 		Orc: orc, Events: events, Dir: dir, Theme: tui.NewTheme(cfg.Theme), Demo: *demo,
 		DemoTask: map[bool]string{true: demoTask}[*demo], SessionLog: log.Path(), Version: version, Approver: ap,
+		AllowSleep: c.allowSleep,
 	})
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()
@@ -436,7 +516,9 @@ func cmdStats(args []string) error {
 		}
 		f.Since = time.Now().Add(-d)
 	}
-	sessionlog.Aggregate(recs, f).Print(os.Stdout)
+	st := sessionlog.Aggregate(recs, f)
+	st.DayLimitUSD, st.DayLimitTokens = cfg.Budget.DayUSD, cfg.Budget.DayTokens
+	st.Print(os.Stdout)
 	fmt.Println("\nlogs:", cfg.SessionDir())
 	return nil
 }
@@ -564,6 +646,8 @@ func runDoctor(w io.Writer, cfgPath string) error {
 	} else {
 		fmt.Fprintf(w, "%s logs        %s\n", ok(true), dir)
 	}
+	wd, _ := os.Getwd()
+	problems += doctorMCP(w, cfg, wd, ok, warn)
 	problems += doctorMachine(w, cfg, ok, warn)
 	if problems > 0 {
 		return fmt.Errorf("%d problem(s) found", problems)

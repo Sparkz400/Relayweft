@@ -26,6 +26,7 @@ const (
 	TypeReview   = "review"
 	TypeMerge    = "merge"
 	TypeConfig   = "config_change"
+	TypeQuota    = "quota" // provider-reported quota (resets_at), logged when it changes
 )
 
 // Record is one JSONL line.
@@ -59,6 +60,8 @@ type Record struct {
 	Cost       *event.TaskCost   `json:"cost,omitempty"`  // task_end
 	Bench      string            `json:"bench,omitempty"` // task name in a `sy bench` run
 	Passed     *bool             `json:"passed,omitempty"`
+	Quota      *event.QuotaInfo  `json:"quota,omitempty"` // quota
+	Until      *time.Time        `json:"until,omitempty"` // limit: limited until (the reset time when known)
 }
 
 // Bool returns a pointer for Record.OK.
@@ -158,22 +161,33 @@ func ReadDir(dir string) ([]Record, error) {
 	}
 	var out []Record
 	for _, f := range files {
-		data, err := os.ReadFile(f)
+		recs, err := readFile(f)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", f, err)
+			return nil, err
 		}
-		start := 0
-		for i := 0; i <= len(data); i++ {
-			if i == len(data) || data[i] == '\n' {
-				line := data[start:i]
-				start = i + 1
-				if len(line) == 0 {
-					continue
-				}
-				var r Record
-				if json.Unmarshal(line, &r) == nil {
-					out = append(out, r)
-				}
+		out = append(out, recs...)
+	}
+	return out, nil
+}
+
+// readFile loads one .jsonl file, skipping broken lines.
+func readFile(f string) ([]Record, error) {
+	data, err := os.ReadFile(f)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", f, err)
+	}
+	var out []Record
+	start := 0
+	for i := 0; i <= len(data); i++ {
+		if i == len(data) || data[i] == '\n' {
+			line := data[start:i]
+			start = i + 1
+			if len(line) == 0 {
+				continue
+			}
+			var r Record
+			if json.Unmarshal(line, &r) == nil {
+				out = append(out, r)
 			}
 		}
 	}
