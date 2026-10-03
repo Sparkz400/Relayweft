@@ -76,6 +76,7 @@ func cmdPR(args []string) error {
 	fs := flag.NewFlagSet("sy pr", flag.ExitOnError)
 	var o prOptions
 	dir := fs.String("dir", "", "project directory (default current directory)")
+	repoName := fs.String("repo", "", "for a multi-repo task: open the PR of this extra repo (its name from --repo / workspace.repos)")
 	fs.StringVar(&o.base, "base", "", "branch to merge into (default: the remote's default branch)")
 	fs.StringVar(&o.branch, "branch", "", "branch to create (default sy/<slug of the task>)")
 	fs.StringVar(&o.title, "title", "", "pull request title (default: the task's first line)")
@@ -84,7 +85,7 @@ func cmdPR(args []string) error {
 	fs.BoolVar(&o.yes, "yes", false, "do not ask for confirmation")
 	fs.StringVar(&o.api, "api", "", "GitHub API base URL (GitHub Enterprise: https://<host>/api/v3; GH_HOST also works)")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: sy pr [task-id] [--base main] [--branch name] [--draft] [--title text] [--no-push] [--yes]
+		fmt.Fprint(os.Stderr, `Usage: sy pr [task-id] [--repo name] [--base main] [--branch name] [--draft] [--title text] [--no-push] [--yes]
 
 Turns a finished task (default: the newest finished task in this directory,
 see sy history) into a branch, a commit and a GitHub pull request.
@@ -96,6 +97,7 @@ if they do not apply cleanly to HEAD, nothing is created. The branch
 forced). The PR is opened with a token from GITHUB_TOKEN, GH_TOKEN or
 `+"`gh auth token`"+`; without one the body is written to a file and the compare
 URL is printed. A task that did not finish ok is opened as a draft.
+A multi-repo task gets one PR per repo: --repo <name> picks an extra repo.
 `)
 	}
 	var id string
@@ -125,8 +127,40 @@ URL is printed. A task that did not finish ok is opened as a draft.
 	if err != nil {
 		return err
 	}
+	others := st.Repos
+	if *repoName != "" {
+		if st, err = repoTask(st, *repoName); err != nil {
+			return err
+		}
+		others = nil
+	}
 	_, err = makePR(st, o)
+	if err == nil && len(others) > 0 {
+		// The snapshots of a multi-repo task are recorded in every repo
+		// under the same key: each repo gets a PR of its own.
+		fmt.Fprintln(prOut, "\nthis task also changed other repos; open their pull requests with:")
+		for _, r := range others {
+			fmt.Fprintf(prOut, "  sy pr %s --repo %s    (%s)\n", st.ID, r.Name, r.Dir)
+		}
+	}
 	return err
+}
+
+// repoTask is the task as seen from one of its extra repos.
+func repoTask(st *orchestrator.TaskState, name string) (*orchestrator.TaskState, error) {
+	var names []string
+	for _, r := range st.Repos {
+		if r.Name == name {
+			c := *st
+			c.Dir, c.Repos = r.Dir, nil
+			return &c, nil
+		}
+		names = append(names, r.Name)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("task %s changed only one repo; --repo is for multi-repo tasks", st.ID)
+	}
+	return nil, fmt.Errorf("task %s has no repo %q (its repos: %s)", st.ID, name, strings.Join(names, ", "))
 }
 
 // findPRTask picks the task by id or the newest finished one in dir.

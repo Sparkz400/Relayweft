@@ -314,3 +314,53 @@ func TestBuildFromRealTask(t *testing.T) {
 		t.Error("dir with spaces not quoted")
 	}
 }
+
+// A multi-repo task's report lists the files of every repo it changed.
+func TestBuildMultiRepoTask(t *testing.T) {
+	isolate(t)
+	api, web := gitRepo(t), gitRepo(t)
+	fn := func(s runner.Spec) runner.Result {
+		switch {
+		case strings.Contains(s.Prompt, runner.MarkerPlan):
+			return runner.Result{Final: "```json\n" + `{"summary":"two repos","subtasks":[` +
+				`{"id":"a","title":"api","kind":"edit","prompt":"api change","files":["api.txt"]},` +
+				`{"id":"b","title":"web","kind":"edit","prompt":"web change","files":["web.txt"],"repo":"web"}]}` + "\n```"}
+		case strings.Contains(s.Prompt, runner.MarkerPlanReview), strings.Contains(s.Prompt, runner.MarkerFinalReview):
+			return runner.Result{Final: `{"approve": true}`}
+		}
+		name := map[string]string{"a": "api.txt", "b": "web.txt"}[s.StepID]
+		os.WriteFile(filepath.Join(s.Dir, name), []byte(s.StepID+"\n"), 0o644)
+		return runner.Result{Final: "wrote " + name, Files: []string{name}}
+	}
+	set := runner.Set{event.Codex: scripted{event.Codex, fn}, event.Claude: scripted{event.Claude, fn}}
+	ch := make(chan event.Event, 256)
+	go func() {
+		for range ch {
+		}
+	}()
+	o := orchestrator.New(orchestrator.Options{
+		Dir: api, Store: config.NewStore(config.Default(), filepath.Join(t.TempDir(), "sy.yaml")), Mode: "routed",
+		Runners: func(*config.Config) runner.Set { return set }, Tracker: limits.NewTracker(),
+		Events: ch, Load: func() sysload.Sample { return sysload.Sample{} },
+		Repos: []orchestrator.Repo{{Name: "web", Dir: web}},
+	})
+	res := o.Run(context.Background(), "Change the api and the web repo together, each in its own step, keeping both in sync please")
+	close(ch)
+	if !res.OK {
+		t.Fatalf("task failed: %+v", res)
+	}
+	st, err := orchestrator.LoadTask(orchestrator.History(api, 1)[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Build(st, Options{Version: "test"})
+	var paths []string
+	if d.Diff != nil {
+		for _, f := range d.Diff.Files {
+			paths = append(paths, f.Path)
+		}
+	}
+	if strings.Join(paths, ",") != "api.txt,[web] web.txt" {
+		t.Fatalf("report files = %v, notes %v", paths, d.Notes)
+	}
+}

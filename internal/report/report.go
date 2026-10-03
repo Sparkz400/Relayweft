@@ -162,6 +162,26 @@ func Build(st *orchestrator.TaskState, o Options) *Data {
 				d.UndoCmd = "sy undo --dir " + shellQuote(st.Dir) + " " + st.UndoKey
 			}
 		}
+		// A multi-repo task recorded each extra repo under the same key:
+		// its files are listed too, labelled with the repo's name.
+		for _, r := range st.Repos {
+			rd, err := loadDiff(r.Dir, st.UndoKey, o)
+			if err != nil {
+				d.Notes = append(d.Notes, "diff of repo "+r.Name+" unavailable: "+err.Error())
+				continue
+			}
+			if d.Diff == nil {
+				d.Diff = &Diff{}
+			}
+			for _, f := range rd.Files {
+				f.Path = "[" + r.Name + "] " + f.Path
+				d.Diff.Files = append(d.Diff.Files, f)
+			}
+			d.Diff.Add += rd.Add
+			d.Diff.Del += rd.Del
+			d.Diff.Hidden += rd.Hidden
+			d.Diff.Truncated = d.Diff.Truncated || rd.Truncated
+		}
 	}
 	return d
 }

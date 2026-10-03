@@ -381,3 +381,17 @@ func TestTitlesAndSlugs(t *testing.T) {
 		t.Errorf("fallback slug %q", got)
 	}
 }
+
+func TestPRRepoTask(t *testing.T) {
+	st := &orchestrator.TaskState{ID: "s-task-1", Dir: "/p/api", Repos: []orchestrator.Repo{{Name: "web", Dir: "/p/web"}}}
+	c, err := repoTask(st, "web")
+	if err != nil || c.Dir != "/p/web" || len(c.Repos) != 0 || st.Dir != "/p/api" {
+		t.Fatalf("repoTask = %+v %v (original %+v)", c, err, st)
+	}
+	if _, err := repoTask(st, "docs"); err == nil || !strings.Contains(err.Error(), "its repos: web") {
+		t.Fatalf("unknown repo: %v", err)
+	}
+	if _, err := repoTask(&orchestrator.TaskState{ID: "x"}, "web"); err == nil || !strings.Contains(err.Error(), "only one repo") {
+		t.Fatalf("single-repo task: %v", err)
+	}
+}
