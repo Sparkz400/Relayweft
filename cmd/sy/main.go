@@ -304,6 +304,11 @@ func cmdRun(args []string) error {
 	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop() // a second Ctrl+C now kills sy immediately
+		fmt.Fprintln(os.Stderr, "\ncancelling: stopping all agents... (Ctrl+C again to force quit)")
+	}()
 	printed := make(chan struct{})
 	go func() {
 		defer close(printed)

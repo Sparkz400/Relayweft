@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/harmonica"
 	"github.com/sparkz400/switchyard/internal/config"
@@ -140,7 +140,7 @@ type Model struct {
 	logScroll int
 	fullLog   bool
 
-	input    textinput.Model
+	input    promptBox
 	focus    focusArea
 	selected int // index into order (tree focus)
 
@@ -151,6 +151,7 @@ type Model struct {
 	result     string
 	resultOK   bool
 	cancelTask context.CancelFunc
+	cancelling bool
 	taskDone   chan struct{}
 	quitArmed  time.Time
 	killArmed  string
@@ -165,17 +166,10 @@ type Model struct {
 
 // New builds the model.
 func New(o Options) *Model {
-	in := textinput.New()
-	in.Placeholder = "describe a task and press enter  ·  /help for commands"
-	in.Prompt = "› "
-	if o.Theme.ASCII {
-		in.Prompt = "> "
-	}
-	in.CharLimit = 4000
+	in := newPrompt(o.Theme.ASCII)
 	if o.Theme.ASCII {
 		ellipsis = "..."
 	}
-	in.Focus()
 	m := &Model{
 		opt: o, orc: o.Orc, store: o.Orc.Store(), th: o.Theme,
 		nodes: map[string]*node{}, input: in,
@@ -228,7 +222,7 @@ func waitEvents(ch <-chan event.Event) tea.Cmd {
 
 // Init implements tea.Model.
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tick(), waitEvents(m.opt.Events), textinput.Blink}
+	cmds := []tea.Cmd{tick(), waitEvents(m.opt.Events), textarea.Blink}
 	if m.opt.Demo && m.opt.DemoTask != "" {
 		task := m.opt.DemoTask
 		cmds = append(cmds, func() tea.Msg { return submitMsg(task) })
@@ -280,6 +274,22 @@ func (m *Model) startTask(text string) {
 	}()
 	m.focus = focusTree
 	m.input.Blur()
+}
+
+// cancelRunning cancels the whole task: every running agent's process tree
+// is killed and nothing new starts. The task ends with a TaskDone event.
+func (m *Model) cancelRunning() {
+	switch {
+	case !m.running || m.cancelTask == nil:
+		m.flashNotice("no task is running")
+	case m.cancelling:
+		m.flashNotice("already cancelling - waiting for agents to stop...")
+	default:
+		m.cancelling = true
+		m.phase = "cancelling"
+		m.cancelTask()
+		m.flashNotice("cancelling: stopping all agents...")
+	}
 }
 
 func (m *Model) startSingle(text, provider string, r config.Route) {
@@ -347,6 +357,26 @@ func (m *Model) handleEvent(e event.Event) {
 		return
 	case event.TaskDone:
 		m.running = false
+		// Agents that never finished (queued behind a cancel, or killed
+		// mid-run without a Done) must not keep spinning.
+		for _, n := range m.nodes {
+			if n.status == stQueued || n.status == stRunning {
+				if n.id == orchestrator.AgentMain && e.OK {
+					continue
+				}
+				n.status = stKilled
+				if n.ended.IsZero() {
+					n.ended = time.Now()
+				}
+			}
+		}
+		if m.reviewer.status == stRunning {
+			m.reviewer.status = stKilled
+		}
+		if m.cancelling {
+			m.cancelling = false
+			m.flashNotice("task cancelled; all agents stopped")
+		}
 		m.result = e.Text
 		m.resultOK = e.OK
 		mark := m.th.G.OK
@@ -635,7 +665,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.input.Width = max(10, msg.Width-6)
+		m.input.SetWidth(max(10, msg.Width-4))
 		return m, nil
 	case tickMsg:
 		m.animate()
@@ -647,6 +677,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitEvents(m.opt.Events)
 	case submitMsg:
 		m.startTask(string(msg))
+		return m, nil
+	case submitCheckMsg:
+		text, ok := m.input.confirm(msg)
+		if !ok {
+			return m, nil
+		}
+		if strings.HasPrefix(text, "/") && !strings.Contains(text, "\n") {
+			return m, m.command(text)
+		}
+		m.startTask(text)
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -662,9 +702,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.focus == focusPrompt && m.picker == nil {
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		return m, cmd
+		return m, m.input.update(msg)
 	}
 	return m, nil
 }
@@ -686,28 +724,18 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+o":
 		m.openPicker()
 		return m, nil
+	case "ctrl+x": // cancel from anywhere, also while typing
+		m.cancelRunning()
+		return m, nil
 	}
 	if m.focus == focusPrompt {
-		switch k.Type {
-		case tea.KeyEnter:
-			text := strings.TrimSpace(m.input.Value())
-			if text == "" {
-				return m, nil
-			}
-			m.input.SetValue("")
-			if strings.HasPrefix(text, "/") {
-				return m, m.command(text)
-			}
-			m.startTask(text)
-			return m, nil
-		case tea.KeyTab, tea.KeyEsc:
-			m.focus = focusTree
-			m.input.Blur()
-			return m, nil
+		if cmd, handled := m.input.key(k); handled {
+			return m, cmd
 		}
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(k)
-		return m, cmd
+		// tab / esc: move focus to the agents
+		m.focus = focusTree
+		m.input.Blur()
+		return m, nil
 	}
 	// Tree focus: single-key commands.
 	ids := m.focusable()
@@ -730,7 +758,7 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("/")
 			m.input.CursorEnd()
 		}
-		return m, textinput.Blink
+		return m, textarea.Blink
 	case "l":
 		m.fullLog = !m.fullLog
 		m.logScroll = 0
@@ -758,10 +786,7 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flashNotice("killed " + id)
 		}
 	case "x":
-		if m.running && m.cancelTask != nil {
-			m.cancelTask()
-			m.flashNotice("cancelling task...")
-		}
+		m.cancelRunning()
 	case "m":
 		m.openPicker()
 	case "c":

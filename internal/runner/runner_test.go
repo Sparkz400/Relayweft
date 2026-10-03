@@ -348,3 +348,41 @@ func TestMidStreamLimitThenSuccessIsNotALimit(t *testing.T) {
 		t.Errorf("usage events = %d, want exactly 1", usage)
 	}
 }
+
+// An agent that leaves a detached process holding stdout must not keep the
+// run (and so the whole task) alive after cancel. exec.Cmd closes our end
+// of the pipe WaitDelay (set by proc.Prepare) after the cancel.
+func TestCancelWithOrphanHoldingStdout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script CLI stub")
+	}
+	if _, err := os.Stat("/usr/bin/setsid"); err != nil {
+		t.Skip("setsid not available")
+	}
+	dir := t.TempDir()
+	cmd := filepath.Join(dir, "orphaning")
+	// setsid puts the sleeper outside our process group, so the group kill
+	// misses it, and it inherits stdout.
+	os.WriteFile(cmd, []byte("#!/bin/sh\ncat >/dev/null\nsetsid sleep 30 &\necho '{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"m\"}'\nsleep 30\n"), 0o755)
+	cfg := config.Default()
+	pc := cfg.Providers[event.Claude]
+	pc.Command = cmd
+	ctx, cancel := context.WithCancel(context.Background())
+	var c collector
+	done := make(chan Result)
+	go func() { done <- NewClaude(pc, nil).Run(ctx, Spec{AgentID: "o"}, c.emit) }()
+	time.Sleep(400 * time.Millisecond)
+	start := time.Now()
+	cancel()
+	select {
+	case res := <-done:
+		if !res.Killed {
+			t.Errorf("want killed, got %+v", res)
+		}
+		if d := time.Since(start); d > 8*time.Second {
+			t.Errorf("cancel took %s", d)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("cancel hung on an orphan holding stdout")
+	}
+}

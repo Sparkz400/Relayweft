@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -141,7 +142,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 			emit(stamp(e))
 		}
 	}
-	if err := sc.Err(); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+	if err := sc.Err(); err != nil && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, os.ErrClosed) {
 		stderr.Write([]byte("\nread stdout: " + err.Error()))
 		// Keep draining so the CLI never blocks on a full pipe.
 		io.Copy(io.Discard, stdout)

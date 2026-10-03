@@ -102,14 +102,20 @@ There are four ways to change any of this, at any time:
 └ prompt ────────────────────────────────────────────────────────────────┘
 ```
 
-**Keys.** Focus starts in the prompt: type a task and press `enter`. `tab`/`esc` move focus to the agents, where:
+**Prompt.** Focus starts in the prompt: type a task and press `enter`. The prompt is multi-line:
+- Pasting multi-line text keeps every line and **never submits**; you press `enter` yourself when ready.
+- On Windows, pastes arrive as single keystrokes, so Switchyard detects them by their speed.
+- `alt+enter` (or `ctrl+j`) adds a new line by hand.
+- `ctrl+x` cancels the running task from anywhere, even while typing.
+
+**Keys.** `tab`/`esc` move focus to the agents, where:
 
 | Key | Action |
 |---|---|
 | `tab` / `shift+tab` | select the next / previous agent (its own log is shown); cycling past the last one returns to "all" |
 | `k` `k` | kill the selected agent (press twice) |
 | `p` | pause / resume dispatching (running agents finish, no new agent starts) |
-| `x` | cancel the whole task |
+| `x` / `ctrl+x` | cancel the whole task: every agent's process tree is stopped, nothing new starts, and agents that never ran are marked stopped |
 | `l` | toggle the full-screen log (`pgup`/`pgdn` scroll) |
 | `m` | model picker |
 | `enter`, `i`, `/` | back to the prompt |
