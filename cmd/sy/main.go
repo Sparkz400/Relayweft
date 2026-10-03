@@ -79,6 +79,8 @@ func main() {
 		err = cmdResume(args)
 	case "update":
 		err = cmdUpdate(args)
+	case "trust":
+		err = cmdTrust(args)
 	case "version", "--version":
 		fmt.Println("switchyard", version)
 	case "help", "-h", "--help":
@@ -121,6 +123,8 @@ Usage:
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
   sy doctor                  check CLIs, versions, git and terminal
   sy init [--global] [--force] [--print]   write the commented default config
+  sy init --repo             write .switchyard.yaml: this repo's shared settings (detected checks, routes)
+  sy trust [--revoke]        review and trust the commands in this repo's .switchyard.yaml
   sy clean [--dir <path>] [--idle 72h]   remove this repo's pooled worktrees (or all idle ones)
   sy undo [--list] [--redo] [--yes] [task]   revert (or re-apply) a task's changes, with preview
   sy bench [--file bench.yaml] [--init]      compare routed Switchyard vs single agents on your tasks
@@ -183,6 +187,26 @@ func (c *common) setup() (*config.Store, string, error) {
 		return nil, "", err
 	}
 	store := config.NewStore(cfg, path)
+	dir := c.dir
+	if dir == "" {
+		dir, _ = os.Getwd()
+	}
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return nil, "", fmt.Errorf("--dir %s is not a directory", dir)
+	}
+	// The project's .switchyard.yaml, then flags on top.
+	info, err := store.ApplyRepo(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(info.Ignored) > 0 {
+		fmt.Fprintf(os.Stderr, "note: %s sets %s, which run commands; they are ignored until you review and trust the file: sy trust\n",
+			info.Path, strings.Join(info.Ignored, ", "))
+	}
 	for _, r := range c.routes {
 		role, spec, ok := strings.Cut(r, "=")
 		if !ok {
@@ -243,17 +267,6 @@ func (c *common) setup() (*config.Store, string, error) {
 	})
 	if err != nil {
 		return nil, "", err
-	}
-	dir := c.dir
-	if dir == "" {
-		dir, _ = os.Getwd()
-	}
-	dir, err = filepath.Abs(dir)
-	if err != nil {
-		return nil, "", err
-	}
-	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
-		return nil, "", fmt.Errorf("--dir %s is not a directory", dir)
 	}
 	return store, dir, nil
 }
@@ -670,12 +683,16 @@ func refreshCodex(cfg *config.Config, all bool) (int, error) {
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("sy init", flag.ExitOnError)
 	global := fs.Bool("global", false, "write to the user config dir instead of ./switchyard.yaml")
+	repo := fs.Bool("repo", false, "write a .switchyard.yaml for this repository (shared settings to commit)")
 	force := fs.Bool("force", false, "overwrite an existing file")
 	print := fs.Bool("print", false, "print the default config instead of writing it")
 	fs.Parse(args)
 	if *print {
 		os.Stdout.Write(config.DefaultYAML())
 		return nil
+	}
+	if *repo {
+		return initRepo(*force)
 	}
 	path := config.FileName
 	if *global {

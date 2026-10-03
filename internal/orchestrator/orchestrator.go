@@ -502,6 +502,14 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 
 	t.quotaBefore = o.quotaNow()
 	var res TaskResult
+	if refused == "" {
+		if err := o.runHooks(ctx, t, "before_task", cfg.Hooks.BeforeTask, nil); err != nil {
+			refused = "not started: " + err.Error()
+			if t.state != nil {
+				t.state.Status = "failed"
+			}
+		}
+	}
 	if refused != "" {
 		o.emit(event.Event{Kind: event.Error, Text: refused})
 		res = TaskResult{Summary: refused}
@@ -520,6 +528,12 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		res.OK = false
 		res.Summary = "cancelled: " + res.Summary
 	}
+	status := map[bool]string{true: "done", false: "failed"}[res.OK]
+	if ctx.Err() != nil {
+		status = "cancelled"
+	}
+	// after_task runs even after a cancel, so give it a context of its own.
+	o.runHooks(context.WithoutCancel(ctx), t, "after_task", cfg.Hooks.AfterTask, map[string]string{"SY_STATUS": status, "SY_SUMMARY": res.Summary})
 	if res.OK && t.useGit && o.opts.Bench == "" && t.cfg.Orchestrator.Handoff {
 		addRepoNote(t.root, text, res.Summary, t.changedFiles())
 	}
@@ -982,6 +996,9 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 						func() {
 							defer func() { <-writeSem }() // released even if the step panics
 							r = o.runStep(ctx, t, st, deps, o.opts.Dir, "")
+							if r.ok {
+								o.afterMerge(ctx, t, st.ID, r.files) // it wrote straight into the tree
+							}
 						}()
 					}
 				}
@@ -1130,6 +1147,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		r.ok, r.err = false, "apply failed"
 		return r
 	}
+	var landed []string
 	if names, err := g.out("diff", "--name-only", "-z", t.snapshot, merged); err == nil {
 		var paths []string
 		for _, p := range strings.Split(names, "\x00") {
@@ -1138,9 +1156,11 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			}
 		}
 		t.noteFiles(t.root, paths)
+		landed = paths
 	}
 	t.snapshot = merged
 	o.mergeEvent(t, st.ID, true, fmt.Sprintf("merged %d file(s)", len(r.files)))
+	o.afterMerge(ctx, t, st.ID, landed)
 	return r
 }
 

@@ -470,3 +470,41 @@ func TestSessionsSurviveRestart(t *testing.T) {
 		t.Fatalf("session not restored: %+v", o2.Sessions())
 	}
 }
+
+func TestHooks(t *testing.T) {
+	dir := gitRepo(t)
+	out := filepath.Join(t.TempDir(), "hooks.log")
+	echo := func(tag string) string {
+		if runtime.GOOS == "windows" {
+			return "echo " + tag + " %SY_STATUS%%SY_STEP%>> \"" + out + "\""
+		}
+		return "echo " + tag + " $SY_STATUS$SY_STEP >> '" + out + "'"
+	}
+	set := both(func(s runner.Spec) runner.Result {
+		if r, ok := twoEdits(s); ok {
+			return r
+		}
+		os.WriteFile(filepath.Join(s.Dir, s.StepID+".txt"), []byte("x\n"), 0o644)
+		return runner.Result{Final: "ok"}
+	})
+	o, _ := newOrc(t, dir, set, func(c *config.Config) {
+		c.Hooks.BeforeTask = []string{echo("before")}
+		c.Hooks.AfterMerge = []string{echo("merge")}
+		c.Hooks.AfterTask = []string{echo("after")}
+	})
+	if res := o.Run(context.Background(), longTask); !res.OK {
+		t.Fatalf("%+v", res)
+	}
+	log := read(t, out)
+	if !strings.HasPrefix(log, "before") || strings.Count(log, "merge") != 2 || !strings.Contains(log, "after done") {
+		t.Fatalf("hook log:\n%s", log)
+	}
+	// A failing before_task hook stops the task before any agent runs.
+	ran := false
+	o2, _ := newOrc(t, dir, both(func(s runner.Spec) runner.Result { ran = true; return runner.Result{} }), func(c *config.Config) {
+		c.Hooks.BeforeTask = []string{"exit 3"}
+	})
+	if res := o2.Run(context.Background(), longTask); res.OK || ran || !strings.Contains(res.Summary, "before_task") {
+		t.Fatalf("failing hook: %+v ran=%v", res, ran)
+	}
+}

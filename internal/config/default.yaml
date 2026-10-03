@@ -120,6 +120,17 @@ verify:
   commands: []                     # e.g. ["go test ./...", "go vet ./..."]
   timeout: 10m
 
+# Your own commands around every task (run through the system shell in the
+# project folder). Environment: SY_TASK, SY_TASK_ID, SY_DIR, SY_STATUS
+# (after_task: done|failed|cancelled), SY_SUMMARY, SY_STEP and SY_FILES
+# (after_merge: the step and the files it changed, one per line).
+# A failing before_task hook stops the task.
+hooks:
+  before_task: []                  # e.g. ["git fetch --quiet"]
+  after_merge: []                  # e.g. ["gofmt -w ."]
+  after_task: []                   # e.g. ["npm run lint"]
+  timeout: 5m
+
 # Desktop notifications (Windows toast, macOS, notify-send): a task finished
 # or failed, a provider hit its limit, or sy waits for your approval.
 notify:
