@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -385,5 +386,87 @@ func TestChangeSetLiteralPaths(t *testing.T) {
 	}
 	if names, _ := g.out("diff", "--name-only", base, pc); names != "[id].tsx" {
 		t.Fatalf("partial commit has %q", names)
+	}
+}
+
+func TestHunkSelection(t *testing.T) {
+	dir := gitRepo(t)
+	g := git{dir}
+	var lines []string
+	for i := 0; i < 40; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	os.WriteFile(filepath.Join(dir, "f.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	g.out("add", "-A")
+	g.out("commit", "-qm", "f")
+	base := headOf(t, dir)
+	lines[2], lines[35] = "TOP CHANGE", "BOTTOM CHANGE"
+	os.WriteFile(filepath.Join(dir, "f.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	g.out("commit", "-qam", "two hunks")
+	files, err := g.changeSet(base, headOf(t, dir))
+	if err != nil || len(files) != 1 || !files[0].Splittable() {
+		t.Fatalf("files %+v %v", files, err)
+	}
+	if _, h := SplitHunks(files[0].Patch); len(h) != 2 {
+		t.Fatalf("%d hunks", len(h))
+	}
+	pc, err := g.selectionCommit(base, headOf(t, dir), files, ChangeDecision{Apply: []string{"f.txt"}, Hunks: map[string][]int{"f.txt": {1}}}, "bottom only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := g.out("show", pc+":f.txt")
+	if strings.Contains(got, "TOP CHANGE") || !strings.Contains(got, "BOTTOM CHANGE") {
+		t.Fatalf("selection:\n%s", got)
+	}
+}
+
+func TestTellReachesRunningAgent(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var prompts []runner.Spec
+	set := both(func(s runner.Spec) runner.Result {
+		mu.Lock()
+		prompts = append(prompts, s)
+		first := len(prompts) == 1
+		mu.Unlock()
+		if first {
+			close(started)
+			<-release
+		}
+		return runner.Result{Final: "ok", SessionID: "sess"}
+	})
+	o, _ := newOrc(t, "", set, nil)
+	if err := o.Tell("work", "too early"); err == nil {
+		t.Fatal("told an agent that is not running")
+	}
+	done := make(chan TaskResult)
+	go func() { done <- o.Run(context.Background(), "add a test") }()
+	<-started
+	if err := o.Tell("work", "use table tests"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if res := <-done; !res.OK {
+		t.Fatalf("task: %+v", res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(prompts) < 2 || prompts[1].Resume != "sess" || !strings.Contains(prompts[1].Prompt, "use table tests") {
+		t.Fatalf("message not delivered: %d runs", len(prompts))
+	}
+}
+
+func TestSessionsSurviveRestart(t *testing.T) {
+	dir := t.TempDir()
+	set := both(func(s runner.Spec) runner.Result { return runner.Result{Final: "ok", SessionID: "s-" + s.StepID} })
+	o, _ := newOrc(t, dir, set, nil)
+	o.opts.NoGit = true
+	if res := o.Run(context.Background(), "add a test"); !res.OK {
+		t.Fatalf("%+v", res)
+	}
+	o2, _ := newOrc(t, dir, set, nil)
+	if s, ok := o2.Session("work"); !ok || s.SessionID != "s-work" {
+		t.Fatalf("session not restored: %+v", o2.Sessions())
 	}
 }

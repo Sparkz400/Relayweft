@@ -2,7 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -35,13 +40,56 @@ type AgentSession struct {
 // maxSessions bounds the remembered agents (oldest are forgotten).
 const maxSessions = 50
 
+// sessionsPath keeps a project's follow-up targets across sy restarts.
+func sessionsPath(dir string) string {
+	h := sha1.Sum([]byte(canonPath(dir)))
+	return filepath.Join(stateDir(), "sessions", hex.EncodeToString(h[:6])+".json")
+}
+
+// persistSessions reports whether sessions outlive this process (not for
+// demo or bench runs).
+func (o *Orchestrator) persistSessions() bool {
+	return o.opts.Mode != "demo" && o.opts.Bench == "" && o.opts.Dir != ""
+}
+
+// loadSessions reads the saved sessions once (o.mu held).
+func (o *Orchestrator) loadSessions() {
+	if o.sessions != nil {
+		return
+	}
+	o.sessions = map[string]AgentSession{}
+	if !o.persistSessions() {
+		return
+	}
+	if data, err := os.ReadFile(sessionsPath(o.opts.Dir)); err == nil {
+		json.Unmarshal(data, &o.sessions)
+	}
+}
+
+// saveSessions writes the sessions (o.mu held).
+func (o *Orchestrator) saveSessions() {
+	if !o.persistSessions() {
+		return
+	}
+	p := sessionsPath(o.opts.Dir)
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	data, err := json.MarshalIndent(o.sessions, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := fmt.Sprintf("%s.%d.tmp", p, os.Getpid())
+	if os.WriteFile(tmp, data, 0o644) == nil {
+		os.Rename(tmp, p)
+	}
+}
+
 func (o *Orchestrator) rememberSession(agentID string, s AgentSession) {
 	s.AgentID, s.Ended = agentID, time.Now()
+	s.Final = clip(s.Final, 6000)
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.sessions == nil {
-		o.sessions = map[string]AgentSession{}
-	}
+	o.loadSessions()
+	defer o.saveSessions()
 	o.sessions[agentID] = s
 	if len(o.sessions) > maxSessions {
 		oldest := ""
@@ -58,6 +106,7 @@ func (o *Orchestrator) rememberSession(agentID string, s AgentSession) {
 func (o *Orchestrator) Sessions() []AgentSession {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.loadSessions()
 	out := make([]AgentSession, 0, len(o.sessions))
 	for _, s := range o.sessions {
 		out = append(out, s)
@@ -84,6 +133,7 @@ func (o *Orchestrator) Session(agentID string) (AgentSession, bool) {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.loadSessions()
 	s, ok := o.sessions[agentID]
 	return s, ok
 }
@@ -235,6 +285,66 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 	o.emit(event.Event{Kind: event.Phase, Text: "done"})
 	o.emit(event.Event{Kind: event.TaskDone, OK: out.OK, Text: out.Summary, Tokens: tk, Cost: &cost})
 	return out
+}
+
+// Tell queues a message for a running agent. It is delivered when the
+// agent's current turn ends: its CLI session is resumed with the message
+// before its work is merged or reviewed, so it can still change course.
+func (o *Orchestrator) Tell(agentID, text string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.cancels[agentID]) == 0 {
+		return fmt.Errorf("%s is not running", agentID)
+	}
+	if o.told == nil {
+		o.told = map[string][]string{}
+	}
+	o.told[agentID] = append(o.told[agentID], text)
+	return nil
+}
+
+func (o *Orchestrator) takeTold(agentID string) []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	msgs := o.told[agentID]
+	delete(o.told, agentID)
+	return msgs
+}
+
+// deliverTold resumes a finished turn with the messages told to the agent
+// meanwhile (repeatedly, while more arrive).
+func (o *Orchestrator) deliverTold(ctx context.Context, rn runner.Runner, spec runner.Spec, agentID string, res runner.Result) runner.Result {
+	for {
+		msgs := o.takeTold(agentID)
+		if len(msgs) == 0 || ctx.Err() != nil {
+			return res
+		}
+		if !res.OK() || res.SessionID == "" {
+			o.emit(event.Event{Kind: event.Error, AgentID: agentID, Text: "your message could not be delivered (the agent ended without a resumable session): " + clip(strings.Join(msgs, " / "), 200)})
+			return res
+		}
+		o.emit(event.Event{Kind: event.Log, AgentID: agentID, Text: "delivering your message: " + clip(strings.Join(msgs, " / "), 200)})
+		next := spec
+		next.Resume = res.SessionID
+		next.Prompt = "The user sent you this while you were working. Take it into account, adjust your work if needed, then reply with an updated short summary:\n\n" + strings.Join(msgs, "\n\n")
+		nr := rn.Run(ctx, next, o.emit)
+		nr.Tokens = addUsage(res.Tokens, nr.Tokens)
+		nr.Files = append(res.Files, nr.Files...)
+		nr.Duration += res.Duration
+		if nr.SessionID == "" {
+			nr.SessionID = res.SessionID
+		}
+		res = nr
+	}
+}
+
+func addUsage(a, b event.TokenUsage) event.TokenUsage {
+	a.Input += b.Input
+	a.Output += b.Output
+	a.Reasoning += b.Reasoning
+	a.Cached += b.Cached
+	a.CostUSD += b.CostUSD
+	return a
 }
 
 func (o *Orchestrator) sessionIDs() []string {

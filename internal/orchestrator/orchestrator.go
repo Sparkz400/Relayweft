@@ -87,6 +87,7 @@ type Orchestrator struct {
 	tipped  bool // the big-repo git settings hint was shown
 
 	sessions map[string]AgentSession // finished agents, for follow-ups
+	told     map[string][]string     // messages for running agents (Tell)
 }
 
 // New creates an orchestrator.
@@ -1088,9 +1089,9 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			r.ok, r.err = false, "changes rejected by you"
 			return r
 		}
-		if len(dec.Apply) < len(files) {
+		if len(dec.Apply) < len(files) || len(dec.Hunks) > 0 {
 			full := commit
-			pc, err := g.partialCommit(base, commit, dec.Apply, "switchyard: "+st.Title+" (files you accepted)")
+			pc, err := g.selectionCommit(base, commit, files, dec, "switchyard: "+st.Title+" (what you accepted)")
 			if err != nil {
 				branch := o.saveBranch(t, st.ID+"-full", full)
 				r.ok, r.err = false, "could not apply the selected files ("+err.Error()+"); the full change is on "+branch
@@ -1098,7 +1099,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			}
 			commit = pc
 			branch := o.saveBranch(t, st.ID+"-full", full)
-			o.logf("%s: applying %d of %d files; the full change is kept on %s", st.ID, len(dec.Apply), len(files), branch)
+			o.logf("%s: applying %d of %d files (%d split by hunk); the full change is kept on %s", st.ID, len(dec.Apply), len(files), len(dec.Hunks), branch)
 		}
 		break
 	}
@@ -1315,6 +1316,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 		spec.AllowedCommands = t.cfg.Verify.Commands
 	}
 	res := rn.Run(actx, spec, o.emit)
+	res = o.deliverTold(actx, rn, spec, agentID, res)
 	if res.SessionID != "" {
 		o.rememberSession(agentID, AgentSession{Provider: d.Provider, Model: d.Model, Effort: d.Effort, Role: d.Role,
 			SessionID: res.SessionID, Dir: dir, Final: res.Final, Title: step.Title, Task: t.text})

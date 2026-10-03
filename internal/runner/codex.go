@@ -26,10 +26,17 @@ func NewCodex(cfg config.ProviderCfg, det *limits.Detector) *Exec {
 
 // CodexArgs builds the argument list. The prompt is read from stdin ("-").
 func CodexArgs(cfg config.ProviderCfg, s Spec) []string {
+	sandbox := cfg.WriteSandbox
+	if sandbox == "" {
+		sandbox = "workspace-write"
+	}
+	if s.ReadOnly {
+		sandbox = "read-only"
+	}
 	if s.Resume != "" {
-		// `codex exec resume` keeps the session's sandbox; it takes no
-		// --sandbox, --color or -C.
-		args := []string{"exec", "resume", "--json", "--skip-git-repo-check"}
+		// `codex exec resume` takes no --sandbox, --color or -C; the sandbox
+		// is set through config so a follow-up never runs with another one.
+		args := []string{"exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=" + sandbox}
 		if s.Model != "" {
 			args = append(args, "-m", s.Model)
 		}
@@ -44,13 +51,6 @@ func CodexArgs(cfg config.ProviderCfg, s Spec) []string {
 	}
 	if s.Effort != "" {
 		args = append(args, "-c", "model_reasoning_effort="+s.Effort)
-	}
-	sandbox := cfg.WriteSandbox
-	if sandbox == "" {
-		sandbox = "workspace-write"
-	}
-	if s.ReadOnly {
-		sandbox = "read-only"
 	}
 	// No -C: the working directory is set on the process, and a quoted path
 	// argument breaks cmd.exe quoting of npm .cmd shims on Windows.

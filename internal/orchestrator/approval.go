@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -41,6 +42,11 @@ type ChangeSet struct {
 type ChangeDecision struct {
 	// Apply lists the paths to apply; empty means reject everything.
 	Apply []string
+	// Hunks narrows a modified file in Apply to some of its hunks: the
+	// indexes (0-based, as SplitHunks numbers them) to keep. A path that is
+	// not in Hunks is applied whole. Only files with Status "M" and a
+	// complete (not truncated) patch can be split.
+	Hunks map[string][]int
 	// Feedback, when set, sends the agent back to work with this message
 	// (its current changes stay in its worktree) and the result is shown
 	// again.
@@ -124,10 +130,82 @@ func splitPatch(s string) []string {
 	return out
 }
 
+// SplitHunks splits one file's unified diff into its header (the lines
+// before the first @@) and its hunks.
+func SplitHunks(patch string) (header string, hunks []string) {
+	lines := strings.SplitAfter(patch, "\n")
+	cur := -1
+	var b strings.Builder
+	for _, l := range lines {
+		if strings.HasPrefix(l, "@@ ") {
+			if cur >= 0 {
+				hunks = append(hunks, b.String())
+			} else {
+				header = b.String()
+			}
+			b.Reset()
+			cur++
+		}
+		b.WriteString(l)
+	}
+	if cur >= 0 {
+		hunks = append(hunks, b.String())
+	} else {
+		header = b.String()
+	}
+	return header, hunks
+}
+
+// Splittable reports whether a file can be reviewed hunk by hunk.
+func (f FileChange) Splittable() bool {
+	_, h := SplitHunks(f.Patch)
+	return f.Status == "M" && !f.Binary && len(h) > 1 && !strings.Contains(f.Patch, "\n... (diff truncated) ...")
+}
+
+// selectionCommit builds a commit on top of base with the files (and, for
+// split files, the hunks) a person accepted.
+func (g git) selectionCommit(base, commit string, files []FileChange, dec ChangeDecision, msg string) (string, error) {
+	var whole []string
+	patches := map[string]string{}
+	byPath := map[string]FileChange{}
+	for _, f := range files {
+		byPath[f.Path] = f
+	}
+	for _, p := range dec.Apply {
+		f, ok := byPath[p]
+		keep, split := dec.Hunks[p]
+		if !split || !ok || !f.Splittable() {
+			whole = append(whole, p)
+			continue
+		}
+		header, hunks := SplitHunks(f.Patch)
+		if len(keep) >= len(hunks) {
+			whole = append(whole, p)
+			continue
+		}
+		var b strings.Builder
+		for _, i := range keep {
+			if i >= 0 && i < len(hunks) {
+				b.WriteString(hunks[i])
+			}
+		}
+		if b.Len() > 0 {
+			patches[p] = header + b.String()
+		}
+	}
+	return g.partialCommitHunks(base, commit, whole, patches, msg)
+}
+
 // partialCommit builds a commit on top of base that contains only the
 // given paths as they are in commit (deleted where commit deleted them).
 // The real index is never touched.
 func (g git) partialCommit(base, commit string, paths []string, msg string) (string, error) {
+	return g.partialCommitHunks(base, commit, paths, nil, msg)
+}
+
+// partialCommitHunks is partialCommit plus patches (base -> commit, with
+// only some hunks) applied to the base version of other files.
+func (g git) partialCommitHunks(base, commit string, paths []string, patches map[string]string, msg string) (string, error) {
 	f, err := os.CreateTemp("", "sy-index-*")
 	if err != nil {
 		return "", err
@@ -155,6 +233,11 @@ func (g git) partialCommit(base, commit string, paths []string, msg string) (str
 		}
 		if _, err := g.run(env, nil, "update-index", "--add", "--cacheinfo", meta[0]+","+meta[2]+","+p); err != nil {
 			return "", err
+		}
+	}
+	for p, patch := range patches {
+		if _, err := g.run(env, []byte(patch), "apply", "--cached", "--recount", "--whitespace=nowarn", "-"); err != nil {
+			return "", fmt.Errorf("apply the hunks you accepted of %s: %w", p, err)
 		}
 	}
 	tree, err := g.run(env, nil, "write-tree")
