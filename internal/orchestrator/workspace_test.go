@@ -335,13 +335,14 @@ func TestResolveWorkspace(t *testing.T) {
 	api, web := gitRepo(t), gitRepo(t)
 	plain := t.TempDir()
 	rel, _ := filepath.Rel(api, web)
+	cfgWeb := []WorkspaceEntry{{Name: "web", Path: rel}}
 
-	repos, err := ResolveWorkspace(api, map[string]string{"web": rel}, nil)
-	if err != nil || len(repos) != 1 || repos[0].Name != "web" || !samePath(repos[0].Dir, web) {
-		t.Fatalf("config path relative to the project: %+v %v", repos, err)
+	repos, skipped, err := ResolveWorkspace(api, cfgWeb, nil)
+	if err != nil || len(skipped) != 0 || len(repos) != 1 || repos[0].Name != "web" || !samePath(repos[0].Dir, web) {
+		t.Fatalf("config path relative to the project: %+v %v %v", repos, skipped, err)
 	}
 	// A flag replaces the config entry of the same name.
-	if _, err := ResolveWorkspace(api, map[string]string{"web": rel}, []string{"web=" + plain}); err == nil || !strings.Contains(err.Error(), "is not a git repository") {
+	if _, _, err := ResolveWorkspace(api, cfgWeb, []string{"web=" + plain}); err == nil || !strings.Contains(err.Error(), "is not a git repository") {
 		t.Fatalf("not a git repo: %v", err)
 	}
 	for flag, want := range map[string]string{
@@ -352,18 +353,116 @@ func TestResolveWorkspace(t *testing.T) {
 		"web=" + filepath.Join(plain, "missing"): "is not a directory",
 		"self=" + api:                            "same git repository",
 	} {
-		if _, err := ResolveWorkspace(api, nil, []string{flag}); err == nil || !strings.Contains(err.Error(), want) {
+		if _, _, err := ResolveWorkspace(api, nil, []string{flag}); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("--repo %s: %v, want %q", flag, err, want)
 		}
 	}
-	if _, err := ResolveWorkspace(plain, nil, []string{"web=" + web}); err == nil || !strings.Contains(err.Error(), "project folder") {
+	if _, _, err := ResolveWorkspace(plain, nil, []string{"web=" + web}); err == nil || !strings.Contains(err.Error(), "project folder") {
 		t.Errorf("primary not a git repo: %v", err)
 	}
-	if repos, err := ResolveWorkspace(plain, nil, nil); err != nil || repos != nil {
+	if repos, _, err := ResolveWorkspace(plain, nil, nil); err != nil || repos != nil {
 		t.Errorf("no repos: %v %v", repos, err)
 	}
 	if got := WorkspaceLabel(api, []Repo{{Name: "web"}, {Name: "docs"}}); got != filepath.Base(api)+" + web, docs" {
 		t.Errorf("label %q", got)
+	}
+}
+
+// A committed workspace that does not fit this machine (the teammate has
+// no ../web, or it is not a repo, or the name is bad) is skipped with a
+// reason instead of stopping sy; the good entries are kept. --repo flags
+// still fail hard.
+func TestResolveWorkspaceSkipsBadConfigRepos(t *testing.T) {
+	api, web := gitRepo(t), gitRepo(t)
+	plain := t.TempDir()
+	repos, skipped, err := ResolveWorkspace(api, []WorkspaceEntry{
+		{Name: "web", Path: web},
+		{Name: "gone", Path: filepath.Join(plain, "missing"), Origin: "/p/.switchyard.yaml: workspace.repos.gone"},
+		{Name: "plain", Path: plain},
+		{Name: "Bad", Path: web},
+		{Name: "self", Path: api},
+	}, nil)
+	if err != nil {
+		t.Fatalf("a bad config repo stopped startup: %v", err)
+	}
+	if len(repos) != 1 || repos[0].Name != "web" {
+		t.Errorf("repos = %+v", repos)
+	}
+	joined := strings.Join(skipped, "\n")
+	for _, want := range []string{"/p/.switchyard.yaml: workspace.repos.gone", "is not a directory", "workspace.repos.plain", "not a git repository", "lowercase", "same git repository", "skipped"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("skipped lacks %q:\n%s", want, joined)
+		}
+	}
+	if len(skipped) != 4 {
+		t.Errorf("%d skipped, want 4:\n%s", len(skipped), joined)
+	}
+	// Without a git project folder every config repo is skipped, not fatal.
+	if repos, skipped, err := ResolveWorkspace(plain, []WorkspaceEntry{{Name: "web", Path: web}}, nil); err != nil || repos != nil || len(skipped) != 1 {
+		t.Errorf("plain project: %+v %v %v", repos, skipped, err)
+	}
+	// A flag that clashes with a config entry wins; the entry is skipped.
+	repos, skipped, err = ResolveWorkspace(api, []WorkspaceEntry{{Name: "other", Path: web}}, []string{"web=" + web})
+	if err != nil || len(repos) != 1 || repos[0].Name != "web" || len(skipped) != 1 {
+		t.Errorf("flag vs config: %+v %v %v", repos, skipped, err)
+	}
+}
+
+// A relative config path is taken from the entry's Base (the folder of the
+// .switchyard.yaml that set it), not from the project folder sy runs in.
+func TestResolveWorkspaceRelativeToConfigFile(t *testing.T) {
+	root := t.TempDir()
+	api := filepath.Join(root, "api")
+	sub := filepath.Join(api, "sub")
+	web := filepath.Join(root, "web")
+	for _, d := range []string{api, web} {
+		os.MkdirAll(d, 0o755)
+		gitIn(t, d, "init", "-q")
+	}
+	os.MkdirAll(sub, 0o755)
+	// sy runs in api/sub; the repo file in api says ../web.
+	repos, skipped, err := ResolveWorkspace(sub, []WorkspaceEntry{{Name: "web", Path: "../web", Base: api}}, nil)
+	if err != nil || len(skipped) != 0 || len(repos) != 1 || !samePath(repos[0].Dir, web) {
+		t.Fatalf("relative to the file's folder: %+v %v %v", repos, skipped, err)
+	}
+	// Without a Base it is the project folder (the user's config).
+	if repos, _, _ := ResolveWorkspace(api, []WorkspaceEntry{{Name: "web", Path: "../web"}}, nil); len(repos) != 1 || !samePath(repos[0].Dir, web) {
+		t.Errorf("relative to the project: %+v", repos)
+	}
+}
+
+// Nested and aliased repos are refused: an extra repo that is the parent
+// (or a child) of the primary or of another listed repo, a symlink to the
+// primary, and a linked worktree of the primary (same git common dir).
+func TestResolveWorkspaceRejectsNestedAndAliases(t *testing.T) {
+	proj := gitRepo(t)
+	link := filepath.Join(t.TempDir(), "lnk")
+	if err := os.Symlink(proj, link); err == nil {
+		if _, _, err := ResolveWorkspace(proj, nil, []string{"same=" + link}); err == nil || !strings.Contains(err.Error(), "same git repository") {
+			t.Errorf("symlink to the primary: %v", err)
+		}
+	}
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitIn(t, proj, "worktree", "add", "-q", "--detach", wt)
+	if r, _, err := ResolveWorkspace(proj, nil, []string{"wt=" + wt}); err == nil || !strings.Contains(err.Error(), "worktree of the same git repository") {
+		t.Errorf("linked worktree of the primary: %+v %v", r, err)
+	}
+	parent := t.TempDir()
+	gitIn(t, parent, "init", "-q")
+	nested := filepath.Join(parent, "child")
+	os.MkdirAll(nested, 0o755)
+	gitIn(t, nested, "init", "-q")
+	if r, _, err := ResolveWorkspace(nested, nil, []string{"mono=" + parent}); err == nil || !strings.Contains(err.Error(), "contains repo") {
+		t.Errorf("extra is the parent of the primary: %+v %v", r, err)
+	}
+	if r, _, err := ResolveWorkspace(parent, nil, []string{"child=" + nested}); err == nil || !strings.Contains(err.Error(), "is inside repo") {
+		t.Errorf("extra is inside the primary: %+v %v", r, err)
+	}
+	// Between two extra repos too (config entries: skipped, not fatal).
+	other := gitRepo(t)
+	r, skipped, err := ResolveWorkspace(other, []WorkspaceEntry{{Name: "a", Path: parent}, {Name: "b", Path: nested}}, nil)
+	if err != nil || len(r) != 1 || r[0].Name != "a" || len(skipped) != 1 || !strings.Contains(skipped[0], "is inside repo \"a\"") {
+		t.Errorf("nested extras: %+v %v %v", r, skipped, err)
 	}
 }
 

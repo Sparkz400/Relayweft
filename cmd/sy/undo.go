@@ -122,7 +122,7 @@ Without a task, the newest task that is not undone yet is used.
 		}
 	}
 	if len(plan.Missing) > 0 {
-		fmt.Printf("\nThese repos of the task no longer exist and are left out: %s\n", strings.Join(plan.Missing, ", "))
+		fmt.Printf("\nwarning: these repos of the task cannot be %s and are left out: %s\n", strings.ToLower(verb)+"ne", strings.Join(plan.Missing, ", "))
 	}
 	if !*yes {
 		fmt.Printf("\n%s these changes? [y/N] ", verb)
@@ -133,7 +133,7 @@ Without a task, the newest task that is not undone yet is used.
 		}
 	}
 	if _, err := orchestrator.Undo(*dir, plan.Task.Key, *redo, *agentOnly); err != nil {
-		return fmt.Errorf("%s failed, nothing was changed: %w", strings.ToLower(verb), err)
+		return fmt.Errorf("%s failed: %w", strings.ToLower(verb), err)
 	}
 	fmt.Printf("%s done.\n", verb)
 	if !*redo {

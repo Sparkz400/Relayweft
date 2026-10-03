@@ -27,7 +27,9 @@ import (
 //     and if that conflicts nothing at all is written.
 //   - The state right before an undo is saved as .../undone, so a redo
 //     (before -> after) puts the task's changes back.
-//   - The newest 30 tasks per working tree are kept.
+//   - The newest 30 tasks per working tree are kept. An extra repo's part
+//     of a multi-repo task is kept beyond that while the task's primary
+//     repo still has its record (undo from the primary needs every part).
 
 const (
 	undoRefs       = "refs/switchyard/tasks/"
@@ -282,17 +284,43 @@ func Undo(dir, key string, redo, agentOnly bool) (UndoPlan, error) {
 		}
 	}
 	for i, p := range all {
-		if err := undoOne(dirs[i], p.Task, redo, only[i]); err != nil {
-			for j := i - 1; j >= 0; j-- { // put the repos done so far back
-				undoOne(dirs[j], all[j].Task, !redo, only[j])
-			}
+		if err := undoRepo(dirs[i], p.Task, redo, only[i]); err != nil {
 			if i > 0 {
 				err = fmt.Errorf("repo %s: %w", p.Repo, err)
+			}
+			// Put the repos done so far back, and say which could not be.
+			var stuck []string
+			for j := i - 1; j >= 0; j-- {
+				if berr := undoRepo(dirs[j], all[j].Task, !redo, only[j]); berr != nil {
+					stuck = append(stuck, fmt.Sprintf("%s is still %s (putting it back failed: %v)", repoLabel(all[j]), doneWord(redo), berr))
+				} else {
+					stuck = append(stuck, repoLabel(all[j])+" was put back")
+				}
+			}
+			if len(stuck) > 0 {
+				err = fmt.Errorf("%w; %s; %s and the repos after it were not changed", err, strings.Join(stuck, "; "), repoLabel(p))
+			} else {
+				err = fmt.Errorf("%w; nothing was changed", err)
 			}
 			return plan, err
 		}
 	}
 	return plan, nil
+}
+
+// repoLabel names a repo of an undo plan in messages.
+func repoLabel(p UndoPlan) string {
+	if p.Repo == "" {
+		return "repo " + PrimaryRepo
+	}
+	return "repo " + p.Repo
+}
+
+func doneWord(redo bool) string {
+	if redo {
+		return "redone"
+	}
+	return "undone"
 }
 
 // agentOnlyPaths is the path list of an --agent-files-only undo (nil = all).
@@ -314,6 +342,9 @@ func agentOnlyPaths(plan UndoPlan, agentOnly bool) ([]string, error) {
 	}
 	return only, nil
 }
+
+// undoRepo is undoOne; tests replace it to make a repo fail.
+var undoRepo = undoOne
 
 // undoOne undoes (or redoes) task t in the repo containing dir.
 func undoOne(dir string, t UndoTask, redo bool, only []string) error {
@@ -337,7 +368,9 @@ func undoOne(dir string, t UndoTask, redo bool, only []string) error {
 	return nil
 }
 
-// trimUndo keeps the newest undoKeep tasks of a working tree.
+// trimUndo keeps the newest undoKeep tasks of a working tree. An extra
+// repo's part of a multi-repo task is kept beyond that for as long as the
+// task's primary repo keeps its record.
 func trimUndo(root string) {
 	list, err := UndoList(root)
 	if err != nil || len(list) <= undoKeep {
@@ -345,6 +378,11 @@ func trimUndo(root string) {
 	}
 	g := git{root}
 	for _, t := range list[undoKeep:] {
+		if p := g.primaryOf(t.Before); p != "" && canonPath(p) != canonPath(root) {
+			if _, err := (git{p}).out("rev-parse", "--verify", "-q", undoPrefix(p)+t.Key+"/before"); err == nil {
+				continue
+			}
+		}
 		for _, w := range []string{"before", "after", "undone"} {
 			g.deleteSnapshot(t.Key, w)
 		}

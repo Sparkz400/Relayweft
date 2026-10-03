@@ -1,6 +1,7 @@
 package sessionlog
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,13 +17,15 @@ func DayStart(t time.Time) time.Time {
 
 // ReadDirSince is ReadDir limited to log files written to since a time (a
 // file's records are never newer than the file), so the budget check does
-// not parse months of logs.
+// not parse months of logs. A file that cannot be read is skipped: the
+// records of the others are returned together with the error.
 func ReadDirSince(dir string, since time.Time) ([]Record, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	if err != nil {
 		return nil, err
 	}
 	var out []Record
+	var errs []error
 	for _, f := range files {
 		st, err := os.Stat(f)
 		if err != nil || st.ModTime().Before(since) {
@@ -30,11 +33,14 @@ func ReadDirSince(dir string, since time.Time) ([]Record, error) {
 		}
 		recs, err := readFile(f)
 		if err != nil {
-			return nil, err
+			// One unreadable file (locked by another process on Windows,
+			// say) must not hide the others: keep going, report it.
+			errs = append(errs, err)
+			continue
 		}
 		out = append(out, recs...)
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 // DayUsage totals the finished tasks (task_end records) of the local day
