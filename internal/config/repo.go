@@ -23,14 +23,14 @@ import (
 //
 // A repo file comes from whoever pushed to the repo, so the parts that run
 // commands on your machine (verify commands, hooks, provider commands and
-// arguments, the log directory) apply only after you trust that exact
+// arguments, the log directory, MCP servers) apply only after you trust that exact
 // content with `sy trust`. Routes, preferences and toggles always apply.
 
 // RepoFileName is the per-repo settings file.
 const RepoFileName = ".switchyard.yaml"
 
 // commandKeys are the top-level keys that need trust.
-var commandKeys = []string{"verify", "hooks", "providers", "log_dir"}
+var commandKeys = []string{"verify", "hooks", "providers", "log_dir", "mcp"}
 
 // RepoInfo describes the repo file applied to a config.
 type RepoInfo struct {

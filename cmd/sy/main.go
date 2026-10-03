@@ -85,6 +85,8 @@ func main() {
 		err = cmdWeb(args)
 	case "app":
 		err = cmdApp(args)
+	case "report":
+		err = cmdReport(args)
 	case "version", "--version":
 		fmt.Println("switchyard", version)
 	case "help", "-h", "--help":
@@ -124,6 +126,7 @@ Usage:
   sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
   sy history [--all] [-n 20]       recent tasks in this directory, with status and cost
   sy resume [task id]        continue an interrupted task (default: the last one here)
+  sy report [task id] [--out f.html] [--md] [--open]   one shareable page per task (default: the last one here)
   sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline
   sy tune [--here] [--since 7d]    routing suggestions from your logs
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
@@ -564,6 +567,8 @@ func runDoctor(w io.Writer, cfgPath string) error {
 	} else {
 		fmt.Fprintf(w, "%s logs        %s\n", ok(true), dir)
 	}
+	wd, _ := os.Getwd()
+	problems += doctorMCP(w, cfg, wd, ok, warn)
 	problems += doctorMachine(w, cfg, ok, warn)
 	if problems > 0 {
 		return fmt.Errorf("%d problem(s) found", problems)

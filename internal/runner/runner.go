@@ -42,6 +42,9 @@ type Spec struct {
 	// AllowedCommands are shell command prefixes a writing agent may run
 	// without asking (verify/test commands); Claude needs them listed.
 	AllowedCommands []string
+	// MCP is the run's MCP servers. Exec fills it from its MCP config for
+	// the spec's role; callers leave it nil.
+	MCP *MCPRun
 }
 
 // Result is what an agent run produced.
@@ -83,8 +86,12 @@ type Exec struct {
 	Provider string
 	Cfg      config.ProviderCfg
 	Detector *limits.Detector
-	args     func(s Spec) []string
-	parser   func() lineParser
+	// MCP servers handed to the CLI (config.MCPCfg.For picks per role).
+	MCP config.MCPCfg
+	// LookupEnv reads ${VAR}s in MCP values (nil = os.LookupEnv).
+	LookupEnv func(string) (string, bool)
+	args      func(s Spec) []string
+	parser    func() lineParser
 }
 
 // Run implements Runner.
@@ -112,7 +119,17 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		ctx, cancel = context.WithTimeout(ctx, s.Timeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, path, x.args(s)...)
+	if s.MCP == nil {
+		m, cleanup, err := PrepareMCP(x.Provider, s.Role, x.MCP, x.LookupEnv)
+		if err != nil {
+			return fail(err)
+		}
+		// The temp config file lives exactly as long as the agent.
+		defer cleanup()
+		s.MCP = m
+	}
+	argv := x.args(s)
+	cmd := exec.CommandContext(ctx, path, argv...)
 	proc.Prepare(cmd)
 	cmd.Dir = s.Dir
 	// The prompt goes in on stdin: multi-line prompts as arguments get
@@ -125,7 +142,11 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	stderr := &tail{max: 8 << 10}
 	cmd.Stderr = stderr
 	diag.Logf("spawn agent=%s role=%s step=%s attempt=%d model=%s effort=%s readonly=%v dir=%s: %s %s",
-		s.AgentID, s.Role, s.StepID, s.Attempt, s.Model, s.Effort, s.ReadOnly, s.Dir, path, strings.Join(x.args(s), " "))
+		s.AgentID, s.Role, s.StepID, s.Attempt, s.Model, s.Effort, s.ReadOnly, s.Dir, path, strings.Join(redactArgs(argv), " "))
+	if s.MCP != nil {
+		// Names only: env values and headers may be secrets.
+		diag.Logf("mcp agent=%s servers=%s unset=%s", s.AgentID, strings.Join(s.MCP.Names, ","), strings.Join(s.MCP.Missing, ","))
+	}
 	if err := cmd.Start(); err != nil {
 		diag.Logf("spawn agent=%s failed: %v", s.AgentID, err)
 		return fail(fmt.Errorf("start %s: %w", x.Provider, err))
@@ -303,7 +324,12 @@ func (f *fileSet) list() []string {
 func New(cfg *config.Config) Set {
 	det := limits.NewDetector(cfg.LimitPatterns)
 	return Set{
-		event.Codex:  NewCodex(cfg.Providers[event.Codex], det),
-		event.Claude: NewClaude(cfg.Providers[event.Claude], det),
+		event.Codex:  withMCP(NewCodex(cfg.Providers[event.Codex], det), cfg.MCP),
+		event.Claude: withMCP(NewClaude(cfg.Providers[event.Claude], det), cfg.MCP),
 	}
+}
+
+func withMCP(x *Exec, m config.MCPCfg) *Exec {
+	x.MCP = m
+	return x
 }

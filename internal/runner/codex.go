@@ -43,6 +43,7 @@ func CodexArgs(cfg config.ProviderCfg, s Spec) []string {
 		if s.Effort != "" {
 			args = append(args, "-c", "model_reasoning_effort="+s.Effort)
 		}
+		args = append(args, codexMCPArgs(s.MCP)...)
 		return append(append(args, cfg.ExtraArgs...), s.Resume, "-")
 	}
 	args := []string{"exec", "--json", "--color", "never", "--skip-git-repo-check"}
@@ -55,6 +56,7 @@ func CodexArgs(cfg config.ProviderCfg, s Spec) []string {
 	// No -C: the working directory is set on the process, and a quoted path
 	// argument breaks cmd.exe quoting of npm .cmd shims on Windows.
 	args = append(args, "--sandbox", sandbox)
+	args = append(args, codexMCPArgs(s.MCP)...)
 	args = append(args, cfg.ExtraArgs...)
 	return append(args, "-")
 }

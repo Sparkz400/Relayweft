@@ -165,6 +165,7 @@ sy run --file tasks.txt               run several tasks one after another, unatt
 sy run --approve "task"               approve the plan (and changes, with review_changes) on the terminal
 sy history [--all] [-n 20]            recent tasks: status, steps done, cost; marks interrupted ones
 sy resume [task id] [--force]         continue an interrupted task (default: the last one in this directory)
+sy report [task id] [--out f] [--md] [--open]   one shareable HTML (or Markdown) page about a task
 sy tune [--here] [--since 7d]         routing suggestions from your own logs, as ready-to-paste commands
 sy update [--check] [--yes]           update sy to the latest GitHub release (checksum-verified)
 sy web / sy app [--port N] [--demo]   the browser UI / the same in its own window
@@ -224,6 +225,23 @@ When a task finishes, the TUI log, `sy run` and `sy stats` show what it used:
 > codex 12k · claude 40k fresh tokens · ≈$0.31 API-equivalent · claude limit 61%→64%
 
 "Fresh" means uncached input plus output. The $ figure is what Claude Code reports a task *would* cost on the API; on a subscription you are not billed it, but it is a good relative measure. The limit share comes from the provider's own quota reports.
+
+### Task reports
+
+`sy report` writes one self-contained page about a task, to share in a PR, an issue or a chat:
+
+```
+sy report                       # the last task in this directory
+sy report <task id> --open      # any task from `sy history`, opened in the browser
+sy report --md --out task.md    # Markdown instead of HTML
+```
+
+It has the task text, status, timing and mode; the plan (each subtask's kind, role, route, dependencies, result and the agent's final answer, collapsed); every routing decision with its rule, reason and confidence; reviewer verdicts; verify checks with pass/fail; the task's diff (its undo snapshots, before -> after), per file, syntax-colored, collapsible and size-capped; the cost (fresh tokens per provider, $ API-equivalent, limit before and after) and the undo command.
+
+- The default output is `<user config dir>/switchyard/reports/<task id>.html`; the path is printed.
+- The HTML is one file with inline CSS: light and dark follow the system, `<details>` sections open when printed, and nothing is loaded from anywhere. A Content-Security-Policy allows no script except the small print helper, and every piece of text is escaped: task text, agent output and diff lines are treated as untrusted.
+- A report holds only the task text, agent answers, routing log and the repo diff. It reads no environment variables or credentials. The diff is your repo's content, so check it before sharing a private repo's report.
+- Resumed tasks include the routing of every part. Without a session log (another machine, deleted logs) the report still has the plan, results and diff, with a note.
 
 ### Protecting your machine
 
@@ -309,7 +327,7 @@ The server listens on 127.0.0.1 only. Each link `sy` prints or opens works once,
 A `.switchyard.yaml` in a repository holds the settings for that repo (in the repo root, or in the project folder). It is layered over your own config: built-in defaults < your config < the repo file < command-line flags. It only needs what the repo cares about; roles merge per key, so `roles: {worker: {prefer: claude}}` keeps the worker's routes.
 
 - Create one with `sy init --repo`, which detects the test commands, or with `/save repo` from the TUI. Commit it to share.
-- **Commands need your trust.** The parts that run commands on your machine are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers` and `log_dir`. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
+- **Commands need your trust.** The parts that run commands on your machine are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers`, `log_dir` and `mcp`. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
 
 ### Hooks
 
@@ -319,6 +337,31 @@ Your own commands run around every task (`hooks:` in the config):
 - `after_task`: after every end (done, failed or cancelled).
 
 They run in the project folder through the system shell. They get `SY_TASK`, `SY_TASK_ID`, `SY_DIR`, `SY_STATUS`, `SY_SUMMARY`, `SY_STEP` and `SY_FILES`. Typical uses are a formatter after every merge or a linter after the task.
+
+### MCP servers
+
+Give the agents [MCP](https://modelcontextprotocol.io) servers (docs search, a database, an issue tracker...) on both CLIs:
+
+```yaml
+mcp:
+  servers:
+    docs: {command: "npx", args: ["-y", "@some/mcp-server"], env: {API_KEY: "${DOCS_API_KEY}"}}
+    db:   {url: "http://localhost:8080/mcp", headers: {Authorization: "Bearer ${DB_TOKEN}"}}
+    feed: {url: "http://localhost:9000/sse", type: sse}    # SSE: Claude only
+    local: {command: "uvx", args: ["my-server"], providers: [claude]}   # one CLI only
+  roles: [worker, worker_high, explorer, researcher]   # the default
+  allow_tools: true     # default: pre-approve the servers' tools for Claude
+  strict: false         # true: Claude uses only these, not your own Claude MCP config
+```
+
+- **Roles.** By default the agents that do the work get the servers: `worker`, `worker_high`, `explorer` and `researcher`. The planner, reviewer and judge do not (they read the plan or the diff, and every server slows a run down). Set `roles` to change that.
+- **Claude Code** gets a temporary `{"mcpServers": {...}}` file (mode 0600, in its own temp folder, removed when the agent ends) through `--mcp-config <file>`, plus `--strict-mcp-config` with `strict: true`. With `allow_tools` (the default) `mcp__<server>` is added to `--allowedTools`, which allows every tool of that server. That also applies to read-only roles: a headless Claude cannot ask, so without it the tools would be denied. MCP tools can change things outside your repo, even for a read-only role: set `allow_tools: false` if a server can write somewhere you care about.
+- **Codex** gets `-c mcp_servers.<name>.command=...`, `.args=[...]`, `.env={...}`, or `.url=...` and `.http_headers={...}` for URL servers, as TOML values. Codex has no SSE client, so `type: sse` servers go to Claude only.
+- **Secrets.** `${VAR}` anywhere in a server's command, args, env, url or headers is filled in from your environment when the agent starts, so tokens need not be committed. The diag log shows server names only, `sy doctor` shows commands and URL hosts, never env or header values, and `sy bugreport` hides literal env and header values and URL queries. Codex receives env values on its command line (that is how `-c` works), so other local processes of your user can see them while the agent runs.
+- **Per repo.** `mcp` in a repo's `.switchyard.yaml` starts programs, so it applies only after `sy trust`, which shows the servers. Trusted repo servers are added to your own.
+- `sy doctor` lists the servers, checks that each command is on PATH and names unset `${VAR}`s.
+
+The flags follow the CLIs' documentation at the time of writing (Claude Code 2.1, codex-cli 0.160). If a CLI changes them, check with `claude --help` and `codex --help`. URL servers on Codex need a version with streamable HTTP MCP support.
 
 ## Development
 
