@@ -352,6 +352,10 @@ func isWorktreeOf(root, path string) bool {
 
 func samePath(a, b string) bool { return canonPath(a) == canonPath(b) }
 
+// SamePath reports whether two paths name the same file or folder (see
+// canonPath).
+func SamePath(a, b string) bool { return samePath(a, b) }
+
 // canonPath normalizes a path for comparison: git prints C:/x where Go uses
 // C:\x, git resolves symlinks (macOS /var -> /private/var), and Windows paths
 // are case-insensitive.

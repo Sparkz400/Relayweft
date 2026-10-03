@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/gh"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
@@ -35,6 +36,8 @@ import (
 //   - The pull request is opened through the GitHub REST API with a token
 //     from GITHUB_TOKEN, GH_TOKEN or `gh auth token`; without one, sy
 //     writes the body to a file and prints the compare URL instead.
+//   - An opened pull request is recorded for sy watch (watch.go), which
+//     follows up on its failed checks and review comments.
 
 // Package vars so tests can drive sy pr without a terminal, network or gh.
 var (
@@ -105,6 +108,7 @@ forced). The PR is opened with a token from GITHUB_TOKEN, GH_TOKEN or
 `+"`gh auth token`"+`; without one the body is written to a file and the compare
 URL is printed. A task that did not finish ok is opened as a draft.
 A multi-repo task gets one PR per repo: --repo <name> picks an extra repo.
+An opened pull request is followed up by sy watch (failed checks, reviews).
 `)
 	}
 	var id string
@@ -354,6 +358,15 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 	}
 	res.URL, res.Number = pr.HTMLURL, pr.Number
 	fmt.Fprintf(out, "opened pull request #%d: %s\n", pr.Number, pr.HTMLURL)
+	err = recordWatch(watchEntry{
+		Root: root, Host: repo.Host, Owner: repo.Owner, Name: repo.Name, Number: pr.Number, URL: pr.HTMLURL, Title: title,
+		Branch: branch, Head: commit, Base: base, TaskID: st.ID, Author: st.Author(), API: o.api, Added: time.Now(),
+	})
+	if err != nil {
+		fmt.Fprintf(out, "note: not recorded for sy watch: %v\n", err)
+	} else {
+		fmt.Fprintln(out, "sy watch follows up on its failed checks and review comments")
+	}
 	return res, nil
 }
 

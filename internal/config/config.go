@@ -243,6 +243,14 @@ type ContextCfg struct {
 	RepoDocsMaxKB int  `yaml:"repo_docs_max_kb"` // total size of the summary (0 = 8)
 }
 
+// WatchCfg controls sy watch: the pull requests sy opened get follow-up
+// tasks for failed checks and review comments.
+type WatchCfg struct {
+	// MaxRounds caps the follow-up tasks per pull request (0 = none: sy
+	// watch only reports).
+	MaxRounds int `yaml:"max_rounds"`
+}
+
 // Config is the whole file.
 type Config struct {
 	Roles         map[string]RoleCfg     `yaml:"roles"`
@@ -256,6 +264,7 @@ type Config struct {
 	Workspace     WorkspaceCfg           `yaml:"workspace,omitempty"`
 	Budget        BudgetCfg              `yaml:"budget"`
 	Context       ContextCfg             `yaml:"context"`
+	Watch         WatchCfg               `yaml:"watch"`
 	LimitPatterns []string               `yaml:"limit_patterns"`
 	Theme         string                 `yaml:"theme"`
 	LogDir        string                 `yaml:"log_dir"`
@@ -392,6 +401,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Context.RepoDocsMaxKB < 0 {
 		errs = append(errs, "context.repo_docs_max_kb must be >= 0 (0 = 8)")
+	}
+	if c.Watch.MaxRounds < 0 {
+		errs = append(errs, "watch.max_rounds must be >= 0")
 	}
 	if w := c.Budget.WarnAt; w < 0 || w > 1 {
 		errs = append(errs, "budget.warn_at must be between 0 and 1")

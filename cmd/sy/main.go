@@ -71,6 +71,10 @@ func main() {
 		err = cmdUndo(args)
 	case "pr":
 		err = cmdPR(args)
+	case "watch":
+		err = cmdWatch(args)
+	case "review":
+		err = cmdReview(args)
 	case "bench":
 		err = cmdBench(args)
 	case "tune":
@@ -135,6 +139,11 @@ Usage:
                              or if a PR would hold files no agent reported or commits not on origin)
   sy pr [task] [--base main] [--branch name] [--draft] [--title t] [--no-push] [--yes]
                              branch + commit + GitHub pull request from a finished task (index/worktree untouched)
+  sy watch [--every 15m] [--dir repo]   follow up on the PRs sy opened: failed checks and review comments get
+                             a task on the PR branch in a separate checkout, pushed (never forced) with a reply
+  sy watch --list | --forget <n>          list the watched pull requests, or stop watching one
+  sy review <PR> [--provider codex|claude] [--post] [--yes]   read-only agent review of a pull request
+                             (default: the provider that did not write it); --post: one comment review, inline
   sy run --at 02:30 | --in 3h | --when-reset claude|codex|any  [--file tasks.txt | "task"]
                              start later, unattended (PC kept awake; --allow-sleep to opt out)
   sy schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)

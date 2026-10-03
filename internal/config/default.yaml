@@ -180,6 +180,12 @@ context:
   repo_docs: true
   repo_docs_max_kb: 8              # total size of the summary
 
+# sy watch: after sy pr opened a pull request, failed checks and review
+# comments (changes requested) get a follow-up task on the PR's branch,
+# pushed to it (never forced). At most this many per pull request.
+watch:
+  max_rounds: 3
+
 # Text that means "usage limit reached" (case-insensitive regular expressions).
 limit_patterns:
   - "usage limit"

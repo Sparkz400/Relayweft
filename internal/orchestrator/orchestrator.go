@@ -1580,6 +1580,9 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	t.addTokens(d.Provider, res.Tokens)
 	if !step.Kind.ReadOnly() {
 		t.noteFiles(dir, res.Files)
+		if res.OK() {
+			t.state.noteAuthor(d.Provider)
+		}
 	}
 	why := "at usage limit"
 	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && (reAuth.MatchString(res.Err.Error()) || strings.Contains(res.Err.Error(), "not found on PATH")) {
