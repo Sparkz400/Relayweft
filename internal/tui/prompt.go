@@ -142,6 +142,12 @@ func (p *promptBox) key(k tea.KeyMsg) (cmd tea.Cmd, handled bool) {
 	return c, true
 }
 
+// inBurst reports whether a key arriving now belongs to a fast burst (a
+// paste), without recording it.
+func (p *promptBox) inBurst() bool {
+	return !p.lastKey.IsZero() && p.now().Sub(p.lastKey) < pasteGap
+}
+
 // confirm reports whether a submitCheckMsg means "submit now" and returns
 // the text, clearing the box.
 func (p *promptBox) confirm(id submitCheckMsg) (string, bool) {

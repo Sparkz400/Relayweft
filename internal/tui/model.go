@@ -118,6 +118,9 @@ type Options struct {
 	DemoTask   string
 	SessionLog string
 	Version    string
+	// Approver, when set (and also passed to the orchestrator), shows plan
+	// approval and change review in the TUI.
+	Approver *Approver
 }
 
 // Model is the Bubble Tea model.
@@ -165,6 +168,15 @@ type Model struct {
 
 	picker *picker
 	spring harmonica.Spring
+
+	approvals   []*approvalReq // waiting for the person; the first is on screen
+	overlay     overlay        // plan approval or change review
+	queue       []job          // tasks typed while one ran
+	interrupted *orchestrator.TaskState
+	complete    struct { // tab completion of @agent ids
+		active       bool
+		prefix, last string
+	}
 }
 
 // New builds the model.
@@ -226,6 +238,9 @@ func waitEvents(ch <-chan event.Event) tea.Cmd {
 // Init implements tea.Model.
 func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tick(), waitEvents(m.opt.Events), textarea.Blink}
+	if m.opt.Approver != nil {
+		cmds = append(cmds, waitApproval(m.opt.Approver))
+	}
 	if m.opt.Demo && m.opt.DemoTask != "" {
 		task := m.opt.DemoTask
 		cmds = append(cmds, func() tea.Msg { return submitMsg(task) })
@@ -237,6 +252,7 @@ func (m *Model) Init() tea.Cmd {
 	if m.opt.Demo {
 		m.addLog(logLine{kind: event.Log, text: "demo mode: fake agents, no files are touched, nothing is logged"})
 	}
+	m.checkInterrupted()
 	return tea.Batch(cmds...)
 }
 
@@ -245,8 +261,12 @@ type submitMsg string
 // Shutdown cancels a running task and waits (bounded) for agents to die, so
 // no CLI keeps running after sy exits.
 func (m *Model) Shutdown() {
+	m.queue = nil
 	if m.cancelTask != nil {
 		m.cancelTask()
+	}
+	if m.opt.Approver != nil {
+		m.opt.Approver.Close()
 	}
 	if m.taskDone != nil {
 		select {
@@ -254,29 +274,6 @@ func (m *Model) Shutdown() {
 		case <-time.After(8 * time.Second):
 		}
 	}
-}
-
-func (m *Model) startTask(text string) {
-	if m.running {
-		m.flashNotice("a task is already running - wait, or press x to cancel it")
-		return
-	}
-	m.resetTree()
-	m.running = true
-	m.taskText = text
-	m.taskStart = time.Now()
-	m.result = ""
-	m.nodes[orchestrator.AgentMain].title = text
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelTask = cancel
-	done := make(chan struct{})
-	m.taskDone = done
-	go func() {
-		defer close(done)
-		m.orc.Run(ctx, text)
-	}()
-	m.focus = focusTree
-	m.input.Blur()
 }
 
 // cancelRunning cancels the whole task: every running agent's process tree
@@ -291,7 +288,11 @@ func (m *Model) cancelRunning() {
 		m.cancelling = true
 		m.phase = "cancelling"
 		m.cancelTask()
-		m.flashNotice("cancelling: stopping all agents...")
+		if n := len(m.queue); n > 0 {
+			m.flashNotice(fmt.Sprintf("cancelling: stopping all agents... (%d queued task(s) still run next; /queue clear drops them)", n))
+		} else {
+			m.flashNotice("cancelling: stopping all agents...")
+		}
 	}
 }
 
@@ -360,6 +361,7 @@ func (m *Model) handleEvent(e event.Event) {
 		return
 	case event.TaskDone:
 		m.running = false
+		m.dropApprovals()
 		// Agents that never finished (queued behind a cancel, or killed
 		// mid-run without a Done) must not keep spinning.
 		for _, n := range m.nodes {
@@ -402,8 +404,10 @@ func (m *Model) handleEvent(e event.Event) {
 		if !m.opt.Demo {
 			m.addLog(logLine{ts: e.Timestamp, kind: event.Log, text: "not happy with the result? /undo shows what undoing this task would change"})
 		}
+		m.notifyDone(e.OK, e.Text, time.Since(m.taskStart))
 		m.focus = focusPrompt
 		m.input.Focus()
+		m.startNext()
 		return
 	case event.Phase:
 		m.phase = e.Text
@@ -420,6 +424,9 @@ func (m *Model) handleEvent(e event.Event) {
 	case event.ProviderState:
 		pv := m.provs[e.Provider]
 		if pv != nil {
+			if e.Until.After(time.Now()) && !e.Until.Equal(pv.until) {
+				m.alert("Switchyard: "+e.Provider+" hit its limit", e.Text)
+			}
 			pv.until = e.Until
 		}
 		m.addLog(logLine{ts: e.Timestamp, kind: event.LimitHit, prov: e.Provider, text: e.Text})
@@ -691,7 +698,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tickMsg:
 		m.animate()
+		m.pruneApprovals()
 		return m, tick()
+	case approvalMsg:
+		if msg.req.ctx.Err() == nil {
+			m.onApproval(msg.req)
+		}
+		return m, waitApproval(m.opt.Approver)
 	case eventsMsg:
 		for _, e := range msg {
 			m.handleEvent(e)
@@ -713,22 +726,27 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(text, "/") && !strings.Contains(text, "\n") {
 			return m, m.command(text)
 		}
-		m.startTask(text)
+		m.submit(text)
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress {
-			switch msg.Button {
-			case tea.MouseButtonWheelUp:
+			rv, inReview := m.overlay.(*reviewOverlay)
+			switch {
+			case inReview && msg.Button == tea.MouseButtonWheelUp:
+				rv.wheel(-3)
+			case inReview && msg.Button == tea.MouseButtonWheelDown:
+				rv.wheel(3)
+			case msg.Button == tea.MouseButtonWheelUp:
 				m.logScroll += 3
-			case tea.MouseButtonWheelDown:
+			case msg.Button == tea.MouseButtonWheelDown:
 				m.logScroll = max(0, m.logScroll-3)
 			}
 		}
 		return m, nil
 	}
-	if m.focus == focusPrompt && m.picker == nil {
+	if m.focus == focusPrompt && m.picker == nil && m.overlay == nil {
 		return m, m.input.update(msg)
 	}
 	return m, nil
@@ -737,6 +755,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.Type == tea.KeyCtrlC {
 		return m.tryQuit()
+	}
+	if m.overlay != nil {
+		if k.Type == tea.KeyCtrlX {
+			m.cancelRunning()
+			return m, nil
+		}
+		return m, m.overlay.update(m, k)
 	}
 	if m.picker != nil {
 		return m, m.picker.update(m, k)
@@ -756,6 +781,9 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.focus == focusPrompt {
+		if k.Type == tea.KeyTab && !m.input.pending && !m.input.inBurst() && m.completeAgent() {
+			return m, nil
+		}
 		if cmd, handled := m.input.key(k); handled {
 			return m, cmd
 		}

@@ -14,18 +14,28 @@ import (
 )
 
 var helpText = []string{
+	"<task>                               run a task; typed while one runs, it is queued (runs unattended)",
+	"@<agent> <message> · @ <message>     follow up with a finished agent (or the newest); tab completes ids",
+	"/agents                              agents that take a follow-up",
 	"/models                              open the model picker (also m or ctrl+o)",
 	"/route <role> <provider>:<model>[:effort]   e.g. /route worker claude:sonnet:high",
 	"/prefer <role|all> <codex|claude|other|auto>",
-	"/save                                write the current models to " + config.FileName,
+	"/save                                write the current settings to " + config.FileName,
 	"/single <provider>:<model>[:effort] <task>  run one agent only (baseline for sy stats)",
 	"/limit <codex|claude> [reset|set]    clear or set a provider's usage-limit state",
-	"/threads <n> · /parallel on|off · /review on|off · /judge on|off",
-	"/pause · /resume · /kill <agent> · /cancel · /clear · /usage",
+	"/approve on|off                      show the plan for editing before anything runs",
+	"/review on|off                       show each agent's changes (per file) before they land",
+	"/verify [<command>|clear]            list, add or clear the checks run before the final review",
+	"/queue · /queue clear · /queue rm <n>   tasks waiting to run",
+	"/resume [<id>] · /history            continue an interrupted task · list the last 10 tasks",
+	"/threads <n> · /parallel on|off · /reviewer on|off · /judge on|off",
+	"/pause · /unpause · /kill <agent> · /cancel · /clear · /usage",
 	"/undo [yes] · /redo [yes]          preview, then revert (or re-apply) the last task's changes",
 	"roles: " + strings.Join(event.Roles, ", "),
 	"keys (agents focused): tab next · k k kill · p pause · x cancel · l log · m models · q quit",
-	"anywhere: ctrl+x cancel task · ctrl+o models · alt+enter new line in the prompt · pasting multi-line text never submits",
+	"anywhere: ctrl+x cancel task (the queue stays) · ctrl+o models · alt+enter new line · pasting never submits",
+	"plan approval: ↑↓ · e edit prompt · d delete · k kind · r role · J/K move · enter run · esc cancel",
+	"change review: ↑↓ · space include · a all · n none · enter apply · f feedback · esc reject all",
 }
 
 func (m *Model) command(line string) tea.Cmd {
@@ -33,6 +43,10 @@ func (m *Model) command(line string) tea.Cmd {
 	cmd := strings.ToLower(strings.TrimPrefix(f[0], "/"))
 	args := f[1:]
 	say := func(format string, a ...any) { m.addLog(logLine{kind: event.Log, text: fmt.Sprintf(format, a...)}) }
+	rest := strings.TrimSpace(strings.TrimPrefix(line, f[0]))
+	if m.phase2Command(cmd, args, rest, say) {
+		return nil
+	}
 	switch cmd {
 	case "help", "h", "?":
 		for _, h := range helpText {
@@ -118,7 +132,7 @@ func (m *Model) command(line string) tea.Cmd {
 			return nil
 		}
 		m.setOrch(func(c *config.Config) { c.Orchestrator.MaxThreads = n }, fmt.Sprintf("max_threads = %d", n))
-	case "parallel", "review", "judge":
+	case "parallel", "reviewer", "judge":
 		on, ok := onOff(args)
 		if !ok {
 			say("usage: /%s on|off", cmd)
@@ -128,7 +142,7 @@ func (m *Model) command(line string) tea.Cmd {
 			switch cmd {
 			case "parallel":
 				c.Orchestrator.Parallel = on
-			case "review":
+			case "reviewer":
 				c.Orchestrator.ReviewBeforePlan = on
 				c.Orchestrator.ReviewOnRepeatError = on
 				c.Orchestrator.ReviewBeforeDone = on
@@ -139,9 +153,6 @@ func (m *Model) command(line string) tea.Cmd {
 	case "pause":
 		m.orc.SetPaused(true)
 		say("paused")
-	case "resume":
-		m.orc.SetPaused(false)
-		say("resumed")
 	case "kill":
 		if len(args) != 1 || !m.orc.Kill(args[0]) {
 			say("usage: /kill <agent> (running: %s)", strings.Join(m.orc.RunningAgents(), ", "))
