@@ -75,10 +75,18 @@ func cmdBench(args []string) error {
 	c.register(fs)
 	file := fs.String("file", "bench.yaml", "benchmark task file")
 	initFile := fs.Bool("init", false, "write an example bench.yaml and exit")
+	starter := fs.String("starter", "", "create the starter set (a small Python repo with 5 tasks) in this new directory and exit")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
 	only := fs.String("only", "", "comma-separated task names to run")
 	fs.Parse(args)
 
+	if *starter != "" {
+		if err := writeStarter(*starter); err != nil {
+			return err
+		}
+		fmt.Printf("wrote the starter set to %s\nnext: cd %s && sy bench\n", *starter, *starter)
+		return nil
+	}
 	if *initFile {
 		if _, err := os.Stat(*file); err == nil {
 			return fmt.Errorf("%s exists", *file)

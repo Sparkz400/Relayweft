@@ -124,6 +124,7 @@ Usage:
   sy clean [--dir <path>] [--idle 72h]   remove this repo's pooled worktrees (or all idle ones)
   sy undo [--list] [--redo] [--yes] [task]   revert (or re-apply) a task's changes, with preview
   sy bench [--file bench.yaml] [--init]      compare routed Switchyard vs single agents on your tasks
+  sy bench --starter <dir>   create a ready-made 5-task benchmark repo (Python) to run sy bench on
   sy bugreport               zip logs, config and diagnostics into one file to send
   sy update [--check] [--yes]      update sy to the latest release
   sy version
