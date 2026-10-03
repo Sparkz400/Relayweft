@@ -116,3 +116,80 @@ func TestSnapshotLeavesIndexAlone(t *testing.T) {
 		t.Errorf("index changed:\n%s", out)
 	}
 }
+
+// In an LFS repo a worktree holds pointer files, and committing it after a
+// code-only change does not touch the LFS file.
+func TestWorktreeKeepsLFSPointers(t *testing.T) {
+	dir := gitRepo(t)
+	g := git{dir}
+	if _, err := g.out("lfs", "install", "--local"); err != nil {
+		t.Skip("git lfs not installed")
+	}
+	g.out("lfs", "track", "*.bin")
+	big := strings.Repeat("binary asset ", 1000)
+	os.WriteFile(filepath.Join(dir, "asset.bin"), []byte(big), 0o644)
+	if _, err := g.out("add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.commitTree("commit", "-q", "-m", "lfs"); err != nil {
+		t.Fatal(err)
+	}
+	if !g.usesLFS() {
+		t.Fatal("usesLFS = false")
+	}
+	if n := g.trackedFiles(); n != 5 { // .gitattributes .gitignore README.md asset.bin shared.txt
+		t.Errorf("trackedFiles = %d, want 5", n)
+	}
+	snap, err := g.snapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(t.TempDir(), "wt")
+	if err := g.addWorktree(wt, snap); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { g.removeWorktree(wt) })
+	data, _ := os.ReadFile(filepath.Join(wt, "asset.bin"))
+	if !strings.HasPrefix(string(data), "version https://git-lfs") {
+		t.Fatalf("worktree asset.bin is not a pointer: %.60q", data)
+	}
+	os.WriteFile(filepath.Join(wt, "shared.txt"), []byte("changed\n"), 0o644)
+	commit, changed, err := (git{wt}).commitAll("w")
+	if err != nil || !changed {
+		t.Fatalf("commitAll = %v, %v", changed, err)
+	}
+	files, _ := g.out("diff", "--name-only", snap, commit)
+	if files != "shared.txt" {
+		t.Errorf("changed files = %q, want only shared.txt", files)
+	}
+}
+
+// The snapshot is seeded from the real index, but must still equal the
+// working tree: staged files that were deleted afterwards are gone, staged
+// content that was edited afterwards has the edited version.
+func TestSnapshotFromStagedIndexMatchesWorkingTree(t *testing.T) {
+	dir := gitRepo(t)
+	g := git{dir}
+	os.WriteFile(filepath.Join(dir, "staged-then-deleted.txt"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("staged\n"), 0o644)
+	g.out("add", "-A")
+	os.Remove(filepath.Join(dir, "staged-then-deleted.txt"))
+	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("edited\n"), 0o644)
+	os.Remove(filepath.Join(dir, "README.md"))
+	before, _ := g.out("ls-files", "--stage")
+
+	snap, err := g.snapshot("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _ := g.out("ls-tree", "-r", "--name-only", snap)
+	if files != ".gitignore\nshared.txt" {
+		t.Errorf("snapshot files:\n%s", files)
+	}
+	if got, _ := g.out("show", snap+":shared.txt"); got != "edited" {
+		t.Errorf("shared.txt = %q, want the working tree version", got)
+	}
+	if after, _ := g.out("ls-files", "--stage"); after != before {
+		t.Errorf("real index changed:\n%s\nwant\n%s", after, before)
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/limits"
+	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/router"
 	"github.com/sparkz400/switchyard/internal/runner"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
@@ -249,17 +250,29 @@ func TestWorktreesMergeIntoWorkingTree(t *testing.T) {
 	if headOf(t, dir) != head {
 		t.Error("HEAD moved: switchyard must not commit on the user's branch")
 	}
+	slots := map[string]bool{}
 	for id, d := range dirs {
-		if d == dir {
-			t.Errorf("%s ran in the main tree, want a worktree", id)
+		if !strings.HasPrefix(d, poolDir(dir)) {
+			t.Errorf("%s ran in %s, want a pooled worktree", id, d)
 		}
-		if _, err := os.Stat(d); !os.IsNotExist(err) {
-			t.Errorf("worktree %s was not removed", d)
+		slots[d] = true
+	}
+	// Slots stay for the next task, unlocked.
+	for d := range slots {
+		unlock, ok := proc.TryLock(d + ".lock")
+		if !ok {
+			t.Errorf("slot %s is still locked", d)
+			continue
 		}
+		unlock()
+	}
+	// The planner phase prewarmed max_threads slots; the plan used some of them.
+	if n, err := CleanPool(dir); err != nil || n != config.Default().Orchestrator.MaxThreads || len(slots) > n {
+		t.Errorf("CleanPool = %d, %v; want max_threads, used %d", n, err, len(slots))
 	}
 	wl, _ := (git{dir}).out("worktree", "list")
 	if n := len(strings.Split(wl, "\n")); n != 1 {
-		t.Errorf("leftover worktrees:\n%s", wl)
+		t.Errorf("leftover worktrees after CleanPool:\n%s", wl)
 	}
 	if st, _ := (git{dir}).out("status", "--porcelain"); strings.Contains(st, "A ") {
 		t.Errorf("index was modified:\n%s", st)

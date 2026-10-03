@@ -297,6 +297,9 @@ func stepPrompt(task string, st Subtask, depResults []string, prevErr, advice st
 	return b.String()
 }
 
+// lfsNote is appended to step prompts that run in a worktree of a Git LFS repo.
+const lfsNote = "\nNOTE: Git LFS files (binary assets such as textures, models, audio) appear here as small text pointer files (\"version https://git-lfs.github.com/spec/v1 ...\"). This is expected: do not edit, \"fix\" or delete them, and do not run builds that need those assets.\n"
+
 func fixPrompt(task string, v Verdict) string {
 	return runner.MarkerFix + ` You are a worker in Switchyard. The reviewer checked the finished work and asked for changes.
 

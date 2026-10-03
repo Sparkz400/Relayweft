@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -57,6 +56,7 @@ type Orchestrator struct {
 	runSeq  int
 	running bool
 	taskSeq int
+	tipped  bool // the big-repo git settings hint was shown
 }
 
 // New creates an orchestrator.
@@ -205,8 +205,39 @@ type task struct {
 	tokens   event.TokenUsage
 	kept     []string
 	notes    []string
-	wtBase   string
+	wtOK     bool          // writers may use pooled worktrees (if the plan has several)
+	warm     chan struct{} // closed when the pool prewarm finished; nil if none ran
+	pool     string        // pool directory when worktrees are in use
+	lfs      bool          // worktrees hold LFS pointer files, not the real content
 	writeSem chan struct{}
+}
+
+// worktreesAllowed reports whether writers may use pooled worktrees in this
+// task (whether they do also depends on the plan). It also logs a one-time
+// hint about git settings that speed up snapshots in big repos.
+func (o *Orchestrator) worktreesAllowed(t *task) bool {
+	if !t.useGit {
+		return false
+	}
+	oc := t.cfg.Orchestrator
+	files, tips := PerfTips(t.root)
+	if len(tips) > 0 && !o.tipped {
+		o.tipped = true
+		o.logf("big repo (%d tracked files): for faster snapshots run in it: %s", files, strings.Join(tips, " && "))
+	}
+	if !oc.Worktrees || !oc.Parallel || oc.MaxThreads < 2 {
+		return false
+	}
+	if !SupportsMergeTree() {
+		o.logf("git < 2.38 (no merge-tree --write-tree): writing agents run one at a time in the main tree")
+		return false
+	}
+	if oc.WorktreeMaxFiles > 0 && files > oc.WorktreeMaxFiles {
+		o.logf("%d tracked files (> worktree_max_files %d): writing agents run one at a time in the main tree", files, oc.WorktreeMaxFiles)
+		return false
+	}
+	t.lfs = (git{t.root}).usesLFS()
+	return true
 }
 
 func (t *task) addTokens(u event.TokenUsage) {
@@ -272,6 +303,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		if root, err := repoRoot(o.opts.Dir); err == nil {
 			t.root = root
 			t.useGit = true
+			o.logf("snapshotting the working tree (git add -A on a temporary index)")
 			if snap, err := (git{root}).snapshot("switchyard start snapshot"); err == nil {
 				t.snapshot, t.start = snap, snap
 			} else {
@@ -280,6 +312,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 			}
 		}
 	}
+	t.wtOK = o.worktreesAllowed(t)
 
 	// 1. Plan.
 	o.emit(event.Event{Kind: event.Phase, Text: "plan"})
@@ -293,6 +326,13 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		o.logf("small task (%d words): skipping the planner", words)
 		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
 	} else {
+		if t.wtOK {
+			// Create missing pool worktrees while the planner thinks.
+			warm := make(chan struct{})
+			t.warm = warm
+			root, snap, n := t.root, t.snapshot, oc.MaxThreads
+			go func() { defer close(warm); prewarmPool(root, snap, n) }()
+		}
 		p, ok := o.plan(ctx, t, "", nil)
 		if ctx.Err() != nil {
 			return TaskResult{Summary: "planning cancelled"}
@@ -467,17 +507,18 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 			edits++
 		}
 	}
-	useWT := t.useGit && oc.Worktrees && threads > 1 && edits > 1
-	if useWT && !SupportsMergeTree() {
-		o.logf("git < 2.38 (no merge-tree --write-tree): writing agents run one at a time in the main tree")
-		useWT = false
-	}
+	useWT := t.wtOK && threads > 1 && edits > 1
 	if useWT {
-		t.wtBase = worktreeBase(t.root, fmt.Sprintf("%s-%s", o.opts.Log.Session(), t.id))
-		defer func() {
-			os.RemoveAll(t.wtBase)
-			os.Remove(filepath.Dir(t.wtBase)) // only succeeds when empty
-		}()
+		if t.lfs {
+			o.logf("git lfs repo: worktrees keep LFS files as pointers")
+		}
+		t.pool = poolDir(t.root)
+		if t.warm != nil {
+			select {
+			case <-t.warm:
+			case <-ctx.Done():
+			}
+		}
 	}
 
 	for _, st := range p.Subtasks {
@@ -601,8 +642,8 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	t.mergeMu.Lock()
 	base := t.snapshot
 	t.mergeMu.Unlock()
-	path := filepath.Join(t.wtBase, st.ID)
-	if err := g.addWorktree(path, base); err != nil {
+	s, err := acquireSlot(t.root, base)
+	if err != nil {
 		o.logf("worktree for %s failed (%v); running in the main tree", st.ID, err)
 		select { // one writer at a time in the main tree
 		case t.writeSem <- struct{}{}:
@@ -612,7 +653,8 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		}
 		return o.runStep(ctx, t, st, deps, o.opts.Dir, "")
 	}
-	defer g.removeWorktree(path)
+	defer s.release()
+	path := s.path
 	// Agents should work in the same relative directory they would use in the main tree.
 	dir := path
 	if rel, err := filepath.Rel(t.root, o.opts.Dir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
@@ -709,6 +751,9 @@ func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []
 		p := prompt
 		if p == "" {
 			p = stepPrompt(t.text, st, deps, prevErr, advice, st.Kind.ReadOnly())
+			if t.lfs && t.pool != "" && strings.HasPrefix(dir, t.pool) {
+				p += lfsNote
+			}
 		} else if advice != "" || prevErr != "" {
 			p += "\n\nPREVIOUS ATTEMPT FAILED WITH:\n" + clip(prevErr, 2000) + "\n\nREVIEWER ADVICE:\n" + advice
 		}

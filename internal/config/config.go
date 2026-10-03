@@ -116,6 +116,7 @@ type OrchestratorCfg struct {
 	MaxThreads          int      `yaml:"max_threads"`
 	Parallel            bool     `yaml:"parallel"`
 	Worktrees           bool     `yaml:"worktrees"`
+	WorktreeMaxFiles    int      `yaml:"worktree_max_files"`
 	ReviewBeforePlan    bool     `yaml:"review_before_plan"`
 	ReviewOnRepeatError bool     `yaml:"review_on_repeat_error"`
 	ReviewBeforeDone    bool     `yaml:"review_before_done"`

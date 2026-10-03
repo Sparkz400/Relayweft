@@ -89,7 +89,8 @@ routing:
 orchestrator:
   max_threads: 3                   # parallel agents at once
   parallel: true
-  worktrees: true                  # each parallel writing agent gets its own git worktree
+  worktrees: true                  # parallel writing agents get their own git worktree (pooled, reused between tasks; `sy clean` removes them)
+  worktree_max_files: 0            # >0: repos with more tracked files skip worktrees (writers take turns in your tree)
   review_before_plan: true
   review_on_repeat_error: true
   review_before_done: true
