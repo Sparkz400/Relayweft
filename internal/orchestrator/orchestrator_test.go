@@ -25,10 +25,26 @@ type recorder struct {
 	evs []event.Event
 }
 
+// all returns the events once the task's TaskDone has been collected: the
+// recorder drains the channel on its own goroutine, so right after Run
+// returns the last events may still be in flight.
 func (r *recorder) all() []event.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]event.Event(nil), r.evs...)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		r.mu.Lock()
+		done := false
+		for _, e := range r.evs {
+			if e.Kind == event.TaskDone {
+				done = true
+			}
+		}
+		out := append([]event.Event(nil), r.evs...)
+		r.mu.Unlock()
+		if done || time.Now().After(deadline) {
+			return out
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // newOrc builds an orchestrator whose events are collected.
