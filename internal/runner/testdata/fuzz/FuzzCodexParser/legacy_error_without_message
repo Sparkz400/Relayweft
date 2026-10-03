@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"id\":\"1\",\"msg\":{\"type\":\"stream_error\"}}")
