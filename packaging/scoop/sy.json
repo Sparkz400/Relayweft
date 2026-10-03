@@ -2,7 +2,7 @@
     "version": "0.0.0",
     "description": "Windows-first terminal app that routes coding work between the Codex CLI and Claude Code.",
     "homepage": "https://github.com/sparkz400/switchyard",
-    "license": "Proprietary",
+    "license": "MIT",
     "notes": "Run `sy doctor` to check the codex and claude CLIs. Update with `scoop update sy`.",
     "architecture": {
         "64bit": {

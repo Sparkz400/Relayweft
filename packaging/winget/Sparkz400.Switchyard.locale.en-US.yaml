@@ -7,7 +7,8 @@ Publisher: Sparkz400
 PublisherUrl: https://github.com/sparkz400
 PackageName: Switchyard
 PackageUrl: https://github.com/sparkz400/switchyard
-License: Proprietary
+License: MIT
+LicenseUrl: https://github.com/sparkz400/switchyard/blob/main/LICENSE
 ShortDescription: Terminal app that routes coding work between the Codex CLI and Claude Code.
 Description: |-
   Switchyard (sy) is a Windows-first, animated terminal app that routes coding
