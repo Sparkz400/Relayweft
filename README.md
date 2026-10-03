@@ -127,20 +127,69 @@ There are four ways to change any of this, at any time:
 - `/limit <codex|claude> [reset|set]` to correct the limit state by hand
 - `/threads <n>`, `/parallel on|off`, `/review on|off`, `/judge on|off`
 - `/pause`, `/resume`, `/kill <agent>`, `/cancel`, `/clear`, `/usage`
+- `/undo` previews reverting the last task, `/undo yes` applies it; `/redo` and `/redo yes` put it back
 
 ## Other commands
 
 ```
 sy run "task"                         headless: same pipeline, events printed as lines
 sy run --single claude:opus "task"    single-agent baseline (for comparison in stats)
-sy stats [--here] [--since 7d]        usage per model, rules fired, routed vs baseline
+sy undo [--list] [--redo] [--yes] [task]   revert a task's changes (preview first), or put them back
+sy bench [--init] [--file bench.yaml] [--only a,b]   routed vs single agents on your own tasks
+sy stats [--here] [--since 7d]        usage per model, rules fired, routed vs baseline, recent task costs
 sy models [--refresh] [--all]         routes + catalogs; refresh Codex catalog
-sy doctor                             check CLIs, versions, codex login, git, terminal
+sy doctor                             CLIs, logins, git, terminal, machine load, free disk, worktree pools
+sy bugreport [--out file.zip]         one zip with logs, crash logs, config and doctor output to send
 sy init [--global] [--force] [--print]
-sy clean [--dir <path>]               remove the repo's pooled agent worktrees
+sy clean [--dir <path>] [--idle 72h]  remove this repo's pooled worktrees (or every repo's idle ones)
 ```
 
-`sy run` exits 1 when the task fails, so it is scriptable. For the success measurement in the plan, run the same ~10 tasks with `sy run "..."` and with `sy run --single <provider:model> "..."`, then compare with `sy stats`.
+`sy run` exits 1 when the task fails, so it is scriptable.
+
+### Undo: try anything, risk-free
+
+Every task in a git repo records the working tree before and after it ran. The snapshots are kept under `refs/switchyard/tasks`, so git never garbage-collects them and your branches stay untouched.
+
+- `sy undo` (or `/undo` in the TUI) shows which files the last task changed, then reverts exactly those: changed files are restored, created files removed, deleted files recreated.
+- Files you edited *after* the task keep your edits (3-way merge). If an edit overlaps the task's change, nothing at all is changed and you're told which file.
+- `sy undo --redo` (or `/redo`) puts the task's changes back. `sy undo --list` shows the last 30 tasks.
+- After every task, `sy run` prints the exact `sy undo <task>` command.
+
+### Bench: does Switchyard beat a single agent on *your* work?
+
+1. Run `sy bench --init` to create `bench.yaml`. Fill in a few real tasks, each with a check command (`go test ./...`, `npm test`, ...), then commit.
+2. Run `sy bench`. It runs every task in every mode (`routed`, `single:codex:gpt-6.1-sol:high`, ...) from a clean checkout of `HEAD`, in a worktree outside your repo. A run passes when its check command exits 0.
+3. Read the results: a table of pass rate, wall time, tokens per provider and Claude's API-equivalent cost. It is printed and saved as `bench-results-<time>.md`.
+
+It uses real quota, so it asks first.
+
+### Cost of every task
+
+When a task finishes, the TUI log, `sy run` and `sy stats` show what it used:
+
+> codex 12k · claude 40k fresh tokens · ≈$0.31 API-equivalent · claude limit 61%→64%
+
+"Fresh" means uncached input plus output. The $ figure is what Claude Code reports a task *would* cost on the API; on a subscription you are not billed it, but it is a good relative measure. The limit share comes from the provider's own quota reports.
+
+### Protecting your machine
+
+Switchyard should never be what tips a PC over.
+
+- **Low priority.** Agents and every git command run below normal CPU priority (`low_priority`), and their child processes inherit it.
+- **Bounded checkout.** Git's parallel checkout is capped at half the cores, at most 4.
+- **Busy gate.** While the machine is above `max_cpu_percent` (90) or below `min_free_memory_mb` (1024), no *new* agent starts. The first agent of a task always runs, and after `busy_max_wait` (2m) the next one starts anyway, so a busy machine slows `sy` down but never stalls it. The log says when an agent is held.
+- **Disk guard.**
+  - No new pool worktree is created below `min_free_disk_gb` (10); writers then take turns in your tree instead.
+  - Pool slots unused for `pool_max_idle` (14 days) are removed automatically.
+  - You get a warning when a repo's pool passes `pool_warn_gb` (20).
+  - `sy doctor` lists every pool with its size.
+- **Switch before the limit.** When a provider reports it has used `switch_at_utilization` (90%) of its limit (Claude's 5-hour or 7-day window), work moves to the other provider *before* the limit hits. The router panel shows these decisions as `quota-preempt`.
+
+### When something goes wrong
+
+- **Debug log.** Every agent spawn and exit, git command, routing decision and error is written to `sy-debug.log`, which rotates at 10 MB. It lives in `%AppData%\switchyard\logs` on Windows and `~/.config/switchyard/logs` on Linux.
+- **Crash logs.** A crash anywhere writes `crash-<time>.log` there, with the stack and the recent log. A crash inside a task ends only that task, not `sy`.
+- **`sy bugreport`.** Zips the environment, PATH, `sy doctor` output, your config, the last 3 session logs, and the debug and crash logs into one file to send.
 
 ## How it works (and the decisions made for v1)
 
@@ -200,7 +249,9 @@ internal/event/         the normalized Event type
 internal/runner/        codex.go, claude.go, fake.go (demo) + recorded fixtures
 internal/router/        rules + judge
 internal/orchestrator/  lifecycle, worktrees, merges, checkpoints, prompts
-internal/limits/        limit detection, reset parsing, provider state
+internal/limits/        limit detection, reset parsing, provider state and quota utilization
+internal/diag/          debug log, crash logs
+internal/sysload/       CPU, memory and disk readings for the load and disk guards
 internal/sessionlog/    JSONL writer + stats
 internal/proc/          process-tree kill (Unix process groups, Windows taskkill + job object)
 internal/tui/           Bubble Tea model, views, model picker, commands

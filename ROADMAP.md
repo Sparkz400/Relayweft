@@ -14,6 +14,15 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - A multi-line prompt that handles pastes.
 - Reliable cancel.
 - CI on Windows, Linux and macOS.
+- **Phase 1 batch (done):**
+  - load limits
+  - disk guard
+  - debug and crash logs with `sy bugreport`
+  - `sy undo`
+- **Ahead of schedule from Phase 3:**
+  - `sy bench`
+  - switching provider before the limit
+  - per-task cost
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
@@ -39,11 +48,12 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 | # | Item | Why |
 |---|---|---|
+| | *Status: 1.2, 1.3, 1.4 and 1.5 are **done**. 1.1, 1.6, 1.7, 1.8 and 1.9 are open.* | |
 | 1.1 | **Real Codex end-to-end run**: record real `codex exec --json` output (success, tool calls, edits, limit hit, logged out) as test fixtures. | Codex has only been tested against output we built by hand from its docs and binary. |
-| 1.2 | **Load limits**: cap git's parallel checkout (`checkout.workers` = half the cores, at most 4), lower process priority for agents and git (`BELOW_NORMAL_PRIORITY_CLASS`), prewarm at most one pool slot at a time, and a `max_cpu_load` setting that pauses dispatch while the machine is pegged. | A freeze under load must never be triggered by `sy`. |
-| 1.3 | **Disk guard**: show the pool size in `sy doctor`, warn at more than X GB, prune slots unused for 14 days, and refuse to create a slot when free space drops under 10 GB. | Each pool slot is a full checkout of your repo. |
-| 1.4 | **Crash safety**: a panic handler that restores the terminal and writes `crash-<time>.log`; a persistent debug log (`%LocalAppData%\switchyard\logs\sy.log`) with every spawned command line, exit code and timing; `sy bugreport` zips the last session log, debug log, config and `doctor` output. | When something goes wrong, you can send one file and the reason is visible. |
-| 1.5 | **Undo a task**: `sy undo` / `u` restores the working tree to the snapshot taken when the task started (the snapshot commit already exists), with a preview first. | It's the single biggest trust feature: trying a task becomes risk-free. |
+| 1.2 | ✅ **Load limits** (done): agents and git at below-normal priority, parallel checkout capped at min(4, cores/2), a busy gate that holds new agents above `max_cpu_percent` or below `min_free_memory_mb` (at most `busy_max_wait`). Was planned as: cap git's parallel checkout (`checkout.workers` = half the cores, at most 4), lower process priority for agents and git (`BELOW_NORMAL_PRIORITY_CLASS`), prewarm at most one pool slot at a time, and a `max_cpu_load` setting that pauses dispatch while the machine is pegged. | A freeze under load must never be triggered by `sy`. |
+| 1.3 | ✅ **Disk guard** (done): `min_free_disk_gb` floor, pruning after `pool_max_idle`, `pool_warn_gb` warning, pools listed in `sy doctor`, one shared pool per repo. Was planned as: show the pool size in `sy doctor`, warn at more than X GB, prune slots unused for 14 days, and refuse to create a slot when free space drops under 10 GB. | Each pool slot is a full checkout of your repo. |
+| 1.4 | ✅ **Crash safety** (done): `sy-debug.log`, `crash-*.log`, task-level panic recovery, `sy bugreport`. Was planned as: a panic handler that restores the terminal and writes `crash-<time>.log`; a persistent debug log (`%LocalAppData%\switchyard\logs\sy.log`) with every spawned command line, exit code and timing; `sy bugreport` zips the last session log, debug log, config and `doctor` output. | When something goes wrong, you can send one file and the reason is visible. |
+| 1.5 | ✅ **Undo a task** (done): `sy undo` / `/undo` with preview, redo, later edits kept by 3-way merge, last 30 tasks. Was planned as: `sy undo` / `u` restores the working tree to the snapshot taken when the task started (the snapshot commit already exists), with a preview first. | It's the single biggest trust feature: trying a task becomes risk-free. |
 | 1.6 | **Real-use test pass on Windows**: Windows Terminal and the old console, a user name with a space, paths with spaces, OneDrive folders, a big repo with LFS, Defender on, sleep/resume during a task, closing the window mid-task. | These are where Windows tools usually break. |
 | 1.7 | **Long-run stress test**: CI runs `sy run` in demo mode in a loop for 30 minutes and checks that memory, goroutines, open handles and leftover processes stay flat. | Catches leaks before you find them as freezes. |
 | 1.8 | **Parser fuzzing**: Go fuzz tests for the Codex and Claude output parsers and for plan and verdict parsing. | Odd model output must never crash `sy` or leave it stuck. |
@@ -83,12 +93,12 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 | # | Item | Why |
 |---|---|---|
-| 3.1 | **Benchmark command**: `sy bench` runs a task set (yours, plus a starter set) routed vs single-agent, and records correctness (did the tests pass), wall time and quota used. | This is the success measure from `plan.md` §9, automated. |
-| 3.2 | **Quota-aware scheduling**: use Claude's live 5-hour and 7-day utilization (already received) and Codex limits to move work to the other provider *before* hitting the limit, not after. | Avoids stalls entirely. |
+| 3.1 | ✅ **Benchmark command** (done early): `sy bench` with `bench.yaml`, check commands, routed vs single, saved results. Next: a starter task set. Was planned as: `sy bench` runs a task set (yours, plus a starter set) routed vs single-agent, and records correctness (did the tests pass), wall time and quota used. | This is the success measure from `plan.md` §9, automated. |
+| 3.2 | ✅ **Quota-aware scheduling** (done early, Claude; Codex as soon as its CLI reports `rate_limits`): `quota-preempt` at `switch_at_utilization`, and the planner and reviewer retry on the other provider. Was planned as: use Claude's live 5-hour and 7-day utilization (already received) and Codex limits to move work to the other provider *before* hitting the limit, not after. | Avoids stalls entirely. |
 | 3.3 | **Rule tuning from stats**: `sy stats` flags rules that often lead to retries or rejected reviews and suggests route changes. | Routing improves from your own data. |
 | 3.4 | **Judge model**: turn the judge on where the stats show the rules guess wrong; measure its cost against the gain. | Spend quota only where it pays. |
 | 3.5 | **Context hand-off**: pass explorer findings and file maps between agents in a compact form instead of re-reading the repo. | Fewer tokens, faster workers. |
-| 3.6 | **Cost visibility**: token use and the share of the limit used per task, per model and per day in the header and in `sy stats`. | You can see what each task cost. |
+| 3.6 | ✅ **Cost visibility** (done early): fresh tokens per provider, Claude API-equivalent $, limit before and after, in the TUI, `sy run` and `sy stats`. Next: per-day totals. Was planned as: token use and the share of the limit used per task, per model and per day in the header and in `sy stats`. | You can see what each task cost. |
 
 **Exit criteria:** on the benchmark, Switchyard beats a single agent on at least 2 of the 3 measures: correctness, wall time, and how quickly the limits are reached.
 
@@ -119,6 +129,9 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 ## Suggested order for the next steps
 
-1. **1.1** real Codex run (needs you logged in), **1.4** crash and debug logging, **1.2** load limits.
-2. **1.5** undo and **1.6** the Windows test pass.
-3. **1.3**, **1.7**, **1.8**, **1.9**, then start Phase 2 with **2.1** plan approval and **2.3** tests for agents.
+1. **Use it for real on Windows and send a `sy bugreport` after any problem.** Items 1.6 (the Windows test pass) and the exit criterion (2 weeks of daily use) need you at the keyboard.
+2. **1.1 Real Codex run.** Run `codex exec --json -m gpt-6-luna "say hi" > codex.jsonl` on your logged-in PC and send the file; it becomes a test fixture. Also check whether the output contains `rate_limits`; if it does, the quota switch then works for Codex too.
+3. **1.9 Review the PR #2 pool code and 1.8 parser fuzzing.** No user input needed.
+4. **1.7 Long-run stress test in CI.**
+5. **Then Phase 2:** 2.1 plan approval, 2.3 agents run tests safely, 2.2 diff review before applying.
+6. **Run `sy bench` on ~10 real tasks** as soon as Codex works. Its results decide which Phase 3 tuning is worth doing.
