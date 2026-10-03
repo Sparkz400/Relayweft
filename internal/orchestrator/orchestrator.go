@@ -451,7 +451,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
 	t.unattended = opts.Unattended
-	if o.opts.Bench == "" {
+	if o.opts.Bench == "" && o.opts.Mode != "demo" {
 		t.state = opts.Resume
 		if t.state == nil {
 			t.state = &TaskState{ID: t.key, Task: text, Dir: o.opts.Dir, Mode: o.opts.Mode, Created: time.Now()}
