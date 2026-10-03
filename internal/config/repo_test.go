@@ -144,3 +144,22 @@ func TestRepoFileBudgetOnlyStricterAndWorkspaceNeedsTrust(t *testing.T) {
 		t.Fatalf("untrusted workspace: %+v ignored %v", s.Get().Workspace, info.Ignored)
 	}
 }
+
+// Trust survives reaching the same file through a symlinked folder.
+func TestTrustThroughSymlink(t *testing.T) {
+	isolateTrust(t)
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	f := filepath.Join(real, RepoFileName)
+	os.WriteFile(f, []byte("verify: {commands: [x]}\n"), 0o644)
+	if err := Trust(filepath.Join(link, RepoFileName)); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(f)
+	if !IsTrusted(f, data) {
+		t.Fatal("trusted through the link, not trusted by its real path")
+	}
+}

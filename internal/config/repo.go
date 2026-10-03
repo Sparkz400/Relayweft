@@ -228,6 +228,11 @@ func trustKey(path string) string {
 	if err != nil {
 		abs = path
 	}
+	// The same file through a symlinked folder (macOS: /var -> /private/var)
+	// must keep its trust.
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
 	return strings.ToLower(filepath.ToSlash(abs))
 }
 
