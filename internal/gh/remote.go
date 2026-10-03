@@ -55,6 +55,22 @@ func (r Repo) APIBase() string {
 	return "https://" + r.Host + "/api/v3"
 }
 
+// APIServes reports whether the API base URL api belongs to host: the
+// same host name (any port), or api.github.com for github.com. A token is
+// for one host, so a client for api only gets the token of a host it
+// serves.
+func APIServes(api, host string) bool {
+	u, err := url.Parse(api)
+	if err != nil || u.Hostname() == "" || host == "" {
+		return false
+	}
+	h := u.Hostname()
+	if isDotCom(host) {
+		return strings.EqualFold(h, "api.github.com") || isDotCom(h)
+	}
+	return strings.EqualFold(h, host)
+}
+
 func isDotCom(host string) bool {
 	h := strings.ToLower(host)
 	return h == "github.com" || h == "www.github.com"

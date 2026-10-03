@@ -123,20 +123,25 @@ type watchRunner struct {
 	prompts []string
 	dirs    []string
 	during  func() // runs inside the step (e.g. someone pushes)
+	file    string // what the step writes (default b.txt)
 }
 
 func (x *watchRunner) Run(_ context.Context, s runner.Spec, _ func(event.Event)) runner.Result {
 	x.mu.Lock()
 	x.prompts = append(x.prompts, s.Prompt)
 	x.dirs = append(x.dirs, s.Dir)
-	during := x.during
+	during, file := x.during, x.file
 	x.mu.Unlock()
+	if file == "" {
+		file = "b.txt"
+	}
 	if strings.Contains(s.Prompt, runner.MarkerStep) {
 		if during != nil {
 			during()
 		}
-		os.WriteFile(filepath.Join(s.Dir, "b.txt"), []byte("fixed\n"), 0o644)
-		return runner.Result{Final: "made b.txt; ping @dave, fixes #5", Files: []string{"b.txt"}}
+		os.MkdirAll(filepath.Dir(filepath.Join(s.Dir, file)), 0o755)
+		os.WriteFile(filepath.Join(s.Dir, file), []byte("fixed\n"), 0o644)
+		return runner.Result{Final: "made " + file + "; ping @dave, fixes #5", Files: []string{file}}
 	}
 	return runner.Result{Final: `{"approve": true, "advice": "ok"}`}
 }
@@ -252,10 +257,14 @@ func TestWatchFollowsUpOnFailedCheckAndReview(t *testing.T) {
 	api.set(func() {
 		api.checks[head0] = `[{"id":500,"name":"test","head_sha":"` + head0 + `","status":"completed","conclusion":"failure","app":{"slug":"github-actions"}},
 			{"id":501,"name":"lint","head_sha":"` + head0 + `","status":"completed","conclusion":"success"}]`
-		api.comments = `[{"id":2,"path":"a.txt","line":1,"body":` + jsonString(injComment) + `,"user":{"login":"rev"}},
-			{"id":3,"path":"a.txt","line":1,"body":"my own note","user":{"login":"me"}},
-			{"id":4,"path":"a.txt","line":1,"body":"bot text ` + syMark + `","user":{"login":"helper"}}]`
-		api.reviews = `[{"id":7,"state":"APPROVED","body":"fine","user":{"login":"x"}}]`
+		api.comments = `[{"id":2,"path":"a.txt","line":1,"body":` + jsonString(injComment) + `,"user":{"login":"rev"},"author_association":"MEMBER"},
+			{"id":3,"path":"a.txt","line":1,"body":"my own note","user":{"login":"me"},"author_association":"OWNER"},
+			{"id":4,"path":"a.txt","line":1,"body":"bot text ` + syMark + `","user":{"login":"helper"},"author_association":"COLLABORATOR"},
+			{"id":5,"path":"a.txt","line":1,"body":"stranger asks","user":{"login":"drive-by"},"author_association":"NONE"},
+			{"id":6,"path":"a.txt","line":1,"body":"contributor asks","user":{"login":"once"},"author_association":"CONTRIBUTOR"},
+			{"id":7,"path":"a.txt","line":1,"body":"bot asks","user":{"login":"x[bot]","type":"Bot"},"author_association":"MEMBER"}]`
+		api.reviews = `[{"id":7,"state":"APPROVED","body":"fine","user":{"login":"x"}},
+			{"id":10,"state":"CHANGES_REQUESTED","body":"stranger review","user":{"login":"drive-by"},"author_association":"NONE"}]`
 	})
 	var out bytes.Buffer
 	w := newWatcher(true)
@@ -301,6 +310,13 @@ func TestWatchFollowsUpOnFailedCheckAndReview(t *testing.T) {
 	if strings.Contains(task, "my own note") || strings.Contains(task, "bot text") || strings.Contains(task, "\x1b[") {
 		t.Errorf("own comments, sy's text or terminal codes reached the agents:\n%s", task)
 	}
+	// Only the repository's owner, members and collaborators count: not
+	// anyone who can comment, and not bots.
+	for _, s := range []string{"stranger", "contributor asks", "bot asks"} {
+		if strings.Contains(task, s) {
+			t.Errorf("an untrusted author's text reached the agents (%q):\n%s", s, task)
+		}
+	}
 	// One commit on top of the old head, pushed (fast-forward) to the branch.
 	head1 := api.head()
 	if head1 == head0 {
@@ -340,7 +356,7 @@ func TestWatchFollowsUpOnFailedCheckAndReview(t *testing.T) {
 	// A review requesting changes is new: round 2 of 2. sy's own reply
 	// (as an inline comment of a reviewer quoting it) is not.
 	api.set(func() {
-		api.reviews = `[{"id":8,"state":"CHANGES_REQUESTED","body":"also update the docs","user":{"login":"rev"}}]`
+		api.reviews = `[{"id":8,"state":"CHANGES_REQUESTED","body":"also update the docs","user":{"login":"rev"},"author_association":"MEMBER"}]`
 	})
 	newWatcher(true).pass(context.Background())
 	if wr.steps() != 2 || len(api.replies) != 2 {
@@ -348,7 +364,7 @@ func TestWatchFollowsUpOnFailedCheckAndReview(t *testing.T) {
 	}
 	// The cap: a third new item does not start a round.
 	api.set(func() {
-		api.reviews = `[{"id":8,"state":"CHANGES_REQUESTED","body":"also update the docs","user":{"login":"rev"}},{"id":9,"state":"CHANGES_REQUESTED","body":"more","user":{"login":"rev"}}]`
+		api.reviews = `[{"id":8,"state":"CHANGES_REQUESTED","body":"also update the docs","user":{"login":"rev"},"author_association":"MEMBER"},{"id":9,"state":"CHANGES_REQUESTED","body":"more","user":{"login":"rev"},"author_association":"MEMBER"}]`
 	})
 	out.Reset()
 	w = newWatcher(true)
@@ -381,12 +397,13 @@ func jsonString(s string) string {
 }
 
 // Someone pushed to the branch while the follow-up ran: sy pushes nothing
-// (never forces) and says so; the items count as handled.
+// (never forces) and says so; the items stay new and the round does not
+// count, so the next pass runs again from the new head.
 func TestWatchRefusesWhenBranchMoved(t *testing.T) {
 	dir, api, _, wr := watchSetup(t)
 	head0 := api.head()
 	api.set(func() {
-		api.comments = `[{"id":2,"path":"a.txt","line":1,"body":"rename it","user":{"login":"rev"}}]`
+		api.comments = `[{"id":2,"path":"a.txt","line":1,"body":"rename it","user":{"login":"rev"},"author_association":"MEMBER"}]`
 	})
 	// A commit by someone else lands on the branch during the step.
 	var other string
@@ -408,18 +425,65 @@ func TestWatchRefusesWhenBranchMoved(t *testing.T) {
 	if h := api.head(); h != other {
 		t.Fatalf("branch is at %s, want the other push %s (sy must not overwrite it)", h, other)
 	}
-	if !strings.Contains(out.String(), "nothing pushed") || !strings.Contains(out.String(), "branch moved") {
+	if !strings.Contains(out.String(), "nothing pushed") || !strings.Contains(out.String(), "branch moved") || !strings.Contains(out.String(), "stay new") {
 		t.Fatalf("output:\n%s", out.String())
 	}
-	if len(api.replies) != 1 || !strings.Contains(api.replies[0], "nothing pushed") {
+	if len(api.replies) != 0 {
 		t.Fatalf("replies %q", api.replies)
 	}
 	prs := watched(t)
-	if prs[0].Rounds != 1 || !prs[0].handled("comment:2") || prs[0].Head == other {
+	if prs[0].Rounds != 0 || prs[0].handled("comment:2") || prs[0].Head == other {
 		t.Fatalf("registry %+v", prs[0])
 	}
 	if after := repoState(t, dir); after != before {
 		t.Fatal("sy watch changed the user's repo")
+	}
+
+	// The next pass runs the round again on top of the new head.
+	wr.mu.Lock()
+	wr.during = nil
+	wr.mu.Unlock()
+	out.Reset()
+	if err := w.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	head1 := api.head()
+	if wr.steps() != 2 || head1 == other || strings.TrimSpace(gitOut(t, api.bare, "rev-parse", head1+"^")) != other {
+		t.Fatalf("retry: %d steps, head %s (other %s)\n%s", wr.steps(), head1, other, out.String())
+	}
+	prs = watched(t)
+	if prs[0].Rounds != 1 || !prs[0].handled("comment:2") || prs[0].Head != head1 || len(api.replies) != 1 {
+		t.Fatalf("registry after the retry %+v, %d replies", prs[0], len(api.replies))
+	}
+}
+
+// A round whose changes touch .github/ is never pushed: workflows run with
+// the repository's secrets. The items are handled (running it again would
+// do the same).
+func TestWatchNeverPushesGitHubDir(t *testing.T) {
+	_, api, _, wr := watchSetup(t)
+	head0 := api.head()
+	wr.file = ".github/workflows/ci.yml"
+	api.set(func() {
+		api.comments = `[{"id":2,"path":"a.txt","line":1,"body":"fix CI","user":{"login":"rev"},"author_association":"MEMBER"}]`
+	})
+	var out bytes.Buffer
+	w := newWatcher(true)
+	w.out = &out
+	if err := w.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if wr.steps() != 1 {
+		t.Fatalf("no round ran:\n%s", out.String())
+	}
+	if h := api.head(); h != head0 {
+		t.Fatalf("pushed a change to .github/ (%s)", h)
+	}
+	if !strings.Contains(out.String(), ".github/workflows/ci.yml") || !strings.Contains(out.String(), "never pushes") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+	if prs := watched(t); prs[0].Rounds != 1 || !prs[0].handled("comment:2") || len(api.replies) != 1 || !strings.Contains(api.replies[0], "nothing pushed") {
+		t.Fatalf("registry %+v, replies %q", prs[0], api.replies)
 	}
 }
 
@@ -489,5 +553,49 @@ func TestWatchTaskFencesEverything(t *testing.T) {
 	}
 	if got := tailText("a\nbb\ncc\n", 5); got != "[...]\ncc\n" {
 		t.Errorf("tailText = %q", got)
+	}
+}
+
+// --api serves only the watched pull requests on its own host: a token is
+// per host, and another host's must never reach it.
+func TestWatchAPIOnlyForItsHost(t *testing.T) {
+	isolate(t)
+	api := &watchAPI{t: t, closed: true, branch: "sy/a", checks: map[string]string{}}
+	srv := api.server(t)
+	recordWatch(watchEntry{Root: t.TempDir(), Host: "github.com", Owner: "o", Name: "r", Number: 101, Branch: "sy/a"})
+	recordWatch(watchEntry{Root: t.TempDir(), Host: "127.0.0.1", Owner: "o", Name: "r", Number: 101, Branch: "sy/a"})
+	old := prToken
+	defer func() { prToken = old }()
+	var hosts []string
+	prToken = func(host string) (string, string) { hosts = append(hosts, host); return "tok", "test" }
+	var out bytes.Buffer
+	w := newWatcher(false)
+	w.out, w.api = &out, srv.URL
+	if err := w.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	prs := watched(t)
+	if len(prs) != 1 || prs[0].Host != "github.com" || !strings.Contains(out.String(), "is not for github.com") {
+		t.Fatalf("left %+v\n%s", prs, out.String())
+	}
+	if strings.Join(hosts, ",") != "127.0.0.1" {
+		t.Fatalf("tokens read for %q", hosts)
+	}
+	for _, c := range []struct {
+		api, host string
+		want      bool
+	}{
+		{"https://api.github.com", "github.com", true},
+		{"https://api.github.com/", "GitHub.com", true},
+		{"https://ghe.corp/api/v3", "ghe.corp", true},
+		{"http://127.0.0.1:8080", "127.0.0.1", true},
+		{"https://ghe.corp/api/v3", "github.com", false},
+		{"https://api.github.com", "ghe.corp", false},
+		{"https://evil.example/api.github.com", "github.com", false},
+		{"not a url", "github.com", false},
+	} {
+		if got := gh.APIServes(c.api, c.host); got != c.want {
+			t.Errorf("APIServes(%q, %q) = %v", c.api, c.host, got)
+		}
 	}
 }

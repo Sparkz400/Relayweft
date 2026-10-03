@@ -153,6 +153,10 @@ func runReview(ctx context.Context, c *common, ref string, o reviewOptions) erro
 		pr.Repo = origin
 	}
 	repo, n := pr.Repo, pr.Number
+	if o.api != "" && !gh.APIServes(o.api, repo.Host) {
+		// The token is for the pull request's host: never send it elsewhere.
+		return fmt.Errorf("--api %s is not for %s, the host of %s#%d", o.api, repo.Host, repo, n)
+	}
 	entry, opened := findWatch(repo, n)
 	api := o.api
 	if api == "" && opened {

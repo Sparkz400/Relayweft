@@ -179,6 +179,8 @@ func (x *reviewRunner) Run(_ context.Context, s runner.Spec, _ func(event.Event)
 func reviewSetup(t *testing.T) (dir, url string, api *reviewAPI, rr *reviewRunner, out *bytes.Buffer) {
 	t.Helper()
 	dir = prRepo(t)
+	// The fake GitHub's host: --api must be for the pull request's host.
+	run(t, dir, "remote", "set-url", "origin", "https://127.0.0.1/o/r.git")
 	api = &reviewAPI{}
 	url = api.server(t)
 	rr = &reviewRunner{}
@@ -206,7 +208,7 @@ func reviewCommon(t *testing.T, args ...string) *common {
 func TestReviewPostsOneCommentReview(t *testing.T) {
 	dir, url, api, rr, out := reviewSetup(t)
 	// sy opened #12 and Codex wrote it: Claude reviews.
-	recordWatch(watchEntry{Root: dir, Host: "github.com", Owner: "o", Name: "r", Number: 12, Branch: "sy/shout", Author: event.Codex})
+	recordWatch(watchEntry{Root: dir, Host: "127.0.0.1", Owner: "o", Name: "r", Number: 12, Branch: "sy/shout", Author: event.Codex})
 	before := repoState(t, dir)
 	reviewIn = strings.NewReader("y\n")
 	if err := runReview(context.Background(), reviewCommon(t, "--dir", dir), "12", reviewOptions{post: true, api: url}); err != nil {
@@ -261,7 +263,7 @@ func TestReviewPostsOneCommentReview(t *testing.T) {
 
 	// Saying no posts nothing; --provider wins over the default.
 	reviewIn = strings.NewReader("n\n")
-	if err := runReview(context.Background(), reviewCommon(t, "--dir", dir, "--provider", "codex"), "https://github.com/o/r/pull/12", reviewOptions{post: true, api: url}); err != nil {
+	if err := runReview(context.Background(), reviewCommon(t, "--dir", dir, "--provider", "codex"), "https://127.0.0.1/o/r/pull/12", reviewOptions{post: true, api: url}); err != nil {
 		t.Fatal(err)
 	}
 	if len(api.posted) != 1 || rr.specs[1].Provider != event.Codex || !strings.Contains(out.String(), "Nothing posted") {
@@ -271,9 +273,14 @@ func TestReviewPostsOneCommentReview(t *testing.T) {
 	if err := runReview(context.Background(), reviewCommon(t, "--dir", dir), "#12", reviewOptions{api: url}); err != nil || len(api.posted) != 1 {
 		t.Fatalf("%v, %d posted", err, len(api.posted))
 	}
+	// --api for another host than the pull request's is refused: the
+	// github.com token would go to it.
+	n := len(rr.specs)
+	if err := runReview(context.Background(), reviewCommon(t, "--dir", dir), "https://github.com/o/r/pull/12", reviewOptions{api: url}); err == nil || !strings.Contains(err.Error(), "is not for github.com") || len(rr.specs) != n {
+		t.Fatalf("--api for another host: %v", err)
+	}
 	// --post without a token is refused before any agent runs.
 	prToken = func(string) (string, string) { return "", "" }
-	n := len(rr.specs)
 	if err := runReview(context.Background(), reviewCommon(t, "--dir", dir), "12", reviewOptions{post: true, api: url}); err == nil || len(rr.specs) != n {
 		t.Fatalf("no token: %v", err)
 	}

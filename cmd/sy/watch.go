@@ -35,9 +35,10 @@ import (
 //     its folder, the number, branch, head commit and task.
 //   - A pass reads each recorded pull request. A merged or closed one is
 //     dropped. New items are failed check runs on the current head commit,
-//     inline review comments, and reviews that request changes, by anyone
-//     but the token's owner (sy writes as the owner) and never text sy
-//     wrote itself (it carries syMark).
+//     inline review comments, and reviews that request changes, by the
+//     repository's owner, members and collaborators (gh.Trusted: not bots,
+//     not other commenters), but not the token's owner (sy writes as the
+//     owner) and never text sy wrote itself (it carries syMark).
 //   - A pull request's new items become one follow-up task, a "round". It
 //     runs in a checkout of the head commit in sy's cache
 //     (orchestrator.NewCheckout): your working tree, index and current
@@ -47,9 +48,10 @@ import (
 //   - The round's changes are committed on top of the head commit
 //     (buildPRCommit) and pushed to the PR branch with a plain push, never
 //     forced. If the branch moved on GitHub and the new commit is not an
-//     ancestor of sy's, nothing is pushed. As with unattended pull
+//     ancestor of sy's, nothing is pushed, and the items stay new for the
+//     next pass (as after a failed push). As with unattended pull
 //     requests, files changed that no agent reported changing stop the
-//     push too.
+//     push too, and so do changes under .github/.
 //   - sy replies once on the pull request with what it did. The items are
 //     remembered by id, so nothing runs twice, and watch.max_rounds caps
 //     the rounds per pull request.
@@ -229,13 +231,14 @@ func cmdWatch(args []string) error {
 	list := fs.Bool("list", false, "list the watched pull requests")
 	forget := fs.String("forget", "", "stop watching a pull request: its number, owner/repo#n or URL")
 	quiet := fs.Bool("quiet", false, "only print routing, results and errors of follow-up tasks")
-	api := fs.String("api", "", "GitHub API base URL for every watched pull request (default: what sy pr used, or the host's)")
+	api := fs.String("api", "", "GitHub API base URL for the watched pull requests on its host (default: what sy pr used, or the host's)")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage: sy watch [--every 15m] [--dir repo] | --list | --forget <n>
 
 Follows up on the pull requests sy pr opened. Each pass reads every watched
 pull request: merged or closed ones are dropped; failed checks on its head
-commit, review comments and reviews requesting changes (not your own) start
+commit, review comments and reviews requesting changes (by the repository's
+owner, members and collaborators; not your own, not bots) start
 one follow-up task on the PR's branch. It runs in a separate checkout (your
 working tree, index and branch are untouched), its changes are committed and
 pushed to the branch (never forced; nothing is pushed if the branch moved),
@@ -448,6 +451,11 @@ func (w *watcher) note(e *watchEntry, format string, args ...any) {
 func (w *watcher) check(ctx context.Context, e watchEntry) (watchEntry, bool) {
 	repo := e.repo()
 	api := w.api
+	if api != "" && !gh.APIServes(api, repo.Host) {
+		// The token is the entry's host's: never send it to another one.
+		w.note(&e, "skipped: --api %s is not for %s", api, repo.Host)
+		return e, false
+	}
 	if api == "" {
 		api = e.API
 	}
@@ -523,10 +531,12 @@ const (
 )
 
 // watchItems collects what reviewers and CI asked for on the head commit,
-// oldest first, leaving out the token owner and sy's own text.
+// oldest first, leaving out the token owner and sy's own text. Only the
+// repository's owner, members and collaborators count (not bots): anyone
+// can comment on a public pull request, and a round pushes to its branch.
 func watchItems(c *gh.Client, repo gh.Repo, p *gh.Pull, viewer string) ([]watchItem, error) {
-	others := func(u gh.User, body string) bool {
-		return !strings.EqualFold(u.Login, viewer) && !strings.Contains(body, syMark)
+	others := func(u gh.User, association, body string) bool {
+		return gh.Trusted(u, association) && !strings.EqualFold(u.Login, viewer) && !strings.Contains(body, syMark)
 	}
 	var out []watchItem
 	runs, err := c.CheckRuns(repo, p.Head.SHA)
@@ -555,7 +565,7 @@ func watchItems(c *gh.Client, repo gh.Repo, p *gh.Pull, viewer string) ([]watchI
 		return nil, fmt.Errorf("read reviews: %w", err)
 	}
 	for _, r := range reviews {
-		if r.State != "CHANGES_REQUESTED" || !others(r.User, r.Body) {
+		if r.State != "CHANGES_REQUESTED" || !others(r.User, r.Association, r.Body) {
 			continue
 		}
 		body := strings.TrimSpace(r.Body)
@@ -570,7 +580,7 @@ func watchItems(c *gh.Client, repo gh.Repo, p *gh.Pull, viewer string) ([]watchI
 		return nil, fmt.Errorf("read review comments: %w", err)
 	}
 	for _, cm := range comments {
-		if !others(cm.User, cm.Body) {
+		if !others(cm.User, cm.Association, cm.Body) {
 			continue
 		}
 		where := cm.Path
@@ -668,12 +678,19 @@ func (w *watcher) round(ctx context.Context, e watchEntry, client *gh.Client, p 
 		w.note(&e, "%s; the items stay new", res.Summary)
 		return e
 	}
+	outcome, pushed, retry := w.land(e, co, res, items)
+	if retry {
+		// The branch moved or the push failed: the round's work is lost,
+		// so its items stay new and the round does not count; the next
+		// pass starts again from the branch's new head.
+		w.note(&e, "%s; the items stay new (the next pass tries again)", outcome)
+		return e
+	}
 	// A round ran: its items are handled whatever came of it.
 	e.Rounds++
 	for _, it := range items {
 		e.Handled = append(e.Handled, it.id)
 	}
-	outcome, pushed := w.land(e, co, res, items)
 	if pushed != "" {
 		e.Head = pushed
 	}
@@ -683,39 +700,61 @@ func (w *watcher) round(ctx context.Context, e watchEntry, client *gh.Client, p 
 }
 
 // land commits a round's changes on top of the head commit and pushes
-// them to the PR branch. It returns what happened and the pushed commit
-// ("" when nothing was pushed).
-func (w *watcher) land(e watchEntry, co *orchestrator.Checkout, res orchestrator.TaskResult, items []watchItem) (outcome, pushed string) {
+// them to the PR branch. It returns what happened, the pushed commit (""
+// when nothing was pushed) and retry when the push was refused because
+// the branch moved, or failed: the round is then worth running again from
+// the branch's new head.
+func (w *watcher) land(e watchEntry, co *orchestrator.Checkout, res orchestrator.TaskResult, items []watchItem) (outcome, pushed string, retry bool) {
 	if !res.OK {
-		return "the follow-up task did not finish ok (" + oneLine(res.Summary, 200) + "); nothing pushed", ""
+		return "the follow-up task did not finish ok (" + oneLine(res.Summary, 200) + "); nothing pushed", "", false
 	}
 	if res.UndoKey == "" {
-		return "the task's changes were not recorded; nothing pushed", ""
+		return "the task's changes were not recorded; nothing pushed", "", false
 	}
 	snap, err := taskSnapshots(co.Dir, res.UndoKey)
 	if err != nil {
-		return fmt.Sprintf("nothing pushed: %v", err), ""
+		return fmt.Sprintf("nothing pushed: %v", err), "", false
 	}
 	// The unattended pull request rule: nobody looked at this commit, so
 	// it holds only what the agents reported changing.
 	unreported, err := unreportedFiles(co.Dir, res.UndoKey)
 	if err != nil {
-		return fmt.Sprintf("nothing pushed: cannot tell which files the agents changed (%v)", err), ""
+		return fmt.Sprintf("nothing pushed: cannot tell which files the agents changed (%v)", err), "", false
 	}
 	if len(unreported) > 0 {
-		return fmt.Sprintf("nothing pushed: %d file(s) changed that no agent reported changing (%s)", len(unreported), strings.Join(unreported, ", ")), ""
+		return fmt.Sprintf("nothing pushed: %d file(s) changed that no agent reported changing (%s)", len(unreported), strings.Join(unreported, ", ")), "", false
 	}
 	commit, files, err := buildPRCommit(co.Dir, snap.Before, snap.After, defuseGitHubRefs(watchCommitMessage(e, items, res)))
 	if err != nil {
 		if strings.Contains(err.Error(), "changed no files") {
-			return "the agents changed no files; nothing pushed", ""
+			return "the agents changed no files; nothing pushed", "", false
 		}
-		return fmt.Sprintf("nothing pushed: %v", err), ""
+		return fmt.Sprintf("nothing pushed: %v", err), "", false
+	}
+	// Workflows run with the repository's secrets: a change to them that
+	// text from GitHub prompted is never pushed unattended.
+	if gf := githubFiles(files); len(gf) > 0 {
+		fmt.Fprintf(w.out, "%s: the follow-up changed %s; sy watch never pushes changes under .github/ (commit %s was not pushed)\n", e, strings.Join(gf, ", "), short(commit))
+		return fmt.Sprintf("nothing pushed: the changes touch %d file(s) under .github/, which sy watch never pushes", len(gf)), "", false
 	}
 	if err := w.push(e, commit); err != nil {
-		return fmt.Sprintf("nothing pushed: %v", err), ""
+		return fmt.Sprintf("nothing pushed: %v", err), "", true
 	}
-	return fmt.Sprintf("pushed %s to %s (%d file(s))", short(commit), e.Branch, len(files)), commit
+	return fmt.Sprintf("pushed %s to %s (%d file(s))", short(commit), e.Branch, len(files)), commit, false
+}
+
+// githubFiles are the paths under .github/ among buildPRCommit's files
+// ("<status> <path>").
+func githubFiles(files []string) []string {
+	const dir = ".github/"
+	var out []string
+	for _, f := range files {
+		_, p, _ := strings.Cut(f, " ")
+		if len(p) >= len(dir) && strings.EqualFold(p[:len(dir)], dir) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // errBranchMoved: the PR branch has commits sy's commit is not built on.

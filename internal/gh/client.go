@@ -202,6 +202,7 @@ type Label struct {
 // User is a GitHub account.
 type User struct {
 	Login string `json:"login"`
+	Type  string `json:"type"` // User, Bot, Organization
 }
 
 // Issue is a GitHub issue (pull requests are issues too; PullRequest is

@@ -144,7 +144,8 @@ type Review struct {
 	ID          int64     `json:"id"`
 	User        User      `json:"user"`
 	Body        string    `json:"body"`
-	State       string    `json:"state"` // APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING
+	State       string    `json:"state"`              // APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING
+	Association string    `json:"author_association"` // see Trusted
 	CommitID    string    `json:"commit_id"`
 	HTMLURL     string    `json:"html_url"`
 	SubmittedAt time.Time `json:"submitted_at"`
@@ -152,16 +153,31 @@ type Review struct {
 
 // ReviewComment is an inline comment on a pull request's diff.
 type ReviewComment struct {
-	ID        int64     `json:"id"`
-	User      User      `json:"user"`
-	Body      string    `json:"body"`
-	Path      string    `json:"path"`
-	Line      int       `json:"line"`
-	DiffHunk  string    `json:"diff_hunk"`
-	CommitID  string    `json:"commit_id"`
-	InReplyTo int64     `json:"in_reply_to_id"`
-	HTMLURL   string    `json:"html_url"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          int64     `json:"id"`
+	User        User      `json:"user"`
+	Body        string    `json:"body"`
+	Path        string    `json:"path"`
+	Line        int       `json:"line"`
+	DiffHunk    string    `json:"diff_hunk"`
+	CommitID    string    `json:"commit_id"`
+	InReplyTo   int64     `json:"in_reply_to_id"`
+	Association string    `json:"author_association"` // see Trusted
+	HTMLURL     string    `json:"html_url"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// Trusted reports whether an author may direct work on the repository:
+// its owner, a member of its organization or a collaborator (the
+// author_association GitHub reports), and never a bot account.
+func Trusted(u User, association string) bool {
+	if strings.EqualFold(u.Type, "Bot") {
+		return false
+	}
+	switch association {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	}
+	return false
 }
 
 // Reviews lists a pull request's reviews, oldest first.
