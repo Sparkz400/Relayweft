@@ -37,11 +37,7 @@ var cacheDir = os.UserCacheDir
 // repoCache is Switchyard's cache directory for a repo: outside the repo, so
 // `git status` in the user's tree stays clean.
 func repoCache(root string) string {
-	key := filepath.Clean(filepath.FromSlash(root)) // git prints C:/x, Go C:\x
-	if runtime.GOOS == "windows" {
-		key = strings.ToLower(key)
-	}
-	h := sha1.Sum([]byte(key))
+	h := sha1.Sum([]byte(canonPath(root)))
 	base, err := cacheDir()
 	if err != nil {
 		base = os.TempDir()
@@ -139,12 +135,20 @@ func isWorktreeOf(root, path string) bool {
 	return err == nil && samePath(strings.TrimSpace(lines[1]), common)
 }
 
-func samePath(a, b string) bool {
-	a, b = filepath.Clean(filepath.FromSlash(a)), filepath.Clean(filepath.FromSlash(b))
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
+func samePath(a, b string) bool { return canonPath(a) == canonPath(b) }
+
+// canonPath normalizes a path for comparison: git prints C:/x where Go uses
+// C:\x, git resolves symlinks (macOS /var -> /private/var), and Windows paths
+// are case-insensitive.
+func canonPath(p string) string {
+	p = filepath.Clean(filepath.FromSlash(p))
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		p = r
 	}
-	return a == b
+	if runtime.GOOS == "windows" {
+		p = strings.ToLower(p)
+	}
+	return p
 }
 
 // CleanPool removes the pooled worktrees of the repo containing dir that are
