@@ -2,6 +2,8 @@ package sessionlog
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +37,28 @@ func TestDayUsageAndReadDirSince(t *testing.T) {
 	// A file not written since the cutoff is skipped.
 	if recs, _ := ReadDirSince(dir, now.Add(time.Hour)); len(recs) != 0 {
 		t.Errorf("old file read: %d records", len(recs))
+	}
+}
+
+// An unreadable log file is reported, and the other files still count.
+func TestReadDirSinceSkipsUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Open(dir, "/p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	w.Write(Record{Type: TypeTaskEnd, TS: now, Cost: &event.TaskCost{CostUSD: 0.5}})
+	w.Close()
+	if err := os.Mkdir(filepath.Join(dir, "locked.jsonl"), 0o755); err != nil { // cannot be read as a file
+		t.Fatal(err)
+	}
+	recs, err := ReadDirSince(dir, DayStart(now))
+	if err == nil || !strings.Contains(err.Error(), "locked.jsonl") {
+		t.Errorf("error = %v", err)
+	}
+	if _, usd := DayUsage(recs, now); usd < 0.499 || usd > 0.501 {
+		t.Errorf("readable file not counted: $%.3f", usd)
 	}
 }
 

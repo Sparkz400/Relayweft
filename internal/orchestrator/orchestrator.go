@@ -53,6 +53,9 @@ type Options struct {
 	// Repos are the extra git repos of a multi-repo workspace (workspace.go);
 	// nil for a single-repo project.
 	Repos []Repo
+	// WorkspaceSkipped describes config repos left out of the workspace
+	// (ResolveWorkspace); every task logs them so the UIs show why.
+	WorkspaceSkipped []string
 	// TaskIDPrefix makes task ids unique when several orchestrators share
 	// one session log (sy bench).
 	TaskIDPrefix string
@@ -290,7 +293,13 @@ type task struct {
 	useWT    bool    // this repo's writers use pooled worktrees (execute)
 	notesMu  sync.Mutex
 	budget   *taskBudget // nil outside RunWith (budget.go)
+	// repoRetries counts planner reruns for an unknown repo name.
+	repoRetries int
 }
+
+// maxRepoRetries caps the planner reruns of one task for a plan that names
+// an unknown repo.
+const maxRepoRetries = 2
 
 // approving reports whether this task asks a person to approve its plan.
 func (o *Orchestrator) approving(t *task) bool {
@@ -502,6 +511,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	t.unattended = opts.Unattended
 	t.dir = o.opts.Dir
 	refused := ""
+	stayInterrupted := false // a resume that could not start keeps its state "running"
 	if o.opts.Bench == "" && o.opts.Mode != "demo" {
 		t.state = opts.Resume
 		if t.state == nil {
@@ -544,6 +554,9 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	}
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
+	for _, s := range o.opts.WorkspaceSkipped {
+		o.logf("workspace: %s", s)
+	}
 
 	t.quotaBefore = o.quotaNow()
 	// tctx is ctx plus a stop by the budget (budget.go); ctx alone tells
@@ -558,8 +571,12 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		}
 		if err := o.setupWorkspace(t, repos); err != nil {
 			refused = "not started: " + err.Error()
-			if t.state != nil {
-				t.state.Status = "failed"
+			if t.resumed && t.state != nil {
+				// A repo that is away for now (unplugged drive, network
+				// share) must not end the task: it stays interrupted, so
+				// a later sy resume works without --force.
+				stayInterrupted = true
+				refused += "; the task stays interrupted (sy resume once the repo is back)"
 			}
 		}
 	}
@@ -612,7 +629,13 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		if ctx.Err() != nil {
 			s.Status = "cancelled"
 		}
-		s.Summary, s.UndoKey, s.CostLine = res.Summary, res.UndoKey, res.Cost.Summary()
+		if stayInterrupted {
+			s.Status = "running" // with its lock free: interrupted
+		}
+		if res.UndoKey != "" || !t.resumed {
+			s.UndoKey = res.UndoKey // a resume that never ran keeps the task's key
+		}
+		s.Summary, s.CostLine = res.Summary, res.Cost.Summary()
 		s.save()
 		pruneStates()
 	}
@@ -863,10 +886,15 @@ func (o *Orchestrator) plan(ctx context.Context, t *task, advice string, prev *P
 		return Plan{Summary: "planner unavailable: single step", Subtasks: []Subtask{{ID: "work", Title: firstWords(t.text, 6), Kind: router.KindEdit, Prompt: t.text}}}, true
 	}
 	p, err := parsePlanFor(res.Final, t.workspaceNames())
-	if re := (*RepoError)(nil); errors.As(err, &re) && !strings.Contains(advice, re.Error()) {
-		// One more try with the mistake named; then the fallback below.
+	if re := (*RepoError)(nil); errors.As(err, &re) && t.repoRetries < maxRepoRetries {
+		// Another try with the mistake named (at most maxRepoRetries per
+		// task); then the fallback below.
+		t.repoRetries++
 		o.logf("the plan names an unknown repo (%v); asking the planner again", re)
-		return o.plan(ctx, t, strings.TrimSpace(advice+"\n"+re.Error()), prev)
+		if !strings.Contains(advice, re.Error()) {
+			advice = strings.TrimSpace(advice + "\n" + re.Error())
+		}
+		return o.plan(ctx, t, advice, prev)
 	}
 	if err != nil {
 		o.logf("could not read the plan (%v); running the task as one worker step", err)
@@ -1188,6 +1216,14 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		dec := o.opts.Approver.ReviewChanges(ctx, ChangeSet{StepID: st.ID, Title: st.Title, Summary: r.final, Round: round, Files: files})
 		if ctx.Err() != nil {
 			r.ok, r.err = false, "cancelled during your review"
+			if why := t.budgetStopped(); why != "" {
+				// Paid-for work: the slot is reset when this returns,
+				// so keep the commit under review on a branch.
+				branch := o.saveBranchIn(rp, st.ID, commit)
+				o.mergeEvent(t, st.ID, false, "stopped by budget during your review; the changes are kept on "+branch)
+				t.addNote(fmt.Sprintf("the budget stopped the task while %s was in review; its changes are on branch %s", st.ID, branch))
+				r.err = "stopped by budget during your review; the changes are kept on " + branch
+			}
 			return r
 		}
 		if dec.Feedback != "" && round >= 3 {
@@ -1560,9 +1596,10 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit,
 		Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files, Text: clip(res.Final, 500)})
-	// Over budget now? Stopping cancels the task; this agent's result
-	// still counts.
-	o.checkBudget(ctx, t, "go on after "+agentID+" finished")
+	// Over budget now? Only noted: this agent's work is done, and a task
+	// whose last agent crossed a limit is finished, not stopped. The next
+	// agent's check (if one starts) asks or stops.
+	o.noteBudget(t, agentID)
 	return d, res
 }
 
@@ -1657,9 +1694,17 @@ func (o *Orchestrator) RunSingle(ctx context.Context, text, provider string, rou
 	rn := t.runners[provider]
 	spec := runner.Spec{AgentID: AgentMain, StepID: "single", Attempt: 1, Role: event.RoleWorker, Provider: provider,
 		Model: route.Model, Effort: route.Effort, Prompt: text, Dir: o.opts.Dir, Timeout: cfg.Orchestrator.AgentTimeout.D()}
-	res := rn.Run(ctx, spec, o.emit)
-	o.opts.Tracker.AddUsage(provider, res.Tokens)
-	t.addTokens(provider, res.Tokens)
+	// The same budget as a task: a day already at its limit starts nothing.
+	bctx := o.startBudget(ctx, t)
+	var res runner.Result
+	if o.checkBudget(bctx, t, "start the single agent") {
+		res = rn.Run(bctx, spec, o.emit)
+		o.opts.Tracker.AddUsage(provider, res.Tokens)
+		t.addTokens(provider, res.Tokens)
+		o.noteBudget(t, AgentMain)
+	} else {
+		res = runner.Result{Err: errBudget, Killed: true}
+	}
 	o.snapshotAfter(t)
 	tk := res.Tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: AgentMain, Step: "single", Attempt: 1,
@@ -1672,9 +1717,14 @@ func (o *Orchestrator) RunSingle(ctx context.Context, text, provider string, rou
 	if res.Err != nil {
 		out.Summary = res.Err.Error()
 	}
+	if why := t.budgetStopped(); why != "" && ctx.Err() == nil {
+		out.OK = false
+		out.Summary = "stopped by budget: " + why
+	}
 	cost := out.Cost
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTaskEnd, TaskID: t.id, Task: text, Mode: "single",
 		OK: sessionlog.Bool(out.OK), Text: out.Summary, Tokens: &tk, DurationMS: out.Duration.Milliseconds(), Cost: &cost, Bench: o.opts.Bench})
+	o.endBudget(t, cost)
 	o.emit(event.Event{Kind: event.TaskDone, OK: out.OK, Text: out.Summary, Tokens: tk, Cost: &cost})
 	return out
 }

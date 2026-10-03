@@ -195,6 +195,9 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 		r := recover()
 		o.mu.Lock()
 		o.running = false
+		if !finished {
+			o.cur = nil
+		}
 		o.mu.Unlock()
 		if r != nil {
 			path := diag.Crash("follow-up", r, debug.Stack())
@@ -216,6 +219,8 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 	o.emit(event.Event{Kind: event.TaskStart, Text: label + ": " + text})
 	t.quotaBefore = o.quotaNow()
 	o.snapshotBefore(t)
+	// The same budget as a task: checked before each agent run.
+	bctx := o.startBudget(ctx, t)
 
 	rn, have := t.runners[s.Provider]
 	var res runner.Result
@@ -236,12 +241,20 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 		// Claude keys its sessions by working directory: one that ran in a
 		// pool worktree cannot be resumed from the main tree.
 		resumable := s.SessionID != "" && (s.Provider != event.Claude || canonPath(s.Dir) == canonPath(o.opts.Dir))
+		run := func(title string) runner.Result {
+			if !o.checkBudget(bctx, t, "start "+title) {
+				return runner.Result{Err: errBudget, Killed: true}
+			}
+			o.emit(event.Event{Kind: event.AgentQueued, AgentID: s.AgentID, Provider: s.Provider, Model: s.Model, Role: s.Role, Text: title})
+			r := rn.Run(bctx, spec, o.emit)
+			o.opts.Tracker.AddUsage(s.Provider, r.Tokens)
+			t.addTokens(s.Provider, r.Tokens)
+			o.noteBudget(t, s.AgentID)
+			return r
+		}
 		if resumable {
 			spec.Resume = s.SessionID
-			o.emit(event.Event{Kind: event.AgentQueued, AgentID: s.AgentID, Provider: s.Provider, Model: s.Model, Role: s.Role, Text: label})
-			res = rn.Run(ctx, spec, o.emit)
-			o.opts.Tracker.AddUsage(s.Provider, res.Tokens)
-			t.addTokens(s.Provider, res.Tokens)
+			res = run(label)
 		}
 		if !resumable || (!res.OK() && !res.Killed && !res.LimitHit && ctx.Err() == nil) {
 			if resumable {
@@ -249,10 +262,7 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 			}
 			spec.Resume = ""
 			spec.Prompt = followUpContext(s, text)
-			o.emit(event.Event{Kind: event.AgentQueued, AgentID: s.AgentID, Provider: s.Provider, Model: s.Model, Role: s.Role, Text: label + " (fresh)"})
-			res = rn.Run(ctx, spec, o.emit)
-			o.opts.Tracker.AddUsage(s.Provider, res.Tokens)
-			t.addTokens(s.Provider, res.Tokens)
+			res = run(label + " (fresh)")
 		}
 		if res.SessionID != "" {
 			o.rememberSession(s.AgentID, AgentSession{Provider: s.Provider, Model: s.Model, Effort: s.Effort, Role: s.Role,
@@ -271,6 +281,10 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 	if res.Err != nil {
 		out.Summary = res.Err.Error()
 	}
+	if why := t.budgetStopped(); why != "" && ctx.Err() == nil {
+		out.OK = false
+		out.Summary = "stopped by budget: " + why
+	}
 	if ctx.Err() != nil {
 		out.OK = false
 		out.Summary = "cancelled: " + out.Summary
@@ -278,6 +292,7 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 	tk, cost := out.Tokens, out.Cost
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTaskEnd, TaskID: t.id, Task: text, Mode: "followup",
 		OK: sessionlog.Bool(out.OK), Text: out.Summary, Tokens: &tk, DurationMS: out.Duration.Milliseconds(), Cost: &cost})
+	o.endBudget(t, cost)
 	o.mu.Lock()
 	o.running = false
 	o.mu.Unlock()

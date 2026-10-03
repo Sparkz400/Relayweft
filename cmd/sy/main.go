@@ -190,6 +190,8 @@ type common struct {
 	unicode    bool
 	repos      multiFlag           // --repo name=path (multi-repo tasks)
 	workspace  []orchestrator.Repo // resolved by setup
+	// workspaceSkipped describes config repos setup left out.
+	workspaceSkipped []string
 	// Budget overrides (negative = not given) and the keep-awake opt-out.
 	budgetTaskTokens int64
 	budgetTaskUSD    float64
@@ -235,10 +237,12 @@ func (c *common) setup() (*config.Store, string, error) {
 		return nil, "", fmt.Errorf("--dir %s is not a directory", dir)
 	}
 	// The project's .switchyard.yaml, then flags on top.
+	userCfg := store.Get()
 	info, err := store.ApplyRepo(dir)
 	if err != nil {
 		return nil, "", err
 	}
+	fileRepos := repoFileWorkspace(userCfg, dir, info)
 	if len(info.Ignored) > 0 {
 		fmt.Fprintf(os.Stderr, "note: %s sets %s, which run commands; they are ignored until you review and trust the file: sy trust\n",
 			info.Path, strings.Join(info.Ignored, ", "))
@@ -313,11 +317,41 @@ func (c *common) setup() (*config.Store, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	// Multi-repo workspace: config (paths relative to dir), then --repo.
-	if c.workspace, err = orchestrator.ResolveWorkspace(dir, store.Get().Workspace.Repos, c.repos); err != nil {
+	// Multi-repo workspace: config, then --repo. A config repo that does
+	// not fit this machine is skipped with a warning; a bad flag fails.
+	var entries []orchestrator.WorkspaceEntry
+	for name, p := range store.Get().Workspace.Repos {
+		e := orchestrator.WorkspaceEntry{Name: name, Path: p, Base: dir, Origin: "workspace.repos." + name}
+		if path != "" {
+			e.Origin = path + ": " + e.Origin
+		}
+		if fp, ok := fileRepos[name]; ok && fp == p {
+			e.Base, e.Origin = filepath.Dir(info.Path), info.Path+": workspace.repos."+name
+		}
+		entries = append(entries, e)
+	}
+	if c.workspace, c.workspaceSkipped, err = orchestrator.ResolveWorkspace(dir, entries, c.repos); err != nil {
 		return nil, "", err
 	}
+	for _, s := range c.workspaceSkipped {
+		fmt.Fprintln(os.Stderr, "warning: "+s)
+	}
 	return store, dir, nil
+}
+
+// repoFileWorkspace returns the workspace.repos the repo file itself sets
+// (only a trusted file's apply): their relative paths are taken from the
+// file's folder, not from --dir.
+func repoFileWorkspace(userCfg *config.Config, dir string, info config.RepoInfo) map[string]string {
+	if info.Path == "" || !info.Trusted {
+		return nil
+	}
+	probe := userCfg.Clone()
+	probe.Workspace.Repos = nil
+	if _, err := config.ApplyRepo(probe, dir); err != nil {
+		return nil
+	}
+	return probe.Workspace.Repos
 }
 
 func cmdTUI(args []string) error {
@@ -360,7 +394,7 @@ func cmdTUI(args []string) error {
 	orc := orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: runners, Tracker: limits.NewTracker(), Log: log,
 		Events: events, ForceProvider: c.provider, NoGit: *demo, Mode: mode, Approver: ap,
-		Repos: c.workspace,
+		Repos: c.workspace, WorkspaceSkipped: c.workspaceSkipped,
 	})
 	m := tui.New(tui.Options{
 		Orc: orc, Events: events, Dir: dir, Theme: tui.NewTheme(cfg.Theme), Demo: *demo,

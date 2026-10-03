@@ -89,13 +89,12 @@ func (r BudgetRequest) RaiseHint() string {
 
 // taskBudget is one task's budget state.
 type taskBudget struct {
-	mu        sync.Mutex
-	dayTokens int64   // today's finished tasks, read when the task started
-	dayUSD    float64 // (this task is added live)
-	allowed   map[string]bool
-	warned    map[string]bool
-	stopped   string // why the budget stopped the task ("" = it did not)
-	cancel    context.CancelFunc
+	mu      sync.Mutex
+	allowed map[string]bool
+	warned  map[string]bool
+	noted   map[string]bool // limits crossed by a finishing agent, logged once
+	stopped string          // why the budget stopped the task ("" = it did not)
+	cancel  context.CancelFunc
 }
 
 // BudgetStatus is what the UIs show: today's use (finished tasks plus the
@@ -114,7 +113,14 @@ type dayCache struct {
 	date   string
 	tokens int64
 	usd    float64
+	read   time.Time // when the logs were last read
+	err    string    // the last read error
+	logged string    // the read error last logged
 }
+
+// dayMaxAge is how old the day totals may get before a budget check reads
+// the session logs again (tasks of other sy windows finish meanwhile).
+var dayMaxAge = time.Minute
 
 // logDir is the session log directory ("" without a log).
 func (o *Orchestrator) logDir() string {
@@ -125,34 +131,64 @@ func (o *Orchestrator) logDir() string {
 }
 
 // refreshDay re-reads today's finished tasks from the session logs (all
-// sy processes write there, so tasks of other windows count too).
-func (o *Orchestrator) refreshDay(now time.Time) dayCache {
-	dc := dayCache{date: now.Local().Format("2006-01-02")}
+// sy processes write there, so tasks of other windows count too). A log
+// file that cannot be read is left out with a warning, and the total never
+// drops below what was known for today: a read error must not turn the
+// day limit off.
+//
+// warn logs a read error (once per error); only task paths warn, since a
+// UI reading BudgetStatus may be the one draining the event channel.
+func (o *Orchestrator) refreshDay(now time.Time, warn bool) dayCache {
+	dc := dayCache{date: now.Local().Format("2006-01-02"), read: now}
+	var readErr error
 	if dir := o.logDir(); dir != "" {
-		if recs, err := sessionlog.ReadDirSince(dir, sessionlog.DayStart(now)); err == nil {
-			dc.tokens, dc.usd = sessionlog.DayUsage(recs, now)
-		}
+		recs, err := sessionlog.ReadDirSince(dir, sessionlog.DayStart(now))
+		dc.tokens, dc.usd = sessionlog.DayUsage(recs, now)
+		readErr = err
 	}
 	o.mu.Lock()
+	prev := o.day
+	dc.logged = prev.logged
+	if readErr != nil {
+		dc.err = readErr.Error()
+		if prev.date == dc.date {
+			dc.tokens, dc.usd = max(dc.tokens, prev.tokens), max(dc.usd, prev.usd)
+		}
+	}
+	logIt := warn && dc.err != "" && dc.err != dc.logged
+	if logIt {
+		dc.logged = dc.err
+	}
 	o.day = dc
 	o.mu.Unlock()
+	if logIt {
+		o.logf("budget: could not read every session log (%v); today's total counts what could be read", readErr)
+	}
 	return dc
 }
 
-// dayTotals returns today's finished-task totals (cached; re-read when the
-// day changed).
-func (o *Orchestrator) dayTotals(now time.Time) dayCache {
+// dayTotals returns today's finished-task totals: cached, re-read when the
+// day changed or the cache is older than maxAge (0 = only on a new day).
+func (o *Orchestrator) dayTotals(now time.Time, maxAge time.Duration, warn bool) dayCache {
 	o.mu.Lock()
 	dc := o.day
 	o.mu.Unlock()
-	if dc.date != now.Local().Format("2006-01-02") {
-		return o.refreshDay(now)
+	if dc.date != now.Local().Format("2006-01-02") || (maxAge > 0 && now.Sub(dc.read) >= maxAge) {
+		return o.refreshDay(now, warn)
+	}
+	if warn && dc.err != "" && dc.err != dc.logged {
+		return o.refreshDay(now, warn)
 	}
 	return dc
 }
 
-// addDay counts a finished task into today's cached totals.
+// addDay counts a finished task into today's cached totals (its task_end
+// record is in the log too; a later refresh reads it from there).
 func (o *Orchestrator) addDay(u event.TokenUsage, usd float64) {
+	if o.logDir() != "" {
+		o.refreshDay(time.Now(), true)
+		return
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.day.date == time.Now().Local().Format("2006-01-02") {
@@ -161,12 +197,21 @@ func (o *Orchestrator) addDay(u event.TokenUsage, usd float64) {
 	}
 }
 
+// budgetLimits are the live limits: an edit in the settings applies to
+// the running task at its next check.
+func (o *Orchestrator) budgetLimits(t *task) config.BudgetCfg {
+	if o.opts.Store != nil {
+		return o.opts.Store.Budget()
+	}
+	return t.cfg.Budget
+}
+
 // BudgetStatus reports today's and the running task's use against the
-// budget. It is cheap (the session logs are read at task start and when
-// the day changes), so a UI may call it every frame.
+// budget. It is cheap (the session logs are read at task start, at budget
+// checks and when the day changes), so a UI may call it every frame.
 func (o *Orchestrator) BudgetStatus() BudgetStatus {
 	cfg := o.opts.Store.Budget()
-	dc := o.dayTotals(time.Now())
+	dc := o.dayTotals(time.Now(), 0, false)
 	st := BudgetStatus{DayTokens: dc.tokens, DayUSD: dc.usd, Limits: cfg}
 	o.mu.Lock()
 	t := o.cur
@@ -189,11 +234,12 @@ func (t *task) usage() event.TokenUsage {
 }
 
 // startBudget prepares a task's budget: today's totals so far and a way
-// to stop the task. It returns the context the task runs under.
+// to stop the task. It returns the context the task runs under. Tasks,
+// single runs and follow-ups all have one.
 func (o *Orchestrator) startBudget(ctx context.Context, t *task) context.Context {
 	ctx, cancel := context.WithCancel(ctx)
-	dc := o.refreshDay(time.Now())
-	t.budget = &taskBudget{dayTokens: dc.tokens, dayUSD: dc.usd, allowed: map[string]bool{}, warned: map[string]bool{}, cancel: cancel}
+	o.refreshDay(time.Now(), true)
+	t.budget = &taskBudget{allowed: map[string]bool{}, warned: map[string]bool{}, noted: map[string]bool{}, cancel: cancel}
 	o.mu.Lock()
 	o.cur = t
 	o.mu.Unlock()
@@ -224,17 +270,28 @@ func (t *task) budgetStopped() string {
 	return t.budget.stopped
 }
 
-// checkBudget compares the task's and today's use with the budget, before
-// an agent starts and after one finished (next says what comes next). It
-// warns once per limit at warn_at. At a limit it asks the person, unless
-// the task is unattended or nobody can be asked: then the task stops. It
-// returns false when the task must stop.
+// checkBudget compares the task's and today's use with the budget before
+// an agent starts (next says which). It warns once per limit at warn_at.
+// At a limit it asks the person, unless the task is unattended or nobody
+// can be asked: then the task stops. It returns false when the task must
+// stop.
 func (o *Orchestrator) checkBudget(ctx context.Context, t *task, next string) bool {
+	return o.budgetCheck(ctx, t, next, false)
+}
+
+// noteBudget is the check after an agent finished: its work is done and
+// paid for, so crossing a limit there only warns. Whether the task goes
+// on is decided when (if) the next agent is about to start.
+func (o *Orchestrator) noteBudget(t *task, agentID string) {
+	o.budgetCheck(context.Background(), t, agentID, true)
+}
+
+func (o *Orchestrator) budgetCheck(ctx context.Context, t *task, what string, after bool) bool {
 	b := t.budget
 	if b == nil {
-		return true // follow-ups and single runs have no budget state
+		return true // bench helpers without budget state
 	}
-	cfg := t.cfg.Budget
+	cfg := o.budgetLimits(t)
 	if !cfg.Any() {
 		return true
 	}
@@ -245,6 +302,10 @@ func (o *Orchestrator) checkBudget(ctx context.Context, t *task, next string) bo
 		return false
 	}
 	u := t.usage()
+	var day dayCache
+	if cfg.DayTokens > 0 || cfg.DayUSD > 0 {
+		day = o.dayTotals(time.Now(), dayMaxAge, true)
+	}
 	type lim struct {
 		name      string
 		used, max float64
@@ -252,19 +313,26 @@ func (o *Orchestrator) checkBudget(ctx context.Context, t *task, next string) bo
 	limits := []lim{
 		{LimitTaskTokens, float64(u.Total()), float64(cfg.TaskTokens)},
 		{LimitTaskUSD, u.CostUSD, cfg.TaskUSD},
-		{LimitDayTokens, float64(b.dayTokens + u.Total()), float64(cfg.DayTokens)},
-		{LimitDayUSD, b.dayUSD + u.CostUSD, cfg.DayUSD},
+		{LimitDayTokens, float64(day.tokens + u.Total()), float64(cfg.DayTokens)},
+		{LimitDayUSD, day.usd + u.CostUSD, cfg.DayUSD},
 	}
 	for _, l := range limits {
 		if l.max <= 0 || b.allowed[l.name] {
 			continue
 		}
-		req := BudgetRequest{Limit: l.name, Used: l.used, Max: l.max, Task: t.text, Next: next}
+		req := BudgetRequest{Limit: l.name, Used: l.used, Max: l.max, Task: t.text, Next: what}
 		if l.used < l.max {
 			if w := cfg.WarnAt; w > 0 && l.used >= w*l.max && !b.warned[l.name] {
 				b.warned[l.name] = true
 				o.emit(event.Event{Kind: event.Log, Text: fmt.Sprintf("budget warning: %s is at %s of %s (%.0f%%)",
 					req.What(), req.Amount(l.used), req.Amount(l.max), l.used/l.max*100)})
+			}
+			continue
+		}
+		if after {
+			if !b.noted[l.name] {
+				b.noted[l.name] = true
+				o.logf("budget: %s after %s finished; its work is kept, and no further agent starts without your ok", req, what)
 			}
 			continue
 		}

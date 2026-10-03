@@ -262,11 +262,12 @@ Cap what one task and one day may use (`budget:` in `switchyard.yaml`, 0 = off; 
 budget: {task_tokens: 0, task_usd: 2, day_tokens: 0, day_usd: 10, warn_at: 0.8}
 ```
 
-Tokens are fresh tokens on both providers; $ is Claude's API-equivalent price. The day total is today's finished tasks (local time, from the session logs of every `sy`) plus the running one. Before each agent starts and after each one finishes, `sy` checks the limits:
+Tokens are fresh tokens on both providers; $ is Claude's API-equivalent price. The day total is today's finished tasks (local time, from the session logs of every `sy`) plus the running one; it is re-read at most every minute while a task runs, so tasks other windows finish count too. Single-agent runs and follow-ups (`@agent`) count and are checked the same way, and a limit you change in the settings applies to the running task at its next check. Before each agent starts, `sy` checks the limits (an agent that crosses one while it works finishes, and its work is kept; a task whose last agent crossed a limit is done, not stopped):
 
 - at `warn_at` (80%) the log shows one warning per limit;
 - at a limit, a task you are watching asks: **continue** (until this task ends) or **stop**. The TUI shows a small prompt (y/n), `sy web` a dialog, `sy run --approve` asks on the terminal;
 - queued, scheduled and `--file` tasks, and `sy run` without `--approve`, never ask: they stop cleanly with "stopped by budget: …" and say how to raise the limit.
+- changes still waiting for your review when the budget stops a task are kept on a `sy/...` branch.
 
 Flags for one run: `--budget-task-tokens`, `--budget-task-usd`, `--budget-day-usd` (on `sy`, `sy run`, `sy web`). The TUI and web headers show e.g. `$0.42/$10 today`, and `sy stats` adds the daily budget to its per-day table.
 
@@ -415,7 +416,7 @@ sy --repo web=../web                     # TUI; also sy run, sy web, sy app, sy 
 sy run --repo web=../web --repo docs=../docs "add a 'nickname' field to the user API and show it on the profile page"
 ```
 
-or for every task of the project, in its `.switchyard.yaml` (or your config; paths are relative to the project folder). Agents write to these folders, so a repo file's `workspace` applies only after `sy trust`:
+or for every task of the project, in its `.switchyard.yaml` (paths relative to that file's folder) or your config (paths relative to the project folder); `--repo` paths are relative to the current folder. Agents write to these folders, so a repo file's `workspace` applies only after `sy trust`:
 
 ```yaml
 workspace:
@@ -424,12 +425,12 @@ workspace:
     docs: ../docs
 ```
 
-Each repo must be a git work tree of its own (not the primary's repo); `sy` refuses to start with a clear message otherwise. What changes in a multi-repo task:
+Each repo must be a git work tree of its own: not the primary's repo, not inside or around the primary or another listed repo, and not a linked worktree of one of them. A bad `--repo` stops `sy` with a clear message; a repo from a config file that does not fit (say a teammate has no `../web`) is skipped with a warning, so `sy` still starts. What changes in a multi-repo task:
 
-- **Planning.** The planner always runs (no small-task shortcut) and sees every repo: its path, repo map and notes. Each subtask gets `"repo": "<name>"`; work that touches two repos is split into one subtask per repo, ordered with `depends_on` when needed. A plan naming an unknown repo is sent back to the planner once. The plan approval (TUI, `sy web`, `sy run --approve`) shows each step's repo; move a step with `o` in the TUI, the repo dropdown in `sy web`, or `o N name` on the terminal.
+- **Planning.** The planner always runs (no small-task shortcut) and sees every repo: its path, repo map and notes. Each subtask gets `"repo": "<name>"`; work that touches two repos is split into one subtask per repo, ordered with `depends_on` when needed. A plan naming an unknown repo is sent back to the planner (at most twice per task). The plan approval (TUI, `sy web`, `sy run --approve`) shows each step's repo; move a step with `o` in the TUI, the repo dropdown in `sy web`, or `o N name` on the terminal.
 - **Execution.** Every repo is snapshotted first. A writing agent works in its own repo: in a pool worktree of that repo (each repo has its own pool) or in its main tree, with that repo as its working directory, so agents in different repos run in parallel. Each repo has its own merges, conflict branches (shown as `web:sy/...`) and integration commit. Read-only agents run in their repo too and get every repo's path in their prompt.
 - **Checks and review.** The primary's `verify` commands run in the project folder; each other repo's own `verify` commands (from its `.switchyard.yaml`, only once trusted there with `sy trust --dir ../web`; your own config's commands are not used for other repos) run in that repo. The final review gets the diff of every repo, labelled. A fix round runs once per repo that changed or whose checks fail, inside that repo.
-- **Undo, history, resume.** Every repo records the task under the same key, so `sy undo <key>` (or `/undo`) in the project folder previews and undoes every repo together; if one repo cannot be undone, the others are put back. `sy undo --dir ../web <key>` undoes only that repo's part. The task state records the repos and each step's repo, so `sy history` and `sy resume` keep working; a resumed task uses the repos it started with.
+- **Undo, history, resume.** Every repo records the task under the same key, so `sy undo <key>` (or `/undo`) in the project folder previews and undoes every repo together; if one repo cannot be undone, the others are put back (the error names any repo that could not be). A repo whose folder is gone or that no longer has the task's record (cloned again) is left out with a warning; a repo's part of a multi-repo task is kept as long as the project folder keeps the task. `sy undo --dir ../web <key>` undoes only that repo's part. The task state records the repos and each step's repo, so `sy history` and `sy resume` keep working; a resumed task uses the repos it started with, and if one of them is not there right now the task stays interrupted, so `sy resume` works once it is back.
 - Hooks still run in the project folder (`SY_FILES` may list files of any repo). Follow-ups (`@agent`) run in the project folder. The planner and reviewer run in the project folder too: they see the other repos through their prompt (repo maps, diffs); whether they can open files there depends on the CLI's own sandbox (Codex can read anywhere; Claude Code may ask, and is denied in read-only mode).
 - A project without extra repos works exactly as before.
 

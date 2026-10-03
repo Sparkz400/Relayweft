@@ -18,8 +18,13 @@ import (
 //   - A workspace is the project folder (the primary repo, named "primary")
 //     plus extra git repositories, each with a short name: `--repo
 //     frontend=../web` on the command line, or `workspace: repos:
-//     {frontend: ../web}` in the config / .switchyard.yaml (paths relative
-//     to the project folder). Every repo must be a git work tree of its own.
+//     {frontend: ../web}` in the config / .switchyard.yaml (a relative path
+//     in a .switchyard.yaml is taken from that file's folder, in the user's
+//     config from the project folder, in a flag from the current folder).
+//     Every repo must be a git work tree of its own, not inside, around or
+//     a linked worktree of another repo of the task. A config entry that
+//     does not fit (folder missing on this machine, ...) is skipped with a
+//     warning; a bad --repo flag is an error.
 //   - The planner sees every repo (name, path, repo map, notes) and puts
 //     "repo": "<name>" on each subtask; "" (or "primary") is the project
 //     folder. NormalizePlan rejects unknown names.
@@ -73,74 +78,163 @@ func checkRepoName(name string) error {
 	return nil
 }
 
+// WorkspaceEntry is a workspace.repos entry from a config file. A relative
+// Path is taken from Base: the folder of the .switchyard.yaml that set it,
+// or the project folder for the user's config.
+type WorkspaceEntry struct {
+	Name, Path string
+	Base       string // folder a relative Path is taken from ("" = the project folder)
+	Origin     string // where it was set, for messages
+}
+
 // ResolveWorkspace builds the extra repos of the project in dir from the
-// config (paths relative to dir) and --repo flags (name=path; relative paths
-// are taken from the current directory; a flag replaces a config entry of
-// the same name). Every repo must be an existing git work tree that is not
-// the project's own repo or another listed repo. Sorted by name.
-func ResolveWorkspace(dir string, fromConfig map[string]string, flags []string) ([]Repo, error) {
-	paths := map[string]string{}
-	origin := map[string]string{}
-	for name, p := range fromConfig {
-		name = strings.TrimSpace(name)
-		if err := checkRepoName(name); err != nil {
-			return nil, fmt.Errorf("workspace.repos: %w", err)
+// config entries and --repo flags (name=path; relative paths are taken from
+// the current directory; a flag replaces a config entry of the same name).
+// Every repo must be an existing git work tree that is not the project's
+// own repo or another listed repo, nor inside or around one of them, nor a
+// linked worktree of one of them (same git common dir). A bad --repo flag
+// is an error; a bad config entry is skipped and described in skipped, so
+// a committed workspace that does not fit a teammate's machine never stops
+// sy from starting. Sorted by name.
+func ResolveWorkspace(dir string, fromConfig []WorkspaceEntry, flags []string) (repos []Repo, skipped []string, err error) {
+	type cand struct {
+		name, path, origin string
+		flag               bool
+	}
+	byName := map[string]cand{}
+	for _, e := range fromConfig {
+		name, p := strings.TrimSpace(e.Name), strings.TrimSpace(e.Path)
+		origin := e.Origin
+		if origin == "" {
+			origin = "workspace.repos." + name
 		}
-		if p = strings.TrimSpace(p); p == "" {
-			return nil, fmt.Errorf("workspace.repos.%s: empty path", name)
+		if err := checkRepoName(name); err != nil {
+			skipped = append(skipped, fmt.Sprintf("%s: %v; skipped", origin, err))
+			continue
+		}
+		if p == "" {
+			skipped = append(skipped, fmt.Sprintf("%s: empty path; skipped", origin))
+			continue
 		}
 		if !filepath.IsAbs(p) {
-			p = filepath.Join(dir, filepath.FromSlash(p))
+			base := e.Base
+			if base == "" {
+				base = dir
+			}
+			p = filepath.Join(base, filepath.FromSlash(p))
 		}
-		paths[name], origin[name] = p, "workspace.repos."+name
+		byName[name] = cand{name, p, origin, false}
 	}
 	for _, f := range flags {
 		name, p, err := ParseRepoFlag(f)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if p, err = filepath.Abs(p); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		paths[name], origin[name] = p, "--repo "+f
+		byName[name] = cand{name, p, "--repo " + f, true}
 	}
-	if len(paths) == 0 {
-		return nil, nil
+	if len(byName) == 0 {
+		return nil, skipped, nil
+	}
+	// Flags first: they claim their repos, and a config entry that clashes
+	// with one is the one skipped.
+	cands := make([]cand, 0, len(byName))
+	for _, c := range byName {
+		cands = append(cands, c)
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].flag != cands[j].flag {
+			return cands[i].flag
+		}
+		return cands[i].name < cands[j].name
+	})
+	fail := func(c cand, msg string) error {
+		if c.flag {
+			return fmt.Errorf("%s: %s", c.origin, msg)
+		}
+		skipped = append(skipped, fmt.Sprintf("%s: %s; skipped", c.origin, msg))
+		return nil
 	}
 	if !isRepo(dir) {
-		return nil, fmt.Errorf("multi-repo tasks need the project folder %s to be a git repository", dir)
+		for _, c := range cands {
+			if err := fail(c, fmt.Sprintf("multi-repo tasks need the project folder %s to be a git repository", dir)); err != nil {
+				return nil, nil, err
+			}
+		}
+		return nil, skipped, nil
 	}
 	primaryRoot, err := repoRoot(dir)
 	if err != nil {
-		return nil, fmt.Errorf("project folder %s: %w", dir, err)
+		return nil, nil, fmt.Errorf("project folder %s: %w", dir, err)
 	}
-	roots := map[string]string{canonPath(primaryRoot): PrimaryRepo}
-	names := make([]string, 0, len(paths))
-	for n := range paths {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	var out []Repo
-	for _, n := range names {
-		p := filepath.Clean(paths[n])
+	type claimed struct{ name, root, common string }
+	taken := []claimed{{PrimaryRepo, canonPath(primaryRoot), commonDir(primaryRoot)}}
+	for _, c := range cands {
+		p := filepath.Clean(c.path)
 		st, err := os.Stat(p)
 		if err != nil || !st.IsDir() {
-			return nil, fmt.Errorf("%s: %s is not a directory", origin[n], p)
+			if err := fail(c, p+" is not a directory"); err != nil {
+				return nil, nil, err
+			}
+			continue
 		}
 		if !isRepo(p) {
-			return nil, fmt.Errorf("%s: %s is not a git repository (every repo of a multi-repo task must be one: git init)", origin[n], p)
+			if err := fail(c, p+" is not a git repository (every repo of a multi-repo task must be one: git init)"); err != nil {
+				return nil, nil, err
+			}
+			continue
 		}
 		root, err := repoRoot(p)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", origin[n], err)
+			if err := fail(c, err.Error()); err != nil {
+				return nil, nil, err
+			}
+			continue
 		}
-		if other, dup := roots[canonPath(root)]; dup {
-			return nil, fmt.Errorf("%s: %s is in the same git repository as %q", origin[n], p, other)
+		me := claimed{c.name, canonPath(root), commonDir(root)}
+		clash := ""
+		for _, o := range taken {
+			switch {
+			case me.root == o.root:
+				clash = fmt.Sprintf("%s is in the same git repository as %q", p, o.name)
+			case within(me.root, o.root):
+				clash = fmt.Sprintf("%s is inside repo %q (%s)", p, o.name, o.root)
+			case within(o.root, me.root):
+				clash = fmt.Sprintf("%s contains repo %q (%s)", p, o.name, o.root)
+			case me.common != "" && me.common == o.common:
+				clash = fmt.Sprintf("%s is a worktree of the same git repository as %q", p, o.name)
+			}
+			if clash != "" {
+				break
+			}
 		}
-		roots[canonPath(root)] = n
-		out = append(out, Repo{Name: n, Dir: p})
+		if clash != "" {
+			if err := fail(c, clash); err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
+		taken = append(taken, me)
+		repos = append(repos, Repo{Name: c.name, Dir: p})
 	}
-	return out, nil
+	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
+	return repos, skipped, nil
+}
+
+// commonDir is the canonical git common dir of the work tree at root (the
+// .git folder its linked worktrees share), "" when git cannot tell.
+func commonDir(root string) string {
+	s, err := (git{root}).out("rev-parse", "--git-common-dir")
+	if err != nil || s == "" {
+		return ""
+	}
+	s = filepath.FromSlash(s)
+	if !filepath.IsAbs(s) {
+		s = filepath.Join(root, s)
+	}
+	return canonPath(s)
 }
 
 // WorkspaceLabel names a project for headers: "api" or "api + web, docs".
@@ -314,7 +408,7 @@ func (o *Orchestrator) repoVerify(rp Repo, timeout config.Duration) config.Verif
 // snapshotExtra snapshots an extra repo before the task.
 func (o *Orchestrator) snapshotExtra(t, r *task) error {
 	root := r.root
-	snap, big, err := (git{root}).snapshotSkipping(subject("switchyard before: ", t.text))
+	snap, big, err := (git{root}).snapshotSkipping(extraBeforeMessage(t))
 	if err != nil {
 		return err
 	}
@@ -374,6 +468,35 @@ func (t *task) beforeMessage() string {
 		b.WriteString(r.repoName + "\t" + root + "\n")
 	}
 	return b.String()
+}
+
+// primaryMark starts the primary's root in an extra repo's "before"
+// snapshot message: trimUndo keeps that record while the primary keeps
+// its own.
+const primaryMark = "workspace-primary:"
+
+// extraBeforeMessage is an extra repo's "before" snapshot message.
+func extraBeforeMessage(t *task) string {
+	msg := subject("switchyard before: ", t.text)
+	if t.root == "" {
+		return msg
+	}
+	return msg + "\n\n" + primaryMark + "\n" + t.root + "\n"
+}
+
+// primaryOf reads the primary's root from an extra repo's "before"
+// snapshot ("" for a task that started in this repo).
+func (g git) primaryOf(before string) string {
+	msg, err := g.run(nil, nil, "log", "-1", "--format=%B", before)
+	if err != nil {
+		return ""
+	}
+	i := strings.Index(msg, primaryMark)
+	if i < 0 {
+		return ""
+	}
+	l, _, _ := strings.Cut(strings.TrimSpace(msg[i+len(primaryMark):]), "\n")
+	return strings.TrimSpace(l)
 }
 
 // workspaceOf reads the extra repos recorded in a "before" snapshot.
@@ -597,14 +720,15 @@ func (o *Orchestrator) snapshotAfterExtras(t *task) {
 // workspaceUndoPlans previews the extra repos of a task recorded in the
 // primary at root (none for a single-repo task). A repo whose part is
 // already in the wanted state (undone there on its own) is skipped; a repo
-// whose folder is gone is listed in missing.
+// whose folder is gone or that has no record of the task any more is
+// listed in missing (with the reason) and left out.
 func workspaceUndoPlans(root string, t UndoTask, redo bool) (plans []UndoPlan, missing []string, err error) {
 	if root == "" || t.Before == "" {
 		return nil, nil, nil
 	}
 	for _, rp := range (git{root}).workspaceOf(t.Before) {
 		if st, err := os.Stat(rp.Dir); err != nil || !st.IsDir() {
-			missing = append(missing, rp.Name+" ("+rp.Dir+")")
+			missing = append(missing, rp.Name+" ("+rp.Dir+": the folder is gone)")
 			continue
 		}
 		list, err := UndoList(rp.Dir)
@@ -627,7 +751,9 @@ func workspaceUndoPlans(root string, t UndoTask, redo bool) (plans []UndoPlan, m
 			}
 		}
 		if !found {
-			return nil, nil, fmt.Errorf("repo %s (%s) has no record of task %s (its snapshots were pruned?)", rp.Name, rp.Dir, t.Key)
+			// Pruned there, or the repo was cloned again: like a missing
+			// folder, it is left out and the other repos are undone.
+			missing = append(missing, rp.Name+" ("+rp.Dir+": no record of this task there; its snapshots were pruned or the repo was replaced)")
 		}
 	}
 	return plans, missing, nil
