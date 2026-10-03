@@ -14,6 +14,9 @@ import (
 type Plan struct {
 	Summary  string    `json:"summary"`
 	Subtasks []Subtask `json:"subtasks"`
+	// Repos are the repo names of a multi-repo task, the primary first
+	// (set by the orchestrator, never by the planner); nil otherwise.
+	Repos []string `json:"repos,omitempty"`
 }
 
 // Subtask is one unit of planned work.
@@ -26,6 +29,9 @@ type Subtask struct {
 	DependsOn []string    `json:"depends_on"`
 	// Role pins the subtask to a role (set in plan approval); "" = router.
 	Role string `json:"role,omitempty"`
+	// Repo is the workspace repo the subtask works in ("" = the project
+	// folder); see workspace.go.
+	Repo string `json:"repo,omitempty"`
 }
 
 // Verdict is what the reviewer returns.
@@ -60,17 +66,21 @@ func extractJSON(s string, v any) error {
 }
 
 // ParsePlan reads and normalizes a planner reply.
-func ParsePlan(reply string) (Plan, error) {
+func ParsePlan(reply string) (Plan, error) { return parsePlanFor(reply, nil) }
+
+// parsePlanFor is ParsePlan for a task with these workspace repos.
+func parsePlanFor(reply string, repos []string) (Plan, error) {
 	var p Plan
 	if err := extractJSON(reply, &p); err != nil {
 		return p, err
 	}
+	p.Repos = repos
 	return NormalizePlan(p)
 }
 
 // NormalizePlan checks and repairs a plan (also after a person edited it):
 // unique, safe ids; known kinds; dependencies only on existing subtasks;
-// no cycles.
+// no cycles; each subtask's repo is one of p.Repos.
 func NormalizePlan(p Plan) (Plan, error) {
 	if len(p.Subtasks) == 0 {
 		return p, fmt.Errorf("plan has no subtasks")
@@ -114,6 +124,9 @@ func NormalizePlan(p Plan) (Plan, error) {
 			}
 		}
 		st.DependsOn = deps
+	}
+	if err := normalizeRepos(&p); err != nil {
+		return p, err
 	}
 	if hasCycle(p.Subtasks) {
 		// Fall back to running in the planner's order.

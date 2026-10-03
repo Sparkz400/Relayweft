@@ -194,6 +194,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.7 | ✅ **Talk to a running agent**: `@agent message` is delivered when the agent's turn ends, before its work is merged. |
 | 4.8 | ✅ **Persistent follow-ups**: sessions are kept per project folder. |
 | 4.9 | **Scheduled runs**: start a task file at a set time, for example when the Claude 5-hour window resets. |
+| 4.12 | ✅ **Multi-repo tasks**: `--repo name=path` or `workspace: repos:` in `.switchyard.yaml`. The planner assigns each subtask a repo; writers run in that repo's worktree pool or main tree; each repo's own (trusted) checks run there; the final review sees every repo's diff; one `sy undo <key>` reverts every repo; history and resume keep the repos. |
 
 ---
 

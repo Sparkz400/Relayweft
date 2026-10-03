@@ -247,6 +247,11 @@ func (m *Model) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg { return submitMsg(task) })
 	}
 	m.addLog(logLine{kind: event.Log, text: fmt.Sprintf("Switchyard %s · %s · config %s", m.opt.Version, m.opt.Dir, m.store.Path())})
+	if m.opt.Orc != nil {
+		for _, r := range m.opt.Orc.Repos() {
+			m.addLog(logLine{kind: event.Log, text: "multi-repo workspace: repo " + r.Name + " at " + r.Dir})
+		}
+	}
 	if m.opt.SessionLog != "" {
 		m.addLog(logLine{kind: event.Log, text: "session log: " + m.opt.SessionLog})
 	}

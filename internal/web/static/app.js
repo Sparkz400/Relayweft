@@ -998,6 +998,9 @@ function planEditor(a, card) {
         PLAN_KINDS.map((k) => h('option', { value: k, selected: st.kind === k }, k)));
       const role = h('select', { class: 'sel-in', title: 'Pin to a role (auto lets the router decide)', onchange: (e) => { st.role = e.target.value; } },
         PLAN_ROLES.map((r) => h('option', { value: r, selected: (st.role || '') === r }, r ? r.replace('_', ' ') : 'auto (router)')));
+      // Multi-repo task: the repo the step works in ('' = the project folder, plan.repos[0]).
+      const repo = plan.repos && plan.repos.length ? h('select', { class: 'sel-in', title: 'Repo this subtask works in', onchange: (e) => { st.repo = e.target.value; } },
+        plan.repos.map((r, j) => h('option', { value: j ? r : '', selected: (st.repo || '') === (j ? r : '') }, 'in ' + r))) : '';
       const ta = h('textarea', { class: 'ta', rows: '1', placeholder: 'What this agent should do', oninput: (e) => { st.prompt = e.target.value; grow(e.target); } });
       ta.value = st.prompt || '';
       const others = plan.subtasks.filter((o) => o !== st);
@@ -1016,7 +1019,7 @@ function planEditor(a, card) {
         h('button', { class: 'btn icon ghost sm danger', title: 'Delete this subtask', onclick: () => del(i) }, icon('trash')));
       const grip = h('div', { class: 'grip', title: 'Drag to reorder' }, icon('grip'), h('span', { class: 'n' }, String(i + 1)));
       const el = h('div', { class: 'step', style: `--rc:${color}` }, grip,
-        h('div', null, h('div', { class: 'step-row' }, h('span', { class: 'step-id' }, st.id), title, kind, role, tools), ta, deps));
+        h('div', null, h('div', { class: 'step-row' }, h('span', { class: 'step-id' }, st.id), title, kind, role, repo, tools), ta, deps));
       grip.addEventListener('mousedown', () => { el.draggable = true; });
       el.addEventListener('dragstart', (e) => { dragFrom = i; el.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); });
       el.addEventListener('dragend', () => { el.draggable = false; el.classList.remove('dragging'); $$('.step', list).forEach((s) => s.classList.remove('drop-before', 'drop-after')); });
