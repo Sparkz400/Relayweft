@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -49,6 +48,7 @@ func main() {
 		defer diag.Close()
 	}
 	defer crashGuard()
+	cleanupOldBinary()
 	var err error
 	switch sub {
 	case "":
@@ -71,6 +71,14 @@ func main() {
 		err = cmdUndo(args)
 	case "bench":
 		err = cmdBench(args)
+	case "tune":
+		err = cmdTune(args)
+	case "history":
+		err = cmdHistory(args)
+	case "resume":
+		err = cmdResume(args)
+	case "update":
+		err = cmdUpdate(args)
 	case "version", "--version":
 		fmt.Println("switchyard", version)
 	case "help", "-h", "--help":
@@ -104,7 +112,12 @@ Usage:
   sy --demo                  the full animated TUI driven by fake agents
   sy run [flags] "task"      run one task headless and print events
   sy run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
-  sy stats [--here] [--since 7d]   usage per model and route, routed vs baseline
+  sy run --file tasks.txt    run a list of tasks one after another, unattended
+  sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
+  sy history [--all] [-n 20]       recent tasks in this directory, with status and cost
+  sy resume [task id]        continue an interrupted task (default: the last one here)
+  sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline
+  sy tune [--here] [--since 7d]    routing suggestions from your logs
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
   sy doctor                  check CLIs, versions, git and terminal
   sy init [--global] [--force] [--print]   write the commented default config
@@ -112,6 +125,7 @@ Usage:
   sy undo [--list] [--redo] [--yes] [task]   revert (or re-apply) a task's changes, with preview
   sy bench [--file bench.yaml] [--init]      compare routed Switchyard vs single agents on your tasks
   sy bugreport               zip logs, config and diagnostics into one file to send
+  sy update [--check] [--yes]      update sy to the latest release
   sy version
 
 Flags (TUI and run):
@@ -294,80 +308,6 @@ func cmdTUI(args []string) error {
 	}()
 	m.Shutdown()
 	return runErr
-}
-
-func cmdRun(args []string) error {
-	fs := flag.NewFlagSet("sy run", flag.ExitOnError)
-	fs.Usage = usage
-	var c common
-	c.register(fs)
-	single := fs.String("single", "", "provider:model[:effort] - one agent, no planning or review (baseline)")
-	quiet := fs.Bool("quiet", false, "only print routing, results and errors")
-	fs.Parse(args)
-	task := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if task == "" {
-		return errors.New(`usage: sy run [flags] "task"`)
-	}
-	store, dir, err := c.setup()
-	if err != nil {
-		return err
-	}
-	_ = proc.Guard()
-	cfg := store.Get()
-	prunePoolsInBackground(cfg)
-	log, err := sessionlog.Open(cfg.SessionDir(), dir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "warning: session log disabled:", err)
-		log = nil
-	}
-	defer log.Close()
-	events := make(chan event.Event, 4096)
-	orc := orchestrator.New(orchestrator.Options{
-		Dir: dir, Store: store, Runners: runner.New, Tracker: limits.NewTracker(), Log: log,
-		Events: events, ForceProvider: c.provider,
-	})
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	go func() {
-		<-ctx.Done()
-		stop() // a second Ctrl+C now kills sy immediately
-		fmt.Fprintln(os.Stderr, "\ncancelling: stopping all agents... (Ctrl+C again to force quit)")
-	}()
-	printed := make(chan struct{})
-	go func() {
-		defer close(printed)
-		for e := range events {
-			printEvent(e, *quiet)
-		}
-	}()
-	var res orchestrator.TaskResult
-	if *single != "" {
-		prov, route, err := config.ParseRouteSpec(*single)
-		if err != nil {
-			return err
-		}
-		res = orc.RunSingle(ctx, task, prov, route)
-	} else {
-		res = orc.Run(ctx, task)
-	}
-	close(events)
-	<-printed
-	status := "OK"
-	if !res.OK {
-		status = "FAILED"
-	}
-	fmt.Printf("\n%s in %s · %s\n", status, res.Duration.Round(time.Second), res.Summary)
-	fmt.Printf("cost: %s\n", res.Cost.Summary())
-	if res.UndoKey != "" {
-		fmt.Printf("undo: sy undo %s   (preview first; your later edits are kept)\n", res.UndoKey)
-	}
-	if log != nil {
-		fmt.Println("session log:", log.Path())
-	}
-	if !res.OK {
-		return errTaskFailed
-	}
-	return nil
 }
 
 var (
@@ -747,9 +687,23 @@ func cmdInit(args []string) error {
 	if _, err := os.Stat(path); err == nil && !*force {
 		return fmt.Errorf("%s exists (use --force to overwrite)", path)
 	}
-	if err := os.WriteFile(path, config.DefaultYAML(), 0o644); err != nil {
+	data := config.DefaultYAML()
+	var checks []string
+	if !*global {
+		// The repo's own checks: agents may run them and sy runs them
+		// before the final review.
+		wd, _ := os.Getwd()
+		checks = config.DetectVerify(wd)
+		data = config.WithVerify(data, checks)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err
 	}
 	fmt.Println("wrote", path)
+	if len(checks) > 0 {
+		fmt.Printf("verify commands detected: %s (edit verify.commands to change)\n", strings.Join(checks, ", "))
+	} else if !*global {
+		fmt.Println("no test command detected: set verify.commands so agents and sy can run your checks")
+	}
 	return nil
 }

@@ -1201,7 +1201,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	o.emit(event.Event{Kind: event.Route, AgentID: agentID, ParentID: parent, Provider: d.Provider, Model: d.Model, Role: d.Role, Decision: &dc})
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeDecision, TaskID: t.id, Agent: agentID, Step: step.ID, Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, Rule: d.Rule, Reason: d.Reason,
-		Confidence: d.Confidence, Fallback: d.Fallback})
+		Confidence: d.Confidence, Fallback: d.Fallback, Judged: d.Judged})
 	title := step.Title
 	if attempt > 1 {
 		title = fmt.Sprintf("%s (attempt %d)", step.Title, attempt)
