@@ -136,9 +136,23 @@ func cmdRun(args []string) error {
 	quiet := fs.Bool("quiet", false, "only print routing, results and errors")
 	file := fs.String("file", "", "run the tasks in this file one after another, unattended (one per line, or blocks separated by a line with ---)")
 	approve := fs.Bool("approve", false, "ask on the terminal before a plan runs (and per change when orchestrator.review_changes is on)")
+	iss := registerIssueFlags(fs)
 	fs.Parse(args)
 	var tasks []string
-	if *file != "" {
+	if iss.active() {
+		if *file != "" {
+			return errors.New("give either --file or --issue/--issues, not both")
+		}
+		d, err := absDir(c.dir)
+		if err != nil {
+			return err
+		}
+		if tasks, err = iss.load(fs, d); errors.Is(err, errNoIssues) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	} else if *file != "" {
 		data, err := os.ReadFile(*file)
 		if err != nil {
 			return err
@@ -166,7 +180,8 @@ func cmdRun(args []string) error {
 		single0.prov, single0.route = prov, route
 	}
 	var ap orchestrator.Approver
-	if *approve && *file == "" {
+	unattended := *file != "" || iss.batch()
+	if *approve && !unattended {
 		ap = newTermApprover(os.Stdin, os.Stdout)
 	}
 	h, err := startHeadless(&c, *quiet, ap)
@@ -186,11 +201,15 @@ func cmdRun(args []string) error {
 		if single0.prov != "" {
 			res = h.orc.RunSingle(h.ctx, task, single0.prov, single0.route)
 		} else {
-			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: *file != ""})
+			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: unattended})
 		}
 		h.report(res)
 		if !res.OK {
 			failed++
+		}
+		if iss.active() && h.ctx.Err() == nil && iss.afterTask(i, res) {
+			tasks = tasks[:i+1]
+			break
 		}
 	}
 	if h.log != nil {

@@ -69,6 +69,8 @@ func main() {
 		err = cmdBugreport(args)
 	case "undo":
 		err = cmdUndo(args)
+	case "pr":
+		err = cmdPR(args)
 	case "bench":
 		err = cmdBench(args)
 	case "tune":
@@ -122,6 +124,12 @@ Usage:
   sy run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
   sy run --file tasks.txt    run a list of tasks one after another, unattended
   sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
+  sy run --issue <N|URL> [--with-comments] [--pr]   run a GitHub issue as the task; --pr opens a PR (Closes #N)
+  sy run --issues label:<name> [--limit 5] [--pr]   run open labelled issues one after another, unattended
+                             (needs a clean working tree; with --pr each task's changes go to its PR branch and
+                             are undone here so the next issue starts from HEAD; the batch stops if that fails)
+  sy pr [task] [--base main] [--branch name] [--draft] [--title t] [--no-push] [--yes]
+                             branch + commit + GitHub pull request from a finished task (index/worktree untouched)
   sy history [--all] [-n 20]       recent tasks in this directory, with status and cost
   sy resume [task id]        continue an interrupted task (default: the last one here)
   sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline

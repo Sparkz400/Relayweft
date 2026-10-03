@@ -10,7 +10,7 @@ sy --demo     # see the whole thing animate with fake agents (no CLIs, no quota)
 
 ![sy web: agent tree and live activity](docs/web/running.png)
 
-Switchyard uses **subscriptions only**. It never touches API keys or tokens; it drives the official `codex` and `claude` CLIs exactly as you would, with their normal login.
+Switchyard uses **subscriptions only**. It never touches model API keys or tokens (only the optional GitHub features use a GitHub token); it drives the official `codex` and `claude` CLIs exactly as you would, with their normal login.
 
 ---
 
@@ -163,6 +163,9 @@ sy run "task"                         headless: same pipeline, events printed as
 sy run --single claude:opus "task"    single-agent baseline (for comparison in stats)
 sy run --file tasks.txt               run several tasks one after another, unattended
 sy run --approve "task"               approve the plan (and changes, with review_changes) on the terminal
+sy run --issue 12 [--pr]              run a GitHub issue as the task; --pr opens a pull request that closes it
+sy run --issues label:sy [--limit 5] [--pr]   run open labelled issues one after another, unattended
+sy pr [task] [--base main] [--draft] [--no-push] [--yes]   branch + commit + pull request from a finished task
 sy history [--all] [-n 20]            recent tasks: status, steps done, cost; marks interrupted ones
 sy resume [task id] [--force]         continue an interrupted task (default: the last one in this directory)
 sy tune [--here] [--since 7d]         routing suggestions from your own logs, as ready-to-paste commands
@@ -191,6 +194,14 @@ Every task in a git repo records the working tree before and after it ran. The s
 - Files you edited *after* the task keep your edits (3-way merge). If an edit overlaps the task's change, nothing at all is changed and you're told which file.
 - `sy undo --redo` (or `/redo`) puts the task's changes back. `sy undo --list` shows the last 30 tasks.
 - After every task, `sy run` prints the exact `sy undo <task>` command.
+
+### GitHub: issues in, PRs out
+
+- `sy pr` turns the last finished task (or `sy pr <task>` from `sy history`) into a pull request. The commit holds exactly the task's changes (its undo snapshots), so edits you made before the task stay out. It is built on top of `HEAD` on a temporary index: your index, working tree and current branch are not touched. If the changes no longer apply cleanly to `HEAD`, nothing is created.
+- It creates the branch `sy/<task>` (or `--branch`; an existing branch is never overwritten), runs `git push -u origin <branch>` with your own git credentials (never forced) and opens the PR through the GitHub API. The body has the task, the plan with each step's role and result, checks, cost and the undo key. A task that did not finish ok is marked and opened as a draft. You see a preview first (`--yes` skips it); `--no-push` only creates the local branch.
+- The token comes from `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`. Without one, sy writes the PR text to a file and prints the compare URL to open it in the browser. GitHub Enterprise: set `GH_HOST` (or `--api https://<host>/api/v3`).
+- `sy run --issue 12` (or an issue URL) runs "Fix GitHub issue #12: <title>" with the issue's body and labels as the task (`--with-comments` adds the comments). Public repositories need no token. Add `--pr` to open a pull request with `Closes #12` when the task succeeds, plus a comment with its link on the issue (`--comment=false` skips it).
+- `sy run --issues label:sy --limit 5 --pr` works through the open issues with that label, oldest first, unattended. It skips pull requests and issues an open PR already closes. It never discards your work: it starts only on a clean working tree, and after each PR it takes that task's changes back out of the working tree with `sy undo` (they live on in the PR branch; `sy undo --redo <key>` puts them back), so the next issue starts from `HEAD`. If that is not possible, or a task leaves changes without a PR, the batch stops.
 
 ### Bench: does Switchyard beat a single agent on *your* work?
 
