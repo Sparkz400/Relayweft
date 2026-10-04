@@ -432,7 +432,10 @@ func runTeamCmd(h *headless, f *issueFlags, allowSleep bool, run teamRun) error 
 	if err != nil {
 		return err
 	}
-	if failed > 0 {
+	if f.noPR > 0 {
+		fmt.Printf("%d issue(s) finished without the pull request --pr asked for\n", f.noPR)
+	}
+	if failed > 0 || f.noPR > 0 {
 		return errTaskFailed
 	}
 	return nil

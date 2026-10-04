@@ -96,8 +96,9 @@ func prRepo(t *testing.T) string {
 	run(t, dir, "remote", "add", "origin", "https://github.com/o/r.git")
 	// As after a clone: origin/main is HEAD (nothing unpushed).
 	run(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD")
-	oldOut, oldTok, oldPush, oldIn := prOut, prToken, prPush, prIn
-	t.Cleanup(func() { prOut, prToken, prPush, prIn = oldOut, oldTok, oldPush, oldIn })
+	oldOut, oldTok, oldPush, oldIn, oldHas := prOut, prToken, prPush, prIn, prRemoteHas
+	t.Cleanup(func() { prOut, prToken, prPush, prIn, prRemoteHas = oldOut, oldTok, oldPush, oldIn, oldHas })
+	prRemoteHas = func(string, string) bool { return false } // no network
 	prOut = io.Discard
 	prToken = func(forge.Kind, string) (string, string) { return "", "" }
 	prPush = func(string, string, string) error { t.Error("unexpected push"); return nil }

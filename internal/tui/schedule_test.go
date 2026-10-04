@@ -31,7 +31,9 @@ func TestScheduledTaskStartsWhenDue(t *testing.T) {
 	m, _, ch := newModel(t, false)
 	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.command("/schedule in 2h fix the parser")
-	m.command("/schedule 23:59 second one")
+	// A clock time 3h ahead stays after "in 2h" at any time of day (a fixed
+	// 23:59 came first from 21:59 on, and the test failed every evening).
+	m.command("/schedule " + time.Now().Add(3*time.Hour).Format("15:04") + " second one")
 	if len(m.queue) != 2 || !m.queue[0].unattended || time.Until(m.queue[0].at) < 119*time.Minute {
 		t.Fatalf("queue = %+v", m.queue)
 	}

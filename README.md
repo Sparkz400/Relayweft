@@ -214,7 +214,7 @@ sy init [--global] [--force] [--print]
 sy clean [--dir <path>] [--idle 72h]  remove this repo's pooled worktrees (or every repo's idle ones)
 ```
 
-`sy run` exits 1 when the task fails, so it is scriptable.
+`sy run` exits 1 when the task fails, so it is scriptable. With `--pr`, a task that ends without its pull request (the push or the PR failed) counts as failed too, so a CI job goes red.
 
 ### Undo: try anything, risk-free
 

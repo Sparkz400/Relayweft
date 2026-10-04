@@ -168,6 +168,46 @@ func TestIssueBatchOpensPRsAndRestoresTree(t *testing.T) {
 	}
 }
 
+// Running an issue again (its first PR closed, the branch still there,
+// here or on origin) gets a new branch: the push was rejected before.
+func TestIssueRerunGetsFreshBranch(t *testing.T) {
+	dir := prRepo(t)
+	_, url := issueAPI(t)
+	var pushed []string
+	prPush = func(root, remote, branch string) error { pushed = append(pushed, branch); return nil }
+	prToken = func(forge.Kind, string) (string, string) { return "tok", "test" }
+	run(t, dir, "branch", "sy/issue-3-shout-the-first-line")
+	prRemoteHas = func(_, b string) bool { return b == "sy/issue-3-shout-the-first-line-2" }
+
+	f, fs := parseIssueFlags(t, "--issues", "label:sy", "--pr", "--api", url)
+	if _, err := f.load(fs, dir); err != nil {
+		t.Fatal(err)
+	}
+	f.afterTask(0, runTask(t, dir, f.items[0].task, taskEdit))
+	if len(pushed) != 1 || pushed[0] != "sy/issue-3-shout-the-first-line-3" {
+		t.Fatalf("pushed %v", pushed)
+	}
+	if f.noPR != 0 {
+		t.Fatalf("noPR = %d", f.noPR)
+	}
+}
+
+// --pr without a pull request is a failed run (exit status 1): a CI job
+// stayed green when the push or the PR failed.
+func TestIssueWithoutPRCounts(t *testing.T) {
+	dir := prRepo(t)
+	_, url := issueAPI(t)
+	prPush = func(string, string, string) error { return os.ErrPermission }
+	f, fs := parseIssueFlags(t, "--issues", "label:sy", "--pr", "--api", url)
+	if _, err := f.load(fs, dir); err != nil {
+		t.Fatal(err)
+	}
+	f.afterTask(0, runTask(t, dir, f.items[0].task, taskEdit))
+	if f.noPR != 1 {
+		t.Fatalf("noPR = %d, want 1", f.noPR)
+	}
+}
+
 // A task that leaves changes but no PR stops the batch instead of letting
 // the next issue start on top of them.
 func TestIssueBatchStopsWithoutPR(t *testing.T) {

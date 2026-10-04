@@ -292,18 +292,21 @@ func cmdRun(args []string) error {
 	if h.log != nil {
 		fmt.Println("session log:", h.log.Path())
 	}
+	if iss.noPR > 0 {
+		fmt.Printf("%d task(s) finished without the pull request --pr asked for\n", iss.noPR)
+	}
 	if len(tasks) > 1 {
 		fmt.Printf("%d of %d task(s) succeeded\n", len(tasks)-failed, len(tasks))
 		if h.ctx.Err() == nil {
 			// One line to read in the morning, after each task's own.
 			title, ev := "Switchyard: all tasks done", notify.EventDone
-			if failed > 0 {
+			if failed > 0 || iss.noPR > 0 {
 				title, ev = "Switchyard: tasks failed", notify.EventFailed
 			}
 			h.webhook(ev, title, fmt.Sprintf("%d of %d task(s) succeeded", len(tasks)-failed, len(tasks)))
 		}
 	}
-	if failed > 0 {
+	if failed > 0 || iss.noPR > 0 {
 		return errTaskFailed
 	}
 	return nil
