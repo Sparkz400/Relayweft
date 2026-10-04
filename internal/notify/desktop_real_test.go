@@ -19,13 +19,16 @@ func TestRealDesktopToast(t *testing.T) {
 		t.Skip("set SY_REAL_DESKTOP=1 to show real desktop notifications")
 	}
 	marker := fmt.Sprintf("sytest%d", time.Now().UnixNano())
+	// Printed so a script can look the toasts up where only the OS can
+	// (the macOS Notification Center database, a Linux notification daemon).
+	t.Logf("marker %s", marker)
 	cases := []struct{ name, title, body string }{
 		{"plain", "Switchyard: done", "plain body " + marker},
 		{"quotes", `He said "hi" & it's 'ok' ` + "`$x` $(calc) “curly” ‘single’", "quotes " + marker},
 		{"xml", "<b>bold</b> & <!-- c --> ]]>", "xml " + marker + " <toast/> &amp;"},
 		{"unicode", "Grüße ä ö ü ß 日本語 🚀", "unicode " + marker + " Ελληνικά"},
 		{"newlines", "line1\nline2", "a\nb\r\nc\td " + marker},
-		{"long", strings.Repeat("T", 300), strings.Repeat("long body ", 200) + marker},
+		{"long", strings.Repeat("T", 300), marker + " " + strings.Repeat("long body ", 200)}, // macOS stores a shortened body: marker first
 		{"control", "bell\a nul\x00 esc\x1b", "ctl " + marker + "\x01\x7f"},
 	}
 	for _, c := range cases {
