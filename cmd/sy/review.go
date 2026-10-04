@@ -95,7 +95,7 @@ func cmdReview(args []string) error {
 	fs.StringVar(&o.api, "api", "", apiFlagHelp)
 	fs.BoolVar(&o.quiet, "quiet", false, "only print routing, results and errors")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: sy review <PR number|URL> [--provider codex|claude] [--post] [--yes]
+		fmt.Fprint(os.Stderr, `Usage: sy review <PR number|URL> [--provider <name>] [--post] [--yes]
 
 Has one agent review a pull request (GitHub, a GitLab merge request or
 Gitea/Forgejo) read-only and prints its findings
@@ -184,7 +184,7 @@ func runReview(ctx context.Context, c *common, ref string, o reviewOptions) erro
 		return fmt.Errorf("%s changes nothing: nothing to review", repo.Ref(n))
 	}
 
-	why := ""
+	why, writer := "", ""
 	if c.provider == "" && opened {
 		author := entry.Author
 		if author == "" && entry.TaskID != "" {
@@ -192,15 +192,16 @@ func runReview(ctx context.Context, c *common, ref string, o reviewOptions) erro
 				author = st.Author()
 			}
 		}
-		if author == event.Codex || author == event.Claude {
-			c.provider = event.Other(author)
-			why = fmt.Sprintf("sy opened it and %s wrote the change", author)
-		}
+		writer = author
 	}
 	c.dir = dir
 	store, dir, err := c.setup()
 	if err != nil {
 		return err
+	}
+	if p := reviewerFor(store.Get(), writer); p != "" {
+		c.provider = p
+		why = fmt.Sprintf("sy opened it and %s wrote the change", writer)
 	}
 	cfg := store.Get()
 	log, err := sessionlog.Open(cfg.SessionDir(), dir)

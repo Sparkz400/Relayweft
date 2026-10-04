@@ -21,7 +21,7 @@ func (m *Model) resetTime(provider string) (time.Time, string) {
 	if !m.opt.Demo {
 		recs, _ = sessionlog.ReadDir(m.store.Get().SessionDir())
 	}
-	return schedule.ResetTime(provider, m.orc.Tracker(), recs, time.Now())
+	return schedule.ResetTimeIn(provider, m.store.Get().Enabled(), m.orc.Tracker(), recs, time.Now())
 }
 
 // scheduled returns the queue positions of scheduled jobs, in start order.
@@ -79,7 +79,7 @@ func (m *Model) scheduleCommand(args []string, say func(string, ...any)) {
 		say("removed from the schedule: %s", oneLine(j.label(), 80))
 		return
 	}
-	at, used, note, err := schedule.ParseWords(args, now, m.resetTime)
+	at, used, note, err := schedule.ParseWords(args, now, m.resetTime, m.store.Get().ProviderNames()...)
 	if err != nil {
 		say("%v - %s", err, usage)
 		return

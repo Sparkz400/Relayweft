@@ -55,8 +55,18 @@ type codexSecrets struct {
 // dir; cleanup removes it (always safe to call). lookup reads environment
 // variables (nil = the process environment).
 func PrepareMCP(provider, role string, m config.MCPCfg, lookup func(string) (string, bool)) (run *MCPRun, cleanup func(), err error) {
+	return prepareMCP(provider, provider, role, m, lookup)
+}
+
+// prepareMCP is PrepareMCP for a provider of any kind. Gemini CLI takes
+// MCP servers only from its own settings, so it gets none from sy; Qwen
+// Code reads Claude's config file format.
+func prepareMCP(provider, kind, role string, m config.MCPCfg, lookup func(string) (string, bool)) (run *MCPRun, cleanup func(), err error) {
 	cleanup = func() {}
-	names := m.For(role, provider)
+	if kind != event.Codex && kind != event.Claude && kind != event.Qwen {
+		return nil, cleanup, nil
+	}
+	names := m.ForKind(role, provider, kind)
 	if len(names) == 0 {
 		return nil, cleanup, nil
 	}
@@ -67,7 +77,7 @@ func PrepareMCP(provider, role string, m config.MCPCfg, lookup func(string) (str
 	}
 	for _, n := range names {
 		s, missing := m.Servers[n].Expanded(lookup)
-		if provider == event.Codex {
+		if kind == event.Codex {
 			s = run.moveSecrets(n, m.Servers[n], s, lookup)
 		}
 		run.Servers[n] = s
@@ -79,7 +89,7 @@ func PrepareMCP(provider, role string, m config.MCPCfg, lookup func(string) (str
 		run.Missing = append(run.Missing, v)
 	}
 	sort.Strings(run.Missing)
-	if provider != event.Claude {
+	if kind != event.Claude && kind != event.Qwen {
 		return run, cleanup, nil
 	}
 	dir, err := mcpTempDir()

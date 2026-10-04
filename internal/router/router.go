@@ -57,6 +57,7 @@ type State interface {
 const (
 	RuleLimit       = "limit-fallback"
 	RuleQuota       = "quota-preempt"
+	RuleStandby     = "standby"
 	RuleReview      = "review-checkpoint"
 	RulePlan        = "plan"
 	RuleReadOnly    = "read-only"
@@ -100,7 +101,7 @@ func (r *Router) Route(s Step) event.Decision {
 	role, rule, reason, conf := r.classify(cfg, s)
 	d := r.resolve(cfg, s, role)
 	d.StepID, d.StepTitle, d.Confidence = s.ID, s.Title, conf
-	if d.Rule == RuleQuota {
+	if d.Rule == RuleQuota || d.Rule == RuleStandby {
 		d.Reason = fmt.Sprintf("%s (%s: %s)", d.Reason, rule, reason)
 		d.Confidence = 1
 		return d
@@ -175,64 +176,165 @@ func (r *Router) classify(cfg *config.Config, s Step) (role, rule, reason string
 // resolve turns a role into provider/model/effort, applying prefer and rule 1.
 func (r *Router) resolve(cfg *config.Config, s Step, role string) event.Decision {
 	rc := cfg.Roles[role]
-	pref := r.preferred(cfg, s, rc)
-	d := event.Decision{Role: role, Provider: pref}
+	writes := stepWrites(s, role)
 	usable := func(p string) bool {
 		pc, ok := cfg.Providers[p]
-		return ok && !pc.Disabled && rc.For(p).Model != ""
+		if !ok || pc.Disabled || rc.For(p).Model == "" {
+			return false
+		}
+		// A provider described in the config may take only one kind of work.
+		if writes {
+			return pc.CanWrite(p)
+		}
+		return pc.CanReadOnly(p)
 	}
-	if !usable(pref) && usable(event.Other(pref)) {
-		pref = event.Other(pref)
-		d.Provider = pref
-	}
-	other := event.Other(pref)
-	if r.State != nil && r.State.Limited(pref) && usable(other) && !r.State.Limited(other) {
-		d.Provider = other
-		d.Fallback = true
-	} else if thr := cfg.Routing.SwitchAtUtilization; thr > 0 && r.State != nil && r.ForceProvider == "" &&
-		usable(other) && !r.State.Limited(other) {
-		// Switch before the limit hits, not after: once a provider reports
-		// it is nearly out, send work to the other one if that has more room.
-		if u, ok := r.State.Utilization(pref); ok && u >= thr {
-			if ou, ok2 := r.State.Utilization(other); !ok2 || ou < u {
-				d.Provider = other
-				d.Fallback = true
-				d.Rule = RuleQuota
-				d.Reason = fmt.Sprintf("%s at %.0f%% of its limit (>= %.0f%%) -> %s", pref, u*100, thr*100, other)
+	pref := r.preferred(cfg, s, rc, usable)
+	if !usable(pref) {
+		// No route on the preferred provider (or it is off): the first
+		// provider that has one and may stand in.
+		for _, q := range cfg.Alternatives(pref) {
+			if usable(q) && !cfg.Providers[q].OnlyPreferred {
+				pref = q
+				break
 			}
 		}
+	}
+	d := event.Decision{Role: role, Provider: pref}
+	var alts []string // where this role can go instead, in order
+	for _, q := range cfg.Alternatives(pref) {
+		if usable(q) && !cfg.Providers[q].OnlyPreferred {
+			alts = append(alts, q)
+		}
+	}
+	moved := false
+	if r.State != nil && r.State.Limited(pref) {
+		for _, q := range alts {
+			if !r.State.Limited(q) {
+				d.Provider, d.Fallback, d.From, moved = q, true, pref, true
+				break
+			}
+		}
+	}
+	if thr := cfg.Routing.SwitchAtUtilization; !moved && thr > 0 && r.State != nil && r.ForceProvider == "" {
+		// Switch before the limit hits, not after: once a provider reports
+		// it is nearly out, send work to one with more room.
+		if u, ok := r.State.Utilization(pref); ok && u >= thr {
+			for _, q := range alts {
+				if r.State.Limited(q) {
+					continue
+				}
+				if ou, ok2 := r.State.Utilization(q); !ok2 || ou < u {
+					d.Provider, d.Fallback, d.From = q, true, pref
+					d.Rule = RuleQuota
+					d.Reason = fmt.Sprintf("%s at %.0f%% of its limit (>= %.0f%%) -> %s", pref, u*100, thr*100, q)
+					break
+				}
+			}
+		}
+	}
+	if r.State != nil && r.ForceProvider == "" {
+		r.standby(cfg, role, &d, usable)
 	}
 	route := rc.For(d.Provider)
 	d.Model, d.Effort = route.Model, route.Effort
 	return d
 }
 
-func (r *Router) preferred(cfg *config.Config, s Step, rc config.RoleCfg) string {
+// standby moves the role's work to a provider standing by for it
+// (providers.<name>.standby) when the provider chosen so far is at its
+// limit, or at switch_at_utilization with nowhere better to go: a free
+// local model takes cheap read-only work while the others are nearly out.
+func (r *Router) standby(cfg *config.Config, role string, d *event.Decision, usable func(string) bool) {
+	tight := func(p string) (string, bool) {
+		if r.State.Limited(p) {
+			return p + " at its limit", true
+		}
+		if thr := cfg.Routing.SwitchAtUtilization; thr > 0 {
+			if u, ok := r.State.Utilization(p); ok && u >= thr {
+				return fmt.Sprintf("%s at %.0f%% of its limit", p, u*100), true
+			}
+		}
+		return "", false
+	}
+	why, ok := tight(d.Provider)
+	if !ok || cfg.Providers[d.Provider].StandsBy(role) {
+		return
+	}
+	for _, q := range cfg.Enabled() {
+		if q == d.Provider || !cfg.Providers[q].StandsBy(role) || !usable(q) {
+			continue
+		}
+		if _, full := tight(q); full {
+			continue
+		}
+		from := d.Provider
+		if d.From != "" {
+			from = d.From // where the role wanted to go first
+		}
+		d.Provider, d.Fallback, d.From = q, true, from
+		d.Rule = RuleStandby
+		d.Reason = fmt.Sprintf("%s, no other provider has room -> %s, standing by for %s", why, q, role)
+		return
+	}
+}
+
+// stepWrites reports whether a step will write files: by its kind, or for
+// a role preview (no kind) by the role.
+func stepWrites(s Step, role string) bool {
+	if s.Kind == "" {
+		return config.WritingRole(role)
+	}
+	return !s.Kind.ReadOnly()
+}
+
+func (r *Router) preferred(cfg *config.Config, s Step, rc config.RoleCfg, usable func(string) bool) string {
 	if r.ForceProvider != "" {
 		return r.ForceProvider
 	}
 	switch rc.Prefer {
-	case config.PreferCodex, config.PreferClaude:
-		return rc.Prefer
 	case config.PreferOther:
 		main := s.MainProvider
 		if main == "" {
 			// Before the planner ran: assume the planner's fixed provider,
-			// else Codex. Never recurse (planner may itself be "other").
-			main = event.Codex
-			if p := cfg.Roles[event.RolePlanner].Prefer; p == config.PreferCodex || p == config.PreferClaude {
+			// else the first one. Never recurse (planner may itself be "other").
+			if p := cfg.Roles[event.RolePlanner].Prefer; cfg.IsProvider(p) {
 				main = p
+			} else if en := cfg.Enabled(); len(en) > 0 {
+				main = en[0]
 			}
 		}
-		return event.Other(main)
+		for _, q := range cfg.Alternatives(main) {
+			if usable(q) && !cfg.Providers[q].OnlyPreferred {
+				return q
+			}
+		}
+		return main // no other provider can take it
 	case config.PreferAuto:
-		if r.State != nil && r.State.Share(event.Claude) < r.State.Share(event.Codex) {
-			return event.Claude
+		// The provider that has used the smallest share of this session's
+		// tokens; ties go to the earlier one in routing order.
+		best, bestShare := "", 0.0
+		for _, p := range cfg.Enabled() {
+			if !usable(p) || cfg.Providers[p].OnlyPreferred {
+				continue
+			}
+			sh := 0.0
+			if r.State != nil {
+				sh = r.State.Share(p)
+			}
+			if best == "" || sh < bestShare {
+				best, bestShare = p, sh
+			}
 		}
-		if r.State != nil && r.State.Share(event.Codex) < r.State.Share(event.Claude) {
-			return event.Codex
+		if best != "" {
+			return best
 		}
-		return event.Codex
+	default:
+		if cfg.IsProvider(rc.Prefer) {
+			return rc.Prefer
+		}
+	}
+	if en := cfg.Enabled(); len(en) > 0 {
+		return en[0]
 	}
 	return event.Codex
 }
@@ -240,8 +342,12 @@ func (r *Router) preferred(cfg *config.Config, s Step, rc config.RoleCfg) string
 // Finalize applies rule 1 bookkeeping: when the decision fell back because
 // of a limit, the rule shown is the limit rule (the role is kept).
 func Finalize(d event.Decision) event.Decision {
-	if d.Fallback && d.Rule != RuleQuota {
-		d.Reason = fmt.Sprintf("%s at limit -> %s (%s: %s)", event.Other(d.Provider), d.Provider, d.Rule, d.Reason)
+	if d.Fallback && d.Rule != RuleQuota && d.Rule != RuleStandby {
+		from := d.From
+		if from == "" {
+			from = "preferred provider"
+		}
+		d.Reason = fmt.Sprintf("%s at limit -> %s (%s: %s)", from, d.Provider, d.Rule, d.Reason)
 		d.Rule = RuleLimit
 		d.Confidence = 1
 	}

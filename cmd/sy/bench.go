@@ -241,7 +241,7 @@ func cmdBench(args []string) error {
 		fmt.Println("afterwards the results update this repo's learned routes (--no-learn skips that)")
 	}
 	if !*yes {
-		fmt.Print("This uses real Codex/Claude quota. Start? [y/N] ")
+		fmt.Print("This uses real provider quota. Start? [y/N] ")
 		ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		if a := strings.ToLower(strings.TrimSpace(ans)); a != "y" && a != "yes" {
 			return nil
@@ -406,8 +406,27 @@ func benchCheck(ctx context.Context, ws *orchestrator.BenchWorkspace, t benchTas
 // benchReport renders per-task rows and per-mode totals.
 func benchReport(rs []benchResult, modes []string) string {
 	var b bytes.Buffer
+	// One token column per provider: codex and claude, and any other that ran.
+	used := map[string]bool{event.Codex: true, event.Claude: true}
+	for _, r := range rs {
+		for p := range r.cost.PerProvider {
+			used[p] = true
+		}
+	}
+	cols := event.ProvidersOf(used)
+	heads := make([]string, len(cols))
+	for i, p := range cols {
+		heads[i] = strings.ToUpper(p) + " TOK"
+	}
+	toks := func(per func(string) int64) string {
+		out := make([]string, len(cols))
+		for i, p := range cols {
+			out[i] = event.HumanTokens(per(p))
+		}
+		return strings.Join(out, "\t")
+	}
 	tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "TASK\tMODE\tCHECK\tWALL\tCODEX TOK\tCLAUDE TOK\tNOTE")
+	fmt.Fprintln(tw, "TASK\tMODE\tCHECK\tWALL\t"+strings.Join(heads, "\t")+"\tNOTE")
 	for _, r := range rs {
 		mark := "pass"
 		switch {
@@ -416,17 +435,17 @@ func benchReport(rs []benchResult, modes []string) string {
 		case !r.passed:
 			mark = "FAIL"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.task, r.mode, mark, r.wall.Round(time.Second),
-			event.HumanTokens(r.cost.PerProvider[event.Codex].Total()), event.HumanTokens(r.cost.PerProvider[event.Claude].Total()), oneLine(r.note, 60))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.task, r.mode, mark, r.wall.Round(time.Second),
+			toks(func(p string) int64 { return r.cost.PerProvider[p].Total() }), oneLine(r.note, 60))
 	}
 	tw.Flush()
 	b.WriteString("\n")
 	tw = tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "MODE\tPASSED\tAVG WALL\tCODEX TOK\tCLAUDE TOK\t≈$ API-EQUIV")
+	fmt.Fprintln(tw, "MODE\tPASSED\tAVG WALL\t"+strings.Join(heads, "\t")+"\t≈$ API-EQUIV")
 	for _, m := range modes {
 		var pass, total int
 		var wall time.Duration
-		var cx, cl int64
+		per := map[string]int64{}
 		var usd float64
 		for _, r := range rs {
 			if r.mode != m || r.note == "cancelled" {
@@ -437,15 +456,16 @@ func benchReport(rs []benchResult, modes []string) string {
 				pass++
 			}
 			wall += r.wall
-			cx += r.cost.PerProvider[event.Codex].Total()
-			cl += r.cost.PerProvider[event.Claude].Total()
+			for p, u := range r.cost.PerProvider {
+				per[p] += u.Total()
+			}
 			usd += r.cost.CostUSD
 		}
 		if total == 0 {
 			continue
 		}
-		fmt.Fprintf(tw, "%s\t%d/%d\t%s\t%s\t%s\t%.2f\n", m, pass, total, (wall / time.Duration(total)).Round(time.Second),
-			event.HumanTokens(cx), event.HumanTokens(cl), usd)
+		fmt.Fprintf(tw, "%s\t%d/%d\t%s\t%s\t%.2f\n", m, pass, total, (wall / time.Duration(total)).Round(time.Second),
+			toks(func(p string) int64 { return per[p] }), usd)
 	}
 	tw.Flush()
 	return b.String()

@@ -1,0 +1,21 @@
+# Gemini CLI (0.62.0) described as a generic provider. The test checks it
+# reads the fixtures like the built-in gemini kind. (The built-in kind also
+# guards the folder trust; a generic provider has no such checks.)
+kind: generic
+command: gemini
+generic:
+  args: [--output-format, stream-json]
+  model_args: [-m, "{model}"]
+  read_only_args: [--approval-mode, plan]
+  write_args: [--approval-mode, auto_edit]
+  resume_args: [--resume, "{session}"]
+  output: jsonl
+  json:
+    - {match: {type: init}, session: session_id}
+    - {match: {type: message, role: assistant}, text: content, delta: true}
+    - {match: {type: tool_use}, tool: tool_name, tool_input: parameters}
+    - {match: {type: error, severity: error}, error: message}
+    - {match: {type: error, severity: warning}, thinking: message}
+    - {match: {type: result}, input_tokens: stats.input_tokens, cached_tokens: stats.cached, output_tokens: stats.output_tokens}
+    - {match: {type: result, status: error}, error: error.message, fatal: true}
+  edit_tools: [write_file, replace, edit]

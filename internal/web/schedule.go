@@ -77,7 +77,7 @@ func (s *Server) resetTime(provider string) (time.Time, string) {
 	if !s.opt.Demo {
 		recs, _ = sessionlog.ReadDir(s.store.Get().SessionDir())
 	}
-	return schedule.ResetTime(provider, s.orc.Tracker(), recs, time.Now())
+	return schedule.ResetTimeIn(provider, s.store.Get().Enabled(), s.orc.Tracker(), recs, time.Now())
 }
 
 // scheduleJob queues j to start at j.at (unattended, like every queued
@@ -116,7 +116,7 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	words := strings.Fields(req.When)
-	at, used, note, err := schedule.ParseWords(words, time.Now(), s.resetTime)
+	at, used, note, err := schedule.ParseWords(words, time.Now(), s.resetTime, s.store.Get().ProviderNames()...)
 	if err == nil && used != len(words) {
 		err = fmt.Errorf("when %q: want e.g. 02:30, in 2h, reset claude or 2026-10-04 02:30", req.When)
 	}

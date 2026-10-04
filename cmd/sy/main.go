@@ -129,7 +129,7 @@ var errTaskFailed = errors.New("task failed")
 var badPath []string
 
 func usage() {
-	fmt.Print(`Switchyard - route coding work between Codex and Claude subscriptions
+	fmt.Print(`Switchyard - route coding work between Codex, Claude and other agent CLIs
 
 Usage:
   sy [flags]                 start the TUI in the current directory
@@ -153,9 +153,9 @@ Usage:
   sy watch [--every 15m] [--dir repo]   follow up on the PRs sy opened: failed checks and review comments get
                              a task on the PR branch in a separate checkout, pushed (never forced) with a reply
   sy watch --list | --forget <n>          list the watched pull requests, or stop watching one
-  sy review <PR> [--provider codex|claude] [--post] [--yes]   read-only agent review of a pull request
+  sy review <PR> [--provider <name>] [--post] [--yes]   read-only agent review of a pull request
                              (default: the provider that did not write it); --post: one comment review, inline
-  sy run --at 02:30 | --in 3h | --when-reset claude|codex|any  [--file tasks.txt | "task"]
+  sy run --at 02:30 | --in 3h | --when-reset <provider>|any  [--file tasks.txt | "task"]
                              start later, unattended (PC kept awake; --allow-sleep to opt out)
   sy schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)
   sy notify [--test]         show where notifications go; --test posts to every webhook (Slack, Discord, ntfy)
@@ -190,7 +190,7 @@ Flags (TUI and run):
   --dir <path>               project directory (default current directory)
   --route role=provider:model[:effort]   override a route (repeatable)
   --prefer role=codex|claude|other|auto  override a role's provider choice (repeatable; role "all" ok)
-  --provider codex|claude    force every role onto one provider
+  --provider <name>          force every role onto one provider (codex, claude, gemini...)
   --threads <n>  --no-parallel  --no-review  --judge
   --repo name=path           another git repo tasks may change too (repeatable; multi-repo tasks)
   --ascii | --unicode        force the ASCII or Unicode theme
@@ -315,8 +315,8 @@ func (c *common) setup() (*config.Store, string, error) {
 			}
 		}
 	}
-	if c.provider != "" && c.provider != event.Codex && c.provider != event.Claude {
-		return nil, "", fmt.Errorf("--provider must be codex or claude")
+	if c.provider != "" && !store.Get().IsProvider(c.provider) {
+		return nil, "", fmt.Errorf("--provider must be one of %s", strings.Join(store.Get().ProviderNames(), ", "))
 	}
 	err = store.Update(func(cf *config.Config) error {
 		if c.threads > 0 {
@@ -470,6 +470,9 @@ func printEvent(e event.Event, quiet bool) {
 		ps = stCodex
 	case event.Claude:
 		ps = stClaude
+	case "":
+	default:
+		ps = lipgloss.NewStyle().Foreground(tui.Theme{}.ProviderColor(e.Provider))
 	}
 	tag := ps.Render(fmt.Sprintf("%-10s", who))
 	line := func(st lipgloss.Style, s string) { fmt.Printf("%s %s %s\n", ts, tag, st.Render(oneLine(s, 220))) }
@@ -647,47 +650,7 @@ func runDoctor(w io.Writer, cfgPath string) error {
 	for _, e := range badPath {
 		fmt.Fprintf(w, "%s PATH        stray quote in entry %s - repaired for sy; remove it in Environment Variables (sysdm.cpl)\n", warn, e)
 	}
-	for _, p := range event.Providers {
-		pc := cfg.Providers[p]
-		bin, err := proc.Resolve(pc.Command)
-		if err != nil {
-			problems++
-			fmt.Fprintf(w, "%s %-11s %q not found on PATH", ok(false), p, pc.Command)
-			if p == event.Codex {
-				fmt.Fprint(w, " - npm install -g @openai/codex, then `codex login`")
-			} else {
-				fmt.Fprint(w, " - npm install -g @anthropic-ai/claude-code, then run `claude` once to log in")
-			}
-			fmt.Fprintln(w)
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		out, verr := exec.CommandContext(ctx, bin, "--version").Output()
-		cancel()
-		v := strings.TrimSpace(string(out))
-		if verr != nil {
-			fmt.Fprintf(w, "%s %-11s %s (version check failed: %v)\n", warn, p, bin, verr)
-			continue
-		}
-		mark := ok(true)
-		note := ""
-		if pc.TestedVersion != "" && v != pc.TestedVersion {
-			mark = warn
-			note = stMuted.Render(fmt.Sprintf("  (tested with %s; output format may differ)", pc.TestedVersion))
-		}
-		fmt.Fprintf(w, "%s %-11s %s  %s%s\n", mark, p, v, bin, note)
-		if p == event.Codex {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			out, err := exec.CommandContext(ctx, bin, "login", "status").CombinedOutput()
-			cancel()
-			s := oneLine(string(out), 100)
-			if err != nil {
-				fmt.Fprintf(w, "%s codex login %s - run `codex login`\n", warn, s)
-			} else {
-				fmt.Fprintf(w, "%s codex login %s\n", ok(true), s)
-			}
-		}
-	}
+	problems += doctorProviders(w, cfg, ok, warn)
 	if a, b, err := orchestrator.GitVersion(); err != nil {
 		fmt.Fprintf(w, "%s git         not found - worktrees and diffs disabled\n", warn)
 	} else if orchestrator.SupportsMergeTree() {
@@ -750,13 +713,22 @@ func cmdModels(args []string) error {
 		fmt.Printf("Codex catalog refreshed: %d models, saved to %s\n\n", n, path)
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ROLE\tPREFER\tCODEX\tCLAUDE")
+	names := cfg.ProviderNames()
+	head := "ROLE\tPREFER"
+	for _, p := range names {
+		head += "\t" + strings.ToUpper(p)
+	}
+	fmt.Fprintln(tw, head)
 	for _, r := range event.Roles {
 		rc := cfg.Roles[r]
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r, rc.Prefer, routeStr(rc.Codex), routeStr(rc.Claude))
+		line := r + "\t" + rc.Prefer
+		for _, p := range names {
+			line += "\t" + routeStr(rc.For(p))
+		}
+		fmt.Fprintln(tw, line)
 	}
 	tw.Flush()
-	for _, p := range event.Providers {
+	for _, p := range names {
 		pc := cfg.Providers[p]
 		fmt.Printf("\n%s models (efforts: %s)\n", p, strings.Join(pc.Efforts, ", "))
 		for _, m := range pc.Models {

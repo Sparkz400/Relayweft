@@ -27,7 +27,7 @@ jobs:
       matrix:
         include:
           - pkg: ./internal/runner
-            targets: FuzzCodexParser FuzzClaudeParser
+            targets: FuzzCodexParser FuzzClaudeParser FuzzGeminiParser FuzzQwenParser FuzzGenericParser
           - pkg: ./internal/orchestrator
             targets: FuzzParsePlan FuzzNormalizePlan FuzzParseVerdict FuzzSplitHunks FuzzParseChangeList
           - pkg: ./internal/limits

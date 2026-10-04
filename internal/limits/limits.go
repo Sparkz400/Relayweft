@@ -112,13 +112,20 @@ type Tracker struct {
 	now   func() time.Time
 }
 
-// NewTracker creates a tracker for both providers.
+// NewTracker creates a tracker. A provider gets its state the first time
+// something is recorded for it.
 func NewTracker() *Tracker {
-	t := &Tracker{state: map[string]*ProviderState{}, now: time.Now}
-	for _, p := range event.Providers {
-		t.state[p] = &ProviderState{Provider: p}
+	return &Tracker{state: map[string]*ProviderState{}, now: time.Now}
+}
+
+// ensure returns p's state, creating it. The caller holds t.mu.
+func (t *Tracker) ensure(p string) *ProviderState {
+	s := t.state[p]
+	if s == nil {
+		s = &ProviderState{Provider: p}
+		t.state[p] = s
 	}
-	return t
+	return s
 }
 
 // SetClock overrides the clock (tests).
@@ -136,10 +143,9 @@ func (t *Tracker) Limited(p string) bool {
 func (t *Tracker) MarkLimited(p string, until time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if s, ok := t.state[p]; ok {
-		s.LimitedUntil = until
-		s.LimitHits++
-	}
+	s := t.ensure(p)
+	s.LimitedUntil = until
+	s.LimitHits++
 }
 
 // Clear marks a provider available again.
@@ -155,19 +161,17 @@ func (t *Tracker) Clear(p string) {
 func (t *Tracker) AddUsage(p string, u event.TokenUsage) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if s, ok := t.state[p]; ok {
-		s.Tokens = s.Tokens.Add(u)
-		s.Calls++
-	}
+	s := t.ensure(p)
+	s.Tokens = s.Tokens.Add(u)
+	s.Calls++
 }
 
 // SetQuota records provider-reported quota utilization.
 func (t *Tracker) SetQuota(p string, q event.QuotaInfo) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if s, ok := t.state[p]; ok {
-		s.Quota = &q
-	}
+	s := t.ensure(p)
+	s.Quota = &q
 }
 
 // Snapshot returns a copy of a provider's state.

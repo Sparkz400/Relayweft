@@ -417,7 +417,7 @@ func (s *Server) snapshot() stateView {
 	cfg := s.store.Get()
 	tr := s.orc.Tracker()
 	provs := map[string]providerView{}
-	for _, p := range event.Providers {
+	for _, p := range cfg.ProviderNames() {
 		st := tr.Snapshot(p)
 		pv := providerView{Tokens: st.Tokens, Fresh: st.Tokens.Total(), Calls: st.Calls, LimitHits: st.LimitHits, Share: tr.Share(p),
 			Disabled: cfg.Providers[p].Disabled}

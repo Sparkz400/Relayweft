@@ -193,8 +193,8 @@ func (m *Model) viewHeader(W int) string {
 	}
 	var right []string
 	now := time.Now()
-	for _, p := range event.Providers {
-		pv := m.provs[p]
+	for _, p := range m.shownProviders() {
+		pv := m.prov(p)
 		c := th.ProviderColor(p)
 		name := th.bold(c).Render(th.G.Dot + " " + p)
 		var info string
@@ -213,8 +213,8 @@ func (m *Model) viewHeader(W int) string {
 	if gap < 1 {
 		// Narrow: provider state without bars.
 		var short []string
-		for _, p := range event.Providers {
-			pv := m.provs[p]
+		for _, p := range m.shownProviders() {
+			pv := m.prov(p)
 			info := sessionlog.Human(pv.tokens.Total())
 			if pv.quota != nil {
 				info = fmt.Sprintf("%.0f%%", pv.quota.Utilization*100)

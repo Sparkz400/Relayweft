@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,7 +27,7 @@ func DefaultYAML() []byte { return append([]byte(nil), defaultYAML...) }
 // FileName is the config file name looked up in the working directory.
 const FileName = "switchyard.yaml"
 
-// Prefer values.
+// Prefer values. A role may also prefer any configured provider by name.
 const (
 	PreferCodex  = "codex"
 	PreferClaude = "claude"
@@ -34,8 +35,8 @@ const (
 	PreferAuto   = "auto"
 )
 
-// PreferOptions lists every valid prefer value.
-var PreferOptions = []string{PreferCodex, PreferClaude, PreferOther, PreferAuto}
+// PreferOptions lists the prefer values that are not provider names.
+var PreferOptions = []string{PreferOther, PreferAuto}
 
 // Route is a model + reasoning effort on one provider.
 type Route struct {
@@ -43,19 +44,44 @@ type Route struct {
 	Effort string `yaml:"effort"`
 }
 
-// RoleCfg holds a role's route on both providers.
+// RoleCfg holds a role's route on each provider.
 type RoleCfg struct {
 	Prefer string `yaml:"prefer"`
 	Codex  Route  `yaml:"codex"`
 	Claude Route  `yaml:"claude"`
+	// Extra are the routes on every other configured provider, keyed by
+	// provider name (`gemini: {model: ...}` next to codex: and claude:).
+	Extra map[string]Route `yaml:",inline"`
 }
 
 // For returns the role's route on a provider.
 func (r RoleCfg) For(provider string) Route {
-	if provider == event.Claude {
+	switch provider {
+	case event.Codex:
+		return r.Codex
+	case event.Claude:
 		return r.Claude
 	}
-	return r.Codex
+	return r.Extra[provider]
+}
+
+// With returns the role with its route on a provider replaced.
+func (r RoleCfg) With(provider string, rt Route) RoleCfg {
+	switch provider {
+	case event.Codex:
+		r.Codex = rt
+	case event.Claude:
+		r.Claude = rt
+	default:
+		// A copy, so the role it came from keeps its own map.
+		extra := maps.Clone(r.Extra)
+		if extra == nil {
+			extra = map[string]Route{}
+		}
+		extra[provider] = rt
+		r.Extra = extra
+	}
+	return r
 }
 
 // ModelInfo is one entry of a provider's model catalog.
@@ -92,7 +118,31 @@ func (d Duration) D() time.Duration { return time.Duration(d) }
 
 // ProviderCfg configures one CLI.
 type ProviderCfg struct {
-	Disabled            bool        `yaml:"disabled,omitempty"` // true hides the provider from routing
+	Disabled bool `yaml:"disabled,omitempty"` // true hides the provider from routing
+	// OnlyPreferred: used only by roles that prefer it by name, never as a
+	// fallback, for prefer: other or for prefer: auto (for example a slow
+	// local model that should not silently take a strong model's job).
+	OnlyPreferred bool `yaml:"only_preferred,omitempty"`
+	// Kind is the CLI protocol: codex, claude, gemini, qwen or generic. Empty means
+	// the provider's name, so only extra providers need it (for example
+	// `ollama: {kind: claude, ...}` runs Claude Code against local models).
+	Kind  string `yaml:"kind,omitempty"`
+	Label string `yaml:"label,omitempty"` // display name (default: the provider name)
+	// Env is added to the CLI's environment; ${VAR} is read from yours.
+	// Values never go on the command line.
+	Env map[string]string `yaml:"env,omitempty"`
+	// AllowRepoSettings lets the CLI load a repo's own settings (.gemini,
+	// .qwen, a .env for Gemini), which can run commands or change where it
+	// connects. Off by default; only your own config can turn it on.
+	AllowRepoSettings bool `yaml:"allow_repo_settings,omitempty"`
+	// Standby lists roles this provider takes when every provider that
+	// would otherwise run them is at or near its usage limit (a free local
+	// model for cheap read-only work), even with only_preferred.
+	Standby []string `yaml:"standby,omitempty"`
+	// Generic describes the CLI for kind: generic (generic.go).
+	Generic *GenericCfg `yaml:"generic,omitempty"`
+	// InstallHint is what `sy doctor` suggests when the command is missing.
+	InstallHint         string      `yaml:"install_hint,omitempty"`
 	Command             string      `yaml:"command"`
 	TestedVersion       string      `yaml:"tested_version,omitempty"`
 	WriteSandbox        string      `yaml:"write_sandbox,omitempty"`
@@ -111,6 +161,10 @@ type RoutingCfg struct {
 	Judge                bool     `yaml:"judge"`
 	JudgeBelowConfidence float64  `yaml:"judge_below_confidence"`
 	SwitchAtUtilization  float64  `yaml:"switch_at_utilization"`
+	// ProviderOrder is the order providers are tried in when one is at its
+	// limit (and what prefer: other picks first). Empty = codex, claude,
+	// then the rest by name.
+	ProviderOrder []string `yaml:"provider_order,omitempty"`
 	// Learn and LearnMinSamples control the learned routes (learned.go).
 	Learn           string `yaml:"learn"`             // auto | suggest | off ("" = suggest)
 	LearnMinSamples int    `yaml:"learn_min_samples"` // runs (after the age decay) a route needs; 0 = 8
@@ -377,7 +431,14 @@ func parseFile(p string, data []byte) (*Config, error) {
 	if err := yaml.Unmarshal(data, c); err != nil {
 		return nil, fmt.Errorf("%s: %w", p, err)
 	}
-	c.fillProviderDefaults(Default())
+	// Before guardLocal: an untrusted file's provider entries are merged
+	// here and then put back as a whole.
+	if err := c.mergeProviderEntries(data); err != nil {
+		return nil, fmt.Errorf("%s: providers: %w", p, err)
+	}
+	def := Default()
+	c.fillProviderDefaults(def)
+	c.fillRoleDefaults(def)
 	return c, nil
 }
 
@@ -412,6 +473,29 @@ func guardLocal(c *Config, data []byte, own []string) []string {
 	return ignored
 }
 
+// mergeProviderEntries decodes the file's provider entries field by field
+// over the presets: YAML decoding replaces a whole map entry, so
+// `qwen: {disabled: false}` would otherwise drop the preset's
+// only_preferred, env and extra_args.
+func (c *Config) mergeProviderEntries(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil // Unmarshal into the struct already reported real errors
+	}
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "providers" {
+			continue
+		}
+		base := Default().Providers
+		if err := mergeMap(root.Content[i+1], base); err != nil {
+			return err
+		}
+		c.Providers = base
+	}
+	return nil
+}
+
 // fillProviderDefaults fills provider fields a partial user file left empty.
 // (YAML decoding replaces a whole map entry, so a user who only sets
 // `providers.codex.command` would otherwise lose the model catalog.)
@@ -442,6 +526,21 @@ func (c *Config) fillProviderDefaults(def *Config) {
 		if v.TestedVersion == "" {
 			v.TestedVersion = d.TestedVersion
 		}
+		if v.Kind == "" {
+			v.Kind = d.Kind
+		}
+		if v.Label == "" {
+			v.Label = d.Label
+		}
+		if v.Env == nil {
+			v.Env = d.Env
+		}
+		if v.InstallHint == "" {
+			v.InstallHint = d.InstallHint
+		}
+		if v.Generic == nil {
+			v.Generic = d.Generic
+		}
 		c.Providers[k] = v
 	}
 }
@@ -455,18 +554,9 @@ func (c *Config) Validate() error {
 			errs = append(errs, "missing role "+role)
 			continue
 		}
-		if !contains(PreferOptions, rc.Prefer) {
-			errs = append(errs, fmt.Sprintf("role %s: prefer must be one of %v, got %q", role, PreferOptions, rc.Prefer))
-		}
-		if rc.Codex.Model == "" && rc.Claude.Model == "" {
-			errs = append(errs, fmt.Sprintf("role %s: needs a model on at least one provider", role))
-		}
+		_ = rc // prefer and routes: validateProviders
 	}
-	for _, p := range event.Providers {
-		if _, ok := c.Providers[p]; !ok {
-			errs = append(errs, "missing provider "+p)
-		}
-	}
+	errs = append(errs, c.validateProviders()...)
 	for _, pat := range c.LimitPatterns {
 		if _, err := regexp.Compile("(?i)" + pat); err != nil {
 			errs = append(errs, fmt.Sprintf("limit pattern %q: %v", pat, err))
@@ -556,21 +646,58 @@ func (c *Config) SessionDir() string {
 }
 
 // ParseRouteSpec parses "provider:model[:effort]" (effort may be empty).
+// The model may itself contain a colon (Ollama tags such as qwen3.6:35b):
+// a trailing part is the effort only when it is an effort word, or empty.
+// Callers with a config use ParseRouteFor, which also checks the provider.
 func ParseRouteSpec(s string) (provider string, r Route, err error) {
-	parts := strings.SplitN(s, ":", 3)
+	return parseRoute(s, nil)
+}
+
+// ParseRouteFor parses a route like ParseRouteSpec and checks it against
+// the config: the provider must be configured, and a trailing part is the
+// effort only when it is one of that provider's efforts.
+func (c *Config) ParseRouteFor(s string) (provider string, r Route, err error) {
+	return parseRoute(s, c)
+}
+
+func parseRoute(s string, c *Config) (provider string, r Route, err error) {
+	parts := strings.SplitN(s, ":", 2)
 	if len(parts) < 2 || parts[1] == "" {
 		return "", r, fmt.Errorf("route %q: want provider:model[:effort]", s)
 	}
 	provider = strings.ToLower(parts[0])
-	if provider != event.Codex && provider != event.Claude {
-		return "", r, fmt.Errorf("route %q: provider must be codex or claude", s)
+	if !providerName.MatchString(provider) {
+		return "", r, fmt.Errorf("route %q: bad provider name %q", s, parts[0])
+	}
+	efforts := effortWords
+	if c != nil {
+		pc, ok := c.Providers[provider]
+		if !ok {
+			return "", r, fmt.Errorf("route %q: unknown provider %q (providers: %s)", s, provider, strings.Join(c.ProviderNames(), ", "))
+		}
+		efforts = pc.Efforts
 	}
 	r.Model = parts[1]
-	if len(parts) == 3 {
-		r.Effort = parts[2]
+	if i := strings.LastIndex(r.Model, ":"); i >= 0 {
+		if last := r.Model[i+1:]; last == "" || contains(efforts, last) {
+			r.Model, r.Effort = r.Model[:i], last
+		}
+	}
+	if r.Model == "" || strings.HasPrefix(r.Model, ":") || strings.HasSuffix(r.Model, ":") {
+		return "", r, fmt.Errorf("route %q: want provider:model[:effort]", s)
+	}
+	if msg := checkRoute(r); msg != "" {
+		return "", r, fmt.Errorf("route %q: %s", s, msg)
+	}
+	if i := strings.LastIndex(r.Model, ":"); i >= 0 && r.Effort == "" && contains(efforts, r.Model[i+1:]) {
+		// "m:high:" would print back as "m:high", which reads as model m.
+		return "", r, fmt.Errorf("route %q: ambiguous - is %q the effort?", s, r.Model[i+1:])
 	}
 	return provider, r, nil
 }
+
+// effortWords are the efforts any built-in CLI knows.
+var effortWords = []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 // Store is a concurrency-safe holder for the live config, edited by the TUI
 // while the orchestrator reads it.
@@ -705,12 +832,10 @@ func (s *Store) SetRoute(role, provider string, r Route) (err error) {
 		if !ok {
 			return fmt.Errorf("unknown role %q (roles: %s)", role, strings.Join(event.Roles, ", "))
 		}
-		if provider == event.Claude {
-			rc.Claude = r
-		} else {
-			rc.Codex = r
+		if !c.IsProvider(provider) {
+			return fmt.Errorf("unknown provider %q (providers: %s)", provider, strings.Join(c.ProviderNames(), ", "))
 		}
-		c.Roles[role] = rc
+		c.Roles[role] = rc.With(provider, r)
 		return nil
 	})
 }

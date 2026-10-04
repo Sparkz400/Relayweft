@@ -50,7 +50,8 @@ func TestMCPValidate(t *testing.T) {
 		`mcp: {servers: {a: {command: x, url: y}}}`:              "not both",
 		`mcp: {servers: {a: {url: y, type: ws}}}`:                "type must be",
 		`mcp: {servers: {a: {command: x}}, roles: [x]}`:          "unknown role",
-		`mcp: {servers: {a: {command: x, providers: [gemini]}}}`: "unknown provider",
+		`mcp: {servers: {a: {command: x, providers: [bard]}}}`:   "unknown provider",
+		`mcp: {servers: {a: {command: x, providers: [gemini]}}}`: "only from its own settings",
 	} {
 		c := Default()
 		if err := yamlInto(c, yml); err != nil {

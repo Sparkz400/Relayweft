@@ -81,9 +81,11 @@ type lineParser interface {
 	Finish(r *Result)
 }
 
-// Exec is the shared subprocess driver used by the Codex and Claude runners.
+// Exec is the shared subprocess driver used by every CLI runner.
 type Exec struct {
-	Provider string
+	Provider string // the provider's name in the config
+	// Kind is the CLI protocol (event.Codex, event.Claude...); "" = Provider.
+	Kind     string
 	Cfg      config.ProviderCfg
 	Detector *limits.Detector
 	// MCP servers handed to the CLI (config.MCPCfg.For picks per role).
@@ -92,6 +94,28 @@ type Exec struct {
 	LookupEnv func(string) (string, bool)
 	args      func(s Spec) []string
 	parser    func() lineParser
+	// precheck refuses a run the CLI could not do properly (nil = none).
+	precheck func(s Spec) error
+	// limitExitCodes are exit codes that mean "at the usage limit".
+	limitExitCodes []int
+}
+
+// Optional lineParser extras.
+type (
+	// blankKeeper wants empty lines too (text output keeps paragraphs).
+	blankKeeper interface{ keepBlankLines() }
+	// flusher has events left once stdout ends (a streamed message).
+	flusher interface{ Flush() []event.Event }
+	// stderrReader reads the CLI's stderr tail before Finish (token counts
+	// some CLIs print there).
+	stderrReader interface{ Stderr(string) }
+)
+
+func (x *Exec) kind() string {
+	if x.Kind != "" {
+		return x.Kind
+	}
+	return x.Provider
 }
 
 // Run implements Runner.
@@ -114,13 +138,22 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	if err != nil {
 		return fail(fmt.Errorf("%s CLI %q not found on PATH: %w", x.Provider, x.Cfg.Command, err))
 	}
+	if x.precheck != nil {
+		if err := x.precheck(s); err != nil {
+			return fail(fmt.Errorf("%s: %w", x.Provider, err))
+		}
+	}
+	provEnv, missing := x.Cfg.EnvFor(x.LookupEnv)
+	if len(missing) > 0 {
+		return fail(fmt.Errorf("%s needs %s set in your environment (providers.%s.env)", x.Provider, strings.Join(missing, ", "), x.Provider))
+	}
 	if s.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.Timeout)
 		defer cancel()
 	}
 	if s.MCP == nil {
-		m, cleanup, err := PrepareMCP(x.Provider, s.Role, x.MCP, x.LookupEnv)
+		m, cleanup, err := prepareMCP(x.Provider, x.kind(), s.Role, x.MCP, x.LookupEnv)
 		if err != nil {
 			return fail(err)
 		}
@@ -132,10 +165,16 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	cmd := exec.CommandContext(ctx, path, argv...)
 	proc.Prepare(cmd)
 	cmd.Dir = s.Dir
-	if s.MCP != nil && len(s.MCP.ChildEnv) > 0 {
+	var childEnv []string
+	if s.MCP != nil {
 		// MCP secrets from ${VAR}: in the environment, not on the command
 		// line (codexMCPArgs names them).
-		cmd.Env = append(os.Environ(), s.MCP.ChildEnv...)
+		childEnv = append(childEnv, s.MCP.ChildEnv...)
+	}
+	// The provider's env (an API endpoint and key) comes last and wins.
+	childEnv = append(childEnv, provEnv...)
+	if len(childEnv) > 0 {
+		cmd.Env = append(os.Environ(), childEnv...)
 	}
 	// The prompt goes in on stdin: multi-line prompts as arguments get
 	// mangled by cmd.exe when the CLI is an npm .cmd shim on Windows.
@@ -146,8 +185,12 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	}
 	stderr := &tail{max: 8 << 10}
 	cmd.Stderr = stderr
-	diag.Logf("spawn agent=%s role=%s step=%s attempt=%d model=%s effort=%s readonly=%v dir=%s: %s %s",
-		s.AgentID, s.Role, s.StepID, s.Attempt, s.Model, s.Effort, s.ReadOnly, s.Dir, path, strings.Join(redactArgs(argv), " "))
+	diag.Logf("spawn agent=%s provider=%s role=%s step=%s attempt=%d model=%s effort=%s readonly=%v dir=%s: %s %s",
+		s.AgentID, x.Provider, s.Role, s.StepID, s.Attempt, s.Model, s.Effort, s.ReadOnly, s.Dir, path, strings.Join(redactArgs(argv), " "))
+	if len(provEnv) > 0 {
+		// Names only: values may be API keys.
+		diag.Logf("env agent=%s %s", s.AgentID, strings.Join(envNames(provEnv), ","))
+	}
 	if s.MCP != nil {
 		// Names only: env values and headers may be secrets.
 		diag.Logf("mcp agent=%s servers=%s unset=%s", s.AgentID, strings.Join(s.MCP.Names, ","), strings.Join(s.MCP.Missing, ","))
@@ -161,14 +204,8 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 
 	p := x.parser()
 	var res Result
-	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 64<<10), 16<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		for _, e := range p.Line(line) {
+	handle := func(evs []event.Event) {
+		for _, e := range evs {
 			if e.Kind == event.Error && x.Detector.Match(e.Text) {
 				e.Kind = event.LimitHit
 			}
@@ -181,12 +218,28 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 			emit(stamp(e))
 		}
 	}
+	_, keepBlank := p.(blankKeeper)
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 64<<10), 16<<20)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 && !keepBlank {
+			continue
+		}
+		handle(p.Line(line))
+	}
 	if err := sc.Err(); err != nil && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, os.ErrClosed) {
 		stderr.Write([]byte("\nread stdout: " + err.Error()))
 		// Keep draining so the CLI never blocks on a full pipe.
 		io.Copy(io.Discard, stdout)
 	}
 	waitErr := cmd.Wait()
+	if f, ok := p.(flusher); ok {
+		handle(f.Flush())
+	}
+	if sr, ok := p.(stderrReader); ok {
+		sr.Stderr(stderr.String())
+	}
 	p.Finish(&res)
 	res.Duration = time.Since(start)
 	if res.LimitHit && res.Err == nil && waitErr == nil && strings.TrimSpace(res.Final) != "" {
@@ -211,6 +264,16 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		}
 		res.Err = fmt.Errorf("%s exited: %s", x.Provider, lastLines(msg, 6))
 	}
+	if code := exitCode(cmd); waitErr != nil && !res.LimitHit && ctx.Err() == nil && containsInt(x.limitExitCodes, code) {
+		res.LimitHit = true
+		if res.Err == nil {
+			res.Err = fmt.Errorf("%s exited with code %d (a usage limit): %s", x.Provider, code, lastLines(stderr.String(), 3))
+		}
+		if t, ok := limits.ParseReset(stderr.String(), time.Now()); ok {
+			res.ResetAt = t
+		}
+		emit(stamp(event.Event{Kind: event.LimitHit, Text: res.Err.Error()}))
+	}
 	if res.Err != nil && !res.LimitHit {
 		if x.Detector.Match(res.Err.Error()) || (waitErr != nil && x.Detector.Match(stderr.String())) {
 			res.LimitHit = true
@@ -220,10 +283,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 			emit(stamp(event.Event{Kind: event.LimitHit, Text: res.Err.Error()}))
 		}
 	}
-	code := -1
-	if cmd.ProcessState != nil {
-		code = cmd.ProcessState.ExitCode()
-	}
+	code := exitCode(cmd)
 	diag.Logf("exit agent=%s pid=%d code=%d after %s ok=%v killed=%v limit=%v tokens=%d err=%v stderr=%q",
 		s.AgentID, cmd.Process.Pid, code, res.Duration.Round(time.Millisecond), res.OK(), res.Killed, res.LimitHit,
 		res.Tokens.Total(), res.Err, lastLines(stderr.String(), 4))
@@ -239,6 +299,22 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	}
 	emit(stamp(done))
 	return res
+}
+
+func exitCode(cmd *exec.Cmd) int {
+	if cmd.ProcessState == nil {
+		return -1
+	}
+	return cmd.ProcessState.ExitCode()
+}
+
+func containsInt(list []int, n int) bool {
+	for _, x := range list {
+		if x == n {
+			return true
+		}
+	}
+	return false
 }
 
 // tail keeps the last max bytes written to it.
@@ -325,16 +401,44 @@ func (f *fileSet) list() []string {
 	return out
 }
 
-// New builds the real runners from config.
+// New builds the real runners from config: one per configured provider,
+// driven by its kind.
 func New(cfg *config.Config) Set {
 	det := limits.NewDetector(cfg.LimitPatterns)
-	return Set{
-		event.Codex:  withMCP(NewCodex(cfg.Providers[event.Codex], det), cfg.MCP),
-		event.Claude: withMCP(NewClaude(cfg.Providers[event.Claude], det), cfg.MCP),
+	set := Set{}
+	for _, name := range cfg.ProviderNames() {
+		pc := cfg.Providers[name]
+		var x *Exec
+		switch kind := pc.KindOf(name); kind {
+		case event.Codex:
+			x = NewCodex(pc, det)
+		case event.Claude:
+			x = NewClaude(pc, det)
+			if pc.Env["ANTHROPIC_BASE_URL"] != "" {
+				// Claude Code against another API (Ollama, DeepSeek): its
+				// price estimate is for Anthropic's models, not these.
+				x.parser = func() lineParser { return &claudeParser{noCost: true, cacheGuess: true} }
+			}
+		case event.Gemini:
+			x = NewGemini(pc, det)
+		case event.Qwen:
+			x = NewQwen(pc, det)
+		case event.Generic:
+			x = NewGeneric(name, pc, cfg.LimitPatterns)
+		default:
+			continue // rejected by config validation
+		}
+		x.Provider, x.Kind, x.MCP = name, pc.KindOf(name), cfg.MCP
+		set[name] = x
 	}
+	return set
 }
 
-func withMCP(x *Exec, m config.MCPCfg) *Exec {
-	x.MCP = m
-	return x
+// envNames returns the NAME part of NAME=value pairs.
+func envNames(env []string) []string {
+	out := make([]string, len(env))
+	for i, kv := range env {
+		out[i], _, _ = strings.Cut(kv, "=")
+	}
+	return out
 }

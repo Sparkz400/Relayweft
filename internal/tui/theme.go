@@ -119,16 +119,37 @@ func legacyConsole() bool {
 	return true
 }
 
-// ProviderColor returns the provider's color.
+// ProviderColor returns the provider's color: the brand color of the
+// providers sy ships presets for, else a stable pick from a palette.
 func (t Theme) ProviderColor(p string) lipgloss.Color {
 	switch p {
 	case event.Codex:
 		return t.Codex
 	case event.Claude:
 		return t.Claude
+	case "":
+		return t.Muted
 	}
-	return t.Muted
+	if c, ok := providerColors[p]; ok {
+		return c
+	}
+	h := 0
+	for _, r := range p {
+		h = h*31 + int(r)
+	}
+	return providerPalette[(h%len(providerPalette)+len(providerPalette))%len(providerPalette)]
 }
+
+// providerColors are the presets in default.yaml.
+var providerColors = map[string]lipgloss.Color{
+	event.Gemini: "#4796E3",
+	event.Qwen:   "#8B7CF6",
+	"deepseek":   "#4D6BFE",
+	"ollama":     "#C9C9C9",
+}
+
+// providerPalette colors any other provider.
+var providerPalette = []lipgloss.Color{"#E5C07B", "#56B6C2", "#C678DD", "#98C379", "#E06C75"}
 
 // Role returns the role's color.
 func (t Theme) Role(r string) lipgloss.Color {

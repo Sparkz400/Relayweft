@@ -7,41 +7,72 @@
 #
 # `sy models --refresh` re-reads the Codex model catalog from `codex debug models`.
 
-# Each role has a route on BOTH providers. `prefer` picks which one is used:
-#   codex | claude  - always that provider (unless it is at its usage limit)
-#   other           - the opposite provider of the planner (used for review)
+# Each role has a route on every provider (see providers: below). `prefer`
+# picks which one is used:
+#   codex | claude | <any provider> - always that provider (unless it is at its usage limit)
+#   other           - another provider than the planner's (used for review)
 #   auto            - whichever provider has used fewer tokens this session
-# If the preferred provider is at its usage limit, the role's route on the other
-# provider is used automatically. Leave `effort` empty to use the CLI default.
+# If the preferred provider is at its usage limit, the role's route on the next
+# provider (routing.provider_order) is used automatically. Leave `effort` empty
+# to use the CLI default. A provider without a model for a role never runs it.
 roles:
   planner:
     prefer: codex
     codex: {model: gpt-6.1-sol, effort: high}
     claude: {model: opus, effort: high}
+    gemini: {model: pro}
+    deepseek: {model: deepseek-v4-pro}
+    qwen: {model: "qwen3.6:35b-a3b-coding"}
+    ollama: {model: "qwen3.6:35b-a3b-coding"}
   worker:
     prefer: codex
     codex: {model: gpt-6.1-sol, effort: medium}
     claude: {model: sonnet, effort: medium}
+    gemini: {model: pro}
+    deepseek: {model: deepseek-v4-pro}
+    qwen: {model: "qwen3.6:35b-a3b-coding"}
+    ollama: {model: "qwen3.6:35b-a3b-coding"}
   worker_high:
     prefer: codex
     codex: {model: gpt-6.1-sol, effort: xhigh}
     claude: {model: opus, effort: high}
+    gemini: {model: pro}
+    deepseek: {model: deepseek-v4-pro}
+    qwen: {model: "qwen3.6:35b-a3b-coding"}
+    ollama: {model: "qwen3.6:35b-a3b-coding"}
   explorer:
     prefer: claude
     codex: {model: gpt-6-luna, effort: low}
     claude: {model: haiku, effort: ""}
+    gemini: {model: flash}
+    deepseek: {model: deepseek-flash}
+    qwen: {model: "qwen3.6:35b-a3b-coding"}
+    ollama: {model: "qwen3.6:35b-a3b-coding"}
   researcher:
     prefer: claude
     codex: {model: gpt-6-luna, effort: low}
     claude: {model: haiku, effort: ""}
+    gemini: {model: flash}
+    deepseek: {model: deepseek-flash}
+    qwen: {model: "qwen3.6:35b-a3b-coding"}
+    ollama: {model: "qwen3.6:35b-a3b-coding"}
   reviewer:
     prefer: other
     codex: {model: gpt-6.1-sol, effort: xhigh}
     claude: {model: opus, effort: high}
+    gemini: {model: pro}
+    deepseek: {model: deepseek-v4-pro}
+    qwen: {model: "qwen3.6:35b-a3b-coding"}
+    ollama: {model: "qwen3.6:35b-a3b-coding"}
   judge:
     prefer: claude
     codex: {model: gpt-6-luna, effort: low}
     claude: {model: haiku, effort: low}
+    gemini: {model: flash-lite}
+    deepseek: {model: deepseek-flash}
+    qwen: {model: "qwen3.6:35b-a3b-coding"}
+    ollama: {model: "qwen3.6:35b-a3b-coding"}
+    ollama-run: {model: "qwen3.6:35b-a3b-coding"}
 
 providers:
   codex:
@@ -80,12 +111,146 @@ providers:
       - {id: claude-sonnet-5-5, label: Sonnet 5.5, tier: standard}
       - {id: claude-haiku-4-5, label: Haiku 4.5, tier: fast}
 
+  # --- More providers. All start disabled: set `disabled: false` (and the
+  # role routes above) to use one. `kind` is the CLI protocol it speaks:
+  # codex, claude, gemini, qwen, or generic (a CLI described entirely
+  # here, see ollama-run). A kind-claude provider runs Claude Code
+  # against another Anthropic-compatible API; `env` is added to the CLI's
+  # environment (${VAR} comes from yours and never reaches the command line).
+  # `only_preferred: true` keeps a provider out of fallbacks, prefer: other and
+  # prefer: auto - it runs only roles that prefer it by name.
+  # `standby: [roles]` lets it take those roles anyway once every provider
+  # that would run them is at its limit or at routing.switch_at_utilization.
+
+  gemini:                          # Gemini CLI (Google): needs GEMINI_API_KEY; personal Google sign-in no longer works
+    disabled: true
+    label: Gemini
+    command: gemini
+    tested_version: "0.62.0"
+    write_permission_mode: auto_edit # auto_edit approves edits, not shell commands (verify commands are allowed)
+    extra_args: []
+    limit_cooldown: 1h
+    efforts: []                      # Gemini CLI has no effort setting
+    models:
+      - {id: pro, label: Gemini Pro (latest), tier: strong}
+      - {id: flash, label: Gemini Flash (latest), tier: standard}
+      - {id: flash-lite, label: Gemini Flash-Lite (latest), tier: fast}
+      - {id: gemini-3.1-pro-preview, label: Gemini 3.1 Pro, tier: strong}
+      - {id: gemini-3.8-flash, label: Gemini 3.8 Flash, tier: standard}
+      - {id: gemini-2.5-pro, label: Gemini 2.5 Pro, tier: strong}
+
+  deepseek:                        # DeepSeek's API, driven by Claude Code
+    disabled: true
+    kind: claude
+    label: DeepSeek
+    command: claude
+    tested_version: "2.1.288 (Claude Code)"
+    env:
+      ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
+      ANTHROPIC_AUTH_TOKEN: ${DEEPSEEK_API_KEY}
+      ANTHROPIC_API_KEY: ""
+      ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek-v4-pro
+      ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek-flash
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek-flash
+      CLAUDE_CODE_SUBAGENT_MODEL: deepseek-flash
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    write_permission_mode: acceptEdits
+    extra_args: []
+    limit_cooldown: 1h
+    efforts: []
+    models:
+      - {id: deepseek-v4-pro, label: DeepSeek V4 Pro, tier: strong}
+      - {id: deepseek-flash, label: DeepSeek Flash, tier: fast}
+
+  qwen:                            # Qwen Code, here on a local model through Ollama
+    disabled: true
+    label: Qwen
+    command: qwen
+    tested_version: "0.24.7"
+    env:                             # for Alibaba Model Studio: its OpenAI-compatible URL and ${DASHSCOPE_API_KEY}
+      OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+      OPENAI_API_KEY: ollama
+    write_permission_mode: auto-edit # auto-edit approves edits, not shell commands (verify commands are allowed)
+    extra_args: [--auth-type, openai]
+    only_preferred: true             # a local model is slow: never a silent fallback...
+    standby: [explorer, researcher]  # ...except for read-only work once Codex and Claude are nearly out
+    limit_cooldown: 10m
+    efforts: []
+    models:
+      - {id: "qwen3.6:35b-a3b-coding", label: Qwen 3.6 35B-A3B coding (local), tier: standard}
+
+  ollama:                          # any local Ollama model, driven by Claude Code
+    disabled: true
+    kind: claude
+    label: Ollama
+    command: claude
+    tested_version: "2.1.288 (Claude Code)"
+    env:                             # Ollama >= 0.14 speaks the Anthropic API; set OLLAMA_CONTEXT_LENGTH >= 32768
+      ANTHROPIC_BASE_URL: http://127.0.0.1:11434
+      ANTHROPIC_AUTH_TOKEN: ollama
+      ANTHROPIC_API_KEY: ""
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "qwen3.6:35b-a3b-coding"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "qwen3.6:35b-a3b-coding"
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "qwen3.6:35b-a3b-coding"
+      CLAUDE_CODE_SUBAGENT_MODEL: "qwen3.6:35b-a3b-coding"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    write_permission_mode: acceptEdits
+    extra_args: []
+    only_preferred: true
+    limit_cooldown: 10m
+    efforts: []
+    models:
+      - {id: "qwen3.6:35b-a3b-coding", label: Qwen 3.6 35B-A3B coding, tier: standard}
+
+  ollama-run:                      # a plain local model through `ollama run`, described with kind: generic
+    disabled: true
+    kind: generic
+    label: Ollama (plain)
+    command: ollama
+    tested_version: "ollama version is 0.35.1"
+    install_hint: "winget install Ollama.Ollama, then `ollama pull <model>` (ollama run downloads a missing model by itself)"
+    only_preferred: true
+    standby: [judge]                 # no tools: it sees only the prompt, so it suits closed questions like the judge's
+    limit_cooldown: 10m
+    efforts: []
+    extra_args: []
+    models:
+      - {id: "qwen3.6:35b-a3b-coding", label: Qwen 3.6 35B-A3B coding (plain), tier: standard}
+    generic:
+      args: [run]
+      model_args: ["{model}", --think=false, --nowordwrap, --verbose]  # --verbose prints the token counts on stderr
+      no_tools: true                 # it cannot read files or run commands: read-only work only
+      output: text                   # stdout is the answer
+      usage:
+        input: '^prompt eval count:\s+(\d+)'
+        output: '^eval count:\s+(\d+)'
+      limit_patterns: []
+      # A CLI with sessions, tools and JSON output is described the same way:
+      #   args: [--output-format, stream-json]
+      #   model_args: [-m, "{model}"]
+      #   read_only_args: [--approval-mode, plan]     # must keep it from editing and running commands
+      #   write_args: [--approval-mode, auto-edit]
+      #   resume_args: [--resume, "{session}"]
+      #   output: jsonl
+      #   json:
+      #     - {match: {type: system, subtype: init}, session: session_id}
+      #     - match: {type: assistant}
+      #       each: message.content
+      #       rules:
+      #         - {match: {type: text}, text: text}
+      #         - {match: {type: tool_use}, tool: name, tool_input: input}
+      #     - {match: {type: result}, final: result, input_tokens: usage.input_tokens, output_tokens: usage.output_tokens}
+      #     - {match: {type: result, is_error: "true"}, error: error.message, fatal: true}
+      #   edit_tools: [write_file, edit, replace]
+      #   limit_exit_codes: []                        # exit codes that mean "at the usage limit"
+
 routing:
   max_files_before_high: 5         # rule 5: more files than this -> worker_high
   sensitive_paths: [auth, login, password, secret, payment, billing, migration, migrations, crypto, security]
   judge: false                     # rule-less cases ask the judge model (costs a little quota)
   judge_below_confidence: 0.65
-  switch_at_utilization: 0.9       # move work to the other provider once one reports this share of its limit used (0 = off)
+  switch_at_utilization: 0.9       # move work to another provider once one reports this share of its limit used (0 = off)
+  provider_order: []               # where work goes when a provider is at its limit, in order (empty = codex, claude, then by name)
   learn: suggest                   # learned routes per repo: auto (refresh daily at task start) | suggest (only `sy tune --apply`) | off
   learn_min_samples: 8             # runs (recent ones count more) a route needs before it is learned
 
@@ -212,6 +377,8 @@ limit_patterns:
   - "\\b429\\b"
   - "purchase more credits"
   - "out of (credits|extra usage)"
+  - "resource.?exhausted"          # Gemini
+  - "insufficient balance"         # DeepSeek
 
 theme: auto       # auto | unicode | ascii (ascii is used automatically on legacy conhost)
 log_dir: ""       # empty = <user config dir>/switchyard/sessions

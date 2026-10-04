@@ -413,13 +413,20 @@ func TestMCPTempDirSweepsStale(t *testing.T) {
 	}
 }
 
-// TestMain keeps Claude's MCP config files out of the real cache dir.
+// TestMain keeps Claude's MCP config files out of the real cache dir. Run
+// with SY_FAKE_CLI set, the test binary is a fake agent CLI (fakeExe).
 func TestMain(m *testing.M) {
+	if os.Getenv("SY_FAKE_CLI") != "" {
+		os.Exit(runFakeCLI())
+	}
 	dir, err := os.MkdirTemp("", "sy-runner-test-")
 	if err != nil {
 		panic(err)
 	}
 	mcpRoot = func() string { return dir }
+	// Never read your real ~/.gemini (trustedFolders.json there may trust
+	// the temp folders the tests use).
+	geminiHome = func() (string, error) { return dir, nil }
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
