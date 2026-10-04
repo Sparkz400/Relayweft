@@ -186,6 +186,29 @@ func TestCommand(t *testing.T) {
 	}
 }
 
+// notify-send arguments: a NUL byte made exec fail ("invalid argument") and
+// the body is markup to the notification server, so "<toast/>" vanished
+// and "&amp;" showed as "&" (both seen with dunst on a real X display).
+func TestCommandLinuxText(t *testing.T) {
+	found := func(string) (string, error) { return "/usr/bin/notify-send", nil }
+	_, args, err := command("linux", "bell\a nul\x00 <b>t</b> & \xff", "a\nb\tc nul\x00 <toast/> &amp; Vec<T>", found)
+	if err != nil {
+		t.Fatal(err)
+	}
+	title, body := args[2], args[3]
+	if title != "bell nul <b>t</b> & �" {
+		t.Errorf("title = %q", title)
+	}
+	if body != "a\nb\tc nul &lt;toast/&gt; &amp;amp; Vec&lt;T&gt;" {
+		t.Errorf("body = %q", body)
+	}
+	for _, a := range args {
+		if strings.ContainsRune(a, 0) {
+			t.Errorf("argument %q has a NUL byte: exec rejects it", a)
+		}
+	}
+}
+
 func TestBell(t *testing.T) {
 	if Bell() != "\a" {
 		t.Fatal("Bell")
