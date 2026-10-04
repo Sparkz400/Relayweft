@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -72,9 +73,10 @@ func (r RoleCfg) With(provider string, rt Route) RoleCfg {
 	case event.Claude:
 		r.Claude = rt
 	default:
-		extra := make(map[string]Route, len(r.Extra)+1)
-		for k, v := range r.Extra {
-			extra[k] = v
+		// A copy, so the role it came from keeps its own map.
+		extra := maps.Clone(r.Extra)
+		if extra == nil {
+			extra = map[string]Route{}
 		}
 		extra[provider] = rt
 		r.Extra = extra

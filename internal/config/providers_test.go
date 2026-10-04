@@ -276,3 +276,15 @@ func TestRedactEnv(t *testing.T) {
 		t.Errorf("redacted = %v", got)
 	}
 }
+
+// With copies the extra routes: the role it came from keeps its own.
+func TestRoleWithCopiesExtraRoutes(t *testing.T) {
+	a := RoleCfg{}.With("gemini", Route{Model: "pro"})
+	b := a.With("qwen", Route{Model: "q"})
+	if _, ok := a.Extra["qwen"]; ok || len(a.Extra) != 1 {
+		t.Fatalf("With changed the original role: %+v", a.Extra)
+	}
+	if b.For("gemini").Model != "pro" || b.For("qwen").Model != "q" {
+		t.Errorf("new role = %+v", b.Extra)
+	}
+}
