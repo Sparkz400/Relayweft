@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -26,8 +28,9 @@ var (
 	// The default transport is kept on purpose: it honours HTTPS_PROXY,
 	// which corporate Windows machines often need.
 	updateHTTP = &http.Client{Timeout: 5 * time.Minute}
-	// updateTarget returns the binary to replace. It resolves symlinks so a
-	// winget "Links" symlink updates the real file, not the link.
+	// updateTarget returns the binary to replace. It resolves symlinks so
+	// a link (winget's "Links", Homebrew's bin) leads to the real file,
+	// whose folder tells which package manager installed it.
 	updateTarget = func() (string, error) {
 		exe, err := os.Executable()
 		if err != nil {
@@ -37,6 +40,18 @@ var (
 	}
 	updateIn  io.Reader = os.Stdin
 	updateOut io.Writer = os.Stdout
+	// updateOwnerQuery runs a package database query (dpkg-query, rpm,
+	// pacman, apk) and returns its output. It fails when the tool is not
+	// installed or the file belongs to no package.
+	updateOwnerQuery = func(name string, args ...string) (string, error) {
+		if _, err := exec.LookPath(name); err != nil {
+			return "", err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, name, args...).Output()
+		return strings.TrimSpace(string(out)), err
+	}
 )
 
 // maxDownload caps a release asset so a broken redirect cannot fill the disk.
@@ -58,12 +73,16 @@ func cmdUpdate(args []string) error {
 	fs := flag.NewFlagSet("sy update", flag.ContinueOnError)
 	check := fs.Bool("check", false, "only show whether a newer release exists")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	force := fs.Bool("force", false, "replace the binary even if a package manager installed it")
 	fs.Usage = func() {
-		fmt.Fprint(fs.Output(), `Usage: sy update [--check] [--yes]
+		fmt.Fprint(fs.Output(), `Usage: sy update [--check] [--yes] [--force]
 
 Downloads the latest release from GitHub, verifies its SHA-256 against
 checksums.txt and replaces this sy binary. Set GITHUB_TOKEN or GH_TOKEN
 if the repository is private.
+
+If Homebrew, Scoop, winget or a Linux package (.deb, .rpm, .apk, AUR)
+installed sy, it says how to update with that instead and changes nothing.
 `)
 	}
 	if err := fs.Parse(args); err != nil {
@@ -87,20 +106,33 @@ if the repository is private.
 		fmt.Fprintln(out, "sy is up to date.")
 		return nil
 	}
+	target, targetErr := updateTarget()
+	var pm pkgManager
+	var managed bool
+	if targetErr == nil {
+		pm, managed = packageManager(target, runtime.GOARCH)
+	}
 	if *check {
-		fmt.Fprintln(out, "An update is available: run `sy update`.")
+		if managed {
+			fmt.Fprintf(out, "An update is available. sy was installed with %s: %s.\n", pm.name, pm.how)
+		} else {
+			fmt.Fprintln(out, "An update is available: run `sy update`.")
+		}
 		if rel.HTMLURL != "" {
 			fmt.Fprintln(out, "release notes:", rel.HTMLURL)
 		}
 		return nil
 	}
-
-	target, err := updateTarget()
-	if err != nil {
-		return fmt.Errorf("cannot locate the running sy binary: %w", err)
+	if targetErr != nil {
+		return fmt.Errorf("cannot locate the running sy binary: %w", targetErr)
 	}
-	if strings.Contains(strings.ToLower(filepath.ToSlash(target)), "/scoop/apps/") {
-		fmt.Fprintln(out, "note: sy was installed with scoop; `scoop update sy` keeps scoop's records in sync.")
+	if managed {
+		// Replacing the binary under a package manager leaves its records
+		// wrong, and its next upgrade may fail or roll sy back.
+		if !*force {
+			return fmt.Errorf("this sy was installed with %s, so `sy update` leaves it alone: %s (release: %s). `sy update --force` replaces the binary anyway", pm.name, pm.how, releaseURL(rel))
+		}
+		fmt.Fprintf(out, "note: sy was installed with %s; replacing it anyway (--force). Its records still name the old version.\n", pm.name)
 	}
 
 	name := assetName(runtime.GOOS, runtime.GOARCH)
@@ -154,6 +186,65 @@ if the repository is private.
 		fmt.Fprintln(out, "To roll back, download an older release from https://github.com/sparkz400/switchyard/releases.")
 	}
 	return nil
+}
+
+// pkgManager is a package manager that installed sy and how to update with it.
+type pkgManager struct {
+	name string // "Homebrew", "a .deb package (switchyard)"
+	how  string // what to do instead of `sy update`
+}
+
+// packageManager reports whether a package manager installed the sy binary
+// at target (symlinks already resolved). Homebrew, Scoop and winget are told
+// by their folders. A binary under /usr/ is looked up in the system's
+// package database (dpkg, rpm, pacman, apk), since the .deb, .rpm, .apk and
+// AUR packages all install /usr/bin/sy.
+func packageManager(target, goarch string) (pkgManager, bool) {
+	// Backslashes too: tests pass Windows paths on every OS.
+	p := strings.ReplaceAll(target, `\`, "/")
+	lower := strings.ToLower(p)
+	switch {
+	case strings.Contains(p, "/Cellar/"):
+		return pkgManager{"Homebrew", "run `brew upgrade switchyard`"}, true
+	case strings.Contains(lower, "/scoop/apps/"):
+		return pkgManager{"Scoop", "run `scoop update sy`"}, true
+	case strings.Contains(lower, "/winget/packages/"):
+		return pkgManager{"winget", "run `winget upgrade Sparkz400.Switchyard`"}, true
+	case !strings.HasPrefix(p, "/usr/"):
+		return pkgManager{}, false
+	}
+	// The release's package assets are named switchyard-linux-<arch>.<ext>.
+	asset := func(ext string) string { return "switchyard-linux-" + goarch + "." + ext }
+	if out, err := updateOwnerQuery("dpkg-query", "-S", p); err == nil {
+		// "switchyard: /usr/bin/sy"; diversions add "diversion by ..." lines.
+		for _, line := range strings.Split(out, "\n") {
+			if pkg, _, ok := strings.Cut(line, ": "); ok && !strings.HasPrefix(line, "diversion ") {
+				return pkgManager{"a .deb package (" + pkg + ")",
+					"download " + asset("deb") + " from the release and run `sudo apt install ./" + asset("deb") + "`"}, true
+			}
+		}
+	}
+	if out, err := updateOwnerQuery("rpm", "-qf", "--queryformat", "%{NAME}\n", p); err == nil && out != "" {
+		return pkgManager{"an .rpm package (" + firstLine(out) + ")",
+			"download " + asset("rpm") + " from the release and run `sudo dnf install ./" + asset("rpm") + "`"}, true
+	}
+	if out, err := updateOwnerQuery("pacman", "-Qqo", p); err == nil && out != "" {
+		pkg := firstLine(out)
+		return pkgManager{"pacman (" + pkg + ")",
+			"update the " + pkg + " package with your AUR helper (for example `yay -Syu`) or makepkg"}, true
+	}
+	if out, err := updateOwnerQuery("apk", "info", "-q", "--who-owns", p); err == nil && out != "" {
+		return pkgManager{"an .apk package (" + firstLine(out) + ")",
+			"download " + asset("apk") + " from the release and run `sudo apk add --allow-untrusted ./" + asset("apk") + "`"}, true
+	}
+	return pkgManager{}, false
+}
+
+func releaseURL(rel *ghRelease) string {
+	if rel.HTMLURL != "" {
+		return rel.HTMLURL
+	}
+	return "https://github.com/sparkz400/switchyard/releases/tag/" + rel.TagName
 }
 
 // cleanupOldBinary removes the <exe>.old (and .old-N) files left behind by

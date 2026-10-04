@@ -1,0 +1,5 @@
+# Shell scripts, PKGBUILD and .SRCINFO run or get read on Linux (also
+# from a Windows checkout mounted into Docker), so keep them LF everywhere.
+*.sh text eol=lf
+packaging/aur/* text eol=lf
+packaging/aur/.SRCINFO text eol=lf

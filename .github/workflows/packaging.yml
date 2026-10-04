@@ -1,0 +1,140 @@
+name: packaging
+
+# Installs sy the way users do: the Homebrew formula from this repo as a
+# tap (macOS and Linux), the .deb, .rpm and .apk packages built from this
+# branch in Ubuntu, Fedora and Alpine containers, and the AUR PKGBUILD in
+# an Arch Linux container. It also checks that the committed manifests are
+# what packaging/render-manifests.sh makes for their release.
+on:
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "Formula/**"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/packaging.yml"
+      - "cmd/sy/update.go"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: render for the formula's release and compare
+        run: |
+          version="$(sed -n 's/^  version "\(.*\)"$/\1/p' Formula/switchyard.rb)"
+          echo "formula version: $version"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/checksums.txt" \
+            "https://github.com/sparkz400/switchyard/releases/download/v$version/checksums.txt"
+          sh packaging/render-manifests.sh "$version" "$RUNNER_TEMP/checksums.txt" "$RUNNER_TEMP/winget"
+          if ! git diff --exit-code; then
+            echo "::error::the committed manifests differ from the rendered ones; run packaging/render-manifests.sh $version and commit"
+            exit 1
+          fi
+
+  homebrew:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: brew install from this branch
+        run: |
+          if ! command -v brew >/dev/null; then
+            # Linux runners have Homebrew, but not on PATH.
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          fi
+          # The tap is a clone of this checkout, as `brew tap` makes of
+          # https://github.com/Sparkz400/Switchyard.
+          brew tap sparkz400/switchyard "$GITHUB_WORKSPACE"
+          brew install sparkz400/switchyard/switchyard
+          brew test sparkz400/switchyard/switchyard
+          brew style sparkz400/switchyard/switchyard
+          brew audit --strict --formula sparkz400/switchyard/switchyard
+          sy="$(brew --prefix)/bin/sy"
+          "$sy" version
+          want="switchyard $(sed -n 's/^  version "\(.*\)"$/\1/p' Formula/switchyard.rb)"
+          [ "$("$sy" version)" = "$want" ]
+          echo "sy=$sy" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: sy update leaves Homebrew's sy alone
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # This branch's sy, as an old version, in place of the formula's.
+        run: |
+          real="$(cd "$(dirname "$sy")" && cd "$(dirname "$(readlink "$sy")")" && pwd -P)/sy"
+          echo "real binary: $real"
+          rm -f "$real"
+          go build -ldflags "-X main.version=0.0.1" -o "$real" ./cmd/sy
+          "$sy" update --check | tee "$RUNNER_TEMP/check.txt"
+          grep -q 'brew upgrade switchyard' "$RUNNER_TEMP/check.txt"
+          if "$sy" update --yes; then
+            echo "::error::sy update replaced Homebrew's binary"
+            exit 1
+          fi
+          [ "$("$sy" version)" = "switchyard 0.0.1" ]
+          brew uninstall switchyard
+          [ ! -e "$sy" ]
+
+  linux-packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: build sy and the packages
+        env:
+          CGO_ENABLED: "0"
+        # An old version, so `sy update` sees a newer release and must
+        # leave the package's binary alone.
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=0.0.1" -o dist/sy-linux-amd64 ./cmd/sy
+          sh packaging/linux-packages.sh 0.0.1 dist amd64
+          ls -l dist
+      - name: install in containers
+        env:
+          # Read-only token against the GitHub API's rate limit for the
+          # `sy update` checks.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          for t in "ubuntu:24.04 deb" "debian:stable deb" "fedora:latest rpm" "alpine:latest apk"; do
+            set -- $t
+            echo "::group::$1"
+            docker run --rm -e GH_TOKEN -v "$PWD:/src:ro" -w /src "$1" \
+              sh packaging/test-install.sh "$2" "dist/switchyard-linux-amd64.$2" 0.0.1
+            echo "::endgroup::"
+          done
+
+  aur:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: makepkg and pacman in Arch Linux
+        run: docker run --rm -v "$PWD:/src:ro" -w /src archlinux:latest sh packaging/test-install.sh aur
