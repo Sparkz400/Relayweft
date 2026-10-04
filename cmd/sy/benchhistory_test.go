@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/switchyard/internal/sysload"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,6 +35,11 @@ func TestIsTestPath(t *testing.T) {
 		"spec/models/user_spec.rb":          true,
 		"docs/testing.md":                   false,
 		"internal/web/__snapshots__/x.snap": true,
+		"integration_test/app_test.dart":    true,
+		"integration_test/robot.dart":       true,
+		"lib/src/parser_test.dart":          true,
+		"test_driver/main.dart":             true,
+		"lib/src/parser.dart":               false,
 	} {
 		if got := isTestPath(p); got != want {
 			t.Errorf("isTestPath(%q) = %v", p, got)
@@ -68,18 +75,166 @@ func TestPickHistory(t *testing.T) {
 		{SHA: "a5", Message: "Speed up the pool reset path", Files: []orchestrator.HistoryFile{f("a.go", 9), f("b.go", 9)}},
 		{SHA: "a6", Message: "wip", Files: []orchestrator.HistoryFile{f("a.go", 9), f("b.go", 9), f("a_test.go", 1)}},
 		{SHA: "a7", Message: "Add icons to the web UI", Files: []orchestrator.HistoryFile{f("a.go", 9), f("b.go", 9), f("a_test.go", 1), {Path: "icon.png", Binary: true}}},
+		{SHA: "a8", Message: "Add retries to the uploader", Files: []orchestrator.HistoryFile{f("a.go", 0), f("b.go", 0), f("a_test.go", 0)}, Uncounted: true},
 	}
 	got, skipped := pickHistory(commits, lim)
 	if len(got) != 1 || got[0].SHA != "a1" || len(got[0].code) != 2 || got[0].lines != 50 || len(got[0].tests) != 1 {
 		t.Fatalf("picked %+v", got)
 	}
-	for _, why := range []string{"fewer than 2 code files", "more than 100 changed lines", "no test changes", "binary files outside the tests"} {
+	for _, why := range []string{"fewer than 2 code files", "more than 100 changed lines", "no test changes", "binary files outside the tests", "changed lines not counted"} {
 		if skipped[why] != 1 {
 			t.Errorf("skipped[%q] = %d (%v)", why, skipped[why], skipped)
 		}
 	}
-	if n := skipped["message is not a task (merge, revert, bump, wip or too short)"]; n != 2 {
+	if n := skipped["message is not a task (merge, revert, sync, bump, wip or too short)"]; n != 2 {
 		t.Errorf("not-a-task skipped %d (%v)", n, skipped)
+	}
+	// Before the line counts only the cheap checks apply.
+	if _, why := judgeHistory(orchestrator.HistoryCommit{Message: "Add icons to the web UI", Uncounted: true,
+		Files: []orchestrator.HistoryFile{f("a.go", 0), f("b.go", 0), f("a_test.go", 0)}}, lim); why != "" {
+		t.Errorf("uncounted commit skipped: %s", why)
+	}
+}
+
+// Mirror and sync commits are copies of work done elsewhere, not tasks.
+func TestHistorySkipsSyncAndMirrorCommits(t *testing.T) {
+	for s, want := range map[string]bool{
+		"Sync from upstream (2026-10-01)":           false,
+		"Synced with the internal repo":             false,
+		"Auto-sync from monorepo":                   false,
+		"Mirror of github.com/acme/tool@1a2b3c":     false,
+		"Mirrored from gitlab":                      false,
+		"Merge branch 'main' into feature":          false,
+		"Merge pull request #12 from a/b":           false,
+		"Revert \"Add the cache\"":                  false,
+		"Import from the old repository":            false,
+		"Update from upstream":                      false,
+		"Sync the timer with the server clock":      true,
+		"Add mirror support to the uploader":        true,
+		"Fix the sync loop dropping the last batch": true,
+	} {
+		if got := taskLikeSubject(s); got != want {
+			t.Errorf("taskLikeSubject(%q) = %v", s, got)
+		}
+	}
+}
+
+// When no commit passes validation, the error names the most common
+// reason instead of always guessing a missing --setup.
+func TestNoValidCommitNamesTheMainReason(t *testing.T) {
+	fails := validateSkips(skipFailsOnCommit+": FAIL TestX", skipFailsOnCommit+": exit 1", skipFailsOnCommit+": FAIL TestY")
+	err := noValidCommit(fails, "npm ci")
+	if err == nil || !strings.Contains(err.Error(), "already fails on all 3 commits") || !strings.Contains(err.Error(), "fix or narrow the check (--check)") ||
+		strings.Contains(err.Error(), "--setup") {
+		t.Errorf("all fail: %v", err)
+	}
+	mixed := validateSkips(skipPassesBefore, skipPassesBefore, skipFailsOnCommit+": x")
+	if err := noValidCommit(mixed, ""); err == nil || !strings.Contains(err.Error(), "already passes before the change on 2 of the 3") {
+		t.Errorf("mostly passing: %v", err)
+	}
+	setup := validateSkips("on the commit: setup failed: npm ERR!", "on the parent: setup failed: npm ERR!")
+	if err := noValidCommit(setup, "npm ci"); err == nil || !strings.Contains(err.Error(), "--setup command failed on all 2") {
+		t.Errorf("setup: %v", err)
+	}
+	if err := noValidCommit(validateSkips("on the parent: timed out"), ""); err == nil || !strings.Contains(err.Error(), "--check-timeout") {
+		t.Errorf("timeout: %v", err)
+	}
+}
+
+func validateSkips(whys ...string) map[string]int {
+	m := map[string]int{}
+	for _, w := range whys {
+		m[skipKind(w)]++
+	}
+	return m
+}
+
+// The file's header says how to run it, with --dir when sy bench would not
+// find the project from where the file is; an empty setup is left out.
+func TestHistoryBenchFileHeader(t *testing.T) {
+	repo, elsewhere := t.TempDir(), t.TempDir()
+	out := filepath.Join(elsewhere, "bench-history.yaml")
+	cmd := historyRunCmd(out, repo, true)
+	if want := "sy bench --dir " + argQuote(repo) + " --file " + argQuote(out); cmd != want {
+		t.Errorf("outside the repo: %q, want %q", cmd, want)
+	}
+	if got := historyRunCmd(filepath.Join(repo, "b.yaml"), repo, true); !strings.Contains(got, "--dir") {
+		t.Errorf("--dir given: %q", got)
+	}
+	chdir(t, repo)
+	if got := historyRunCmd("bench-history.yaml", repo, false); got != "sy bench --file bench-history.yaml" {
+		t.Errorf("in the repo: %q", got)
+	}
+	if got := argQuote(`C:\My Repo`); got != `"C:\My Repo"` {
+		t.Errorf("argQuote = %s", got)
+	}
+	h := historyCandidate{HistoryCommit: orchestrator.HistoryCommit{SHA: "abcdef123", Parent: "p"}, tests: []string{"a_test.go"}, prompt: "Add a"}
+	data, err := historyBenchFile([]historyCandidate{h}, historyOpts{out: out, check: "go test ./...", runCmd: cmd}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "# Run it with: "+cmd+"\n") || strings.Contains(string(data), "setup:") {
+		t.Errorf("bench file:\n%s", data)
+	}
+}
+
+// --no-validate without a check command lists the commits that fit and
+// writes nothing.
+func TestBenchFromHistoryNoValidateLists(t *testing.T) {
+	isolate(t)
+	dir := gitInit(t)
+	chdir(t, dir)
+	os.MkdirAll("spec", 0o755)
+	for name, body := range map[string]string{"a.lua": "return 1\n", "b.lua": "return 2\n", "spec/a_spec.lua": "-- a\n"} {
+		os.WriteFile(name, []byte(body), 0o644)
+	}
+	run(t, dir, "add", "-A")
+	run(t, dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "Add the a and b modules")
+	out, err := captureStdout(t, func() error { return cmdBench([]string{"--from-history", "--no-validate"}) })
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Add the a and b modules") || !strings.Contains(out, "listed only") {
+		t.Errorf("output:\n%s", out)
+	}
+	if _, err := os.Stat("bench-history.yaml"); err == nil {
+		t.Error("wrote a bench file without a check")
+	}
+	if err := cmdBench([]string{"--from-history"}); err == nil || !strings.Contains(err.Error(), "--check") {
+		t.Errorf("validating without a check: %v", err)
+	}
+}
+
+// Low free RAM holds the next history step, at most busy_max_wait.
+func TestWaitForMemory(t *testing.T) {
+	oldLoad, oldPoll := benchLoad, benchPoll
+	t.Cleanup(func() { benchLoad, benchPoll = oldLoad, oldPoll })
+	benchPoll = time.Millisecond
+	reads := 0
+	benchLoad = func() sysload.Sample {
+		reads++
+		if reads < 3 {
+			return sysload.Sample{MemOK: true, MemFree: 100 << 20}
+		}
+		return sysload.Sample{MemOK: true, MemFree: 4 << 30}
+	}
+	oc := config.OrchestratorCfg{MinFreeMemoryMB: 1024, BusyMaxWait: config.Duration(time.Minute)}
+	out, _ := captureStdout(t, func() error { waitForMemory(context.Background(), oc, "the scan"); return nil })
+	if reads != 3 || !strings.Contains(out, "only 100 MB RAM free") {
+		t.Errorf("%d reads, output %q", reads, out)
+	}
+	// Still low after busy_max_wait: go on.
+	reads = -1000
+	oc.BusyMaxWait = config.Duration(5 * time.Millisecond)
+	out, _ = captureStdout(t, func() error { waitForMemory(context.Background(), oc, "the scan"); return nil })
+	if !strings.Contains(out, "going on with the scan") {
+		t.Errorf("output %q", out)
+	}
+	// Off when min_free_memory_mb is 0.
+	reads = 0
+	waitForMemory(context.Background(), config.OrchestratorCfg{}, "the scan")
+	if reads != 0 {
+		t.Error("read the load with the limit off")
 	}
 }
 

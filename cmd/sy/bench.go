@@ -54,7 +54,7 @@ var benchRunners = runner.New
 
 type benchFile struct {
 	Modes   []string        `yaml:"modes"`
-	Setup   string          `yaml:"setup"`
+	Setup   string          `yaml:"setup,omitempty"`
 	Timeout config.Duration `yaml:"timeout"`
 	// Learn updates the repo's learned routes when the bench ends
 	// (benchlearn.go).
