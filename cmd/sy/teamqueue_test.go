@@ -39,6 +39,7 @@ type fakeTeam struct {
 	nextID     int64
 	created    int
 	beforePost func(n int)
+	dropPosts  bool // accept comments but never list them
 }
 
 func (f *fakeTeam) add(n int, author, assoc, body string) {
@@ -105,7 +106,9 @@ func (f *fakeTeam) server(t *testing.T) string {
 			if f.beforePost != nil {
 				f.beforePost(n)
 			}
-			f.add(n, "me", "OWNER", in.Body)
+			if !f.dropPosts {
+				f.add(n, "me", "OWNER", in.Body)
+			}
 			w.WriteHeader(201)
 			io.WriteString(w, `{}`)
 		case scan(p, "/repos/o/r/issues/%d", &n) && r.Method == "GET":
@@ -260,6 +263,19 @@ func TestTeamTakeAndEnd(t *testing.T) {
 		t.Fatal("--retry-failed did not take it")
 	} else {
 		cl3.end(claimReleased, "")
+	}
+}
+
+// A claim that never shows up names the forge as the user knows it:
+// Forgejo on Codeberg, not Gitea.
+func TestTeamClaimMissingNamesForgejo(t *testing.T) {
+	dir, api, url := teamSetup(t)
+	q := testQueue(t, teamFlags(t, dir, url))
+	api.dropPosts = true
+	q.repo.Kind, q.repo.Host = forge.Gitea, "codeberg.org"
+	_, _, err := q.take(3)
+	if err == nil || !strings.Contains(err.Error(), "does not show up on Forgejo") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

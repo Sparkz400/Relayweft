@@ -215,7 +215,7 @@ func (q *teamQueue) take(n int) (cl *claim, skip string, err error) {
 		}
 	}
 	if cl.comment == 0 {
-		return nil, "", fmt.Errorf("claim #%d: the claim comment does not show up on %s", n, q.repo.Kind.Name())
+		return nil, "", fmt.Errorf("claim #%d: the claim comment does not show up on %s", n, q.repo.ForgeName())
 	}
 	v = evalQueue(cs, q.trusted, q.now())
 	if v.holder == nil || v.holder.id != cl.id {
