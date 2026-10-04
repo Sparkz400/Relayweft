@@ -33,7 +33,7 @@ type AgentSession struct {
 	SessionID string // the CLI's own session/thread id
 	Dir       string // where it ran
 	// Slot is the pool worktree Dir is in ("" = the main tree): a
-	// follow-up resumes a Claude session there (followUpSlot).
+	// follow-up resumes the session there (followUpSlot).
 	Slot  string `json:",omitempty"`
 	Final string // its last answer
 	Title string // the step it worked on
@@ -163,7 +163,8 @@ func followUpContext(s AgentSession, text string) string {
 // resumed so it keeps its context. When the conversation cannot be resumed
 // (the CLI forgot it, or it ran in a worktree that is gone) a fresh agent
 // on the same route gets the earlier task and answer as context instead.
-// It runs in the main working tree, like a one-step task.
+// It runs in the main working tree, like a one-step task, or in the pool
+// worktree the agent ran in (followUpSlot).
 func (o *Orchestrator) FollowUp(ctx context.Context, agentID, text string) TaskResult {
 	s, ok := o.Session(agentID)
 	if !ok {
@@ -243,18 +244,23 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 			Model: s.Model, Effort: s.Effort, Prompt: text, Dir: o.opts.Dir, Timeout: cfg.Orchestrator.AgentTimeout.D(),
 			AllowedCommands: cfg.Verify.Commands}
 		resumable := s.SessionID != ""
-		// Claude Code (and Gemini CLI, Qwen Code) keep their sessions per
-		// working directory: an agent that ran in a pool worktree is
-		// resumed there, and its result lands like a step's.
+		// An agent that ran in a pool worktree is resumed there, whatever
+		// its CLI: its history names the worktree's paths, so resumed
+		// anywhere else (Codex finds its sessions anywhere) it would work
+		// in the wrong folder. Claude Code, Gemini CLI and Qwen Code keep
+		// their sessions per folder, so for them no other folder works at
+		// all. The result lands like a step's.
 		var sl *slot
 		var loc stepLoc
-		if resumable && cfg.SessionPerDir(s.Provider) && !samePath(s.Dir, o.opts.Dir) {
+		inPool := s.Slot != "" || slotOf(t.root, s.Dir) != ""
+		if resumable && !samePath(s.Dir, o.opts.Dir) && (inPool || cfg.SessionPerDir(s.Provider)) {
 			var why string
 			if sl, loc, why = o.followUpSlot(t, s); sl == nil {
 				o.logf("%s's session cannot be resumed in %s (%s); starting a fresh agent with its context", s.AgentID, s.Dir, why)
 				resumable = false
 			} else {
 				defer sl.release()
+				o.slotNotes(t, sl)
 				spec.Dir = loc.dir
 			}
 		}
@@ -329,8 +335,9 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 
 // followUpSlot prepares the pool worktree an agent ran in for a follow-up
 // that resumes its session there. Claude Code keeps its sessions per
-// folder, and resuming from the main tree would leave the agent's earlier
-// absolute paths pointing into the pool worktree. The slot is locked and
+// folder, and resuming any CLI (Codex too) from the main tree would leave
+// the agent's earlier absolute paths pointing into the pool worktree. The
+// slot is locked and
 // moved to the main tree's current state (t.snapshot, taken by the
 // follow-up), so the agent sees what the person sees; its work is then
 // merged into the main tree like a step's (landSlot). With a nil slot, why
