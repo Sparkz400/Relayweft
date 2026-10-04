@@ -46,7 +46,9 @@ func TestSelectGo(t *testing.T) {
 		{[]string{"fixture.json"}, "go test ./f"},                        // named by f's test
 		{[]string{"README.md"}, "-"},                                     // docs
 		{[]string{"go.mod"}, ""},                                         // dependencies
-		{[]string{"a/testdata/x.golden"}, ""},                            // test data any test may read
+		{[]string{"a/testdata/x.golden"}, "go test ./a"},                 // test data belongs to its package
+		{[]string{"a/testdata/gen.go"}, "go test ./a"},                   // go ignores testdata, .go files too
+		{[]string{"x/testdata/y"}, ""},                                   // test data outside a package
 		{[]string{"ci/build.sh"}, ""},                                    // not Go, named nowhere
 		{[]string{"gone/x.go"}, ""},                                      // a package that no longer exists
 		{[]string{"a/a.go", "c/c.go", "e/e.go", "f/f.go", "g/g.go"}, ""}, // every package
@@ -80,6 +82,15 @@ func TestSelectGo(t *testing.T) {
 	}
 	if !strings.Contains(sel(t, dir, "go test ./...", "a/a.go").Why, "3 of 7 packages") {
 		t.Errorf("reason: %q", sel(t, dir, "go test ./...", "a/a.go").Why)
+	}
+}
+
+// Test data another package reaches into is shared: the run is full.
+func TestSelectGoSharedTestData(t *testing.T) {
+	dir := goTree(t)
+	os.WriteFile(filepath.Join(dir, "c", "c_test.go"), []byte("package c\n\nvar golden = \"../a/testdata/x.golden\"\n"), 0o644)
+	if p := sel(t, dir, "go test ./...", "a/testdata/x.golden"); !p.Full || !strings.Contains(p.Why, "example.com/m/c") {
+		t.Errorf("shared test data: %+v", p)
 	}
 }
 

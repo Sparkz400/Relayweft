@@ -152,7 +152,7 @@ type goSel struct {
 
 // goAffected finds the packages of the changed files and every package
 // that imports them (tests included), or says why it cannot: go.mod,
-// go.sum, test data and files sy cannot place. f is the verify command,
+// go.sum, test data another package reads and files sy cannot place. f is the verify command,
 // for its build tags.
 func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 	for _, file := range c.files {
@@ -160,8 +160,6 @@ func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 		switch {
 		case base == "go.mod" || base == "go.sum" || base == "go.work" || base == "go.work.sum":
 			return nil, file + " changed"
-		case slices.Contains(strings.Split(file, "/"), "testdata"):
-			return nil, file + " is test data, which any test may read"
 		case strings.HasPrefix(file, "vendor/"):
 			return nil, file + " is vendored code"
 		}
@@ -191,8 +189,24 @@ func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 		sources[k] = b
 		return b
 	}
+	var dataOwners []string // packages whose test data changed
 	for _, file := range c.files {
 		dir := path.Dir(file)
+		if parts := strings.Split(file, "/"); slices.Contains(parts, "testdata") {
+			// Test data belongs to the package around its testdata folder
+			// (go ignores the folder itself, .go files included).
+			owner := strings.Join(parts[:slices.Index(parts, "testdata")], "/")
+			if owner == "" {
+				owner = "."
+			}
+			ip, ok := pkgOf(owner)
+			if !ok {
+				return nil, file + " is test data outside a package"
+			}
+			testOnly[ip] = true
+			dataOwners = append(dataOwners, ip)
+			continue
+		}
 		if strings.HasSuffix(file, ".go") {
 			ip, ok := pkgOf(dir)
 			if !ok {
@@ -237,6 +251,22 @@ func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 		case isDoc(file):
 		default:
 			return nil, fmt.Sprintf("%s is neither Go code nor named by any package, so sy cannot tell which tests read it", file)
+		}
+	}
+	// Another package reaching into a testdata folder ("../x/testdata")
+	// shares it: sy cannot tell which files it reads.
+	if len(dataOwners) > 0 {
+		for ip, p := range pkgs {
+			if slices.Contains(dataOwners, ip) {
+				continue
+			}
+			for _, g := range p.goFiles {
+				for _, line := range bytes.Split(read(ip, g), []byte("\n")) {
+					if bytes.Contains(line, []byte("testdata")) && bytes.Contains(line, []byte("..")) {
+						return nil, fmt.Sprintf("test data changed and %s reads test data of another package (%s)", ip, g)
+					}
+				}
+			}
 		}
 	}
 	var start []string
