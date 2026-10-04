@@ -94,3 +94,6 @@ func ReapOrphans(file string) bool {
 	os.Remove(file)
 	return true
 }
+
+// Alive reports whether the process with this pid is still running.
+func Alive(pid int) bool { return pid > 0 && alive(pid) }

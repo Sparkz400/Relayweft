@@ -9,7 +9,75 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
+
+var procIsProcessInJob = windows.NewLazySystemDLL("kernel32.dll").NewProc("IsProcessInJob")
+
+func isProcessInJob(p, j windows.Handle, in *bool) error {
+	var r int32
+	if ok, _, err := procIsProcessInJob.Call(uintptr(p), uintptr(j), uintptr(unsafe.Pointer(&r))); ok == 0 {
+		return err
+	}
+	*in = r != 0
+	return nil
+}
+
+// A browser sy opens must not join sy's kill-on-close job: found on a real
+// desktop, where `sy app` started Edge, the user opened another Edge window
+// (it lives in the same process) and it was killed when sy exited. Agents
+// (no Breakaway) must stay in the job.
+func TestBreakawayLeavesGuardJob(t *testing.T) {
+	if job == 0 {
+		// An outer job (CI runner, terminal) that forbids breakaway makes
+		// CREATE_BREAKAWAY_FROM_JOB fail whatever sy's own job allows.
+		var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+		var inJob bool
+		isProcessInJob(windows.CurrentProcess(), 0, &inJob)
+		if inJob {
+			err := windows.QueryInformationJobObject(0, windows.JobObjectExtendedLimitInformation,
+				uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil)
+			if err == nil && info.BasicLimitInformation.LimitFlags&(windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK|windows.JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK) == 0 {
+				t.Skip("this test runs in a job that forbids breakaway")
+			}
+		}
+	}
+	if err := Guard(); err != nil {
+		t.Fatal(err)
+	}
+	start := func(away bool) *exec.Cmd {
+		cmd := exec.Command("cmd.exe", "/c", "ping -n 30 127.0.0.1 >nul")
+		background(cmd)
+		if away {
+			Breakaway(cmd)
+		}
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start (breakaway=%v): %v", away, err)
+		}
+		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		return cmd
+	}
+	inGuardJob := func(cmd *exec.Cmd) bool {
+		h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(cmd.Process.Pid))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer windows.CloseHandle(h)
+		var in bool
+		if err := isProcessInJob(h, job, &in); err != nil {
+			t.Fatal(err)
+		}
+		return in
+	}
+	if inGuardJob(start(true)) {
+		t.Error("a Breakaway child is in sy's kill-on-close job; it would die with sy")
+	}
+	if !inGuardJob(start(false)) {
+		t.Error("an ordinary child left sy's job; it would outlive sy")
+	}
+}
 
 // An npm-style .cmd shim in a directory with a space, called with quoted
 // arguments and a prompt on stdin, as the runners do.

@@ -253,7 +253,7 @@ func TestReplaceBinaryBothStyles(t *testing.T) {
 		exe := filepath.Join(dir, "sy")
 		os.WriteFile(exe, []byte("v1"), 0o755)
 		os.WriteFile(exe+".old", []byte("stale"), 0o755)
-		if err := replaceBinary(exe, []byte("v2"), windows); err != nil {
+		if _, err := replaceBinary(exe, []byte("v2"), windows); err != nil {
 			t.Fatalf("windows=%v: %v", windows, err)
 		}
 		if readFile(t, exe) != "v2" {

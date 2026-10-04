@@ -7,9 +7,9 @@ import (
 	"github.com/sparkz400/switchyard/internal/repodocs"
 )
 
-// Pull request templates: when the repo has one (in any place GitHub
-// reads it from), sy pr lays out the description by the template's
-// headings and fills each from the task:
+// Pull request templates: when the repo has one (in any place GitHub,
+// Gitea or GitLab reads it from), sy pr lays out the description by the
+// template's headings and fills each from the task:
 //
 //   - a summary/description heading gets the task (fenced) and the plan's
 //     summary; a plan/approach heading the steps table; a testing heading

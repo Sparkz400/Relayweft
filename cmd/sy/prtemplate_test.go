@@ -123,3 +123,23 @@ func TestPRTemplateLookup(t *testing.T) {
 		t.Error(".github/ template does not come first")
 	}
 }
+
+// ... and where GitLab and Gitea do.
+func TestPRTemplateLookupGitLabAndGitea(t *testing.T) {
+	root := t.TempDir()
+	mr := filepath.Join(root, ".gitlab", "merge_request_templates")
+	os.MkdirAll(mr, 0o755)
+	os.WriteFile(filepath.Join(mr, "Bug.md"), []byte("## Bug one\n"), 0o644)
+	if prTemplate(root) != "" {
+		t.Error("a GitLab template other than Default was used")
+	}
+	os.WriteFile(filepath.Join(mr, "default.md"), []byte("## GitLab one\n"), 0o644)
+	if !strings.Contains(prTemplate(root), "GitLab one") {
+		t.Error("GitLab's Default template not found")
+	}
+	os.MkdirAll(filepath.Join(root, ".gitea"), 0o755)
+	os.WriteFile(filepath.Join(root, ".gitea", "PULL_REQUEST_TEMPLATE.md"), []byte("## Gitea one\n"), 0o644)
+	if !strings.Contains(prTemplate(root), "Gitea one") {
+		t.Error(".gitea/ template not found")
+	}
+}

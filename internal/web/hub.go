@@ -27,6 +27,7 @@ type hub struct {
 	// Connection bookkeeping for `sy app` (exit when the window is gone).
 	everConnected bool
 	lastSeen      time.Time
+	byeAt         time.Time // a page said it is closing; zero after a new page connects
 }
 
 type client struct {
@@ -88,6 +89,7 @@ func (h *hub) subscribe() (*client, [][]byte, error) {
 	h.clients[c] = struct{}{}
 	h.everConnected = true
 	h.lastSeen = time.Now()
+	h.byeAt = time.Time{}
 	return c, append([][]byte(nil), h.replay...), nil
 }
 
@@ -96,6 +98,33 @@ func (h *hub) unsubscribe(c *client) {
 	defer h.mu.Unlock()
 	h.dropLocked(c)
 	h.lastSeen = time.Now()
+	if len(h.clients) > 0 {
+		h.byeAt = time.Time{} // the goodbye was not from the last page
+	}
+}
+
+// bye records that a page is being closed or reloaded (pagehide).
+func (h *hub) bye() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.byeAt = time.Now()
+}
+
+// gone reports whether `sy app`'s window is gone at now: a page was
+// connected, none is now, and either the last one said goodbye at least
+// grace ago without a page reconnecting (a reload reconnects within it), or
+// none has been connected for idle (the connection dropped without a
+// goodbye, e.g. the browser crashed).
+func (h *hub) gone(now time.Time, idle, grace time.Duration) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.everConnected || len(h.clients) > 0 {
+		return false
+	}
+	if !h.byeAt.IsZero() && now.Sub(h.byeAt) >= grace && now.Sub(h.lastSeen) >= grace {
+		return true
+	}
+	return now.Sub(h.lastSeen) >= idle
 }
 
 func (h *hub) dropLocked(c *client) {

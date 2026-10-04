@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -198,10 +199,22 @@ func (g git) agentFiles(after string) (map[string]bool, bool) {
 	set := map[string]bool{}
 	for _, l := range strings.Split(msg[i+len(agentFilesMark):], "\n") {
 		if l = strings.TrimSpace(l); l != "" {
-			set[l] = true
+			set[agentKey(l)] = true
 		}
 	}
 	return set, true
+}
+
+// agentKey is how an agent-reported path is compared with git's: noteFiles
+// records paths through canon.Path, which lower-cases them on Windows
+// (whose file names ignore case), so there the comparison ignores case too.
+// Without it every file with an upper-case letter looked unreported on
+// Windows, and unattended pull requests and sy watch pushes were refused.
+func agentKey(p string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
 }
 
 // PreviewUndo shows what undoing (redo=false) or redoing a task would change.
@@ -250,7 +263,7 @@ func previewOne(dir, key string, redo bool) (UndoPlan, error) {
 		if idErr == nil && ids[e.path] != e.want() {
 			plan.Edited = append(plan.Edited, e.path)
 		}
-		if known && !agents[e.path] {
+		if known && !agents[agentKey(e.path)] {
 			plan.Unreported = append(plan.Unreported, e.path)
 		}
 	}

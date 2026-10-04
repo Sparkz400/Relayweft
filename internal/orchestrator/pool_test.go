@@ -5,9 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sparkz400/switchyard/internal/diag"
 )
 
-// Pools go to a temporary cache dir, not the real user cache.
+// Pools go to a temporary cache dir, not the real user cache, and crash
+// logs from the panic tests to a temporary log dir, not the user's.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "sy-cache-*")
 	if err != nil {
@@ -15,7 +18,11 @@ func TestMain(m *testing.M) {
 	}
 	cacheDir = func() (string, error) { return dir, nil }
 	stateDir = func() string { return filepath.Join(dir, "tasks") }
+	if err := diag.Init(filepath.Join(dir, "logs")); err != nil {
+		panic(err)
+	}
 	code := m.Run()
+	diag.Close()
 	os.RemoveAll(dir)
 	os.Exit(code)
 }

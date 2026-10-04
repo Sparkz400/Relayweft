@@ -273,6 +273,17 @@ export function reconstruct(patch: string, status: string, disk: string | undefi
       if (r) {
         return { before: joinLines(base.lines, base.eol), after: joinLines(r.lines, r.eol), ranges: r.ranges, beforeRanges: r.beforeRanges, whole: true };
       }
+      // core.autocrlf=true (Git for Windows' default): the file on disk has
+      // CRLF, but git diffs the normalized (LF) content, so no hunk matches
+      // as it is. Compare and show both sides with LF line ends then.
+      if (disk !== undefined && disk.includes('\r\n')) {
+        const lf = splitLines(disk.replace(/\r\n/g, '\n'));
+        const hunks = p.hunks.map((h) => ({ ...h, lines: h.lines.map((l) => ({ op: l.op, text: l.text.replace(/\r$/, '') })) }));
+        const r2 = applyHunks(lf, hunks);
+        if (r2) {
+          return { before: joinLines(lf.lines, lf.eol), after: joinLines(r2.lines, r2.eol), ranges: r2.ranges, beforeRanges: r2.beforeRanges, whole: true };
+        }
+      }
     }
     if (status === 'D' && p.hunks.length === 1 && p.hunks[0].oldStart <= 1) {
       // A deletion's patch holds the whole old file.

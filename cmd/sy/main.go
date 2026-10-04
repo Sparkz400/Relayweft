@@ -41,6 +41,10 @@ func main() {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		sub, args = args[0], args[1:]
 	}
+	if sub == selftestAgentCmd {
+		cmdSelftestAgent()
+		return
+	}
 	switch sub {
 	case "version", "--version", "help", "-h", "--help":
 	default:
@@ -73,6 +77,8 @@ func main() {
 		err = cmdPR(args)
 	case "watch":
 		err = cmdWatch(args)
+	case "notify":
+		err = cmdNotify(args)
 	case "review":
 		err = cmdReview(args)
 	case "bench":
@@ -95,6 +101,8 @@ func main() {
 		err = cmdApp(args)
 	case "report":
 		err = cmdReport(args)
+	case "selftest":
+		err = cmdSelftest(args)
 	case "version", "--version":
 		fmt.Println("switchyard", version)
 	case "help", "-h", "--help":
@@ -133,13 +141,15 @@ Usage:
   sy run --file tasks.txt    run a list of tasks one after another, unattended
   sy run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
   sy run --estimate "task"   plan only: print the plan with estimated tokens, time and $ per step, run nothing
-  sy run --issue <N|URL> [--with-comments] [--pr]   run a GitHub issue as the task; --pr opens a PR (Closes #N)
+  sy run --issue <N|URL> [--with-comments] [--pr]   run an issue as the task; --pr opens a PR (Closes #N)
   sy run --issues label:<name> [--limit 5] --pr     run open labelled issues one after another, unattended
                              (needs --pr and a clean working tree; each task's changes go to its PR branch and
                              are undone here so the next issue starts from HEAD; the batch stops if that fails,
                              or if a PR would hold files no agent reported or commits not on origin)
   sy pr [task] [--base main] [--branch name] [--draft] [--title t] [--no-push] [--yes]
-                             branch + commit + GitHub pull request from a finished task (index/worktree untouched)
+                             branch + commit + pull request from a finished task (index/worktree untouched)
+                             on GitHub, GitLab (merge request) or Gitea/Forgejo; self-hosted: GH_HOST,
+                             GITLAB_HOST or GITEA_HOST=<host>
   sy watch [--every 15m] [--dir repo]   follow up on the PRs sy opened: failed checks and review comments get
                              a task on the PR branch in a separate checkout, pushed (never forced) with a reply
   sy watch --list | --forget <n>          list the watched pull requests, or stop watching one
@@ -148,6 +158,7 @@ Usage:
   sy run --at 02:30 | --in 3h | --when-reset claude|codex|any  [--file tasks.txt | "task"]
                              start later, unattended (PC kept awake; --allow-sleep to opt out)
   sy schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)
+  sy notify [--test]         show where notifications go; --test posts to every webhook (Slack, Discord, ntfy)
   sy history [--all] [-n 20]       recent tasks in this directory, with status and cost
   sy resume [task id]        continue an interrupted task (default: the last one here)
   sy report [task id] [--out f.html] [--md] [--open]   one shareable page per task (default: the last one here)
@@ -165,7 +176,12 @@ Usage:
   sy undo [--list] [--redo] [--yes] [task]   revert (or re-apply) a task's changes, with preview
   sy bench [--file bench.yaml] [--init]      compare routed Switchyard vs single agents on your tasks
   sy bench --starter <dir>   create a ready-made 5-task benchmark repo (Python) to run sy bench on
+  sy bench --from-history [--count 10] [--check "go test ./..."]   tasks from past multi-file commits:
+                             start at the parent, commit message as prompt, the commit's tests as check;
+                             running that file updates this repo's learned routes (--no-learn skips it)
   sy bugreport               zip logs, config and diagnostics into one file to send
+  sy selftest [--onedrive] [--keep]   automated Windows checks: paths with spaces, OneDrive, Defender,
+                             a task killed mid-run, then resume and undo (scripted agent, no quota used)
   sy update [--check] [--yes]      update sy to the latest release
   sy version
 
@@ -234,10 +250,11 @@ func (c *common) register(fs *flag.FlagSet) {
 
 // setup loads config and applies flag overrides.
 func (c *common) setup() (*config.Store, string, error) {
-	cfg, path, err := config.Load(c.configPath)
+	cfg, path, ignored, err := config.LoadInfo(c.configPath)
 	if err != nil {
 		return nil, "", err
 	}
+	noteUntrustedLocal(os.Stderr, path, ignored)
 	store := config.NewStore(cfg, path)
 	dir := c.dir
 	if dir == "" {
@@ -609,10 +626,11 @@ func cmdDoctor(args []string) error {
 // runDoctor checks the setup and writes a report to w (also used by
 // sy bugreport).
 func runDoctor(w io.Writer, cfgPath string) error {
-	cfg, path, err := config.Load(cfgPath)
+	cfg, path, ignored, err := config.LoadInfo(cfgPath)
 	if err != nil {
 		return err
 	}
+	noteUntrustedLocal(w, path, ignored)
 	ok := func(b bool) string {
 		if b {
 			return stOK.Render("ok  ")
@@ -680,6 +698,11 @@ func runDoctor(w io.Writer, cfgPath string) error {
 	if files, tips := orchestrator.PerfTips("."); len(tips) > 0 {
 		fmt.Fprintf(w, "%s repo        %d tracked files - for faster snapshots run here: %s\n", warn, files, strings.Join(tips, " && "))
 	}
+	if wd, err := os.Getwd(); err == nil {
+		if root, in := inOneDrive(wd); in {
+			fmt.Fprintf(w, "%s onedrive    this folder is inside OneDrive (%s): %s\n", warn, root, oneDriveAdvice)
+		}
+	}
 	theme := tui.NewTheme(cfg.Theme)
 	tname := "unicode"
 	if theme.ASCII {
@@ -719,6 +742,9 @@ func cmdModels(args []string) error {
 			return err
 		}
 		if err := cfg.Save(path); err != nil {
+			return err
+		}
+		if err := config.TrustLocal(path); err != nil {
 			return err
 		}
 		fmt.Printf("Codex catalog refreshed: %d models, saved to %s\n\n", n, path)
@@ -855,6 +881,10 @@ func cmdInit(args []string) error {
 		data = config.WithVerify(data, checks)
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	// You wrote it: its verify commands apply without `sy trust`.
+	if err := config.TrustLocal(path); err != nil {
 		return err
 	}
 	fmt.Println("wrote", path)

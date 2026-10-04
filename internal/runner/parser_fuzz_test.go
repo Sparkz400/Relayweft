@@ -134,6 +134,9 @@ func FuzzClaudeParser(f *testing.F) {
 		`{"type":"assistant","message":null}`,
 		`{"type":"system","subtype":"task_summary","detail":null}`,
 		`{"type":"system","subtype":"init","session_id":"s","model":""}`,
+		`{"type":"system","subtype":"permission_denied","tool_use_id":"t","message":{"content":[]}}`,
+		`{"type":"assistant","message":"text"}`,
+		`{"type":"result","permission_denials":[{"tool_use_id":"t"},{"tool_use_id":"t"},{}]}`,
 	)
 	f.Fuzz(func(t *testing.T, data []byte) {
 		evs, r := parseStream(t, &claudeParser{}, data)

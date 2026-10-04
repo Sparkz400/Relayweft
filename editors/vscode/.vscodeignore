@@ -7,4 +7,5 @@ out/test/**
 tsconfig.json
 .gitignore
 node_modules/**
+.vscode-test/**
 package-lock.json

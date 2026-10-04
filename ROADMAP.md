@@ -57,6 +57,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - team budgets and stats export
   - the repo's own conventions as context
   - a VS Code extension
+  - GitLab and Gitea/Forgejo for `sy pr`, issues, `sy watch` and `sy review`
 - **Release v0.1.0** (3 Oct 2026): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
   - The repository is public: release downloads, `sy update` and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
@@ -77,18 +78,25 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **`sy web` in headless Chromium:** plan editing, hunk review, reload restore and the panels.
 - **A 3-minute stress run:** goroutines, file handles, heap and processes stayed flat over 1,750 tasks.
 
+**Verified for real on 4 Oct 2026 (Windows 11):**
+- **Follow-ups:** `claude --resume` (Claude Code 2.1.288) and `codex exec resume` (codex-cli 0.160.0) through `sy web`, with the same session and the agent remembering; the pool-worktree fallback to a fresh agent. Recorded as fixtures, with a real Codex edit run.
+- **Claude verify through `allowedTools`:** a failing check fed the fix round. Found and fixed: Claude's PowerShell tool on Windows was refused (only `Bash(...)` was allowed), and refused tool calls were invisible.
+- **`sy update`** against the real v0.1.0 release: asset, checksum, swap while running, `.old` cleanup. Fixed: a second update while the first update's `.old` still runs.
+- **Windows toasts** (delivered, read back from the notification history) and **ntfy.sh** (every event, escaping, non-ASCII). Fixed: a non-ASCII click URL in a header.
+- **`sy app` in Edge:** fixed a serious bug (closing sy killed the user's other Edge windows: the browser was in sy's kill-on-exit job), and sy now exits ~5s after its window closes instead of 30s; a reload keeps it.
+- **The VS Code extension** in real VS Code 1.140 and 1.90 (`npm run test:integration`). Fixed: CRLF checkouts showed only hunks, and answered reviews stayed open.
+- **Gitea 28 and GitLab CE 19.4** for `sy pr`, issues, `sy watch` and `sy review --post`. Fixed: a self-hosted forge's port and http were dropped; on Windows a file with a capital letter counted as "unreported", which blocked every unattended push; `--api` with an issue URL on another host sent the token there.
+- **The Windows stress limits:** four CI runs rose at most 12 handles above warm-up; the slack is now 40 (was 100). Fixed: on Windows the test counted other `go test` runs as leaked processes.
+- **Security fix:** a `./switchyard.yaml` that came with a cloned repo could run programs (e.g. from `sy doctor`) without `sy trust`. Its command settings now need trust like a repo's `.switchyard.yaml`.
+
 **Not verified yet:**
-- Real Codex runs with tool calls and file edits, a usage-limit hit and a logged-out CLI. A simple run and a resume are now recorded (see 1.1).
+- Codex: a usage-limit hit and a logged-out CLI.
 - Real daily use on your Windows PC.
 - Behaviour under heavy load: a big repo, three agents in parallel, hours of use.
 - A ~10-task comparison against a single agent on real, multi-file tasks (`plan.md` §9). The starter set is too small to show it: on its one-file tasks a single agent is faster.
-- **Phase 2 and 3 against the real CLIs:**
-  - `codex exec resume` and `claude --resume` (the flags come from the CLIs' docs and help output, not from a recorded run)
-  - Claude running verify commands through `allowedTools`
-- **The release pipeline:** `sy update` has not yet run against a real release.
-- **Notifications on a real desktop:** Windows toast, macOS and notify-send.
-- **`sy app` window detection** on real Windows and macOS machines.
-- **The Windows stress run:** its handle-count limits are first guesses until the first CI run.
+- Notifications on macOS and notify-send; `sy app` on macOS.
+- Webhooks to real Slack and Discord (payloads checked against their current docs only).
+- GitLab pipeline-job failures in `sy watch` (needs a GitLab Runner), and Forgejo itself (Gitea was used).
 
 **Open risk:** a full Windows freeze happened on 3 Oct while using `sy`.
 - The logs show the same unexplained hard resets since August, before Switchyard existed, with no blue screen and no disk or memory exhaustion.
@@ -109,7 +117,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 1.3 | ✅ **Disk guard** (done): `min_free_disk_gb` floor, pruning after `pool_max_idle`, `pool_warn_gb` warning, pools listed in `sy doctor`, one shared pool per repo. Was planned as: show the pool size in `sy doctor`, warn at more than X GB, prune slots unused for 14 days, and refuse to create a slot when free space drops under 10 GB. | Each pool slot is a full checkout of your repo. |
 | 1.4 | ✅ **Crash safety** (done): `sy-debug.log`, `crash-*.log`, task-level panic recovery, `sy bugreport`. Was planned as: a panic handler that restores the terminal and writes `crash-<time>.log`; a persistent debug log (`%LocalAppData%\switchyard\logs\sy.log`) with every spawned command line, exit code and timing; `sy bugreport` zips the last session log, debug log, config and `doctor` output. | When something goes wrong, you can send one file and the reason is visible. |
 | 1.5 | ✅ **Undo a task** (done): `sy undo` / `/undo` with preview, redo, later edits kept by 3-way merge, last 30 tasks. Was planned as: `sy undo` / `u` restores the working tree to the snapshot taken when the task started (the snapshot commit already exists), with a preview first. | It's the single biggest trust feature: trying a task becomes risk-free. |
-| 1.6 | **Real-use test pass on Windows**: Windows Terminal and the old console, a user name with a space, paths with spaces, OneDrive folders, a big repo with LFS, Defender on, sleep/resume during a task, closing the window mid-task. | These are where Windows tools usually break. |
+| 1.6 | 🟡 **Real-use test pass on Windows** (partly automated): `sy selftest` checks a user profile and project path with spaces and non-ASCII letters, the agent CLI behind a `.cmd` shim, many files plus Git LFS, OneDrive (detection, and `--onedrive` runs a task inside it), Defender on (status, exclusions, fresh-exe start time), and a `sy run` killed hard mid-task followed by `sy history`, `sy resume`, `sy undo` and redo. CI runs it on all three OSes (`TestSelftest`). It already found one bug: a normal end of `sy run` / `sy resume` printed the Ctrl+C notice. Still by hand: sleep/resume during a task, and closing the window mid-task in Windows Terminal and in the old console. Was planned as: Windows Terminal and the old console, a user name with a space, paths with spaces, OneDrive folders, a big repo with LFS, Defender on, sleep/resume during a task, closing the window mid-task. | These are where Windows tools usually break. |
 | 1.7 | ✅ **Long-run stress test** (done: `internal/orchestrator/stress_test.go`, `.github/workflows/stress.yml`, demo and real-git modes with cancels). CI runs the orchestrator in a loop for 30 minutes and checks that memory, goroutines, open handles and leftover processes stay flat. | Catches leaks before you find them as freezes. |
 | 1.8 | ✅ **Parser fuzzing** (done: 15 fuzz targets, nightly in `.github/workflows/fuzz.yml`; fixed a Codex error line counted as success, plan dependencies on reserved ids, reset-time overflow, `@` parsing and a change-list panic). Go fuzz tests for the Codex and Claude output parsers and for plan and verdict parsing. | Odd model output must never crash `sy` or leave it stuck. |
 | 1.9 | ✅ **Review the worktree pool** (done: 17 findings fixed, including a crash leaving a slot that disabled worktrees, agent commits being lost, non-atomic apply, the Windows command-line limit, submodules, symlinks, git hooks in slots and orphan agents). It got the same adversarial pass that found the earlier bugs. | It is the newest and most complex code and has had only one review pass. |
@@ -166,7 +174,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 | # | Item | Why |
 |---|---|---|
-| 3.1 | ✅ **Benchmark command**: `sy bench` with `bench.yaml`, check commands, routed vs single, saved results, and `sy bench --starter` (five Python tasks with check scripts). | This is the success measure from `plan.md` §9, automated. |
+| 3.1 | ✅ **Benchmark command**: `sy bench` with `bench.yaml`, check commands, routed vs single, saved results, `sy bench --starter` (five Python tasks with check scripts), and `sy bench --from-history` (real tasks from past multi-file commits, checked by the repo's tests with the commit's test files in place, each validated to fail before and pass after). | This is the success measure from `plan.md` §9, automated. |
 | 3.2 | ✅ **Quota-aware scheduling** (done early, Claude; Codex as soon as its CLI reports `rate_limits`): `quota-preempt` at `switch_at_utilization`, and the planner and reviewer retry on the other provider. Was planned as: use Claude's live 5-hour and 7-day utilization (already received) and Codex limits to move work to the other provider *before* hitting the limit, not after. | Avoids stalls entirely. |
 | 3.3 | ✅ **Rule tuning from stats**: `sy tune` flags failing routes, frequent escalations, rejected reviews, quota pressure and over-sized read-only models, and prints the `/route` / `/prefer` command for each. | Routing improves from your own data. |
 | 3.4 | ✅ **Judge model** (measurement): decisions record whether the judge ran, and `sy tune` compares judged with rule-routed steps to suggest `/judge on` or `/judge off`. | Spend quota only where it pays. |
@@ -177,6 +185,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - `sy tune` reads models, efforts and the fast tier from your config.
 - It compares the judge's own tokens with the retries the judge saved.
 - `routed-nohandoff` measures the hand-off; the first run showed a small saving.
+- `sy bench --from-history` builds the multi-file benchmark from your own history instead of hand-written tasks.
 - Notes are dropped when they are older than 60 days or all their files are gone.
 
 **First measurements** ([docs/bench](docs/bench/2026-10-03-starter-claude.md)):
@@ -216,7 +225,10 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.19 | ✅ **Team budgets and stats export**: `sy stats --json` / `--merge`, and `budget.team` over a shared folder. |
 | 4.20 | ✅ **Repo conventions as context**: CONTRIBUTING, the PR template, CODEOWNERS, CI commands and AGENTS.md go to the planner and reviewer as untrusted text; `sy pr` fills the PR template. |
 | 4.21 | ✅ **Cost estimate before approval**: per step and total, against the remaining budget; `sy run --estimate`. |
-| 4.22 | ✅ **VS Code extension** (`editors/vscode`): a thin client for `sy web --client` with the agent tree, plan approval and hunk review in the diff editor. Built and unit-tested; not yet tried in a real VS Code window. |
+| 4.22 | ✅ **VS Code extension** (`editors/vscode`): a thin client for `sy web --client` with the agent tree, plan approval and hunk review in the diff editor. Built and unit-tested, and tried in real VS Code 1.140 and 1.90 with an integration suite (`npm run test:integration`). |
+| 4.23 | ✅ **GitLab and Gitea/Forgejo** (`internal/forge`): `sy pr`, issues as tasks, `sy watch` and `sy review` work on gitlab.com and self-managed GitLab (merge requests, pipeline jobs and their logs, unresolved diff comments by Developers and above, one thread per inline finding) and on Gitea and Forgejo, Codeberg included (commit statuses, reviews requesting changes, inline reviews). The origin remote's host picks the forge; self-hosted ones are named in `GH_HOST` / `GITLAB_HOST` / `GITEA_HOST`, and each forge's token goes only to its own hosts. GitLab quick actions are defused like mentions, and `sy watch` never pushes CI config of any forge. Tested against fake APIs and, for real, against Gitea 28 and GitLab CE 19.4. |
+| 4.24 | ✅ **Webhook notifications** (`notify.webhooks`): Slack, Discord, ntfy or plain JSON, so overnight runs and `sy watch` reach your phone. Events `done`, `failed`, `limit`, `waiting` and `watch` (round results, merged or closed PRs), filterable per webhook; a task-file batch ends with a summary. `${VAR}` keeps the secret URL out of the file; a repo file's webhooks need `sy trust`; text is escaped against mentions and hidden links; errors and `sy bugreport` never show the URL path. `sy notify --test` checks each webhook. Tested against local servers and real ntfy.sh; not yet against real Slack or Discord. |
+| 4.25 | ✅ **Bench results feed learned routes**: a bench mode `routed:<role>=<provider:model[:effort]>` runs the routed pipeline with one role on another route, so the learner gets an alternative to compare with (single-agent runs never counted). `learn: true` in a bench file, or `--learn`, updates the repo's learned routes when the bench ends, with the same clear-evidence rules as `sy tune --apply`. `sy bench --from-history` writes `learn: true` and a worker variant on the other provider, so one bench of your own history can change the routing with no manual tuning. `--no-learn` and `routing.learn: off` keep the routes as they are; a cancelled bench learns nothing. |
 
 ---
 
@@ -233,7 +245,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 ## Suggested order for the next steps
 
-1. **Use it for real on Windows and send a `sy bugreport` after any problem.** Items 1.6 (the Windows test pass) and the exit criterion (2 weeks of daily use) need you at the keyboard. Try each new feature once:
+1. **Use it for real on Windows and send a `sy bugreport` after any problem.** Items 1.6 (the Windows test pass) and the exit criterion (2 weeks of daily use) need you at the keyboard. Start with `sy selftest` (add `--onedrive` if you use OneDrive); it prints the two checks left to do by hand. Then try each new feature once:
    - approve and edit a plan;
    - `/review-changes on` for one task;
    - `@ follow-up` after a task;
@@ -244,7 +256,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
    - once you hit a Codex limit, run the same command again and keep the file (`codex-limit.jsonl`).
    - after `codex logout`, run it once more (`codex-logout.jsonl`), then `codex login`.
    Send the files; they become test fixtures.
-3. **Run `sy bench` on ~10 real, multi-file tasks from your own repos, with Codex.** This decides the Phase 3 exit criterion. After a week of use, run `sy tune`.
+3. **Run `sy bench` on ~10 real, multi-file tasks from your own repos, with Codex.** This decides the Phase 3 exit criterion. In each repo, `sy bench --from-history` writes the tasks (it runs your tests on each candidate commit, which costs no quota). Read and reword the prompts, then run `sy bench --file bench-history.yaml`. After a week of use, run `sy tune`.
 4. **Releases:**
    - Submit the rendered winget manifests to microsoft/winget-pkgs (needs a fork of winget-pkgs on your account).
    - After each release, render the manifests (`packaging/render-manifests.sh X.Y.Z`).

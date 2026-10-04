@@ -18,6 +18,7 @@ import (
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/forge"
 	"github.com/sparkz400/switchyard/internal/gh"
 	"github.com/sparkz400/switchyard/internal/limits"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
@@ -84,7 +85,9 @@ func prRepo(t *testing.T) string {
 	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
 		t.Setenv(k, "t@t")
 	}
-	t.Setenv("GH_HOST", "")
+	for _, k := range []string{"GH_HOST", "GITLAB_HOST", "GITEA_HOST", "FORGEJO_HOST"} {
+		t.Setenv(k, "")
+	}
 	dir := gitInit(t)
 	write(t, dir, "a.txt", "one\ntwo\nthree\n")
 	write(t, dir, "gone.txt", "bye\n")
@@ -96,7 +99,7 @@ func prRepo(t *testing.T) string {
 	oldOut, oldTok, oldPush, oldIn := prOut, prToken, prPush, prIn
 	t.Cleanup(func() { prOut, prToken, prPush, prIn = oldOut, oldTok, oldPush, oldIn })
 	prOut = io.Discard
-	prToken = func(string) (string, string) { return "", "" }
+	prToken = func(forge.Kind, string) (string, string) { return "", "" }
 	prPush = func(string, string, string) error { t.Error("unexpected push"); return nil }
 	prIn = strings.NewReader("")
 	return dir
@@ -288,7 +291,7 @@ func TestPROpensPullRequestAfterPush(t *testing.T) {
 	srv := api.server(t)
 	var pushed []string
 	prPush = func(root, remote, branch string) error { pushed = append(pushed, remote+" "+branch); return nil }
-	prToken = func(host string) (string, string) { return "tok", "test" }
+	prToken = func(_ forge.Kind, host string) (string, string) { return "tok", "test" }
 	st, _ := findPRTask(dir, "")
 	pr, err := makePR(st, prOptions{yes: true, api: srv.URL, closes: "#12"})
 	if err != nil {
@@ -311,7 +314,7 @@ func TestPROpensPullRequestAfterPush(t *testing.T) {
 	}
 
 	// Without a token: no API call, the compare URL instead.
-	prToken = func(string) (string, string) { return "", "" }
+	prToken = func(forge.Kind, string) (string, string) { return "", "" }
 	var out bytes.Buffer
 	prOut = &out
 	if _, err := makePR(st, prOptions{yes: true, api: srv.URL, branch: "sy/again", base: "dev"}); err != nil {
@@ -432,12 +435,12 @@ func TestPRBodyFencesTaskText(t *testing.T) {
 	}
 }
 
-func TestDefuseGitHubRefs(t *testing.T) {
+func TestDefuseRefs(t *testing.T) {
 	for _, in := range []string{
 		"Fixes #7", "this closes o/r#12 too", "Resolves: https://github.com/o/r/issues/3",
 		"fixed #1 and ping @octocat", "cc @org/team",
 	} {
-		out := defuseGitHubRefs(in)
+		out := defuseRefs(in)
 		if reCloseRef.MatchString(out) || reMention.MatchString(out) {
 			t.Errorf("%q -> %q still live", in, out)
 		}
@@ -446,7 +449,7 @@ func TestDefuseGitHubRefs(t *testing.T) {
 		}
 	}
 	for _, keep := range []string{"Fix GitHub issue #42: crash", "mail me at a@b.c", "prefix #7 alone"} {
-		if out := defuseGitHubRefs(keep); out != keep {
+		if out := defuseRefs(keep); out != keep {
 			t.Errorf("%q changed to %q", keep, out)
 		}
 	}
@@ -455,7 +458,7 @@ func TestDefuseGitHubRefs(t *testing.T) {
 	if !strings.HasSuffix(body, "\nCloses #3\n") || reCloseRef.MatchString(strings.TrimSuffix(body, "Closes #3\n")) || reMention.MatchString(body) {
 		t.Fatalf("body:\n%s", body)
 	}
-	if msg := defuseGitHubRefs(commitMessage(st, prTitle(st.Task))); reCloseRef.MatchString(msg) || reMention.MatchString(msg) {
+	if msg := defuseRefs(commitMessage(st, prTitle(st.Task))); reCloseRef.MatchString(msg) || reMention.MatchString(msg) {
 		t.Fatalf("commit message:\n%s", msg)
 	}
 }

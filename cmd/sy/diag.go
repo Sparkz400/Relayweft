@@ -203,6 +203,7 @@ func cmdBugreport(args []string) error {
 	add("doctor.txt", []byte(ansi.Strip(doc.String())))
 	if cfg, path, err := config.Load(*cfgPath); err == nil {
 		cfg.MCP = cfg.MCP.Redacted() // env and header values may be secrets
+		cfg.Notify = cfg.Notify.Redacted()
 		data, _ := yaml.Marshal(cfg)
 		add("config.yaml", append([]byte("# effective config, loaded from "+path+"\n"), data...))
 

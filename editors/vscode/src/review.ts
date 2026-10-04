@@ -126,14 +126,15 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
         fresh.push(a);
       }
     }
-    let gone = false;
+    const gone: string[] = [];
     for (const id of [...this.reviews.keys()]) {
       if (!live.has(id)) {
         this.reviews.delete(id);
-        gone = true;
+        gone.push(id);
       }
     }
-    if (fresh.length || gone) {
+    this.ended(gone);
+    if (fresh.length || gone.length) {
       this.refresh();
       void vscode.commands.executeCommand('setContext', 'switchyard.reviewPending', this.reviews.size > 0);
     }
@@ -147,6 +148,34 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
     if (this.view) {
       const n = this.reviews.size;
       this.view.badge = n ? { value: n, tooltip: `${n} change set(s) to review` } : undefined;
+    }
+  }
+
+  /**
+   * Open diffs of reviews that are over (answered here or elsewhere, or the
+   * task ended) say so instead of still offering their hunks.
+   */
+  private ended(ids: string[]): void {
+    if (!ids.length) {
+      return;
+    }
+    for (const d of vscode.workspace.textDocuments) {
+      const t = parseReviewUri(d.uri);
+      if (t && ids.includes(t.id)) {
+        this.docChanged.fire(d.uri);
+      }
+    }
+  }
+
+  /** Closes the diff tabs of a review (after it was answered here). */
+  private async closeTabs(id: string): Promise<void> {
+    const tabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((tab) => {
+      const input = tab.input;
+      const uri = input instanceof vscode.TabInputTextDiff ? input.modified : input instanceof vscode.TabInputText ? input.uri : undefined;
+      return uri !== undefined && parseReviewUri(uri)?.id === id;
+    });
+    if (tabs.length) {
+      await vscode.window.tabGroups.close(tabs, true);
     }
   }
 
@@ -505,7 +534,9 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
       const res = await this.api.call<{ message: string }>('POST', `/api/approvals/${encodeURIComponent(id)}/changes`, body);
       void vscode.window.showInformationMessage('Switchyard: ' + res.message);
       this.reviews.delete(id);
+      this.ended([id]);
       this.refresh();
+      await this.closeTabs(id).catch(() => undefined);
       void vscode.commands.executeCommand('setContext', 'switchyard.reviewPending', this.reviews.size > 0);
     } catch (e) {
       void vscode.window.showErrorMessage('Switchyard: ' + (e as Error).message);

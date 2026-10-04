@@ -7,6 +7,8 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+
+	"github.com/sparkz400/switchyard/internal/proc"
 )
 
 // OpenBrowser opens url in the default browser.
@@ -105,15 +107,26 @@ func appCommand(goos, url string, getenv func(string) string, exists func(string
 }
 
 // startDetached starts a process without waiting for it (it is reaped in
-// the background).
+// the background). It starts outside sy's kill-on-close job: the browser
+// it opens is the user's, and must not be killed when sy exits.
 func startDetached(name string, args []string) error {
+	_, err := startDetachedCmd(name, args)
+	return err
+}
+
+func startDetachedCmd(name string, args []string) (*exec.Cmd, error) {
 	if name == "" {
-		return errors.New("no command")
+		return nil, errors.New("no command")
 	}
 	cmd := exec.Command(name, args...)
+	proc.Breakaway(cmd)
 	if err := cmd.Start(); err != nil {
-		return err
+		// A job sy was started in may forbid breakaway.
+		cmd = exec.Command(name, args...)
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
 	}
 	go cmd.Wait()
-	return nil
+	return cmd, nil
 }

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/gh"
+	"github.com/sparkz400/switchyard/internal/forge"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 )
 
@@ -23,13 +23,13 @@ func parseIssueFlags(t *testing.T, args ...string) (*issueFlags, *flag.FlagSet) 
 }
 
 func TestIssueTaskText(t *testing.T) {
-	is := gh.Issue{Number: 12, Title: " Crash on empty input ", Body: "Steps:\r\n1. run it\r\n", Labels: []gh.Label{{Name: "bug"}, {Name: "sy"}}}
-	got := issueTask(is, []gh.Comment{{Body: "also on Windows", User: gh.User{Login: "bob"}}})
+	is := forge.Issue{Number: 12, Title: " Crash on empty input ", Body: "Steps:\r\n1. run it\r\n", Labels: []string{"bug", "sy"}}
+	got := issueTask(forge.GitHub, is, []forge.Comment{{Body: "also on Windows", Author: "bob"}})
 	want := "Fix GitHub issue #12: Crash on empty input\n\nSteps:\n1. run it\n\nLabels: bug, sy\n\nComments:\n\n@bob wrote:\nalso on Windows"
 	if got != want {
 		t.Fatalf("got:\n%q\nwant:\n%q", got, want)
 	}
-	if got := issueTask(gh.Issue{Number: 1, Title: "T"}, nil); got != "Fix GitHub issue #1: T" {
+	if got := issueTask(forge.GitHub, forge.Issue{Number: 1, Title: "T"}, nil); got != "Fix GitHub issue #1: T" {
 		t.Fatalf("%q", got)
 	}
 }
@@ -67,7 +67,7 @@ func TestIssueLoad(t *testing.T) {
 		t.Fatalf("PR as issue: %v", err)
 	}
 	f, fs = parseIssueFlags(t, "--issue", "77", "--api", url)
-	if _, err := f.load(fs, dir); !gh.IsNotFound(err) {
+	if _, err := f.load(fs, dir); !forge.IsNotFound(err) {
 		t.Fatalf("missing issue: %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestIssueBatchOpensPRsAndRestoresTree(t *testing.T) {
 	api, url := issueAPI(t)
 	var pushed []string
 	prPush = func(root, remote, branch string) error { pushed = append(pushed, branch); return nil }
-	prToken = func(string) (string, string) { return "tok", "test" }
+	prToken = func(forge.Kind, string) (string, string) { return "tok", "test" }
 
 	f, fs := parseIssueFlags(t, "--issues", "label:sy", "--pr", "--api", url)
 	tasks, err := f.load(fs, dir)
@@ -210,7 +210,7 @@ func TestIssueBatchStopsOnUnreportedFiles(t *testing.T) {
 	dir := prRepo(t)
 	api, url := issueAPI(t)
 	prPush = func(string, string, string) error { t.Error("pushed"); return nil }
-	prToken = func(string) (string, string) { return "tok", "test" }
+	prToken = func(forge.Kind, string) (string, string) { return "tok", "test" }
 	f, fs := parseIssueFlags(t, "--issues", "label:sy", "--pr", "--api", url)
 	if _, err := f.load(fs, dir); err != nil {
 		t.Fatal(err)

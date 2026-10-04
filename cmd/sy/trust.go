@@ -5,14 +5,26 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/sparkz400/switchyard/internal/config"
 )
 
-// cmdTrust shows what a repo's .switchyard.yaml would run and trusts it.
+// noteUntrustedLocal says which settings of an untrusted ./switchyard.yaml
+// were ignored (see config.LoadInfo).
+func noteUntrustedLocal(w io.Writer, path string, ignored []string) {
+	if len(ignored) > 0 {
+		fmt.Fprintf(w, "note: %s sets %s, which run commands; they are ignored (yours apply) until you review and trust them: sy trust\n",
+			path, strings.Join(ignored, ", "))
+	}
+}
+
+// cmdTrust shows what a repo's .switchyard.yaml, and a ./switchyard.yaml in
+// the project folder, would run and trusts them.
 func cmdTrust(args []string) error {
 	fs := flag.NewFlagSet("sy trust", flag.ExitOnError)
 	dirFlag := fs.String("dir", "", "project directory (default current directory)")
@@ -23,9 +35,18 @@ func cmdTrust(args []string) error {
 	if err != nil {
 		return err
 	}
+	local := filepath.Join(dir, config.FileName)
+	if _, err := os.Stat(local); err != nil {
+		local = ""
+	}
 	p := config.FindRepoFile(dir)
-	if p == "" {
-		return errors.New("no " + config.RepoFileName + " in this project (sy init --repo creates one)")
+	if p == "" && local == "" {
+		return errors.New("no " + config.RepoFileName + " or " + config.FileName + " in this project (sy init --repo creates one)")
+	}
+	if local != "" {
+		if err := trustLocal(local, *yes, *revoke); err != nil || p == "" {
+			return err
+		}
 	}
 	if *revoke {
 		if err := config.Untrust(p); err != nil {
@@ -109,6 +130,40 @@ func initRepo(force bool) error {
 	if len(checks) > 0 {
 		fmt.Println("verify commands detected:", strings.Join(checks, ", "))
 	}
+	return nil
+}
+
+// trustLocal is sy trust for a ./switchyard.yaml: it is a whole config,
+// and only what it sets for the settings that run commands is trusted, so
+// later edits to its routes or toggles keep the trust.
+func trustLocal(p string, yes, revoke bool) error {
+	if revoke {
+		if err := config.Untrust(p); err != nil {
+			return err
+		}
+		fmt.Println("no longer trusted:", p)
+		return nil
+	}
+	cmds, err := config.CommandSettings(p)
+	if err != nil {
+		return err
+	}
+	if len(cmds) == 0 {
+		fmt.Println(p, "runs no commands; it applies without trust.")
+		return nil
+	}
+	fmt.Printf("%s runs these on your machine (instead of your own config's):\n\n%s\n\n", p, strings.Join(cmds, "\n"))
+	if !yes {
+		fmt.Print("Trust these settings? A later change to them asks again. [y/N] ")
+		ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(ans)); a != "y" && a != "yes" {
+			return nil
+		}
+	}
+	if err := config.TrustLocal(p); err != nil {
+		return err
+	}
+	fmt.Println("trusted:", p)
 	return nil
 }
 

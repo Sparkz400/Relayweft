@@ -94,7 +94,9 @@ func readText(root, rel string) string {
 
 // PRTemplate finds the repo's pull request template in every place GitHub
 // supports: pull_request_template(.md|.txt) in .github/, the root or docs/,
-// else the first file of a PULL_REQUEST_TEMPLATE/ folder there. rel is ""
+// else the first file of a PULL_REQUEST_TEMPLATE/ folder there; then
+// Gitea's and Forgejo's (.gitea/, .forgejo/) and GitLab's default merge
+// request template (.gitlab/merge_request_templates/Default.md). rel is ""
 // when there is none.
 func PRTemplate(root string) (rel, text string) {
 	rel = findFile(root, docDirs, []string{"pull_request_template.md", "pull_request_template.txt", "pull_request_template"})
@@ -126,6 +128,14 @@ func PRTemplate(root string) (rel, text string) {
 				break
 			}
 		}
+	}
+	if rel == "" {
+		// Gitea and Forgejo read the same names from their own folders.
+		rel = findFile(root, []string{".gitea", ".forgejo"}, []string{"pull_request_template.md", "pull_request_template.txt", "pull_request_template"})
+	}
+	if rel == "" {
+		// GitLab fills in the merge request template named Default.
+		rel = findFile(root, []string{".gitlab/merge_request_templates"}, []string{"Default.md"})
 	}
 	if rel == "" {
 		return "", ""

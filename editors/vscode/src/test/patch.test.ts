@@ -85,6 +85,18 @@ test('CRLF files keep their line endings', () => {
   assert.equal(r.after, 'one\r\nTWO\r\n');
 });
 
+test('core.autocrlf: an LF patch applies to a CRLF checkout (whole file, not hunks only)', () => {
+  // Found in a real VS Code on Windows: git diffs the normalized (LF)
+  // content while the working tree has CRLF.
+  const disk = before.replace(/\n/g, '\r\n');
+  const r = reconstruct(patch, 'M', disk);
+  assert.equal(r.whole, true);
+  assert.equal(r.before, before);
+  assert.equal(r.after, before.replace('"a"', '"A"').replace('\tfmt.Println("c")\n', '\tfmt.Println("c")\n\tfmt.Println("C")\n'));
+  assert.deepEqual(r.ranges, [{ start: 2, end: 7 }, { start: 11, end: 16 }]);
+  assert.equal(hunkAt(r.ranges, 12), 1);
+});
+
 test('a truncated patch shows the hunks it has', () => {
   const p = patch + '... (diff truncated) ...';
   const r = reconstruct(p, 'M', before);

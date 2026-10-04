@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -66,7 +67,8 @@ type Server struct {
 	dirty       bool
 	interrupted *orchestrator.TaskState
 	last        *resultView
-	awake       func() // releases the keep-awake while scheduled work is pending
+	awake       func()               // releases the keep-awake while scheduled work is pending
+	limitUntil  map[string]time.Time // per provider: the limit last posted to webhooks
 
 	stateKick chan struct{}
 	stop      chan struct{}
@@ -97,11 +99,11 @@ func New(o Options) (*Server, error) {
 	s.ap.setNotify(s.kick, func(r *Request) {
 		switch r.Type {
 		case "plan":
-			s.desktopAlert("Switchyard needs you", "approve the plan: "+oneLine(r.Task, 120))
+			s.alert(notify.EventWaiting, "Switchyard needs you", "approve the plan: "+oneLine(r.Task, 120))
 		case "budget":
-			s.desktopAlert("Switchyard needs you", "budget reached: "+r.Budget.Text)
+			s.alert(notify.EventWaiting, "Switchyard needs you", "budget reached: "+r.Budget.Text)
 		default:
-			s.desktopAlert("Switchyard needs you", "review the changes of "+r.Changes.StepID)
+			s.alert(notify.EventWaiting, "Switchyard needs you", "review the changes of "+r.Changes.StepID)
 		}
 	})
 	go s.pump()
@@ -199,9 +201,13 @@ func (s *Server) Shutdown() {
 	}
 }
 
+// byeGrace is how long `sy app` waits after its page said goodbye: a
+// reload reconnects within it, a closed window does not.
+const byeGrace = 5 * time.Second
+
 // WaitIdle returns when a page has been connected once and then no page
-// has been connected for idle (sy app: the window was closed), or when ctx
-// ends.
+// has been connected for byeGrace after it said goodbye, or for idle
+// without one (sy app: the window was closed), or when ctx ends.
 func (s *Server) WaitIdle(ctx context.Context, idle time.Duration) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -210,8 +216,7 @@ func (s *Server) WaitIdle(ctx context.Context, idle time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			n, ever, last := s.hub.connections()
-			if ever && n == 0 && time.Since(last) >= idle {
+			if s.hub.gone(time.Now(), idle, byeGrace) {
 				return
 			}
 		}
@@ -276,11 +281,11 @@ func (s *Server) observe(e event.Event) {
 			took := time.Since(s.taskStart)
 			rv.Took = took.Round(time.Second).String()
 			if took >= s.store.Get().Notify.MinTask.D() {
-				title := "Switchyard: done"
+				title, ev := "Switchyard: done", notify.EventDone
 				if !e.OK {
-					title = "Switchyard: failed"
+					title, ev = "Switchyard: failed", notify.EventFailed
 				}
-				s.desktopAlert(title, oneLine(e.Text, 200))
+				s.alert(ev, title, oneLine(e.Text, 600)+"\n"+rv.Took)
 			}
 		}
 		s.last = rv
@@ -288,11 +293,49 @@ func (s *Server) observe(e event.Event) {
 		if e.AgentID == orchestrator.AgentMain {
 			s.mainProv = e.Provider
 		}
+	case event.ProviderState:
+		// An open page shows the limit; the webhook is for when you are away.
+		if e.Until.After(time.Now()) && !e.Until.Equal(s.limitUntil[e.Provider]) {
+			if s.limitUntil == nil {
+				s.limitUntil = map[string]time.Time{}
+			}
+			s.limitUntil[e.Provider] = e.Until
+			s.webhook(notify.EventLimit, "Switchyard: "+e.Provider+" hit its limit", e.Text)
+		}
 	}
 }
 
 // sendNotify is notify.Send; tests replace it.
 var sendNotify = notify.Send
+
+// sendWebhooks is notify.Broadcast; tests replace it.
+var sendWebhooks = notify.Broadcast
+
+// alert posts to the webhooks and shows a desktop notification.
+func (s *Server) alert(ev, title, body string) {
+	s.webhook(ev, title, body)
+	s.desktopAlert(title, oneLine(body, 200))
+}
+
+// webhook posts to the configured webhooks in the background, whether a
+// page is open or not: they are for when you are away from the PC. A
+// failure shows on the open pages.
+func (s *Server) webhook(ev, title, body string) {
+	if s.opt.Demo {
+		return
+	}
+	hooks := s.store.Get().Notify.Webhooks
+	if !notify.Wanted(hooks, ev) {
+		return
+	}
+	msg := notify.Message{Event: ev, Title: title, Body: body, Source: filepath.Base(s.opt.Dir)}
+	post := sendWebhooks
+	go func() {
+		if err := post(context.Background(), hooks, msg); err != nil {
+			s.notice("warn", "notification not sent: "+err.Error())
+		}
+	}()
+}
 
 // desktopAlert shows a desktop notification from the sy process, only
 // when no page is open (an open page notifies through the browser).

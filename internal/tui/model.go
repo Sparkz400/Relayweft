@@ -16,6 +16,7 @@ import (
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/notify"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 )
 
@@ -440,7 +441,7 @@ func (m *Model) handleEvent(e event.Event) {
 		pv := m.provs[e.Provider]
 		if pv != nil {
 			if e.Until.After(time.Now()) && !e.Until.Equal(pv.until) {
-				m.alert("Switchyard: "+e.Provider+" hit its limit", e.Text)
+				m.alert(notify.EventLimit, "Switchyard: "+e.Provider+" hit its limit", e.Text)
 			}
 			pv.until = e.Until
 		}

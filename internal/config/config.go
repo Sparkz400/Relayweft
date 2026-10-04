@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/notify"
 	"gopkg.in/yaml.v3"
 )
 
@@ -169,10 +170,27 @@ type WorkspaceCfg struct {
 	Repos map[string]string `yaml:"repos,omitempty"`
 }
 
-// NotifyCfg controls desktop notifications.
+// NotifyCfg controls notifications: Enabled turns desktop notifications
+// on; Webhooks (Slack, Discord, ntfy) are sent whenever listed. A repo
+// file's webhooks apply only after `sy trust`: they say where sy sends
+// what your tasks did.
 type NotifyCfg struct {
-	Enabled bool     `yaml:"enabled"`
-	MinTask Duration `yaml:"min_task"` // only tasks that ran at least this long
+	Enabled  bool             `yaml:"enabled"`
+	MinTask  Duration         `yaml:"min_task"` // only tasks that ran at least this long
+	Webhooks []notify.Webhook `yaml:"webhooks,omitempty"`
+}
+
+// Redacted returns a copy for display (sy bugreport): webhook URLs and
+// tokens are secrets.
+func (n NotifyCfg) Redacted() NotifyCfg {
+	if n.Webhooks != nil {
+		hooks := make([]notify.Webhook, len(n.Webhooks))
+		for i, w := range n.Webhooks {
+			hooks[i] = w.Redacted()
+		}
+		n.Webhooks = hooks
+	}
+	return n
 }
 
 // BudgetCfg caps what a task and a day may use (0 = off). Tokens are fresh
@@ -299,7 +317,22 @@ func Parse(data []byte) (*Config, error) {
 // ./switchyard.yaml and then <user config dir>/switchyard/switchyard.yaml are
 // tried. The returned path is where Save writes; it is ./switchyard.yaml when
 // no file was found.
+//
+// A ./switchyard.yaml found this way may have come with a cloned
+// repository, so like a repo's .switchyard.yaml its settings that run
+// commands apply only once trusted (see LoadInfo).
 func Load(path string) (*Config, string, error) {
+	c, p, _, err := LoadInfo(path)
+	return c, p, err
+}
+
+// LoadInfo is Load, and also returns the settings of an untrusted
+// ./switchyard.yaml that were ignored (verify, hooks, providers, ...: see
+// commandKeys). Those come from the user config, or the defaults, instead,
+// until `sy trust` (or sy itself saving the file) trusts what the file
+// sets for them. An explicit path and the user config are yours and always
+// apply in full.
+func LoadInfo(path string) (*Config, string, []string, error) {
 	candidates := []string{}
 	if path != "" {
 		candidates = append(candidates, path)
@@ -309,30 +342,74 @@ func Load(path string) (*Config, string, error) {
 			candidates = append(candidates, filepath.Join(dir, "switchyard", FileName))
 		}
 	}
-	for _, p := range candidates {
+	for i, p := range candidates {
 		data, err := os.ReadFile(p)
 		if errors.Is(err, os.ErrNotExist) {
 			if path != "" {
-				return nil, "", fmt.Errorf("config %s not found", path)
+				return nil, "", nil, fmt.Errorf("config %s not found", path)
 			}
 			continue
 		}
 		if err != nil {
-			return nil, "", err
+			return nil, "", nil, err
 		}
-		c := Default()
-		if err := yaml.Unmarshal(data, c); err != nil {
-			return nil, "", fmt.Errorf("%s: %w", p, err)
+		c, err := parseFile(p, data)
+		if err != nil {
+			return nil, "", nil, err
 		}
-		c.fillProviderDefaults(Default())
+		var ignored []string
+		if path == "" && i == 0 && !IsLocalTrusted(p, data) {
+			ignored = guardLocal(c, data, candidates[1:])
+		}
 		if err := c.Validate(); err != nil {
-			return nil, "", fmt.Errorf("%s: %w", p, err)
+			return nil, "", nil, fmt.Errorf("%s: %w", p, err)
 		}
 		abs, _ := filepath.Abs(p)
-		return c, abs, nil
+		return c, abs, ignored, nil
 	}
 	abs, _ := filepath.Abs(FileName)
-	return Default(), abs, nil
+	return Default(), abs, nil, nil
+}
+
+// parseFile reads a config file's content over the defaults.
+func parseFile(p string, data []byte) (*Config, error) {
+	c := Default()
+	if err := yaml.Unmarshal(data, c); err != nil {
+		return nil, fmt.Errorf("%s: %w", p, err)
+	}
+	c.fillProviderDefaults(Default())
+	return c, nil
+}
+
+// guardLocal puts back the settings that run commands in c, read from an
+// untrusted ./switchyard.yaml (data), from the first of the user's own
+// config files that loads, or the defaults; it returns those the file set
+// to something else.
+func guardLocal(c *Config, data []byte, own []string) []string {
+	base := Default()
+	for _, p := range own {
+		if d, err := os.ReadFile(p); err == nil {
+			if b, err := parseFile(p, d); err == nil && b.Validate() == nil {
+				base = b
+			}
+			break
+		}
+	}
+	// Restored whatever YAML reached them (merge keys, anchors); reported
+	// only where the file itself sets them, since your own config differs
+	// from the defaults the file was read over.
+	changed := restoreCommandSettings(c, base)
+	set, err := trustSubset(data)
+	if err != nil {
+		return changed // unreadable as a plain mapping: report all
+	}
+	var ignored []string
+	for _, k := range changed {
+		if _, ok := set[k]; ok {
+			ignored = append(ignored, k)
+		}
+	}
+	return ignored
 }
 
 // fillProviderDefaults fills provider fields a partial user file left empty.
@@ -410,6 +487,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Watch.MaxRounds < 0 {
 		errs = append(errs, "watch.max_rounds must be >= 0")
+	}
+	for i, w := range c.Notify.Webhooks {
+		if err := w.Validate(); err != nil {
+			errs = append(errs, fmt.Sprintf("notify.webhooks[%d]: %v", i, err))
+		}
 	}
 	if w := c.Budget.WarnAt; w < 0 || w > 1 {
 		errs = append(errs, "budget.warn_at must be between 0 and 1")
@@ -600,14 +682,19 @@ func (s *Store) Update(fn func(c *Config) error) error {
 	return nil
 }
 
-// Save persists the live config.
+// Save persists the live config. You saved it, so a ./switchyard.yaml
+// written here is trusted as it now is.
 func (s *Store) Save() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	c := s.cfg
 	if s.base != nil {
-		return s.base.Save(s.path) // never bake the repo file into yours
+		c = s.base // never bake the repo file into yours
 	}
-	return s.cfg.Save(s.path)
+	if err := c.Save(s.path); err != nil {
+		return err
+	}
+	return TrustLocal(s.path)
 }
 
 // SetRoute changes one role's route on one provider.
