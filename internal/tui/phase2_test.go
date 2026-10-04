@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/notify"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/router"
 )
@@ -470,6 +471,56 @@ func TestNotifications(t *testing.T) {
 	all := strings.Join(got, "\n")
 	if !strings.Contains(all, "Switchyard: done: all good") || !strings.Contains(all, "limit") || strings.Contains(all, "short") {
 		t.Errorf("notifications = %q", all)
+	}
+}
+
+// Webhooks get the same news, with desktop notifications off too.
+func TestWebhookNotifications(t *testing.T) {
+	m, orc, _ := newModel(t, false)
+	posted := make(chan notify.Message, 8)
+	old := sendWebhooks
+	sendWebhooks = func(_ context.Context, hooks []notify.Webhook, msg notify.Message) error {
+		if len(hooks) != 1 {
+			t.Errorf("hooks = %v", hooks)
+		}
+		posted <- msg
+		return nil
+	}
+	t.Cleanup(func() { sendWebhooks = old })
+	orc.Store().Update(func(c *config.Config) error {
+		c.Notify.Enabled = false
+		c.Notify.MinTask = config.Duration(time.Minute)
+		c.Notify.Webhooks = []notify.Webhook{{URL: "https://ntfy.sh/t", Events: []string{"done", "limit"}}}
+		return nil
+	})
+	m.running = true
+	m.taskStart = time.Now().Add(-2 * time.Minute)
+	m.handleEvent(event.Event{Kind: event.TaskDone, OK: true, Text: "all good"}.Stamp())
+	m.alert(notify.EventWaiting, "Switchyard needs you", "not in this webhook's events")
+	m.handleEvent(event.Event{Kind: event.ProviderState, Provider: event.Codex, Until: time.Now().Add(time.Hour), Text: "codex limit"}.Stamp())
+	var got []notify.Message
+	for len(got) < 2 {
+		select {
+		case msg := <-posted:
+			got = append(got, msg)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("webhooks posted %v", got)
+		}
+	}
+	select {
+	case msg := <-posted:
+		t.Fatalf("unwanted post: %+v", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+	events := map[string]notify.Message{}
+	for _, msg := range got {
+		events[msg.Event] = msg
+	}
+	if d := events[notify.EventDone]; !strings.HasPrefix(d.Body, "all good\n2m") || d.Source == "" {
+		t.Errorf("done = %+v", d)
+	}
+	if l := events[notify.EventLimit]; l.Body != "codex limit" {
+		t.Errorf("limit = %+v", l)
 	}
 }
 

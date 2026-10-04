@@ -34,11 +34,13 @@ const benchExample = `# sy bench: compare Switchyard (routed) with single agents
 modes:
   - routed                          # Switchyard with your switchyard.yaml routes
   # - routed-nohandoff              # the same without the context hand-off (repo map, notes), to measure it
+  # - routed:worker=claude:sonnet:medium   # routed with a role on another route: evidence for learned routes
   - single:codex:gpt-6.1-sol:high   # one agent, no planning or review
   - single:claude:opus:high
 
 setup: ""        # optional command run before every run, e.g. "npm ci" (ignored files are kept between runs)
 timeout: 30m     # per run, including the check
+learn: false     # true: update this repo's learned routes from the results when the bench ends
 
 tasks:
   - name: example-fix
@@ -54,11 +56,29 @@ type benchFile struct {
 	Modes   []string        `yaml:"modes"`
 	Setup   string          `yaml:"setup"`
 	Timeout config.Duration `yaml:"timeout"`
-	Tasks   []struct {
-		Name   string `yaml:"name"`
-		Prompt string `yaml:"prompt"`
-		Check  string `yaml:"check"`
-	} `yaml:"tasks"`
+	// Learn updates the repo's learned routes when the bench ends
+	// (benchlearn.go).
+	Learn bool        `yaml:"learn,omitempty"`
+	Tasks []benchTask `yaml:"tasks"`
+}
+
+type benchTask struct {
+	Name   string `yaml:"name"`
+	Prompt string `yaml:"prompt"`
+	Check  string `yaml:"check"`
+	// Base is the commit the run starts from (default: HEAD); history
+	// tasks start from the parent of the commit they come from.
+	Base  string      `yaml:"base,omitempty"`
+	Tests *benchTests `yaml:"tests,omitempty"`
+}
+
+// benchTests are a history task's test files. Before the check they are
+// set to their content at From (so editing or deleting them cannot pass
+// it); Visible also puts them in place before the agent starts.
+type benchTests struct {
+	From    string   `yaml:"from"`
+	Files   []string `yaml:"files,flow"`
+	Visible bool     `yaml:"visible"`
 }
 
 type benchResult struct {
@@ -79,6 +99,20 @@ func cmdBench(args []string) error {
 	starter := fs.String("starter", "", "create the starter set (a small Python repo with 5 tasks) in this new directory and exit")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
 	only := fs.String("only", "", "comma-separated task names to run")
+	learnFlag := fs.Bool("learn", false, "update this repo's learned routes from the results when the bench ends (default: the file's learn setting)")
+	noLearn := fs.Bool("no-learn", false, "do not update the learned routes, even if the file sets learn: true")
+	fromHistory := fs.Bool("from-history", false, "write bench-history.yaml (or --file) with tasks made from past multi-file commits of this repo, and exit")
+	var ho historyOpts
+	fs.IntVar(&ho.count, "count", 10, "--from-history: number of tasks")
+	fs.IntVar(&ho.scan, "scan", 300, "--from-history: how many recent commits to look at")
+	fs.StringVar(&ho.check, "check", "", "--from-history: check command (default: verify.commands, else detected from the build files)")
+	fs.StringVar(&ho.setup, "setup", "", "--from-history: setup command run before every check and run, e.g. \"npm ci\"")
+	fs.IntVar(&ho.lim.minFiles, "min-files", 2, "--from-history: minimum code files a commit changed (tests, docs and lock files do not count)")
+	fs.IntVar(&ho.lim.maxFiles, "max-files", 15, "--from-history: maximum files a commit changed")
+	fs.IntVar(&ho.lim.maxLines, "max-lines", 800, "--from-history: maximum changed lines outside tests and lock files")
+	fs.BoolVar(&ho.hidden, "hidden-tests", false, "--from-history: keep the commit's tests from the agents until the check (default: in place from the start)")
+	fs.BoolVar(&ho.noValidate, "no-validate", false, "--from-history: skip running the check on each commit and its parent")
+	fs.DurationVar(&ho.timeout, "check-timeout", 15*time.Minute, "--from-history: time limit per validation check")
 	fs.Parse(args)
 
 	if *starter != "" {
@@ -87,6 +121,18 @@ func cmdBench(args []string) error {
 		}
 		fmt.Printf("wrote the starter set to %s\nnext: cd %s && sy bench\n", *starter, *starter)
 		return nil
+	}
+	if *fromHistory {
+		ho.out = "bench-history.yaml"
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "file" {
+				ho.out = *file
+			}
+		})
+		if ho.count < 1 || ho.scan < 1 {
+			return fmt.Errorf("--count and --scan must be at least 1")
+		}
+		return benchFromHistory(c, ho)
 	}
 	if *initFile {
 		if _, err := os.Stat(*file); err == nil {
@@ -112,26 +158,17 @@ func cmdBench(args []string) error {
 	if bf.Timeout == 0 {
 		bf.Timeout = config.Duration(30 * time.Minute)
 	}
-	type modeSpec struct {
-		name, provider string
-		route          config.Route
-		noHandoff      bool
+	if *learnFlag && *noLearn {
+		return fmt.Errorf("give --learn or --no-learn, not both")
 	}
-	var modes []modeSpec
+	learn := (bf.Learn || *learnFlag) && !*noLearn
+	var modes []benchMode
 	for _, m := range bf.Modes {
-		if m == "routed" || m == "routed-nohandoff" {
-			modes = append(modes, modeSpec{name: m, noHandoff: m == "routed-nohandoff"})
-			continue
-		}
-		spec, ok := strings.CutPrefix(m, "single:")
-		if !ok {
-			return fmt.Errorf("mode %q: want routed, routed-nohandoff or single:<provider>:<model>[:effort]", m)
-		}
-		prov, route, err := config.ParseRouteSpec(spec)
+		bm, err := parseBenchMode(m)
 		if err != nil {
-			return fmt.Errorf("mode %q: %w", m, err)
+			return err
 		}
-		modes = append(modes, modeSpec{name: m, provider: prov, route: route})
+		modes = append(modes, bm)
 	}
 	want := map[string]bool{}
 	for _, n := range strings.Split(*only, ",") {
@@ -164,8 +201,30 @@ func cmdBench(args []string) error {
 	if err != nil {
 		return fmt.Errorf("the repo needs at least one commit: %w", err)
 	}
+	history := 0
+	for i := range tasks {
+		t := &tasks[i]
+		if t.Base != "" {
+			sha, err := ws.Resolve(t.Base)
+			if err != nil {
+				return fmt.Errorf("task %q: base %q is not a commit of this repo", t.Name, t.Base)
+			}
+			t.Base = sha
+			history++
+		}
+		if t.Tests != nil {
+			sha, err := ws.Resolve(t.Tests.From)
+			if err != nil {
+				return fmt.Errorf("task %q: tests.from %q is not a commit of this repo", t.Name, t.Tests.From)
+			}
+			t.Tests.From = sha
+		}
+	}
 	if ws.Dirty() {
 		fmt.Println("note: your working tree has uncommitted changes; the bench runs on HEAD without them.")
+	}
+	if bad := unlearnable(store.Get(), modes); len(bad) > 0 {
+		fmt.Printf("note: %s: not a configured, usable route, so learned routes never pick it\n", strings.Join(bad, ", "))
 	}
 	unlock, err := ws.Lock()
 	if err != nil {
@@ -173,7 +232,14 @@ func cmdBench(args []string) error {
 	}
 	defer unlock()
 	runs := len(tasks) * len(modes)
-	fmt.Printf("%d task(s) x %d mode(s) = %d runs from %s, in %s\n", len(tasks), len(modes), runs, head[:min(10, len(head))], ws.Path)
+	from := head[:min(10, len(head))]
+	if history > 0 {
+		from += fmt.Sprintf(" (%d task(s) from their own base commit)", history)
+	}
+	fmt.Printf("%d task(s) x %d mode(s) = %d runs from %s, in %s\n", len(tasks), len(modes), runs, from, ws.Path)
+	if learn {
+		fmt.Println("afterwards the results update this repo's learned routes (--no-learn skips that)")
+	}
 	if !*yes {
 		fmt.Print("This uses real Codex/Claude quota. Start? [y/N] ")
 		ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
@@ -208,21 +274,13 @@ func cmdBench(args []string) error {
 			n++
 			fmt.Printf("\n[%d/%d] %s · %s\n", n, runs, t.Name, m.name)
 			r := benchResult{task: t.Name, mode: m.name}
-			if err := ws.Reset(head); err != nil {
-				r.note = "workspace: " + err.Error()
+			rctx, cancel := context.WithTimeout(ctx, bf.Timeout.D())
+			if note := prepareBenchRun(rctx, ws, head, bf.Setup, t); note != "" {
+				r.note = note
+				cancel()
 				results = append(results, r)
 				fmt.Println("  ", r.note)
 				continue
-			}
-			rctx, cancel := context.WithTimeout(ctx, bf.Timeout.D())
-			if bf.Setup != "" {
-				if ok, out := shell(rctx, ws.Path, bf.Setup); !ok {
-					r.note = "setup failed: " + lastLine(out)
-					cancel()
-					results = append(results, r)
-					fmt.Println("  ", r.note)
-					continue
-				}
 			}
 			events := make(chan event.Event, 4096)
 			printed := make(chan struct{})
@@ -232,12 +290,13 @@ func cmdBench(args []string) error {
 					printEvent(e, true)
 				}
 			}()
-			runStore := store
-			if m.noHandoff {
-				// Same routes without the context hand-off, to measure it.
-				cfgNo := store.Get()
-				cfgNo.Orchestrator.Handoff = false
-				runStore = config.NewStore(cfgNo, store.Path())
+			// Same routes without the context hand-off, or a route variant.
+			runStore, err := m.store(store)
+			if err != nil {
+				cancel()
+				close(events)
+				<-printed
+				return err
 			}
 			orc := orchestrator.New(orchestrator.Options{
 				Dir: ws.Path, Store: runStore, Runners: benchRunners, Tracker: tracker, Log: log,
@@ -261,7 +320,7 @@ func cmdBench(args []string) error {
 				fmt.Println("  =>", r.note)
 				continue
 			}
-			ok, out := shell(rctx, ws.Path, t.Check)
+			ok, out := benchCheck(rctx, ws, t)
 			cancel()
 			r.passed = ok
 			if !ok {
@@ -280,14 +339,69 @@ func cmdBench(args []string) error {
 	report := benchReport(results, modes2names(bf.Modes))
 	fmt.Println("\n" + report)
 	out := "bench-results-" + time.Now().Format("20060102-150405") + ".md"
-	if err := os.WriteFile(out, []byte("# sy bench results\n\nCommit "+head+"\n\n```\n"+report+"```\n"), 0o644); err == nil {
+	hdr := "Commit " + head + "\n"
+	for _, t := range tasks {
+		if t.Base != "" {
+			hdr += fmt.Sprintf("- %s starts at %s", t.Name, t.Base)
+			if t.Tests != nil {
+				hdr += ", tests from " + t.Tests.From
+			}
+			hdr += "\n"
+		}
+	}
+	if err := os.WriteFile(out, []byte("# sy bench results\n\n"+hdr+"\n```\n"+report+"```\n"), 0o644); err == nil {
 		fmt.Println("saved", out)
 	}
 	diag.Logf("bench finished: %d runs", len(results))
+	switch {
+	case !learn:
+	case ctx.Err() != nil:
+		fmt.Println("learned routes: not updated, the bench was cancelled (`sy tune --apply` learns from the runs so far)")
+	default:
+		fmt.Println()
+		if err := benchLearn(os.Stdout, store, dir); err != nil {
+			fmt.Fprintln(os.Stderr, "learned routes: not updated:", err)
+		}
+	}
 	return nil
 }
 
 func modes2names(m []string) []string { return m }
+
+// prepareBenchRun gives a run its clean start: the task's base commit (HEAD
+// when it has none), the setup command and visible tests. It returns why
+// the run cannot start, or "".
+func prepareBenchRun(ctx context.Context, ws *orchestrator.BenchWorkspace, head, setup string, t benchTask) string {
+	base := head
+	if t.Base != "" {
+		base = t.Base
+	}
+	if err := ws.Reset(base); err != nil {
+		return "workspace: " + err.Error()
+	}
+	if setup != "" {
+		if ok, out := shell(ctx, ws.Path, setup); !ok {
+			return "setup failed: " + lastLine(out)
+		}
+	}
+	if t.Tests != nil && t.Tests.Visible {
+		if err := ws.RestoreFiles(t.Tests.From, t.Tests.Files); err != nil {
+			return "tests: " + err.Error()
+		}
+	}
+	return ""
+}
+
+// benchCheck runs a task's check, with its tests set to the reference
+// commit's version first.
+func benchCheck(ctx context.Context, ws *orchestrator.BenchWorkspace, t benchTask) (bool, string) {
+	if t.Tests != nil {
+		if err := ws.RestoreFiles(t.Tests.From, t.Tests.Files); err != nil {
+			return false, "restoring the tests: " + err.Error()
+		}
+	}
+	return shell(ctx, ws.Path, t.Check)
+}
 
 // benchReport renders per-task rows and per-mode totals.
 func benchReport(rs []benchResult, modes []string) string {

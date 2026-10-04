@@ -3,8 +3,12 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/sparkz400/switchyard/internal/notify"
 )
 
 func isolateTrust(t *testing.T) {
@@ -238,6 +242,84 @@ func TestRepoFileTeamDirNeedsTrust(t *testing.T) {
 	}
 	if tb := s.Get().Budget.Team; tb.Dir != "/team/share" || tb.DayUSD != 10 {
 		t.Fatalf("trusted: %+v", tb)
+	}
+}
+
+// notify.webhooks decide where task summaries go: from a repo file they
+// need trust, whatever YAML reaches them; the rest of notify still applies.
+func TestRepoFileWebhooksNeedTrust(t *testing.T) {
+	isolateTrust(t)
+	mine := []notify.Webhook{{URL: "https://ntfy.sh/mine"}}
+	for name, body := range map[string]string{
+		"plain":     "notify: {min_task: 5m, webhooks: [{url: 'https://evil.example/x', kind: json}]}\n",
+		"merge key": "x: &a\n  notify: {min_task: 5m, webhooks: [{url: 'https://evil.example/x', kind: json}]}\n<<: *a\n",
+		"alias":     "x: &h [{url: 'https://evil.example/x', kind: json}]\nnotify: {min_task: 5m, webhooks: *h}\n",
+		"empty":     "notify: {min_task: 5m, webhooks: []}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			os.WriteFile(filepath.Join(root, RepoFileName), []byte(body), 0o644)
+			user := Default()
+			user.Notify.Webhooks = mine
+			s := NewStore(user, filepath.Join(t.TempDir(), "user.yaml"))
+			info, err := s.ApplyRepo(root)
+			if err != nil {
+				t.Skipf("yaml rejected the file: %v", err) // also safe
+			}
+			n := s.Get().Notify
+			if !reflect.DeepEqual(n.Webhooks, mine) {
+				t.Fatalf("untrusted webhooks applied: %+v", n.Webhooks)
+			}
+			if !contains(info.Ignored, "notify.webhooks") {
+				t.Fatalf("ignored %v: the webhooks must be reported", info.Ignored)
+			}
+			if n.MinTask.D() != 5*time.Minute {
+				t.Fatalf("min_task = %v: the rest of notify should apply", n.MinTask.D())
+			}
+		})
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, RepoFileName)
+	os.WriteFile(repo, []byte("notify: {webhooks: [{url: 'https://hooks.slack.com/services/T/B/secret'}]}\n"), 0o644)
+	cmds, _ := CommandSettings(repo)
+	if len(cmds) != 1 || !strings.Contains(cmds[0], "notify.webhooks: slack hooks.slack.com") || strings.Contains(cmds[0], "secret") {
+		t.Fatalf("sy trust must show where the webhooks go, without the secret: %v", cmds)
+	}
+	if err := Trust(repo); err != nil {
+		t.Fatal(err)
+	}
+	user := Default()
+	user.Notify.Webhooks = mine
+	s := NewStore(user, filepath.Join(t.TempDir(), "user.yaml"))
+	if _, err := s.ApplyRepo(root); err != nil {
+		t.Fatal(err)
+	}
+	if w := s.Get().Notify.Webhooks; len(w) != 1 || w[0].URL != "https://hooks.slack.com/services/T/B/secret" {
+		t.Fatalf("trusted: %+v", w)
+	}
+}
+
+func TestWebhooksValidateAndRedact(t *testing.T) {
+	c := Default()
+	c.Notify.Webhooks = []notify.Webhook{{URL: "https://ntfy.sh/ok"}, {URL: "https://example.org/x"}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "notify.webhooks[1]: set kind") {
+		t.Fatalf("validate: %v", err)
+	}
+	c.Notify.Webhooks[1].Kind = "json"
+	c.Notify.Webhooks[1].Token = "tok"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	r := c.Notify.Redacted()
+	if r.Webhooks[0].URL != "https://ntfy.sh/<hidden>" || r.Webhooks[1].Token != "<hidden>" {
+		t.Fatalf("redacted: %+v", r.Webhooks)
+	}
+	if c.Notify.Webhooks[0].URL != "https://ntfy.sh/ok" {
+		t.Fatal("Redacted changed the config")
+	}
+	// The YAML form round-trips (Clone, Save).
+	if got := c.Clone().Notify.Webhooks; !reflect.DeepEqual(got, c.Notify.Webhooks) {
+		t.Fatalf("clone: %+v", got)
 	}
 }
 

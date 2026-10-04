@@ -35,3 +35,5 @@ func reap(pid int, stamp string) bool {
 	cur := procStamp(pid)
 	return cur == "" || (stamp != "" && cur != stamp)
 }
+
+func alive(pid int) bool { return procStamp(pid) != "" }

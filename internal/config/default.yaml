@@ -64,7 +64,7 @@ providers:
   claude:
     disabled: false
     command: claude
-    tested_version: "2.1.287 (Claude Code)"
+    tested_version: "2.1.288 (Claude Code)"
     write_permission_mode: acceptEdits # acceptEdits | auto | bypassPermissions | dontAsk
     write_allowed_tools: []            # e.g. ["Bash(go test *)", "Bash(npm test *)"] so workers can run tests
     extra_args: []
@@ -150,8 +150,21 @@ hooks:
 # Desktop notifications (Windows toast, macOS, notify-send): a task finished
 # or failed, a provider hit its limit, or sy waits for your approval.
 notify:
-  enabled: true
+  enabled: true                    # desktop notifications (Windows toast, macOS, notify-send)
   min_task: 1m                     # skip "done" for tasks shorter than this
+  # Webhooks reach your phone: overnight runs, scheduled tasks and sy watch
+  # post here (sy notify --test sends a test message). kind is slack,
+  # discord, ntfy or json; it is read from the URL for hooks.slack.com,
+  # discord.com/api/webhooks and ntfy.sh. url and token may use ${VAR}, so
+  # the secret can stay in your environment. events (default: all): done,
+  # failed, limit (a provider's usage limit), waiting (sy needs you), watch.
+  # Task summaries leave your machine: on ntfy.sh, anyone who knows the
+  # topic can read them, so pick a long random one (or a token).
+  # webhooks:
+  #   - url: https://ntfy.sh/sy-change-me-to-something-random
+  #     events: [done, failed, watch]
+  #   - url: ${SY_SLACK_WEBHOOK}
+  #     kind: slack
 
 # Spending caps (0 = off). tokens = fresh tokens on both providers; usd =
 # Claude's API-equivalent price (not billed on a subscription). Day totals

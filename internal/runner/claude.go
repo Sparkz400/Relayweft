@@ -17,8 +17,12 @@ import (
 // researcher, planner, reviewer, judge) may use.
 const ReadOnlyTools = "Read,Grep,Glob,WebSearch,WebFetch"
 
+// shellTools are the Claude Code tools that run shell commands; verify
+// commands are allowed in each of them.
+var shellTools = []string{"Bash", "PowerShell"}
+
 // NewClaude returns a runner for `claude -p --output-format stream-json`
-// (tested with Claude Code 2.1.287).
+// (tested with Claude Code 2.1.288).
 func NewClaude(cfg config.ProviderCfg, det *limits.Detector) *Exec {
 	return &Exec{
 		Provider: event.Claude,
@@ -58,8 +62,13 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 	}
 	allowed := append([]string(nil), cfg.WriteAllowedTools...)
 	for _, c := range s.AllowedCommands {
-		// Exact command and with arguments (e.g. "go test ./pkg/...").
-		allowed = append(allowed, "Bash("+c+")", "Bash("+c+" *)")
+		// Exact command and with arguments (e.g. "go test ./pkg/..."), for
+		// both shell tools: Claude Code on Windows also has a PowerShell
+		// tool, and Bash(...) rules do not cover a command run through it
+		// (verified with Claude Code 2.1.288: denied without PowerShell(...)).
+		for _, tool := range shellTools {
+			allowed = append(allowed, tool+"("+c+")", tool+"("+c+" *)")
+		}
 	}
 	if s.ReadOnly {
 		// A read-only agent gets no write tools or commands, but MCP tools
@@ -83,7 +92,8 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 //	{"type":"assistant","message":{"content":[{"type":"text|thinking|tool_use",...}]}}
 //	{"type":"user","message":{"content":[{"type":"tool_result",...}]}}
 //	{"type":"system","subtype":"task_summary","detail":"Reading a.txt"}
-//	{"type":"result","subtype":"success","is_error":false,"result":"...","usage":{...},"total_cost_usd":0.01}
+//	{"type":"system","subtype":"permission_denied","tool_name":"PowerShell","tool_use_id":"...","message":"<why>"}
+//	{"type":"result","subtype":"success","is_error":false,"result":"...","usage":{...},"total_cost_usd":0.01,"permission_denials":[...]}
 type claudeParser struct {
 	session string
 	final   string
@@ -93,27 +103,41 @@ type claudeParser struct {
 	limit   bool
 	files   fileSet
 	gotDone bool
+	calls   map[string]string // tool_use id -> "Tool arg", to name denied calls
+	denied  map[string]bool   // tool_use ids already reported as denied
 }
 
 type claudeLine struct {
-	Type          string          `json:"type"`
-	SessionID     string          `json:"session_id"`
-	Subtype       string          `json:"subtype"`
-	Model         string          `json:"model"`
-	Detail        *string         `json:"detail"`
-	StatusDetail  string          `json:"status_detail"`
-	Message       *claudeMessage  `json:"message"`
+	Type         string  `json:"type"`
+	SessionID    string  `json:"session_id"`
+	Subtype      string  `json:"subtype"`
+	Model        string  `json:"model"`
+	Detail       *string `json:"detail"`
+	StatusDetail string  `json:"status_detail"`
+	// An object on assistant/user lines, a plain string on others
+	// (system permission_denied): decoded per line type.
+	Message       json.RawMessage `json:"message"`
+	ToolName      string          `json:"tool_name"`
+	ToolUseID     string          `json:"tool_use_id"`
 	Result        string          `json:"result"`
 	IsError       bool            `json:"is_error"`
 	Usage         *claudeUsage    `json:"usage"`
 	TotalCostUSD  float64         `json:"total_cost_usd"`
 	RateLimitInfo *claudeRateInfo `json:"rate_limit_info"`
 	Errors        []string        `json:"errors"`
+	// Tool calls Claude Code refused for lack of permission (in -p mode
+	// nobody can approve them; the agent just reports it could not).
+	PermissionDenials []struct {
+		ToolName  string          `json:"tool_name"`
+		ToolUseID string          `json:"tool_use_id"`
+		ToolInput json.RawMessage `json:"tool_input"`
+	} `json:"permission_denials"`
 }
 
 type claudeMessage struct {
 	Content []struct {
 		Type     string          `json:"type"`
+		ID       string          `json:"id"`
 		Text     string          `json:"text"`
 		Thinking string          `json:"thinking"`
 		Name     string          `json:"name"`
@@ -166,6 +190,10 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 			if l.Detail != nil && *l.Detail != "" {
 				return []event.Event{{Kind: event.Thinking, Text: *l.Detail}}
 			}
+		case "permission_denied":
+			var why string
+			json.Unmarshal(l.Message, &why)
+			return p.deny(l.ToolUseID, l.ToolName, "", why)
 		}
 	case "rate_limit_event":
 		if ri := l.RateLimitInfo; ri != nil {
@@ -198,11 +226,12 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 			return out
 		}
 	case "assistant":
-		if l.Message == nil {
+		var m claudeMessage
+		if len(l.Message) == 0 || json.Unmarshal(l.Message, &m) != nil {
 			return nil
 		}
 		var out []event.Event
-		for _, c := range l.Message.Content {
+		for _, c := range m.Content {
 			switch c.Type {
 			case "text":
 				if t := strings.TrimSpace(c.Text); t != "" {
@@ -215,6 +244,12 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 				}
 			case "tool_use":
 				arg := toolArg(c.Input)
+				if c.ID != "" {
+					if p.calls == nil {
+						p.calls = map[string]string{}
+					}
+					p.calls[c.ID] = strings.TrimSpace(c.Name + " " + arg)
+				}
 				if editTools[c.Name] {
 					p.files.add(arg)
 					out = append(out, event.Event{Kind: event.FileEdit, Text: arg})
@@ -226,6 +261,11 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 		return out
 	case "result":
 		p.gotDone = true
+		var out []event.Event
+		for _, d := range l.PermissionDenials {
+			// Those not already reported by a permission_denied line.
+			out = append(out, p.deny(d.ToolUseID, d.ToolName, toolArg(d.ToolInput), "")...)
+		}
 		if l.Usage != nil {
 			u := l.Usage
 			p.tokens = event.TokenUsage{
@@ -245,11 +285,37 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 				msg = "claude: " + l.Subtype
 			}
 			p.fatal = msg
-			return []event.Event{{Kind: event.Error, Text: msg}}
+			return append(out, event.Event{Kind: event.Error, Text: msg})
 		}
 		p.final = l.Result
+		return out
 	}
 	return nil
+}
+
+// deny reports a tool call Claude Code refused for lack of permission, once
+// per call. In -p mode nobody can approve it, so the agent goes on without
+// it (e.g. without running a check). A warning, not an error: the run may
+// still succeed, but the user should see what the agent was not allowed
+// to do.
+func (p *claudeParser) deny(id, tool, arg, why string) []event.Event {
+	if id != "" {
+		if p.denied[id] {
+			return nil
+		}
+		if p.denied == nil {
+			p.denied = map[string]bool{}
+		}
+		p.denied[id] = true
+		if c := p.calls[id]; c != "" {
+			tool, arg = c, ""
+		}
+	}
+	text := strings.TrimSpace("warning: permission denied: " + strings.TrimSpace(tool+" "+arg))
+	if why = strings.TrimSpace(why); why != "" {
+		text += " (" + why + ")"
+	}
+	return []event.Event{{Kind: event.Thinking, Text: text}}
 }
 
 // toolArg extracts the most telling argument of a tool call for display.

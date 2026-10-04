@@ -6,15 +6,17 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/gh"
+	"github.com/sparkz400/switchyard/internal/forge"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 )
 
-// GitHub issues as tasks (sy run --issue / --issues):
+// Issues as tasks (sy run --issue / --issues), on GitHub, GitLab or
+// Gitea/Forgejo (the origin remote's forge, or the issue URL's):
 //
 //   - --issue N|URL reads the issue (title, body, labels; comments with
-//     --with-comments) and runs "Fix GitHub issue #N: <title>" plus the body
-//     as the task. Public repositories need no token.
+//     --with-comments) and runs "Fix GitHub issue #N: <title>" (GitLab
+//     issue, Gitea issue) plus the body as the task. Public repositories
+//     need no token.
 //   - --issues label:<name> --pr runs the open issues with that label one
 //     after another, unattended, oldest first; pull requests and issues an
 //     open pull request already closes ("Closes #N") are skipped. A batch
@@ -36,7 +38,7 @@ import (
 //   - With --at/--in/--when-reset the issues are read, and the working tree
 //     checked, when the run starts, not when it is scheduled.
 
-// issueFlags are sy run's GitHub issue flags and what they resolved to.
+// issueFlags are sy run's issue flags and what they resolved to.
 type issueFlags struct {
 	issue        string
 	issues       string
@@ -50,25 +52,25 @@ type issueFlags struct {
 	api          string
 
 	dir       string
-	origin    gh.Repo // the origin remote's repository (zero if none)
+	origin    forge.Repo // the origin remote's repository (zero if none)
 	originErr error
-	ref       gh.IssueRef // --issue, resolved by prepare
-	label     string      // --issues label
+	ref       forge.Ref // --issue, resolved by prepare
+	label     string    // --issues label
 	items     []issueItem
 	pulls     int
 }
 
 type issueItem struct {
-	repo   gh.Repo
-	client *gh.Client
-	issue  gh.Issue
+	repo   forge.Repo
+	client forge.Client
+	issue  forge.Issue
 	task   string
 	closes string // "#12" or "owner/repo#12"
 }
 
 func registerIssueFlags(fs *flag.FlagSet) *issueFlags {
 	f := &issueFlags{}
-	fs.StringVar(&f.issue, "issue", "", "run a GitHub issue (number or URL) as the task")
+	fs.StringVar(&f.issue, "issue", "", "run an issue (number or URL; GitHub, GitLab or Gitea) as the task")
 	fs.StringVar(&f.issues, "issues", "", "label:<name>: run the open issues with this label one after another, unattended (needs --pr)")
 	fs.IntVar(&f.limit, "limit", 5, "with --issues: at most this many issues")
 	fs.BoolVar(&f.withComments, "with-comments", false, "with --issue(s): include the issue's comments in the task")
@@ -76,7 +78,7 @@ func registerIssueFlags(fs *flag.FlagSet) *issueFlags {
 	fs.BoolVar(&f.comment, "comment", true, "with --pr: comment the pull request link on the issue")
 	fs.StringVar(&f.base, "base", "", "with --pr: branch to merge into (default: the remote's default branch)")
 	fs.BoolVar(&f.draft, "draft", false, "with --pr: open pull requests as drafts")
-	fs.StringVar(&f.api, "api", "", "GitHub API base URL (GitHub Enterprise: https://<host>/api/v3)")
+	fs.StringVar(&f.api, "api", "", apiFlagHelp)
 	return f
 }
 
@@ -112,18 +114,15 @@ func (f *issueFlags) prepare(fs *flag.FlagSet, dir string) error {
 		return errors.New("--limit must be at least 1")
 	}
 	f.dir = dir
-	ent := gh.EnterpriseHost()
-	if u, err := prGit(dir, nil, nil, "remote", "get-url", "origin"); err != nil {
-		f.originErr = fmt.Errorf("%s has no git remote `origin` on GitHub", dir)
+	hosts := forge.EnvHosts()
+	if u, err := originURL(dir); err != nil {
+		f.originErr = fmt.Errorf("%s has no git remote `origin` on GitHub, GitLab or Gitea", dir)
 	} else {
-		u = strings.TrimSpace(u)
-		if f.api != "" {
-			ent = hostOf(u)
-		}
-		f.origin, f.originErr = gh.ParseRemote(u, ent)
+		hosts = forgeHosts(u, f.api)
+		f.origin, f.originErr = forge.ParseRemote(u, hosts)
 	}
 	if f.issue != "" {
-		ref, err := gh.ParseIssueRef(f.issue, ent)
+		ref, err := forge.ParseIssueRef(f.issue, hosts)
 		if err != nil {
 			return err
 		}
@@ -186,14 +185,14 @@ func (f *issueFlags) fetch() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	taken := gh.ClosedBy(pulls)
+	taken := forge.ClosedBy(pulls)
 	var tasks []string
 	for _, is := range open {
 		if len(tasks) == f.limit {
 			break
 		}
 		if taken[is.Number] {
-			fmt.Printf("skipping #%d: an open pull request already closes it\n", is.Number)
+			fmt.Printf("skipping #%d: an open %s already closes it\n", is.Number, f.origin.Kind.PullNoun())
 			continue
 		}
 		it, err := f.fetchOne(c, f.origin, is.Number)
@@ -204,7 +203,7 @@ func (f *issueFlags) fetch() ([]string, error) {
 		tasks = append(tasks, it.task)
 	}
 	if len(tasks) == 0 {
-		fmt.Printf("no open issues labelled %q in %s without an open pull request\n", f.label, f.origin)
+		fmt.Printf("no open issues labelled %q in %s without an open %s\n", f.label, f.origin, f.origin.Kind.PullNoun())
 		return nil, errNoIssues
 	}
 	fmt.Printf("%d issue(s) labelled %q to run:", len(tasks), f.label)
@@ -215,30 +214,33 @@ func (f *issueFlags) fetch() ([]string, error) {
 	return tasks, nil
 }
 
-func (f *issueFlags) client(repo gh.Repo) *gh.Client {
-	api := f.api
-	if api == "" {
-		api = repo.APIBase()
+func (f *issueFlags) client(repo forge.Repo) forge.Client {
+	return forgeClient(repo, f.apiFor(repo), prOut)
+}
+
+// apiFor is the API override for repo. --api is the origin's (as for sy
+// pr): an issue given as a URL on another host is read from that host's
+// own API, with its own token, never through the origin's.
+func (f *issueFlags) apiFor(repo forge.Repo) string {
+	if f.api == "" || f.origin.IsZero() || strings.EqualFold(repo.Host, f.origin.Host) || forge.APIServes(f.api, repo.Host) {
+		return f.api
 	}
-	tok, _ := prToken(repo.Host)
-	c := gh.NewClient(api, tok)
-	c.Notes = prOut
-	return c
+	return ""
 }
 
 // fetchOne reads one issue (and its comments) and builds the task text.
-func (f *issueFlags) fetchOne(c *gh.Client, repo gh.Repo, n int) (issueItem, error) {
+func (f *issueFlags) fetchOne(c forge.Client, repo forge.Repo, n int) (issueItem, error) {
 	is, err := c.Issue(repo, n)
 	if err != nil {
 		return issueItem{}, fmt.Errorf("read issue %s#%d: %w", repo, n, err)
 	}
-	if is.PullRequest != nil {
+	if is.IsPull {
 		return issueItem{}, fmt.Errorf("%s#%d is a pull request, not an issue", repo, n)
 	}
 	if is.State == "closed" {
 		fmt.Printf("note: %s#%d is closed\n", repo, n)
 	}
-	var comments []gh.Comment
+	var comments []forge.Comment
 	if f.withComments {
 		if comments, err = c.Comments(repo, n); err != nil {
 			return issueItem{}, fmt.Errorf("read comments of %s#%d: %w", repo, n, err)
@@ -248,23 +250,23 @@ func (f *issueFlags) fetchOne(c *gh.Client, repo gh.Repo, n int) (issueItem, err
 	if !f.origin.IsZero() && !repo.Same(f.origin) {
 		closes = fmt.Sprintf("%s#%d", repo, n)
 	}
-	return issueItem{repo: repo, client: c, issue: *is, task: issueTask(*is, comments), closes: closes}, nil
+	return issueItem{repo: repo, client: c, issue: *is, task: issueTask(repo.Kind, *is, comments), closes: closes}, nil
 }
 
-// issueTask is the task text for an issue.
-func issueTask(is gh.Issue, comments []gh.Comment) string {
+// issueTask is the task text for an issue on a forge of kind k.
+func issueTask(k forge.Kind, is forge.Issue, comments []forge.Comment) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Fix GitHub issue #%d: %s\n\n", is.Number, strings.TrimSpace(is.Title))
+	fmt.Fprintf(&b, "Fix %s issue #%d: %s\n\n", k.Name(), is.Number, strings.TrimSpace(is.Title))
 	if body := strings.TrimSpace(strings.ReplaceAll(is.Body, "\r\n", "\n")); body != "" {
 		b.WriteString(clipText(body, 20000) + "\n")
 	}
-	if labels := is.LabelNames(); len(labels) > 0 {
-		fmt.Fprintf(&b, "\nLabels: %s\n", strings.Join(labels, ", "))
+	if len(is.Labels) > 0 {
+		fmt.Fprintf(&b, "\nLabels: %s\n", strings.Join(is.Labels, ", "))
 	}
 	if len(comments) > 0 {
 		b.WriteString("\nComments:\n")
 		for _, c := range comments {
-			fmt.Fprintf(&b, "\n@%s wrote:\n%s\n", c.User.Login, clipText(strings.TrimSpace(strings.ReplaceAll(c.Body, "\r\n", "\n")), 4000))
+			fmt.Fprintf(&b, "\n@%s wrote:\n%s\n", c.Author, clipText(strings.TrimSpace(strings.ReplaceAll(c.Body, "\r\n", "\n")), 4000))
 		}
 	}
 	return strings.TrimSpace(b.String())
@@ -293,7 +295,7 @@ func (f *issueFlags) afterTask(i int, res orchestrator.TaskResult) (stop bool) {
 			}
 			pr, err = makePR(st, prOptions{base: f.base, branch: branch, draft: f.draft, draftSet: f.draftSet, yes: true, unattended: true, closes: it.closes, api: f.api})
 			if err != nil {
-				fmt.Printf("pull request for #%d failed: %v\n", it.issue.Number, err)
+				fmt.Printf("%s for #%d failed: %v\n", it.repo.Kind.PullNoun(), it.issue.Number, err)
 				pr = nil // a branch that was not pushed is no pull request
 			}
 		}
@@ -302,8 +304,8 @@ func (f *issueFlags) afterTask(i int, res orchestrator.TaskResult) (stop bool) {
 		f.pulls++
 		if f.comment {
 			if !it.client.HasToken() {
-				fmt.Printf("not commenting on #%d: no GitHub token\n", it.issue.Number)
-			} else if err := it.client.AddComment(it.repo, it.issue.Number, fmt.Sprintf("Switchyard opened a pull request for this issue: %s", pr.URL)); err != nil {
+				fmt.Printf("not commenting on #%d: %s\n", it.issue.Number, noTokenText(it.repo.Kind))
+			} else if err := it.client.CommentIssue(it.repo, it.issue.Number, fmt.Sprintf("Switchyard opened a %s for this issue: %s", it.repo.Kind.PullNoun(), pr.URL)); err != nil {
 				fmt.Printf("comment on #%d failed: %v\n", it.issue.Number, err)
 			}
 		}

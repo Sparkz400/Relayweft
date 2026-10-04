@@ -43,7 +43,7 @@ func FuzzParseFindings(f *testing.F) {
 			t.Fatalf("%d inline + %d rest != %d findings", len(inline), len(rest), len(rv.Findings))
 		}
 		for _, c := range inline {
-			if !lines[c.Path][c.Line] || c.Line < 1 {
+			if !lines.has(c.Path, c.Line) || c.Line < 1 {
 				t.Fatalf("inline comment on %s:%d, which the diff does not show", c.Path, c.Line)
 			}
 			if reMention.MatchString(c.Body) || reCloseRef.MatchString(c.Body) {

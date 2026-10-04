@@ -132,3 +132,10 @@ func Started(cmd *exec.Cmd) {
 // object with kill-on-close). It is a no-op elsewhere, where agents get
 // their own process group and are killed explicitly.
 func Guard() error { return guard() }
+
+// Breakaway configures cmd to start outside Guard's job, so it outlives sy:
+// for the user's own programs sy merely launches (a browser), never for
+// agents. On Windows, Start then fails if an outer job (one sy itself was
+// started in) forbids breakaway: start a fresh command without it then.
+// It is a no-op elsewhere.
+func Breakaway(cmd *exec.Cmd) { breakaway(cmd) }

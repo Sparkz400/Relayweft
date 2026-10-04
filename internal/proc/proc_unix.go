@@ -24,6 +24,8 @@ func guard() error { return nil }
 
 func background(cmd *exec.Cmd) {}
 
+func breakaway(*exec.Cmd) {}
+
 // lower renices a process (children forked later inherit it).
 func lower(pid int) { _ = syscall.Setpriority(syscall.PRIO_PROCESS, pid, 10) }
 

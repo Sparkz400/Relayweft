@@ -47,7 +47,7 @@ Switchyard uses **subscriptions only**. It never touches model API keys or token
 
 Use **Windows Terminal** for the full look. Legacy `conhost` is detected and gets an ASCII theme (force either with `--ascii` / `--unicode`).
 
-**Tested CLI versions:** `codex-cli 0.160.0` and `Claude Code 2.1.287`. Output formats can change between releases. `sy doctor` warns when your versions differ, and the parsers are covered by recorded JSON fixtures in `internal/runner/testdata`.
+**Tested CLI versions:** `codex-cli 0.160.0` and `Claude Code 2.1.288`. Output formats can change between releases. `sy doctor` warns when your versions differ, and the parsers are covered by recorded JSON fixtures in `internal/runner/testdata`.
 
 ---
 
@@ -83,6 +83,23 @@ With the defaults, two more steps involve you or your repo's checks:
 - **Queue tasks.** Submitting while a task runs queues the new one (`/queue` to list, `/queue rm <n>`, `/queue clear`). Queued tasks run one after another, unattended: no approvals. Headless, use `sy run --file tasks.txt`, one task per line or blocks separated by `---`.
 - **History and resume.** Every task's plan and per-step results are saved as it runs. If `sy`, the terminal or the PC dies mid-task, `sy resume` (or `/resume`) continues it: finished steps are skipped and the rest runs, then verify and review. `sy history` (or `/history`) lists recent tasks with status and cost.
 - **Notifications.** A desktop notification (a Windows toast, macOS Notification Center or `notify-send`) when a task that ran at least `notify.min_task` (1 minute) finishes or fails, when a provider hits its limit, and when `sy` waits for your approval.
+- **Webhooks to your phone** (`notify.webhooks`). The same news goes to Slack, Discord or [ntfy](https://ntfy.sh), so overnight runs and `sy watch` reach you away from the PC. Webhooks are sent whenever they are listed; `notify.enabled` only switches the desktop notifications. `sy notify` shows where notifications go, and `sy notify --test` posts a test message to each webhook:
+
+  ```yaml
+  notify:
+    webhooks:
+      - url: https://ntfy.sh/sy-k3v9q2-pick-your-own   # install the ntfy app, subscribe to this topic
+        events: [done, failed, watch]
+      - url: ${SY_SLACK_WEBHOOK}                       # Slack incoming webhook, kept out of the file
+        kind: slack
+      - url: https://discord.com/api/webhooks/123/abc  # Discord channel webhook
+  ```
+
+  - `kind` is `slack`, `discord`, `ntfy` or `json` (a plain `{"event","title","body","source","link"}` POST for anything else). It is read from the URL for `hooks.slack.com`, `discord.com/api/webhooks/…` and `ntfy.sh` / `ntfy.*` hosts; set it for a self-hosted server.
+  - `events` (default: all): `done`, `failed`, `limit` (a provider hit its usage limit), `waiting` (sy needs your approval or a budget answer) and `watch` (a `sy watch` round pushed or did not push a follow-up, or a watched PR was merged or closed). `done` and `failed` follow `notify.min_task`. A `sy run --file` batch ends with one "N of M tasks succeeded" message.
+  - `url` and `token` may use `${VAR}`, filled in from your environment when a message is sent. `token` is an ntfy access token (or the bearer token for `json`).
+  - Task summaries leave your machine. On the public ntfy.sh server anyone who knows a topic can read it, so pick a long random topic, or use a token or your own server. Messages are escaped: a summary cannot ping `@everyone` or `<!channel>`, or hide a link. Errors and `sy bugreport` never show a webhook's URL path or token.
+  - Headless runs wait for the last post (at most 10 seconds) before `sy` exits. A failed post is printed (`sy run`, `sy watch`) or shown on the open page (`sy web`); in the TUI, check with `sy notify --test`.
 - **Context hand-off** (`orchestrator.handoff`). Planner and workers get a compact map of the repo, short notes from earlier successful tasks in the same repo, and what this task's read-only steps found. They spend fewer tokens finding their way around.
 
 ## Choosing models: any model for any job
@@ -168,6 +185,7 @@ sy run --issues label:sy [--limit 5] --pr     run open labelled issues one after
 sy run --estimate "task"              plan only: estimated tokens, time and $ per step; runs nothing
 sy pr [task] [--base main] [--draft] [--no-push] [--yes]   branch + commit + pull request from a finished task
 sy watch [--every 15m] [--list] [--forget n]   follow up on the PRs sy opened: failed checks, review comments
+sy notify [--test]                    where notifications go; --test posts to every webhook (Slack, Discord, ntfy)
 sy review <PR> [--provider codex|claude] [--post] [--yes]   second-opinion review of a pull request
 sy history [--all] [-n 20]            recent tasks: status, steps done, cost; marks interrupted ones
 sy resume [task id] [--force]         continue an interrupted task (default: the last one in this directory)
@@ -177,16 +195,18 @@ sy tune --apply | --learned | --reset   update, show or forget this repo's learn
 sy update [--check] [--yes]           update sy to the latest GitHub release (checksum-verified)
 sy web / sy app [--port N] [--demo]   the browser UI / the same in its own window
 sy init --repo                        write this repo's .switchyard.yaml (shared settings)
-sy trust [--revoke]                   review and trust the commands in this repo's .switchyard.yaml
+sy trust [--revoke]                   review and trust the commands in this repo's .switchyard.yaml (and ./switchyard.yaml)
 sy undo [--list] [--redo] [--yes] [task]   revert a task's changes (preview first), or put them back
 sy bench [--init] [--file bench.yaml] [--only a,b]   routed vs single agents on your own tasks
 sy bench --starter <dir>              a ready-made 5-task Python benchmark repo
+sy bench --from-history [--count 10]  bench tasks made from your own past multi-file commits
 sy stats [--here] [--since 7d]        usage per model, rules fired, routed vs baseline, per day, recent task costs
 sy stats --json [--out f.json]        this machine's usage as a JSON export (no task texts unless --with-tasks)
 sy stats --merge a.json b.json | dir  combined tables of several machines' exports
 sy models [--refresh] [--all]         routes + catalogs; refresh Codex catalog
 sy doctor                             CLIs, logins, git, terminal, machine load, free disk, worktree pools
 sy bugreport [--out file.zip]         one zip with logs, crash logs, config and doctor output to send
+sy selftest [--onedrive] [--keep]    automated Windows checks with a scripted agent (no quota used)
 sy init [--global] [--force] [--print]
 sy clean [--dir <path>] [--idle 72h]  remove this repo's pooled worktrees (or every repo's idle ones)
 ```
@@ -202,13 +222,16 @@ Every task in a git repo records the working tree before and after it ran. The s
 - `sy undo --redo` (or `/redo`) puts the task's changes back. `sy undo --list` shows the last 30 tasks.
 - After every task, `sy run` prints the exact `sy undo <task>` command.
 
-### GitHub: issues in, PRs out
+### GitHub, GitLab and Gitea: issues in, PRs out
 
+- Everything below works on **GitHub** (and GitHub Enterprise), **GitLab** (gitlab.com and self-managed; there a PR is a merge request, `!12`) and **Gitea or Forgejo** (Codeberg and self-hosted). The host of your `origin` remote picks the forge: github.com, gitlab.com and codeberg.org are known. For a self-hosted one, set `GH_HOST`, `GITLAB_HOST` or `GITEA_HOST` (also `FORGEJO_HOST`) to its host name, or to its URL when it uses another port, plain http or a path prefix (`GITEA_HOST=http://git.lan:3000`, `GITLAB_HOST=https://example.com/gitlab`; `host:3000` without a scheme drops the port); `GITLAB_HOST` and `GITEA_HOST` take a comma-separated list. Plain http is used only for a host named this way or a localhost remote, so a token never travels unencrypted by default. `--api` overrides the API URL (`https://<host>/api/v3` GitHub Enterprise, `/api/v4` GitLab, `/api/v1` Gitea) and also marks the remote's host as that forge.
 - `sy pr` turns the last finished task (or `sy pr <task>` from `sy history`) into a pull request. The commit holds exactly the task's changes (its undo snapshots), so edits you made before the task stay out. It is built on top of `HEAD` on a temporary index: your index, working tree and current branch are not touched. If the changes no longer apply cleanly to `HEAD`, nothing is created.
 - It creates the branch `sy/<task>` (or `--branch`; an existing branch is never overwritten), runs `git push -u origin <branch>` with your own git credentials (never forced) and opens the PR through the GitHub API. The body has the task, the plan with each step's role and result, checks, cost and the undo key. A task that did not finish ok is marked and opened as a draft. You see a preview first (`--yes` skips it); `--no-push` only creates the local branch.
 - The token comes from `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`. Without one, sy writes the PR text to a file and prints the compare URL to open it in the browser. GitHub Enterprise: set `GH_HOST` (or `--api https://<host>/api/v3`); the token then comes from `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` or `gh auth token --hostname <host>`, never from the github.com variables.
-- The task text is shown in the PR body as a code block, so an issue's text cannot close other issues or @-mention anyone; only the explicit `Closes #N` line counts. The preview warns about files that changed while the task ran but that no agent reported changing (possibly your own edits) and about commits of `HEAD` that are not on `origin/<base>`, since both would be in the PR.
-- `sy run --issue 12` (or an issue URL) runs "Fix GitHub issue #12: <title>" with the issue's body and labels as the task (`--with-comments` adds the comments). Public repositories need no token. Add `--pr` to open a pull request with `Closes #12` when the task succeeds, plus a comment with its link on the issue (`--comment=false` skips it).
+  - GitLab: `GITLAB_TOKEN` or `GITLAB_ACCESS_TOKEN` (scope `api`), else `glab config get token --host <host>`. Gitea and Forgejo: `GITEA_TOKEN` or `FORGEJO_TOKEN`. When `GITLAB_HOST` (`GITEA_HOST`) is set, its token variables go to the hosts it names only, so a token for your company's server never reaches gitlab.com or codeberg.org. A token is never sent to a forge of another kind.
+  - A draft is opened the way the forge marks one: a GitHub draft, a `Draft:` title on GitLab, a `WIP:` title on Gitea. Repo templates are found where each forge looks: `.github/`, the root or `docs/`, then `.gitea/` or `.forgejo/`, then GitLab's `.gitlab/merge_request_templates/Default.md`.
+- The task text is shown in the PR body as a code block, so an issue's text cannot close other issues, @-mention anyone or run GitLab quick actions (`/merge`, `/approve`; they are defused in everything sy posts); only the explicit `Closes #N` line counts. The preview warns about files that changed while the task ran but that no agent reported changing (possibly your own edits) and about commits of `HEAD` that are not on `origin/<base>`, since both would be in the PR.
+- `sy run --issue 12` (or an issue URL, also of a GitLab or Gitea issue) runs "Fix GitHub issue #12: <title>" (GitLab issue, Gitea issue) with the issue's body and labels as the task (`--with-comments` adds the comments). Public repositories need no token. Add `--pr` to open a pull request with `Closes #12` when the task succeeds, plus a comment with its link on the issue (`--comment=false` skips it).
 - `sy run --issues label:sy --limit 5 --pr` works through the open issues with that label, oldest first, unattended (`--pr` is required: without PRs the tasks' changes would pile up in the working tree). It skips pull requests and issues an open PR already closes. It never discards your work: it starts only on a clean working tree, and after each PR it takes that task's changes back out of the working tree with `sy undo` (they live on in the PR branch; `sy undo --redo <key>` puts them back), so the next issue starts from `HEAD`. If that is not possible, or a task leaves changes without a PR, the batch stops. With `--at`/`--in`/`--when-reset` the issues are read and the working tree checked when the run starts.
 - Nobody reviews these PRs before they are pushed, so `--pr` (with `--issue` or `--issues`) refuses a PR that would carry more than the agents' work: files that changed while the task ran but that no agent reported changing, or commits of `HEAD` that are not on `origin/<base>` (also when there is no `origin/<base>` to compare with: `git fetch` first). The work stays in the working tree, the batch stops, and you can check it and run `sy pr`. A multi-repo workspace is refused up front: open its PRs with `sy pr <task> [--repo <name>]`.
 
@@ -216,9 +239,11 @@ Every task in a git repo records the working tree before and after it ran. The s
 
 - **`sy watch`** follows up on the pull requests `sy pr` opened (also from `--issue(s) --pr`). For each one it looks at failed checks on the current head and at review comments and "changes requested" reviews from the repository's owner, members and collaborators (not you, not bots). New items get one follow-up task on the PR's branch, in a separate checkout under sy's cache folder: your working tree, index and branches are not touched. The result is pushed to the PR branch (never forced; refused if the branch moved in the meantime, and then the items stay new for the next pass) and sy replies once on the PR. Each item runs once; `watch.max_rounds` (default 3, 0 = report only) caps the rounds per PR, and merged or closed PRs are dropped.
   - `sy watch` makes one pass; `sy watch --every 15m` keeps going, unattended (a budget limit stops it), and keeps the PC awake. Combine with `sy schedule` for a cron or Task Scheduler line.
-  - CI logs and comments reach the agents only as fenced, untrusted text, and the unattended rule of `sy pr` applies: nothing is pushed if a file changed that no agent reported changing, or if the change touches `.github/`.
-  - `sy watch --list` shows the watched PRs; `--forget <n>` stops watching one. It needs a GitHub token (see above).
-- **`sy review <PR>`** (a number or URL) runs one read-only reviewer on a pull request's diff. If sy opened the PR, the reviewer is the provider that did *not* write it; otherwise the configured reviewer role (`--provider` overrides). It prints the findings; `--post` posts them as a single review (always a plain comment, never approve or request changes), inline where the line is in the diff, after a preview (`--yes` skips it). It counts into the day budget.
+  - CI logs and comments reach the agents only as fenced, untrusted text, and the unattended rule of `sy pr` applies: nothing is pushed if a file changed that no agent reported changing, or if the change touches CI or forge settings (`.github/`, `.gitlab-ci.yml`, `.gitlab/`, `.gitea/`, `.forgejo/`, `.woodpecker`, `.drone.yml`).
+  - **GitLab:** the checks are the failed jobs of the newest pipeline (per ref) on the head commit, with each job's log tail; jobs allowed to fail are skipped. The comments are unresolved diff comments by members with at least Developer access (not project or group token bots). GitLab's API has no "request changes" review state, so resolve-or-comment on the diff is what counts. The reply is a note on the merge request.
+  - **Gitea and Forgejo:** the checks are failed commit statuses (with their link; Gitea serves no job logs), plus reviews requesting changes and unresolved review comments by people with write access (or, when your token may not read permissions, collaborators and members of the owning organization). The Actions bot never counts.
+  - `sy watch --list` shows the watched PRs; `--forget <n>` stops watching one (`group/project!n` for GitLab). It needs a token (see above).
+- **`sy review <PR>`** (a number or URL) runs one read-only reviewer on a pull request's diff. If sy opened the PR, the reviewer is the provider that did *not* write it; otherwise the configured reviewer role (`--provider` overrides). It prints the findings; `--post` posts them as a single review (always a plain comment, never approve or request changes), inline where the line is in the diff, after a preview (`--yes` skips it). On GitLab that is one thread per inline finding plus one note with the rest; a finding GitLab cannot place on its line moves into the note. It counts into the day budget.
 
 ### Bench: does Switchyard beat a single agent on *your* work?
 
@@ -227,6 +252,20 @@ Every task in a git repo records the working tree before and after it ran. The s
 3. Read the results: a table of pass rate, wall time, tokens per provider and Claude's API-equivalent cost. It is printed and saved as `bench-results-<time>.md`.
 
 It uses real quota, so it asks first.
+
+**Tasks from your git history.** `sy bench --from-history` writes `bench-history.yaml` with up to 10 tasks (`--count`) taken from your repo's past commits. Each task starts from the parent of a past commit, uses its commit message as the prompt, and is checked by the repo's tests with that commit's own test files in place:
+
+- It looks at the last 300 non-merge commits (`--scan`). It keeps the ones that change at least 2 code files and some tests, at most 15 files and at most 800 lines outside tests and lock files (`--min-files`, `--max-files`, `--max-lines`). Merges, reverts, version bumps and one- or two-word messages are skipped.
+- The check is `verify.commands` from your config, else what `sy init` would detect (`go test ./...`, `npm test`, ...). `--check` overrides it, and `--setup "npm ci"` runs before every check.
+- Each commit is validated before it becomes a task: the check must pass on the commit and fail on its parent with the commit's tests in place. Otherwise the task would measure nothing. This runs your tests twice per commit and uses no agent quota. `--no-validate` skips it.
+- By default the agents see the commit's tests from the start and are told to make them pass. `--hidden-tests` keeps the tests away until the check. Either way the test files are restored before every check, so editing or deleting them cannot pass it.
+- Read the prompts before you run `sy bench --file bench-history.yaml`. Commit messages are often terser than a real request, and you can reword them.
+- The runs share your repo's git objects, so an agent that searches the history could find the original commit. Every mode has the same chance.
+- The file sets `learn: true` and adds a mode like `routed:worker=claude:sonnet:medium`: the routed pipeline with the worker on the other provider's configured route. When the bench ends, the results update this repo's learned routes (below) as `sy tune --apply` would, so a worker route that clearly passes more of your own tasks becomes the route for the next ones. `--no-learn` skips that, `routing.learn: off` ignores it, and a cancelled bench learns nothing.
+
+**Route variants.** Any bench file can use `routed:<role>=<provider>:<model>[:effort]` (several roles separated by commas) to compare one role's routes inside the full pipeline, and `learn: true` (or `sy bench --learn`) to keep the winner. A failed check counts against the run's worker steps. Single-agent modes are whole conversations, not routed steps, so they never change learned routes.
+
+Hand-written tasks can use the same fields: `base:` (the commit to start from) and `tests: {from: <commit>, files: [...], visible: true}`.
 
 No tasks of your own yet? `sy bench --starter bench-starter` creates a small Python repo with five tasks (two bug fixes, a parser feature, a CLI flag and a read-only question), each with a check script. Then run `cd bench-starter && sy bench`. It needs Python 3. The `routed-nohandoff` mode runs the same routes without the context hand-off, to measure what it saves.
 
@@ -334,6 +373,15 @@ Switchyard should never be what tips a PC over.
 - **Debug log.** Every agent spawn and exit, git command, routing decision and error is written to `sy-debug.log`, which rotates at 10 MB. It lives in `%AppData%\switchyard\logs` on Windows and `~/.config/switchyard/logs` on Linux.
 - **Crash logs.** A crash anywhere writes `crash-<time>.log` there, with the stack and the recent log. A crash inside a task ends only that task, not `sy`.
 - **`sy bugreport`.** Zips the environment, PATH, `sy doctor` output, your config, the last 3 session logs, and the debug and crash logs into one file to send.
+- **`sy selftest`.** Runs the parts of the Windows test pass that can be automated. It works in a throwaway folder, with a scripted agent instead of Codex or Claude, so no quota is used:
+  - a user profile and project path with spaces, parentheses and non-ASCII letters, and the agent CLI behind an npm-style `.cmd` shim;
+  - a repo with many files and, when git-lfs is installed, an LFS file;
+  - OneDrive detection; `--onedrive` also runs a task in a repo inside your OneDrive folder;
+  - Microsoft Defender's real-time protection and exclusions, and how fast a fresh copy of `sy` starts;
+  - a `sy run` killed hard while an agent works, as closing the window does: the agent must die with it, the finished steps must stay in your tree, and `sy history` must list the task as interrupted;
+  - then `sy resume` (the planner and finished steps must not run again), `sy undo --yes` and `sy undo --redo --yes`.
+
+  Your repos and config are not touched. When a check fails, the work folder is kept, with every command's output and the test profile's debug logs. At the end it lists what is left to check by hand: sleep and resume during a task, and closing the window in Windows Terminal and in the old console.
 
 ## How it works (and the decisions made for v1)
 
@@ -396,12 +444,14 @@ The server listens on 127.0.0.1 only. Each link `sy` prints or opens works once,
 
 `sy` looks for `./switchyard.yaml`, then `<user config dir>/switchyard/switchyard.yaml`, then falls back to the built-in default (the file in this repo). Partial files work: anything you leave out keeps its default. See [`switchyard.yaml`](switchyard.yaml) for every option with comments.
 
+A `./switchyard.yaml` may have come with a repository you cloned, so the settings in it that run commands or send data (the same list as for a repo file below: `verify`, `hooks`, `providers`, ...) apply only once trusted. Until then, `sy` uses your own config's (or the defaults) and says which it ignored. Files `sy` writes itself (`sy init`, `/save`, the model picker, `sy models --refresh`, settings saved in `sy web`) are trusted for you; after editing those settings by hand, run `sy trust`. Only what the file sets for them is trusted, so editing its routes or toggles needs no new `sy trust`. `--config <file>` and your user config always apply in full.
+
 ### Per-repo settings: `.switchyard.yaml`
 
 A `.switchyard.yaml` in a repository holds the settings for that repo (in the repo root, or in the project folder). It is layered over your own config: built-in defaults < your config < the repo file < command-line flags. It only needs what the repo cares about; roles merge per key, so `roles: {worker: {prefer: claude}}` keeps the worker's routes.
 
 - Create one with `sy init --repo`, which detects the test commands, or with `/save repo` from the TUI. Commit it to share.
-- **Commands need your trust.** The parts that run commands or reach other folders are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers`, `log_dir`, `mcp`, `workspace` and `budget.team.dir`. A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
+- **Commands need your trust.** The parts that run commands or reach other folders are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers`, `log_dir`, `mcp`, `workspace`, `budget.team.dir` and `notify.webhooks` (they say where your task results are sent). A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
 
 ### The repo's own conventions
 

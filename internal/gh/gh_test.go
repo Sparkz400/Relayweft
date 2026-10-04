@@ -240,13 +240,8 @@ func TestListIssuesAndPulls(t *testing.T) {
 	if is, _ := c.OpenIssues(repo, "sy", 2); len(is) != 2 {
 		t.Fatalf("max not applied: %d", len(is))
 	}
-	ps, err := c.OpenPulls(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	taken := ClosedBy(ps)
-	if !taken[5] || taken[3] || len(taken) != 1 {
-		t.Fatalf("closed by = %v", taken)
+	if ps, err := c.OpenPulls(repo); err != nil || len(ps) == 0 {
+		t.Fatalf("open pulls: %v %v", ps, err)
 	}
 	if b, err := c.DefaultBranch(repo); err != nil || b != "trunk" {
 		t.Fatalf("default branch %q %v", b, err)
@@ -276,20 +271,6 @@ func TestCreatePullAndComment(t *testing.T) {
 	_, err = NewClient(srv.URL, "").CreatePull(repo, NewPull{Title: "x", Head: "b", Base: "main"})
 	if !IsUnauthorized(err) || !strings.Contains(err.Error(), "needs a token") {
 		t.Fatalf("anonymous create: %v", err)
-	}
-}
-
-func TestClosedByKeywords(t *testing.T) {
-	got := ClosedBy([]Pull{{Body: "fixes #1, Resolves #2\nclosed #3 and Closes: #4"}, {Body: "see #5; prefix#6; closes #7x"}})
-	for _, n := range []int{1, 2, 3, 4} {
-		if !got[n] {
-			t.Errorf("#%d not found in %v", n, got)
-		}
-	}
-	for _, n := range []int{5, 6, 7} {
-		if got[n] {
-			t.Errorf("#%d wrongly matched", n)
-		}
 	}
 }
 

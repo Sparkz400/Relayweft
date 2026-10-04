@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -488,5 +489,164 @@ func TestCodexRealRecordings(t *testing.T) {
 		if w != c.warnings {
 			t.Errorf("%s: %d warnings, want %d", c.file, w, c.warnings)
 		}
+	}
+}
+
+// Recorded from a real Claude Code 2.1.288 on Windows (4 Oct 2026) with
+// sy's exact argv: `claude -p --output-format stream-json --verbose --model
+// haiku --effort low --permission-mode acceptEdits` (prompt on stdin), then
+// the follow-up `... --resume <session> --permission-mode acceptEdits`.
+// The resumed turn keeps the session id and remembers the first turn (it
+// wrote the secret word without reading hello.txt). The init lines are
+// trimmed of the recording machine's MCP servers, skills and paths.
+func TestClaudeRealRecordings(t *testing.T) {
+	for _, c := range []struct {
+		file, final, file1            string
+		input, cached, out, reasoning int64
+		tools                         int
+		util                          float64
+	}{
+		{"claude_real_write.jsonl", "Created hello.txt with the secret word pineapple.", "hello.txt", 17 + 12443 + 64795, 64795, 220, 98, 0, 0.3},
+		{"claude_real_resume.jsonl", "pineapple", "bye.txt", 25 + 1062 + 117562, 117562, 443, 248, 1, 0.31},
+	} {
+		p := &claudeParser{}
+		evs := feed(t, p, c.file)
+		var r Result
+		p.Finish(&r)
+		if r.Err != nil || r.LimitHit {
+			t.Errorf("%s: err %v limit %v", c.file, r.Err, r.LimitHit)
+		}
+		if r.Final != c.final || r.SessionID != "e706907f-51a1-4071-8e73-375309cdf9dc" {
+			t.Errorf("%s: final %q session %q", c.file, r.Final, r.SessionID)
+		}
+		if r.Tokens.Input != c.input || r.Tokens.Cached != c.cached || r.Tokens.Output != c.out || r.Tokens.Reasoning != c.reasoning || r.Tokens.CostUSD <= 0 {
+			t.Errorf("%s: tokens %+v", c.file, r.Tokens)
+		}
+		// Windows paths: compare the base name so the test runs anywhere.
+		if len(r.Files) != 1 || !strings.HasSuffix(strings.ReplaceAll(r.Files[0], `\`, "/"), "/"+c.file1) {
+			t.Errorf("%s: files %q", c.file, r.Files)
+		}
+		k := kinds(evs)
+		if k[event.Error] != 0 || k[event.ToolCall] != c.tools || k[event.FileEdit] != 1 || k[event.Quota] != 1 {
+			t.Errorf("%s: event kinds %v", c.file, k)
+		}
+		for _, e := range evs {
+			if e.Kind == event.Quota && (e.Quota.Utilization != c.util || e.Quota.Window != "five_hour") {
+				t.Errorf("%s: quota %+v", c.file, e.Quota)
+			}
+			if e.Kind == event.Thinking && e.Model != "" && e.Model != "claude-haiku-4-5-20251001" {
+				t.Errorf("%s: init model %q", c.file, e.Model)
+			}
+		}
+	}
+}
+
+// Recorded from a real codex-cli 0.160.0 on Windows (4 Oct 2026) with sy's
+// worker argv (`exec --json --color never --skip-git-repo-check -m
+// gpt-6.1-sol -c model_reasoning_effort=medium --sandbox workspace-write -`):
+// a file_change (absolute Windows path) and a PowerShell command_execution.
+// The final answer is the last agent_message, not the first.
+func TestCodexRealEditRecording(t *testing.T) {
+	p := &codexParser{}
+	evs := feed(t, p, "codex_real_edit.jsonl")
+	var r Result
+	p.Finish(&r)
+	if r.Err != nil || r.LimitHit || r.Final != "done" || r.SessionID != "01a107b5-1c1d-7103-b0dc-97b48bf23ca1" {
+		t.Errorf("result %+v", r)
+	}
+	if r.Tokens.Input != 43622 || r.Tokens.Cached != 34944 || r.Tokens.Output != 102 {
+		t.Errorf("tokens %+v", r.Tokens)
+	}
+	if len(r.Files) != 1 || !strings.HasSuffix(strings.ReplaceAll(r.Files[0], `\`, "/"), "/raw-codex/notes.txt") {
+		t.Errorf("files %q", r.Files)
+	}
+	k := kinds(evs)
+	// The file_change's item.started must not count as a second edit.
+	if k[event.FileEdit] != 1 || k[event.ToolCall] != 1 || k[event.Message] != 2 || k[event.Error] != 0 {
+		t.Errorf("event kinds %v: %+v", k, evs)
+	}
+	for _, e := range evs {
+		if e.Kind == event.ToolCall && !strings.Contains(e.Text, "pwsh.exe") {
+			t.Errorf("tool call %q", e.Text)
+		}
+	}
+}
+
+// Recorded from a real Claude Code 2.1.288 on Windows (4 Oct 2026): with
+// sy's old allowedTools (only Bash(...) rules for verify commands) Claude
+// ran `go test ./...` through its PowerShell tool and was refused. The
+// refusal must be visible, not hidden behind a successful run: Claude
+// reports it twice (a system permission_denied line, whose "message" is a
+// string, and the result's permission_denials), sy shows it once.
+func TestClaudeRealPermissionDenied(t *testing.T) {
+	p := &claudeParser{}
+	evs := feed(t, p, "claude_real_denied.jsonl")
+	var r Result
+	p.Finish(&r)
+	if r.Err != nil || r.SessionID != "95be088e-14c6-4583-8542-6a4a9fac5be2" || !strings.Contains(r.Final, "requires your approval") {
+		t.Errorf("result %+v", r)
+	}
+	var warn []string
+	for _, e := range evs {
+		if e.Kind == event.Thinking && strings.HasPrefix(e.Text, "warning: permission denied") {
+			warn = append(warn, e.Text)
+		}
+		if e.Kind == event.ToolCall && e.Text != "PowerShell go test ./..." {
+			t.Errorf("tool call %q", e.Text)
+		}
+		if e.Kind == event.Thinking && strings.HasPrefix(e.Text, "{") {
+			t.Errorf("line shown as raw JSON: %s", e.Text)
+		}
+	}
+	want := "warning: permission denied: PowerShell go test ./... (This PowerShell command contains multiple operations. The following part requires approval: go test ./...)"
+	if len(warn) != 1 || warn[0] != want {
+		t.Errorf("denial warnings %q", warn)
+	}
+}
+
+// A denial reported only in the result line (older CLIs) is shown too.
+func TestClaudePermissionDeniedInResultOnly(t *testing.T) {
+	p := &claudeParser{}
+	var evs []event.Event
+	for _, l := range []string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rm -rf x"}}]}}`,
+		`{"type":"result","subtype":"success","result":"could not","permission_denials":[{"tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"rm -rf x"}},{"tool_name":"WebFetch","tool_input":{"url":"https://example.com"}}]}`,
+	} {
+		evs = append(evs, p.Line([]byte(l))...)
+	}
+	var warn []string
+	for _, e := range evs {
+		if strings.HasPrefix(e.Text, "warning:") {
+			warn = append(warn, e.Text)
+		}
+	}
+	if strings.Join(warn, "|") != "warning: permission denied: Bash rm -rf x|warning: permission denied: WebFetch https://example.com" {
+		t.Errorf("warnings %q", warn)
+	}
+}
+
+// Verify commands must be allowed in every Claude shell tool: on Windows
+// Claude Code may pick PowerShell, which Bash(...) rules do not cover
+// (TestClaudeRealPermissionDenied is the refusal that caused).
+func TestClaudeAllowedCommandsCoverPowerShell(t *testing.T) {
+	cfg := config.Default()
+	args := ClaudeArgs(cfg.Providers[event.Claude], Spec{Model: "haiku", AllowedCommands: []string{"go test ./...", "npm test"}})
+	if args[len(args)-2] != "--allowedTools" {
+		t.Fatalf("allowedTools not last: %q", args)
+	}
+	got := strings.Split(args[len(args)-1], ",")
+	for _, c := range []string{"go test ./...", "npm test"} {
+		for _, tool := range []string{"Bash", "PowerShell"} {
+			for _, rule := range []string{tool + "(" + c + ")", tool + "(" + c + " *)"} {
+				if !slices.Contains(got, rule) {
+					t.Errorf("missing %q in %q", rule, got)
+				}
+			}
+		}
+	}
+	// A read-only agent still gets no commands at all.
+	ro := strings.Join(ClaudeArgs(cfg.Providers[event.Claude], Spec{ReadOnly: true, AllowedCommands: []string{"go test ./..."}}), " ")
+	if strings.Contains(ro, "go test") {
+		t.Errorf("read-only args allow commands: %s", ro)
 	}
 }

@@ -70,6 +70,17 @@ func background(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW | priorityFlag()}
 }
 
+// breakaway starts cmd outside sy's kill-on-close job (guard allows that
+// with BREAKAWAY_OK). Without it a browser sy opened would join the job:
+// when the browser was not running yet, that process becomes the user's
+// browser, and every window they open later was killed when sy exited.
+func breakaway(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_BREAKAWAY_FROM_JOB
+}
+
 // lower is a no-op: the priority class is set at creation.
 func lower(int) {}
 
@@ -77,7 +88,9 @@ var job windows.Handle
 
 // guard puts sy itself into a job object with KILL_ON_JOB_CLOSE. Children
 // inherit the job, so when sy exits or crashes Windows kills every agent
-// instead of leaving orphans that keep burning quota.
+// instead of leaving orphans that keep burning quota. BREAKAWAY_OK lets a
+// child that asks for it (Breakaway: the browser) leave the job; children
+// that do not ask stay in it.
 func guard() error {
 	if job != 0 {
 		return nil
@@ -88,7 +101,7 @@ func guard() error {
 	}
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
 		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
-			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK,
 		},
 	}
 	if _, err := windows.SetInformationJobObject(h, windows.JobObjectExtendedLimitInformation,

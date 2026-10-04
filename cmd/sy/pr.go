@@ -15,13 +15,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/gh"
+	"github.com/sparkz400/switchyard/internal/forge"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/proc"
 )
 
-// sy pr turns a finished task into a branch, a commit and a GitHub pull
-// request:
+// sy pr turns a finished task into a branch, a commit and a pull request
+// on GitHub, GitLab (a merge request) or Gitea/Forgejo, whichever hosts the
+// origin remote (forge.go):
 //
 //   - The change is the task's own: its undo "after" snapshot against its
 //     "before" snapshot (refs/switchyard/tasks/...), so edits you made
@@ -33,9 +34,10 @@ import (
 //   - The branch (sy/<slug>) must not exist yet; it is pushed with a plain
 //     `git push -u origin <branch>` (never forced) using your git remote and
 //     credentials.
-//   - The pull request is opened through the GitHub REST API with a token
-//     from GITHUB_TOKEN, GH_TOKEN or `gh auth token`; without one, sy
-//     writes the body to a file and prints the compare URL instead.
+//   - The pull request is opened through the forge's REST API with its
+//     token (forge.Token: GITHUB_TOKEN, GITLAB_TOKEN, GITEA_TOKEN, ...);
+//     without one, sy writes the body to a file and prints the compare URL
+//     instead.
 //   - An opened pull request is recorded for sy watch (watch.go), which
 //     follows up on its failed checks and review comments.
 
@@ -43,7 +45,7 @@ import (
 var (
 	prIn    io.Reader = os.Stdin
 	prOut   io.Writer = os.Stdout
-	prToken           = gh.Token
+	prToken           = forge.Token
 	// prPush pushes the branch; it is interactive (credential prompts).
 	prPush = func(root, remote, branch string) error {
 		cmd := exec.Command("git", "push", "-u", remote, branch)
@@ -58,7 +60,7 @@ type prOptions struct {
 	base     string
 	branch   string
 	title    string
-	api      string // API base URL override (GitHub Enterprise, tests)
+	api      string // API base URL override (self-hosted forges, tests)
 	draft    bool
 	draftSet bool // --draft given explicitly (else: draft unless the task is done)
 	noPush   bool
@@ -79,7 +81,7 @@ type prResult struct {
 	Files  []string
 	URL    string // the pull request; "" when none was opened
 	Number int
-	Repo   gh.Repo
+	Repo   forge.Repo
 }
 
 func cmdPR(args []string) error {
@@ -93,20 +95,22 @@ func cmdPR(args []string) error {
 	fs.BoolVar(&o.draft, "draft", false, "open as a draft (default: draft when the task did not finish ok)")
 	fs.BoolVar(&o.noPush, "no-push", false, "only create the local branch and commit")
 	fs.BoolVar(&o.yes, "yes", false, "do not ask for confirmation")
-	fs.StringVar(&o.api, "api", "", "GitHub API base URL (GitHub Enterprise: https://<host>/api/v3; GH_HOST also works)")
+	fs.StringVar(&o.api, "api", "", apiFlagHelp)
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage: sy pr [task-id] [--repo name] [--base main] [--branch name] [--draft] [--title text] [--no-push] [--yes]
 
 Turns a finished task (default: the newest finished task in this directory,
-see sy history) into a branch, a commit and a GitHub pull request.
+see sy history) into a branch, a commit and a pull request on GitHub,
+GitLab (a merge request) or Gitea/Forgejo: whichever hosts origin.
 
 The commit holds exactly the task's changes (its undo snapshots), applied
 on top of HEAD without touching your index, working tree or current branch;
 if they do not apply cleanly to HEAD, nothing is created. The branch
 (sy/<task>) must not exist yet and is pushed with git push -u origin (never
-forced). The PR is opened with a token from GITHUB_TOKEN, GH_TOKEN or
-`+"`gh auth token`"+`; without one the body is written to a file and the compare
-URL is printed. A task that did not finish ok is opened as a draft.
+forced). The PR is opened with the forge's token (GitHub: GITHUB_TOKEN,
+GH_TOKEN or `+"`gh auth token`"+`; GitLab: GITLAB_TOKEN or glab; Gitea: GITEA_TOKEN);
+without one the body is written to a file and the compare URL is printed.
+Self-hosted forges: set GH_HOST, GITLAB_HOST or GITEA_HOST to the host. A task that did not finish ok is opened as a draft.
 A multi-repo task gets one PR per repo: --repo <name> picks an extra repo.
 An opened pull request is followed up by sy watch (failed checks, reviews).
 `)
@@ -215,20 +219,13 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 		return nil, err
 	}
 
-	// Where it goes: the origin remote on GitHub.
-	var repo gh.Repo
+	// Where it goes: the origin remote's forge.
+	var repo forge.Repo
 	var repoErr error
-	if u, err := prGit(root, nil, nil, "remote", "get-url", "origin"); err != nil {
+	if u, err := originURL(root); err != nil {
 		repoErr = errors.New("this repository has no `origin` remote")
 	} else {
-		ent := gh.EnterpriseHost()
-		if o.api != "" {
-			// An explicit API URL means: trust the remote's host.
-			if r, err := gh.ParseRemote(strings.TrimSpace(u), hostOf(strings.TrimSpace(u))); err == nil {
-				ent = r.Host
-			}
-		}
-		repo, repoErr = gh.ParseRemote(strings.TrimSpace(u), ent)
+		repo, repoErr = forge.ParseRemote(u, forgeHosts(u, o.api))
 	}
 	if repoErr != nil && !o.noPush {
 		return nil, fmt.Errorf("%w (use --no-push to only create the local branch)", repoErr)
@@ -236,9 +233,9 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 
 	title := o.title
 	if title == "" {
-		title = defuseGitHubRefs(prTitle(st.Task))
+		title = defuseRefs(prTitle(st.Task))
 	}
-	commit, files, err := buildPRCommit(root, snap.Before, snap.After, defuseGitHubRefs(commitMessage(st, title)))
+	commit, files, err := buildPRCommit(root, snap.Before, snap.After, defuseRefs(commitMessage(st, title)))
 	if err != nil {
 		return nil, err
 	}
@@ -258,15 +255,9 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 	if !o.draftSet {
 		draft = st.Status != "done"
 	}
-	var client *gh.Client
+	var client forge.Client
 	if !o.noPush && !repo.IsZero() {
-		api := o.api
-		if api == "" {
-			api = repo.APIBase()
-		}
-		tok, _ := prToken(repo.Host)
-		client = gh.NewClient(api, tok)
-		client.Notes = out
+		client = forgeClient(repo, o.api, out)
 	}
 	base := o.base
 	if base == "" {
@@ -296,9 +287,9 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 	if o.noPush {
 		fmt.Fprintln(out, "push:   no (--no-push): only the local branch is created")
 	} else {
-		kind := "pull request"
+		kind := repo.Kind.PullNoun()
 		if draft {
-			kind = "draft pull request"
+			kind = "draft " + kind
 		}
 		fmt.Fprintf(out, "into:   %s %s on %s (git push -u origin %s)\n", kind, base, repo, branch)
 		if ahead > 0 {
@@ -347,19 +338,19 @@ func makePR(st *orchestrator.TaskState, o prOptions) (*prResult, error) {
 		fmt.Fprintf(out, "open the pull request here: %s\n", repo.CompareURL(base, branch))
 	}
 	if client == nil || !client.HasToken() {
-		fmt.Fprintln(out, "no GitHub token (GITHUB_TOKEN, GH_TOKEN or `gh auth login`): open the pull request in the browser")
+		fmt.Fprintf(out, "%s: open the %s in the browser\n", noTokenText(repo.Kind), repo.Kind.PullNoun())
 		fallback()
 		return res, nil
 	}
-	pr, err := client.CreatePull(repo, gh.NewPull{Title: title, Head: branch, Base: base, Body: body, Draft: draft})
+	pr, err := client.CreatePull(repo, forge.NewPull{Title: title, Head: branch, Base: base, Body: body, Draft: draft})
 	if err != nil {
 		fallback()
-		return res, fmt.Errorf("open pull request: %w", err)
+		return res, fmt.Errorf("open %s: %w", repo.Kind.PullNoun(), err)
 	}
-	res.URL, res.Number = pr.HTMLURL, pr.Number
-	fmt.Fprintf(out, "opened pull request #%d: %s\n", pr.Number, pr.HTMLURL)
+	res.URL, res.Number = pr.URL, pr.Number
+	fmt.Fprintf(out, "opened %s %s%d: %s\n", repo.Kind.PullNoun(), repo.PullSign(), pr.Number, pr.URL)
 	err = recordWatch(watchEntry{
-		Root: root, Host: repo.Host, Owner: repo.Owner, Name: repo.Name, Number: pr.Number, URL: pr.HTMLURL, Title: title,
+		Forge: forgeName(repo.Kind), Root: root, Host: repo.Host, Web: repo.Web, Owner: repo.Owner, Name: repo.Name, Number: pr.Number, URL: pr.URL, Title: title,
 		Branch: branch, Head: commit, Base: base, TaskID: st.ID, Author: st.Author(), API: o.api, Added: time.Now(),
 	})
 	if err != nil {
@@ -446,9 +437,9 @@ func branchExists(root, branch string) bool {
 	return err == nil
 }
 
-// detectBase picks the base branch: origin/HEAD, then GitHub's default
+// detectBase picks the base branch: origin/HEAD, then the forge's default
 // branch, then main.
-func detectBase(root string, client *gh.Client, repo gh.Repo) string {
+func detectBase(root string, client forge.Client, repo forge.Repo) string {
 	if s, err := prGit(root, nil, nil, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"); err == nil {
 		if b := strings.TrimPrefix(strings.TrimSpace(s), "origin/"); b != "" {
 			return b
@@ -517,6 +508,18 @@ func unattendedPRCheck(st *orchestrator.TaskState, base string, unreported []str
 		return fmt.Errorf("not opening a pull request nobody reviewed: HEAD has %d commit(s) that are not on origin/%s and the pull request would include them (push them or check out %s first, then run sy pr %s)", ahead, base, base, st.ID)
 	}
 	return nil
+}
+
+// apiFlagHelp is the --api flag's text.
+const apiFlagHelp = "forge API base URL (GitHub Enterprise: https://<host>/api/v3, GitLab: https://<host>/api/v4, Gitea: https://<host>/api/v1; GH_HOST, GITLAB_HOST and GITEA_HOST also work)"
+
+// forgeName is the kind stored in sy watch's list ("" for GitHub, as in
+// lists from before GitLab and Gitea).
+func forgeName(k forge.Kind) string {
+	if k == forge.GitHub {
+		return ""
+	}
+	return string(k)
 }
 
 func hostOf(remote string) string {
@@ -751,7 +754,7 @@ func renderPRBody(st *orchestrator.TaskState, o prBodyOptions) string {
 	}
 	// Everything above may quote untrusted text (task, plan, errors, the
 	// template): defuse it, then add the one reference sy means.
-	out := defuseGitHubRefs(body)
+	out := defuseRefs(body)
 	if o.Closes != "" {
 		out += fmt.Sprintf("\nCloses %s\n", o.Closes)
 	}
@@ -841,22 +844,28 @@ func renderPRParts(st *orchestrator.TaskState, o prBodyOptions) prParts {
 	return p
 }
 
-// reCloseRef finds GitHub closing keywords followed by an issue reference
-// (#7, owner/repo#7 or an issues URL); reMention finds @user / @org/team.
+// reCloseRef finds closing keywords (GitHub's and Gitea's, plus GitLab's
+// -ing forms and "implements") followed by an issue reference (#7,
+// owner/repo#7, group/sub/project#7 or an issues URL); reMention finds
+// @user / @org/team; reQuickAction finds GitLab quick actions ("/merge",
+// "/approve" at the start of a line), which GitLab runs with the poster's
+// rights.
 var (
-	reCloseRef = regexp.MustCompile(`(?i)\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(\s*:?\s*(?:[\w.-]+/[\w.-]+)?#\d|\s*:?\s*https?://[^\s]*/issues/\d)`)
-	reMention  = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9])`)
+	reCloseRef    = regexp.MustCompile(`(?i)\b(clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)(\s*:?\s*(?:[\w.-]+(?:/[\w.-]+)+)?#\d|\s*:?\s*https?://[^\s]*/issues/\d)`)
+	reMention     = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9])`)
+	reQuickAction = regexp.MustCompile(`(?m)^([ \t]*)/([A-Za-z])`)
 )
 
-// defuseGitHubRefs stops text written by others (an issue's body, a task)
-// from closing issues or notifying people when it lands in a commit
-// message, a PR title or a squash commit built from the PR body: a word
-// joiner (U+2060, invisible) breaks the keyword and the @. The text reads
-// the same.
-func defuseGitHubRefs(s string) string {
+// defuseRefs stops text written by others (an issue's body, a task, CI
+// output) from closing issues, notifying people or running GitLab quick
+// actions when it lands in a commit message, a PR title, a comment or a
+// squash commit built from the PR body: a word joiner (U+2060, invisible)
+// breaks the keyword, the @ and the /. The text reads the same.
+func defuseRefs(s string) string {
 	s = reCloseRef.ReplaceAllStringFunc(s, func(m string) string {
 		return m[:1] + "\u2060" + m[1:]
 	})
+	s = reQuickAction.ReplaceAllString(s, "${1}/\u2060${2}")
 	return reMention.ReplaceAllString(s, "${1}@\u2060${2}")
 }
 

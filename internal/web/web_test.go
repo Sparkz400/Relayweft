@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/limits"
+	"github.com/sparkz400/switchyard/internal/notify"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/runner"
 	"github.com/sparkz400/switchyard/internal/sysload"
@@ -40,6 +42,11 @@ const longTask = "Make the parser keep trailing empty fields and add a --strict 
 
 func newEnv(t *testing.T, mutate func(c *config.Config)) *testEnv {
 	t.Helper()
+	// Saving the config records its trust under the user config dir.
+	home := t.TempDir()
+	for _, k := range []string{"XDG_CONFIG_HOME", "APPDATA", "HOME"} {
+		t.Setenv(k, home)
+	}
 	cfg := config.Default()
 	cfg.Orchestrator.ApprovePlan = false
 	if mutate != nil {
@@ -248,6 +255,7 @@ func TestSecurityChecks(t *testing.T) {
 		{"POST", "/api/routes"}, {"POST", "/api/config/save"}, {"POST", "/api/settings"}, {"GET", "/api/history"},
 		{"POST", "/api/resume"}, {"GET", "/api/queue"}, {"POST", "/api/queue/remove"}, {"POST", "/api/queue/clear"},
 		{"GET", "/api/stats"}, {"GET", "/api/sessions"}, {"POST", "/api/limit"}, {"POST", "/api/demo/review"},
+		{"POST", "/api/bye"},
 	}
 	for _, rt := range routes {
 		var body any
@@ -960,6 +968,61 @@ func TestDesktopAlertOnlyWithoutPage(t *testing.T) {
 	}
 }
 
+// Webhooks are for when you are away: they post whether a page is open or
+// not, and a failure shows on the open pages.
+func TestWebhookAlertsWithPageOpen(t *testing.T) {
+	env := newEnv(t, nil)
+	env.srv.opt.Demo = false
+	oldN, oldW := sendNotify, sendWebhooks
+	defer func() { sendNotify, sendWebhooks = oldN, oldW }()
+	sendNotify = func(string, string) error { return nil }
+	posted := make(chan notify.Message, 4)
+	sendWebhooks = func(_ context.Context, _ []notify.Webhook, msg notify.Message) error {
+		posted <- msg
+		return errors.New("webhook 1 (ntfy ntfy.sh): 403 Forbidden")
+	}
+	env.srv.store.Update(func(c *config.Config) error {
+		c.Notify.Webhooks = []notify.Webhook{{URL: "https://ntfy.sh/t", Events: []string{"waiting", "limit"}}}
+		return nil
+	})
+	c, _, _ := env.srv.hub.subscribe()
+	defer env.srv.hub.unsubscribe(c)
+	env.srv.alert(notify.EventWaiting, "Switchyard needs you", "approve the plan")
+	env.srv.alert(notify.EventDone, "Switchyard: done", "not in the events")
+	limit := event.Event{Kind: event.ProviderState, Provider: event.Claude, Until: time.Now().Add(time.Hour), Text: "claude limit"}.Stamp()
+	env.srv.observe(limit)
+	env.srv.observe(limit) // the same limit again: posted once
+	var got []string
+	for len(got) < 2 {
+		select {
+		case m := <-posted:
+			got = append(got, m.Event+": "+m.Body)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("posted %v", got)
+		}
+	}
+	select {
+	case m := <-posted:
+		t.Fatalf("unwanted post %+v", m)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if all := strings.Join(got, "|"); !strings.Contains(all, "waiting: approve the plan") || !strings.Contains(all, "limit: claude limit") {
+		t.Errorf("posts = %v", got)
+	}
+	waitFor(t, "the failure notice", func() bool {
+		for {
+			select {
+			case f := <-c.ch:
+				if strings.Contains(string(f), "notification not sent: webhook 1") {
+					return true
+				}
+			default:
+				return false
+			}
+		}
+	})
+}
+
 func TestHubDropsSlowClient(t *testing.T) {
 	h := newHub()
 	c, _, _ := h.subscribe()
@@ -1052,5 +1115,53 @@ func TestStaticAssetsEmbedded(t *testing.T) {
 				t.Errorf("%s references %q", p, bad)
 			}
 		}
+	}
+}
+
+// sy app exits a few seconds after its page says goodbye (the window was
+// closed), not after the 30s idle wait; a reload, which says goodbye and
+// reconnects, and a goodbye from one of two pages do not end it.
+func TestAppGoneAfterGoodbye(t *testing.T) {
+	env := newEnv(t, nil)
+	h := env.srv.hub
+	const idle, grace = 30 * time.Second, 5 * time.Second
+	now := time.Now()
+	if h.gone(now.Add(time.Hour), idle, grace) {
+		t.Fatal("gone before any page connected")
+	}
+	c, _, _ := h.subscribe()
+	if res, _ := env.do("POST", "/api/bye", map[string]any{}, nil); res.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST /api/bye: %d", res.StatusCode)
+	}
+	if h.gone(time.Now().Add(time.Minute), idle, grace) {
+		t.Fatal("gone while the page is still connected")
+	}
+	h.unsubscribe(c)
+	now = time.Now()
+	if h.gone(now.Add(grace/2), idle, grace) {
+		t.Fatal("gone within the grace after a goodbye")
+	}
+	if !h.gone(now.Add(grace+time.Second), idle, grace) {
+		t.Fatal("not gone after a goodbye and the grace")
+	}
+
+	// A reload: goodbye, then the new page connects.
+	c, _, _ = h.subscribe()
+	h.unsubscribe(c)
+	if h.gone(time.Now().Add(grace+time.Second), idle, grace) {
+		t.Fatal("a reconnect did not clear the goodbye")
+	}
+	if !h.gone(time.Now().Add(idle+time.Second), idle, grace) {
+		t.Fatal("not gone after the idle wait without a goodbye")
+	}
+
+	// Two pages: one says goodbye and closes, the other drops later.
+	a, _, _ := h.subscribe()
+	b, _, _ := h.subscribe()
+	h.bye()
+	h.unsubscribe(a)
+	h.unsubscribe(b)
+	if h.gone(time.Now().Add(grace+time.Second), idle, grace) {
+		t.Fatal("one page's goodbye ended sy app while another page was open")
 	}
 }

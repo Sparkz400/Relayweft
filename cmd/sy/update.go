@@ -142,51 +142,57 @@ if the repository is private.
 	}
 
 	windows := runtime.GOOS == "windows"
-	if err := replaceBinary(target, data, windows); err != nil {
+	old, err := replaceBinary(target, data, windows)
+	if err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Updated %s from %s to %s (sha256 verified).\n", target, cur, latest)
 	if windows {
-		fmt.Fprintf(out, "The previous version is kept as %s.old and removed on the next start.\n", target)
-		fmt.Fprintf(out, "To roll back now: close sy, then move %s.old back to %s.\n", target, target)
+		fmt.Fprintf(out, "The previous version is kept as %s and removed on the next start.\n", old)
+		fmt.Fprintf(out, "To roll back now: close sy, then move %s back to %s.\n", old, target)
 	} else {
 		fmt.Fprintln(out, "To roll back, download an older release from https://github.com/sparkz400/switchyard/releases.")
 	}
 	return nil
 }
 
-// cleanupOldBinary removes the <exe>.old left behind by a Windows update,
-// where the running file could only be renamed, not deleted. It is best
-// effort and silent: a failure just means we try again next start.
+// cleanupOldBinary removes the <exe>.old (and .old-N) files left behind by
+// Windows updates, where the running file could only be renamed, not
+// deleted. It is best effort and silent: a file still in use (another sy
+// runs it) is tried again next start.
 func cleanupOldBinary() {
 	target, err := updateTarget()
 	if err != nil {
 		return
 	}
 	os.Remove(target + ".old")
+	more, _ := filepath.Glob(target + ".old-*")
+	for _, p := range more {
+		os.Remove(p)
+	}
 }
 
-// replaceBinary swaps target for data. windows selects the rename dance
-// needed there: a running .exe cannot be overwritten or deleted but can be
+// replaceBinary swaps target for data and returns where the previous
+// binary was kept (Windows only). windows selects the rename dance needed
+// there: a running .exe cannot be overwritten or deleted but can be
 // renamed, so it is moved to .old first. It is a parameter (not a GOOS
 // check) so both paths are tested on every platform.
-func replaceBinary(target string, data []byte, windows bool) error {
+func replaceBinary(target string, data []byte, windows bool) (string, error) {
 	tmp := target + ".new"
 	if err := os.WriteFile(tmp, data, 0o755); err != nil {
-		return fmt.Errorf("cannot write %s (is the folder writable?): %w", tmp, err)
+		return "", fmt.Errorf("cannot write %s (is the folder writable?): %w", tmp, err)
 	}
 	if !windows {
 		if err := os.Rename(tmp, target); err != nil {
 			os.Remove(tmp)
-			return fmt.Errorf("replace %s: %w", target, err)
+			return "", fmt.Errorf("replace %s: %w", target, err)
 		}
-		return nil
+		return "", nil
 	}
-	old := target + ".old"
-	os.Remove(old) // a leftover from an earlier update
+	old := oldBinaryName(target)
 	if err := os.Rename(target, old); err != nil {
 		os.Remove(tmp)
-		return fmt.Errorf("move running binary aside: %w", err)
+		return "", fmt.Errorf("move running binary aside: %w", err)
 	}
 	err := os.Rename(tmp, target)
 	for i := 0; err != nil && windows && i < 5; i++ {
@@ -197,12 +203,29 @@ func replaceBinary(target string, data []byte, windows bool) error {
 	if err != nil {
 		// Put the old binary back so sy keeps working.
 		if rerr := os.Rename(old, target); rerr != nil {
-			return fmt.Errorf("install new binary: %w (and restoring failed: %v; the old binary is %s)", err, rerr, old)
+			return "", fmt.Errorf("install new binary: %w (and restoring failed: %v; the old binary is %s)", err, rerr, old)
 		}
 		os.Remove(tmp)
-		return fmt.Errorf("install new binary: %w", err)
+		return "", fmt.Errorf("install new binary: %w", err)
 	}
-	return nil
+	return old, nil
+}
+
+// oldBinaryName is where the running binary is moved aside: <exe>.old, or
+// <exe>.old-N when an earlier .old cannot be removed because it still runs
+// (a sy web left open across two updates); Windows cannot rename over a
+// running .exe.
+func oldBinaryName(target string) string {
+	old := target + ".old"
+	if err := os.Remove(old); err == nil || os.IsNotExist(err) {
+		return old
+	}
+	for i := 1; ; i++ {
+		p := fmt.Sprintf("%s.old-%d", target, i)
+		if err := os.Remove(p); err == nil || os.IsNotExist(err) {
+			return p
+		}
+	}
 }
 
 func latestRelease() (*ghRelease, error) {

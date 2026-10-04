@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sparkz400/switchyard/internal/notify"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,8 +28,9 @@ import (
 // A repo file comes from whoever pushed to the repo, so the parts that run
 // commands on your machine (verify commands, hooks, provider commands and
 // arguments, the log directory, MCP servers) apply only after you trust that exact
-// content with `sy trust`, and so does budget.team.dir (where sy writes its
-// usage file). Routes, preferences and toggles always apply.
+// content with `sy trust`, and so do budget.team.dir (where sy writes its
+// usage file) and notify.webhooks (where sy sends what your tasks did).
+// Routes, preferences and toggles always apply.
 
 // RepoFileName is the per-repo settings file.
 const RepoFileName = ".switchyard.yaml"
@@ -167,6 +169,12 @@ func restoreCommandSettings(c, before *Config) []string {
 	if c.Budget.Team.Dir != before.Budget.Team.Dir {
 		changed = append(changed, teamDirKey)
 	}
+	// Webhooks send task summaries off the machine: a URL nobody reviewed
+	// must not decide where they go.
+	if !reflect.DeepEqual(c.Notify.Webhooks, before.Notify.Webhooks) {
+		changed = append(changed, webhooksKey)
+	}
+	c.Notify.Webhooks = before.Notify.Webhooks
 	c.Verify, c.Hooks, c.Providers, c.LogDir, c.MCP, c.Workspace = before.Verify, before.Hooks, before.Providers, before.LogDir, before.MCP, before.Workspace
 	c.Budget.Team.Dir = before.Budget.Team.Dir
 	return changed
@@ -174,6 +182,9 @@ func restoreCommandSettings(c, before *Config) []string {
 
 // teamDirKey is the one budget setting that needs trust.
 const teamDirKey = "budget.team.dir"
+
+// webhooksKey is the one notify setting that needs trust.
+const webhooksKey = "notify.webhooks"
 
 // stricterBudget keeps the tighter of two budgets per limit (0 = no limit).
 func stricterBudget(mine, repo BudgetCfg) BudgetCfg {
@@ -257,6 +268,79 @@ func trustKey(path string) string {
 	return strings.ToLower(filepath.ToSlash(abs))
 }
 
+// trustSubset is what a local config file (./switchyard.yaml) sets among
+// the settings that need trust, keyed like CommandSettings' lines.
+func trustSubset(data []byte) (map[string]any, error) {
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	for _, k := range commandKeys {
+		if v, ok := raw[k]; ok {
+			out[k] = v
+		}
+	}
+	if b, ok := raw["budget"].(map[string]any); ok {
+		if t, ok := b["team"].(map[string]any); ok {
+			if d, ok := t["dir"]; ok {
+				out[teamDirKey] = d
+			}
+		}
+	}
+	if n, ok := raw["notify"].(map[string]any); ok {
+		if w, ok := n["webhooks"]; ok {
+			out[webhooksKey] = w
+		}
+	}
+	return out, nil
+}
+
+// localHash hashes only what a local config file sets among the settings
+// that need trust (yaml.v3 writes map keys sorted), so editing its routes
+// or toggles by hand keeps the trust; a change to what it runs does not.
+func localHash(data []byte) (string, error) {
+	set, err := trustSubset(data)
+	if err != nil {
+		return "", err
+	}
+	b, err := yaml.Marshal(set)
+	if err != nil {
+		return "", err
+	}
+	return "local:" + contentHash(b), nil
+}
+
+// IsLocalTrusted reports whether what the local config file at path (with
+// content data) sets among the settings that run commands was trusted.
+func IsLocalTrusted(path string, data []byte) bool {
+	h, err := localHash(data)
+	return err == nil && loadTrust()[trustKey(path)] == h
+}
+
+// TrustLocal trusts what the local config file at path now sets among the
+// settings that run commands (a later change to them asks again). A
+// missing file is not an error.
+func TrustLocal(path string) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	h, err := localHash(data)
+	if err != nil {
+		return err
+	}
+	m := loadTrust()
+	if m[trustKey(path)] == h {
+		return nil
+	}
+	m[trustKey(path)] = h
+	return writeTrust(m)
+}
+
 // IsTrusted reports whether this exact content of path was trusted.
 func IsTrusted(path string, data []byte) bool {
 	return loadTrust()[trustKey(path)] == contentHash(data)
@@ -317,6 +401,21 @@ func CommandSettings(path string) ([]string, error) {
 			if d, ok := t["dir"]; ok {
 				out = append(out, fmt.Sprintf("%s: %v (sy writes this machine's usage file there)", teamDirKey, d))
 			}
+		}
+	}
+	if n, ok := raw["notify"].(map[string]any); ok {
+		if hooks, ok := n["webhooks"].([]any); ok && len(hooks) > 0 {
+			var where []string
+			for _, h := range hooks {
+				if m, ok := h.(map[string]any); ok {
+					w := notify.Webhook{URL: fmt.Sprint(m["url"])}
+					if k, ok := m["kind"].(string); ok {
+						w.Kind = k
+					}
+					where = append(where, w.Name())
+				}
+			}
+			out = append(out, fmt.Sprintf("%s: %s (sy sends task results there)", webhooksKey, strings.Join(where, ", ")))
 		}
 	}
 	sort.Strings(out)

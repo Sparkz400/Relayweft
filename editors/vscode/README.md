@@ -113,7 +113,21 @@ cd editors/vscode
 npm ci           # dev dependencies only: typescript, @types/vscode, @types/node
 npm run build    # tsc -> out/
 npm test         # unit tests (node:test), no VS Code needed
+npm run test:integration   # the extension in a real VS Code, see below
 ```
+
+`npm run test:integration` downloads VS Code into `.vscode-test/` (stable;
+`VSCODE_VERSION=1.90.0` for the oldest supported one), builds sy from
+this repository (`go build ./cmd/sy`; `SY_EXE=<path>` uses an existing
+one) and runs `src/test/integration` in that VS Code with its own user
+data and extensions folders. sy runs for real (git, worktrees, change
+review) in a throwaway repository, with a scripted Claude CLI as its agent
+(no quota is used) and its config and state in a scratch `APPDATA`. The
+suite starts sy, runs tasks, edits and approves a plan, accepts and
+rejects hunks in the diff editor and checks the files in the repository,
+then undo, follow-up, feedback, cancel, stop, a killed sy, and VS Code
+closing while an agent works; afterwards it checks that no sy or agent
+process is left. Your own VS Code profile and sy state are not touched.
 
 To try it, open `editors/vscode` in VS Code and press F5 (Extension
 Development Host), or package and install it:

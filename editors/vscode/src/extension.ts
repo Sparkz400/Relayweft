@@ -28,8 +28,25 @@ interface Session {
 
 let ext: Extension | undefined;
 
-export function activate(context: vscode.ExtensionContext): void {
+/**
+ * What the integration tests (src/test/integration) look at. activate
+ * returns it only when VS Code runs the extension's tests.
+ */
+export interface TestHooks {
+  readonly model: TaskModel;
+  readonly tree: AgentsTree;
+  readonly review: ReviewController;
+  /** The pid of the sy this window started, while it runs. */
+  syPid(): number | undefined;
+  /** Whether a sy session is attached (switchyard.running). */
+  running(): boolean;
+  /** The lines written to the Switchyard output channel. */
+  readonly log: string[];
+}
+
+export function activate(context: vscode.ExtensionContext): TestHooks | undefined {
   ext = new Extension(context);
+  return context.extensionMode === vscode.ExtensionMode.Test ? ext.hooks() : undefined;
 }
 
 export function deactivate(): Promise<void> | undefined {
@@ -41,7 +58,18 @@ export function deactivate(): Promise<void> | undefined {
 class Extension {
   private session: Session | undefined;
   private starting = false;
-  private readonly out = vscode.window.createOutputChannel('Switchyard');
+  private readonly channel = vscode.window.createOutputChannel('Switchyard');
+  private readonly logLines: string[] = [];
+  private readonly out = {
+    appendLine: (l: string) => {
+      this.channel.appendLine(l);
+      if (this.testing) {
+        this.logLines.push(l);
+      }
+    },
+    show: (keep?: boolean) => this.channel.show(keep),
+  };
+  private readonly testing: boolean;
   private readonly model = new TaskModel();
   private readonly tree = new AgentsTree(this.model);
   private readonly review = new ReviewController();
@@ -53,6 +81,7 @@ class Extension {
   private refreshTimer: NodeJS.Timeout | undefined;
 
   constructor(ctx: vscode.ExtensionContext) {
+    this.testing = ctx.extensionMode === vscode.ExtensionMode.Test;
     const agentsView = vscode.window.createTreeView('switchyard.agents', { treeDataProvider: this.tree, showCollapseAll: true });
     const reviewView = vscode.window.createTreeView('switchyard.review', { treeDataProvider: this.review, manageCheckboxStateManually: true });
     this.review.view = reviewView;
@@ -66,7 +95,7 @@ class Extension {
         }
       });
     ctx.subscriptions.push(
-      this.out, this.tree, this.review, this.plan, this.status, agentsView, reviewView,
+      this.channel, this.tree, this.review, this.plan, this.status, agentsView, reviewView,
       vscode.workspace.registerTextDocumentContentProvider(SCHEME, this.review),
       vscode.languages.registerCodeLensProvider({ scheme: SCHEME }, this.review),
       vscode.languages.registerCodeLensProvider({ scheme: 'untitled', language: 'json' }, this.plan),
@@ -102,6 +131,17 @@ class Extension {
       reg('switchyard.plan.reject', (uri?: vscode.Uri) => this.plan.rejectEdited(uri)),
     );
     this.setContext();
+  }
+
+  hooks(): TestHooks {
+    return {
+      model: this.model,
+      tree: this.tree,
+      review: this.review,
+      syPid: () => this.session?.proc.pid,
+      running: () => !!this.session,
+      log: this.logLines,
+    };
   }
 
   // --- process -------------------------------------------------------------------

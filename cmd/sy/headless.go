@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -37,6 +38,11 @@ type headless struct {
 	done   chan struct{}
 	ctx    context.Context
 	stop   context.CancelFunc
+	// closing is set before close cancels ctx, so the end of a normal run
+	// is not reported as a Ctrl+C.
+	closing atomic.Bool
+	dir     string        // the project folder, named in webhook messages
+	hooks   notify.Sender // webhook posts; close waits for them
 }
 
 // headlessRunners builds the agents of sy run and sy resume (tests swap in
@@ -56,18 +62,15 @@ func startHeadless(c *common, quiet bool, ap orchestrator.Approver) (*headless, 
 		fmt.Fprintln(os.Stderr, "warning: session log disabled:", err)
 		log = nil
 	}
-	h := &headless{cfg: cfg, log: log, events: make(chan event.Event, 4096), flush: make(chan chan struct{}), done: make(chan struct{})}
+	h := &headless{cfg: cfg, log: log, events: make(chan event.Event, 4096), flush: make(chan chan struct{}), done: make(chan struct{}), dir: dir}
+	h.hooks.OnError = func(err error) { fmt.Fprintln(os.Stderr, "notify:", err) }
 	h.orc = orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: headlessRunners, Tracker: limits.NewTracker(), Log: log,
 		Events: h.events, ForceProvider: c.provider, Approver: ap,
 		Repos: c.workspace,
 	})
 	h.ctx, h.stop = signal.NotifyContext(context.Background(), os.Interrupt)
-	go func() {
-		<-h.ctx.Done()
-		h.stop() // a second Ctrl+C now kills sy immediately
-		fmt.Fprintln(os.Stderr, "\ncancelling: stopping all agents... (Ctrl+C again to force quit)")
-	}()
+	go watchInterrupt(h.ctx, h.stop, &h.closing, os.Stderr)
 	go func() {
 		defer close(h.done)
 		for {
@@ -91,9 +94,18 @@ func startHeadless(c *common, quiet bool, ap orchestrator.Approver) (*headless, 
 
 func (h *headless) print(e event.Event, quiet bool) {
 	printEvent(e, quiet)
-	if e.Kind == event.ProviderState && !e.Until.IsZero() && h.cfg.Notify.Enabled {
-		go notify.Send("Switchyard: "+e.Provider+" limit", e.Text)
+	if e.Kind == event.ProviderState && !e.Until.IsZero() {
+		if h.cfg.Notify.Enabled {
+			go notify.Send("Switchyard: "+e.Provider+" limit", e.Text)
+		}
+		h.webhook(notify.EventLimit, "Switchyard: "+e.Provider+" hit its limit", e.Text)
 	}
+}
+
+// webhook posts to the configured webhooks in the background (close
+// waits for it).
+func (h *headless) webhook(ev, title, body string) {
+	h.hooks.Send(h.cfg.Notify.Webhooks, notify.Message{Event: ev, Title: title, Body: body, Source: filepath.Base(h.dir)})
 }
 
 // drain waits until every event emitted so far is printed.
@@ -103,14 +115,25 @@ func (h *headless) drain() {
 	<-reply
 }
 
+// watchInterrupt tells the user that Ctrl+C is cancelling the run.
+func watchInterrupt(ctx context.Context, stop context.CancelFunc, closing *atomic.Bool, w io.Writer) {
+	<-ctx.Done()
+	stop() // a second Ctrl+C now kills sy immediately
+	if !closing.Load() {
+		fmt.Fprintln(w, "\ncancelling: stopping all agents... (Ctrl+C again to force quit)")
+	}
+}
+
 func (h *headless) close() {
 	close(h.events)
 	<-h.done
+	h.hooks.Wait() // the last result must reach your phone before sy exits
+	h.closing.Store(true)
 	h.stop()
 	h.log.Close()
 }
 
-// report prints a task's result and sends the desktop notification.
+// report prints a task's result and sends the notifications.
 func (h *headless) report(res orchestrator.TaskResult) {
 	h.drain()
 	status := "OK"
@@ -122,12 +145,13 @@ func (h *headless) report(res orchestrator.TaskResult) {
 	if res.UndoKey != "" {
 		fmt.Printf("undo: sy undo %s   (preview first; your later edits are kept)\n", res.UndoKey)
 	}
-	if n := h.cfg.Notify; n.Enabled && res.Duration >= n.MinTask.D() && h.ctx.Err() == nil {
-		title := "Switchyard: done"
+	if n := h.cfg.Notify; res.Duration >= n.MinTask.D() && h.ctx.Err() == nil {
+		title, ev := "Switchyard: done", notify.EventDone
 		if !res.OK {
-			title = "Switchyard: failed"
+			title, ev = "Switchyard: failed", notify.EventFailed
 		}
-		if notify.Send(title, oneLine(res.Summary, 200)) != nil {
+		h.webhook(ev, title, fmt.Sprintf("%s\n%s · %s", oneLine(res.Summary, 600), res.Duration.Round(time.Second), res.Cost.Summary()))
+		if n.Enabled && notify.Send(title, oneLine(res.Summary, 200)) != nil {
 			fmt.Fprint(os.Stderr, notify.Bell())
 		}
 	}
@@ -260,6 +284,14 @@ func cmdRun(args []string) error {
 	}
 	if len(tasks) > 1 {
 		fmt.Printf("%d of %d task(s) succeeded\n", len(tasks)-failed, len(tasks))
+		if h.ctx.Err() == nil {
+			// One line to read in the morning, after each task's own.
+			title, ev := "Switchyard: all tasks done", notify.EventDone
+			if failed > 0 {
+				title, ev = "Switchyard: tasks failed", notify.EventFailed
+			}
+			h.webhook(ev, title, fmt.Sprintf("%d of %d task(s) succeeded", len(tasks)-failed, len(tasks)))
+		}
 	}
 	if failed > 0 {
 		return errTaskFailed

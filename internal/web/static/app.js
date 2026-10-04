@@ -415,6 +415,15 @@ function reviewerEvent(e, ts) {
 
 // ---------- SSE ----------
 let es = null;
+
+// sy app exits soon after its window closes instead of waiting 30s; a
+// reload says goodbye too but reconnects in time.
+window.addEventListener('pagehide', (e) => {
+  if (e.persisted || !SESSION) return;
+  try {
+    fetch('/api/bye', { method: 'POST', keepalive: true, headers: { 'X-Switchyard-Session': SESSION, 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+  } catch (err) { /* best effort */ }
+});
 function connect() {
   if (es) es.close();
   es = new EventSource('/api/events?s=' + encodeURIComponent(SESSION || ''));

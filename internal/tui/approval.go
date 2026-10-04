@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/sparkz400/switchyard/internal/notify"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 )
 
@@ -172,13 +173,13 @@ func (m *Model) openApproval() {
 	switch {
 	case r.plan != nil:
 		m.overlay = newPlanOverlay(r, m.th.ASCII)
-		m.alert("Switchyard needs you", "approve the plan: "+oneLine(r.task, 120))
+		m.alert(notify.EventWaiting, "Switchyard needs you", "approve the plan: "+oneLine(r.task, 120))
 	case r.budget != nil:
 		m.overlay = &budgetOverlay{r: r}
-		m.alert("Switchyard needs you", "budget reached: "+r.budget.String())
+		m.alert(notify.EventWaiting, "Switchyard needs you", "budget reached: "+r.budget.String())
 	default:
 		m.overlay = newReviewOverlay(r)
-		m.alert("Switchyard needs you", "review changes of "+r.changes.StepID)
+		m.alert(notify.EventWaiting, "Switchyard needs you", "review changes of "+r.changes.StepID)
 	}
 	m.input.Blur()
 	m.focus = focusTree

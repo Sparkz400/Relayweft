@@ -36,6 +36,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/session", s.handleSession)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.snapshot()) })
 	mux.HandleFunc("GET /api/events", s.handleEvents)
+	mux.HandleFunc("POST /api/bye", func(w http.ResponseWriter, r *http.Request) {
+		s.hub.bye()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /api/task", s.handleTask)
 	mux.HandleFunc("POST /api/cancel", func(w http.ResponseWriter, r *http.Request) {
 		msg, err := s.cancelTask()

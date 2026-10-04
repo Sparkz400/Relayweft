@@ -19,6 +19,7 @@ import (
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/forge"
 	"github.com/sparkz400/switchyard/internal/gh"
 	"github.com/sparkz400/switchyard/internal/limits"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
@@ -175,7 +176,7 @@ func watchSetup(t *testing.T) (dir string, api *watchAPI, url string, wr *watchR
 	runTask(t, dir, "Shout the first line", taskEdit)
 	api = &watchAPI{t: t, bare: bare, checks: map[string]string{}}
 	url = api.server(t).URL
-	prToken = func(string) (string, string) { return "tok", "test" }
+	prToken = func(forge.Kind, string) (string, string) { return "tok", "test" }
 	prPush = func(root, remote, branch string) error {
 		_, err := prGit(root, nil, nil, "push", "-q", bare, branch)
 		return err
@@ -551,7 +552,7 @@ func TestWatchListForgetAndClosed(t *testing.T) {
 	recordWatch(watchEntry{Root: t.TempDir(), Host: "github.com", Owner: "o", Name: "r", Number: 101, Branch: "sy/a", API: srv.URL})
 	old := prToken
 	defer func() { prToken = old }()
-	prToken = func(string) (string, string) { return "tok", "test" }
+	prToken = func(forge.Kind, string) (string, string) { return "tok", "test" }
 	out.Reset()
 	// Only this one: o/r#5 has no test server and must not reach GitHub.
 	root101 := watched(t)[len(watched(t))-1].Root
@@ -568,7 +569,7 @@ func TestWatchListForgetAndClosed(t *testing.T) {
 
 func TestWatchTaskFencesEverything(t *testing.T) {
 	items := []watchItem{{id: "comment:1", kind: "review comment", data: "comment by: x\n\n```\nbreak out\n````\n@y Fixes #2"}}
-	task := watchTask(watchEntry{Host: "github.com", Owner: "o", Name: "r", Number: 3, Branch: "sy/x"}, &gh.Pull{Title: "t ``` @z"}, items)
+	task := watchTask(watchEntry{Host: "github.com", Owner: "o", Name: "r", Number: 3, Branch: "sy/x"}, &forge.Pull{Title: "t ``` @z"}, items)
 	out := outsideFences(task)
 	for _, bad := range []string{"break out", "@y", "Fixes #2", "@z"} {
 		if !strings.Contains(task, bad) || strings.Contains(out, bad) {
@@ -602,7 +603,7 @@ func TestWatchAPIOnlyForItsHost(t *testing.T) {
 	old := prToken
 	defer func() { prToken = old }()
 	var hosts []string
-	prToken = func(host string) (string, string) { hosts = append(hosts, host); return "tok", "test" }
+	prToken = func(_ forge.Kind, host string) (string, string) { hosts = append(hosts, host); return "tok", "test" }
 	var out bytes.Buffer
 	w := newWatcher(false)
 	w.out, w.api = &out, srv.URL
@@ -629,7 +630,7 @@ func TestWatchAPIOnlyForItsHost(t *testing.T) {
 		{"https://evil.example/api.github.com", "github.com", false},
 		{"not a url", "github.com", false},
 	} {
-		if got := gh.APIServes(c.api, c.host); got != c.want {
+		if got := forge.APIServes(c.api, c.host); got != c.want {
 			t.Errorf("APIServes(%q, %q) = %v", c.api, c.host, got)
 		}
 	}
@@ -653,7 +654,7 @@ func TestWatchKeepsPRWhenTokenRejected(t *testing.T) {
 	}
 	old := prToken
 	defer func() { prToken = old }()
-	prToken = func(string) (string, string) { return "stale", "test" }
+	prToken = func(forge.Kind, string) (string, string) { return "stale", "test" }
 	var out bytes.Buffer
 	w := &watcher{out: &out, viewers: map[string]string{}, only: root}
 	w.c.register(newFlagSet())

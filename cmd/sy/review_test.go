@@ -13,6 +13,7 @@ import (
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/forge"
 	"github.com/sparkz400/switchyard/internal/runner"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
 )
@@ -55,13 +56,13 @@ func TestDiffLines(t *testing.T) {
 			t.Fatalf("%s: lines %v, want %v", f, got[f], lines)
 		}
 		for _, l := range lines {
-			if !got[f][l] {
+			if !got.has(f, l) {
 				t.Fatalf("%s: line %d missing in %v", f, l, got[f])
 			}
 		}
 	}
 	quoted := "diff --git \"a/t\\303\\244.txt\" \"b/t\\303\\244.txt\"\n--- \"a/t\\303\\244.txt\"\n+++ \"b/t\\303\\244.txt\"\n@@ -5,2 +5,2 @@\n x\n-y\n+z\n"
-	if q := diffLines(quoted); !q["tä.txt"][5] || !q["tä.txt"][6] || q["tä.txt"][7] {
+	if q := diffLines(quoted); !q.has("tä.txt", 5) || !q.has("tä.txt", 6) || q.has("tä.txt", 7) {
 		t.Fatalf("quoted path: %v", q)
 	}
 }
@@ -190,7 +191,7 @@ func reviewSetup(t *testing.T) (dir, url string, api *reviewAPI, rr *reviewRunne
 	reviewOut = out
 	reviewRunners = func(*config.Config) runner.Set { return runner.Set{event.Codex: rr, event.Claude: rr} }
 	eventPrint = func(event.Event, bool) {}
-	prToken = func(string) (string, string) { return "tok", "test" }
+	prToken = func(forge.Kind, string) (string, string) { return "tok", "test" }
 	return dir, url, api, rr, out
 }
 
@@ -280,7 +281,7 @@ func TestReviewPostsOneCommentReview(t *testing.T) {
 		t.Fatalf("--api for another host: %v", err)
 	}
 	// --post without a token is refused before any agent runs.
-	prToken = func(string) (string, string) { return "", "" }
+	prToken = func(forge.Kind, string) (string, string) { return "", "" }
 	if err := runReview(context.Background(), reviewCommon(t, "--dir", dir), "12", reviewOptions{post: true, api: url}); err == nil || len(rr.specs) != n {
 		t.Fatalf("no token: %v", err)
 	}

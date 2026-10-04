@@ -6,6 +6,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -97,5 +98,23 @@ func TestTermApproverConcurrentReviews(t *testing.T) {
 	}
 	if applied != 1 {
 		t.Fatalf("want one accepted and one rejected review, applied %d", applied)
+	}
+}
+
+// The end of a normal sy run or sy resume cancels the run's context too; it
+// must not print the Ctrl+C notice (found by sy selftest).
+func TestWatchInterruptQuietOnClose(t *testing.T) {
+	for _, closing := range []bool{true, false} {
+		ctx, stop := context.WithCancel(context.Background())
+		var flag atomic.Bool
+		flag.Store(closing)
+		var buf bytes.Buffer
+		done := make(chan struct{})
+		go func() { watchInterrupt(ctx, stop, &flag, &buf); close(done) }()
+		stop()
+		<-done
+		if printed := strings.Contains(buf.String(), "cancelling"); printed == closing {
+			t.Errorf("closing=%v: printed %q", closing, buf.String())
+		}
 	}
 }

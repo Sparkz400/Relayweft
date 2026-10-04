@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -194,15 +195,30 @@ func (m *Model) startNext() {
 // sendNotify is notify.Send; tests replace it.
 var sendNotify = notify.Send
 
-// alert shows a desktop notification when notifications are on. It never
-// blocks the UI: Send can take seconds.
-func (m *Model) alert(title, body string) {
-	if m.opt.Demo || !m.store.Get().Notify.Enabled {
+// sendWebhooks is notify.Broadcast; tests replace it.
+var sendWebhooks = notify.Broadcast
+
+// alert shows a desktop notification when notifications are on, and
+// posts to the configured webhooks. It never blocks the UI: both can take
+// seconds.
+func (m *Model) alert(ev, title, body string) {
+	if m.opt.Demo {
+		return
+	}
+	cfg := m.store.Get()
+	if hooks := cfg.Notify.Webhooks; notify.Wanted(hooks, ev) {
+		msg := notify.Message{Event: ev, Title: title, Body: body, Source: filepath.Base(m.opt.Dir)}
+		post := sendWebhooks
+		// A failure has nowhere to show in a running TUI; sy notify --test
+		// reports it.
+		go post(context.Background(), hooks, msg)
+	}
+	if !cfg.Notify.Enabled {
 		return
 	}
 	send := sendNotify
 	go func() {
-		if send(title, body) != nil {
+		if send(title, oneLine(body, 200)) != nil {
 			// No desktop notifications here: ring the terminal bell.
 			// stderr, because Bubble Tea owns stdout.
 			os.Stderr.WriteString(notify.Bell())
@@ -215,11 +231,11 @@ func (m *Model) notifyDone(ok bool, summary string, took time.Duration) {
 	if took < m.store.Get().Notify.MinTask.D() {
 		return
 	}
-	title := "Switchyard: done"
+	title, ev := "Switchyard: done", notify.EventDone
 	if !ok {
-		title = "Switchyard: failed"
+		title, ev = "Switchyard: failed", notify.EventFailed
 	}
-	m.alert(title, oneLine(summary, 200))
+	m.alert(ev, title, oneLine(summary, 600)+"\n"+took.Round(time.Second).String())
 }
 
 // checkInterrupted looks for a task a crash or a closed window cut short.
