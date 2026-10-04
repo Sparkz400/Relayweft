@@ -4,7 +4,6 @@
 class Switchyard < Formula
   desc "Terminal app that routes coding work between the Codex CLI and Claude Code"
   homepage "https://github.com/sparkz400/switchyard"
-  version "0.2.0"
   license "MIT"
 
   on_macos do

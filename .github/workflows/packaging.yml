@@ -27,8 +27,9 @@ jobs:
           persist-credentials: false
       - name: render for the formula's release and compare
         run: |
-          version="$(sed -n 's/^  version "\(.*\)"$/\1/p' Formula/switchyard.rb)"
+          version="$(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' Formula/switchyard.rb | head -n 1)"
           echo "formula version: $version"
+          [ -n "$version" ]
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/checksums.txt" \
             "https://github.com/sparkz400/switchyard/releases/download/v$version/checksums.txt"
           sh packaging/render-manifests.sh "$version" "$RUNNER_TEMP/checksums.txt" "$RUNNER_TEMP/winget"
@@ -69,7 +70,7 @@ jobs:
           brew audit --strict --formula sparkz400/switchyard/switchyard
           sy="$(brew --prefix)/bin/sy"
           "$sy" version
-          want="switchyard $(sed -n 's/^  version "\(.*\)"$/\1/p' Formula/switchyard.rb)"
+          want="switchyard $(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' Formula/switchyard.rb | head -n 1)"
           [ "$("$sy" version)" = "$want" ]
           echo "sy=$sy" >> "$GITHUB_ENV"
       - uses: actions/setup-go@v7
