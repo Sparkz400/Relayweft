@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -63,6 +64,7 @@ func Init(d string) error {
 	if st, err := file.Stat(); err == nil {
 		written = st.Size()
 	}
+	openHealth(d)
 	return nil
 }
 
@@ -73,13 +75,23 @@ func Dir() string {
 	return dir
 }
 
-// Close flushes and closes the debug log.
+// Close flushes and closes the debug log, and disarms the fatal-error file
+// if End did not.
 func Close() {
 	mu.Lock()
 	defer mu.Unlock()
+	if fatalPath != "" {
+		debug.SetCrashOutput(nil, debug.CrashOptions{})
+		os.Remove(fatalPath)
+		fatalPath = ""
+	}
 	if f != nil {
 		f.Close()
 		f = nil
+	}
+	if hf != nil {
+		hf.Close()
+		hf = nil
 	}
 }
 
@@ -128,6 +140,9 @@ func Sync() {
 	if f != nil {
 		f.Sync()
 	}
+	if hf != nil {
+		hf.Sync()
+	}
 }
 
 // Recent returns the last lines logged in this process.
@@ -152,12 +167,19 @@ func Crash(where string, value any, stack []byte) string {
 	d := Dir()
 	if d == "" {
 		d = DefaultDir()
+		if testing.Testing() {
+			// A test that panics on purpose must not leave crash logs
+			// among the user's real ones (sy health counts those).
+			d = filepath.Join(os.TempDir(), "switchyard-test-logs")
+		}
 		os.MkdirAll(d, 0o755)
 	}
 	path := filepath.Join(d, "crash-"+time.Now().Format("20060102-150405.000")+".log")
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		Health("panic", "in", where)
 		return ""
 	}
+	Health("panic", "in", where, "log", filepath.Base(path))
 	return path
 }
 

@@ -40,6 +40,8 @@ jobs:
             targets: FuzzParseFollowUp
           - pkg: ./cmd/sy
             targets: FuzzParseTaskFile
+          - pkg: ./internal/diag
+            targets: FuzzParseRecord
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

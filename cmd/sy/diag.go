@@ -36,6 +36,7 @@ func startDiag(sub string) {
 	for _, e := range badPath {
 		diag.Logf("PATH entry with stray quote repaired: %s", e)
 	}
+	diag.Start(sub)
 }
 
 // crashGuard is deferred in main: a panic is written to a crash log and the
@@ -43,6 +44,7 @@ func startDiag(sub string) {
 func crashGuard() {
 	if r := recover(); r != nil {
 		path := diag.Crash("main", r, debug.Stack())
+		diag.End(fmt.Errorf("crash: %v", r))
 		fmt.Fprintf(os.Stderr, "\nsy crashed: %v\ncrash log: %s\nplease run `sy bugreport` and send the zip it creates\n", r, path)
 		os.Exit(3)
 	}
@@ -240,13 +242,23 @@ func cmdBugreport(args []string) error {
 	diag.Logf("bugreport written to %s", *out)
 	addFile("logs/sy-debug.log", filepath.Join(logDir, "sy-debug.log"))
 	addFile("logs/sy-debug.log.1", filepath.Join(logDir, "sy-debug.log.1"))
-	crashes, _ := filepath.Glob(filepath.Join(logDir, "crash-*.log"))
-	sort.Strings(crashes)
-	if len(crashes) > 10 {
-		crashes = crashes[len(crashes)-10:]
-	}
-	for _, p := range crashes {
-		addFile("logs/"+filepath.Base(p), p)
+	addFile("logs/sy-health.log", filepath.Join(logDir, "sy-health.log"))
+	addFile("logs/sy-health.log.1", filepath.Join(logDir, "sy-health.log.1"))
+	for _, pattern := range []string{"crash-*.log", "hang-*.log", "fatal-*.log"} {
+		files, _ := filepath.Glob(filepath.Join(logDir, pattern))
+		sort.Strings(files)
+		var kept []string
+		for _, p := range files {
+			if st, err := os.Stat(p); err == nil && st.Size() > 0 { // an empty fatal log: a running or killed process
+				kept = append(kept, p)
+			}
+		}
+		if len(kept) > 10 {
+			kept = kept[len(kept)-10:]
+		}
+		for _, p := range kept {
+			addFile("logs/"+filepath.Base(p), p)
+		}
 	}
 	if err := zw.Close(); err != nil {
 		return err
@@ -254,6 +266,6 @@ func cmdBugreport(args []string) error {
 	abs, _ := filepath.Abs(*out)
 	fmt.Printf("wrote %s\n", abs)
 	fmt.Println("It contains: environment and PATH, sy doctor output, your effective config, the last",
-		*sessions, "session logs\n(task texts and agent output), the debug log and crash logs. No API keys or tokens are read.")
+		*sessions, "session logs\n(task texts and agent output), the debug, health, crash and hang logs. No API keys or tokens are read.")
 	return nil
 }

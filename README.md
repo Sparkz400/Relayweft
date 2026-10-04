@@ -209,6 +209,7 @@ sy models [--refresh] [--all]         routes + catalogs; refresh Codex catalog
 sy doctor                             CLIs, logins, git, terminal, machine load, free disk, worktree pools
 sy bugreport [--out file.zip]         one zip with logs, crash logs, config and doctor output to send
 sy selftest [--onedrive] [--keep]    automated Windows checks with a scripted agent (no quota used)
+sy health [--days 14] [--check]       crashes, hangs, unclean exits, load peaks and leftovers; is "2 weeks clean" met?
 sy init [--global] [--force] [--print]
 sy clean [--dir <path>] [--idle 72h]  remove this repo's pooled worktrees (or every repo's idle ones)
 ```
@@ -378,7 +379,7 @@ Switchyard should never be what tips a PC over.
 
 - **Debug log.** Every agent spawn and exit, git command, routing decision and error is written to `sy-debug.log`, which rotates at 10 MB. It lives in `%AppData%\switchyard\logs` on Windows and `~/.config/switchyard/logs` on Linux.
 - **Crash logs.** A crash anywhere writes `crash-<time>.log` there, with the stack and the recent log. A crash inside a task ends only that task, not `sy`.
-- **`sy bugreport`.** Zips the environment, PATH, `sy doctor` output, your config, the last 3 session logs, and the debug and crash logs into one file to send.
+- **`sy bugreport`.** Zips the environment, PATH, `sy doctor` output, your config, the last 3 session logs, and the debug, health, crash and hang logs into one file to send.
 - **`sy selftest`.** Runs the parts of the Windows test pass that can be automated. It works in a throwaway folder, with a scripted agent instead of Codex or Claude, so no quota is used:
   - a user profile and project path with spaces, parentheses and non-ASCII letters, and the agent CLI behind an npm-style `.cmd` shim;
   - a repo with many files and, when git-lfs is installed, an LFS file;
@@ -388,6 +389,9 @@ Switchyard should never be what tips a PC over.
   - then `sy resume` (the planner and finished steps must not run again), `sy undo --yes` and `sy undo --redo --yes`.
 
   Your repos and config are not touched. When a check fails, the work folder is kept, with every command's output and the test profile's debug logs. At the end it lists what is left to check by hand: sleep and resume during a task, and closing the window in Windows Terminal and in the old console.
+- **Health log.** Every `sy` process also writes a few lines to `sy-health.log` next to the debug log: its start and end, the machine's CPU peak, lowest free RAM and its own memory every 5 minutes, hangs, panics, agent timeouts and what it left behind. It is small, so it covers months where the debug log covers days.
+- **Hangs and fatal errors.** A watchdog checks that the TUI keeps responding; if it stops for a minute, `hang-<time>.log` gets every goroutine's stack. Errors no `recover` can catch (out of memory, concurrent map writes) are written to `fatal-<pid>-<time>.log`. A process that ends without an end line and without such a file was killed, lost its window or lost power: an *unclean exit*.
+- **`sy health`.** Reads these logs and shows the last 14 days: crashes, hangs, unclean exits, agent timeouts, CPU and RAM peaks, sleep or freeze pauses, and leftovers (agents still running in a pool worktree no `sy` holds, worktrees that could not be deleted, temp files older than a day). Its first line says whether the Phase 1 exit criterion is met: 14 days without a crash or hang, with use on at least 10 of them. Unclean exits and agent timeouts are listed but do not reset the clock. `--json` for scripts, `--check` exits 1 while the criterion is not met, `--logs <dir>` reads the logs folder of an unzipped bug report. The **Health** button in `sy web` shows the same report.
 
 ## How it works (and the decisions made for v1)
 

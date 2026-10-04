@@ -739,6 +739,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetWidth(max(10, msg.Width-4))
 		return m, nil
 	case tickMsg:
+		diag.Beat("tui")
 		m.animate()
 		m.pruneApprovals()
 		m.tickSchedule()

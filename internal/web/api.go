@@ -15,6 +15,7 @@ import (
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/health"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
 )
@@ -84,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, map[string]string{"message": fmt.Sprintf("queue cleared (%d dropped)", n)})
 	})
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("POST /api/limit", s.handleLimit)
 	if s.opt.Demo {
@@ -811,4 +813,20 @@ func (s *Server) handleLimit(w http.ResponseWriter, r *http.Request) {
 	s.notice("info", msg)
 	s.kick()
 	writeJSON(w, map[string]string{"message": msg})
+}
+
+// healthOptions are the defaults of /api/health; tests point them at a
+// temporary log directory.
+var healthOptions health.Options
+
+// handleHealth serves the reliability report (sy health).
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	o := healthOptions
+	o.Days, _ = strconv.Atoi(r.URL.Query().Get("days"))
+	rep, err := health.Build(o)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, rep)
 }

@@ -97,3 +97,36 @@ func ReapOrphans(file string) bool {
 
 // Alive reports whether the process with this pid is still running.
 func Alive(pid int) bool { return pid > 0 && alive(pid) }
+
+// LiveOrphans returns the processes recorded in a pid file that are still
+// running (the same process, not a program that got the pid since),
+// without touching them.
+func LiveOrphans(file string) []int {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	var out []int
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		pid, err := strconv.Atoi(f[0])
+		if err != nil || pid <= 0 || pid == os.Getpid() {
+			continue
+		}
+		stamp := ""
+		if len(f) > 1 {
+			stamp = f[1]
+		}
+		if cur := procStamp(pid); cur != "" {
+			if stamp == "" || cur == stamp {
+				out = append(out, pid)
+			}
+		} else if stamp == "" && alive(pid) { // no stamps on this OS
+			out = append(out, pid)
+		}
+	}
+	return out
+}
