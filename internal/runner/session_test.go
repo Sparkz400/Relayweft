@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -123,5 +124,32 @@ func TestParsersReportSessionEarly(t *testing.T) {
 	q.ResumeArgs = nil
 	if jp.sessionID() != "" {
 		t.Error("a generic CLI without resume_args reported a session")
+	}
+}
+
+// A session id that is not plain (it came from a saved file) never reaches
+// the CLI's command line, whatever the CLI.
+func TestExecRefusesUnsafeSessionID(t *testing.T) {
+	for _, kind := range []string{event.Claude, event.Codex, event.Gemini, event.Qwen} {
+		pc, det := providerCfg(t, kind)
+		dump := fakeExe(t, &pc, "", 0, "")
+		x := map[string]func() *Exec{
+			event.Claude: func() *Exec { return NewClaude(pc, det) },
+			event.Codex:  func() *Exec { return NewCodex(pc, det) },
+			event.Gemini: func() *Exec { return NewGemini(pc, det) },
+			event.Qwen:   func() *Exec { return NewQwen(pc, det) },
+		}[kind]()
+		for _, id := range []string{"-x", "--yolo", "a b", "a;b"} {
+			res := x.Run(context.Background(), Spec{AgentID: "a", Dir: t.TempDir(), Resume: id}, func(event.Event) {})
+			if res.Err == nil || !strings.Contains(res.Err.Error(), "not safe") {
+				t.Errorf("%s: session %q: %v", kind, id, res.Err)
+			}
+		}
+		if _, err := os.Stat(dump); err == nil {
+			t.Errorf("%s: the CLI was started", kind)
+		}
+	}
+	if !ValidSessionID("9c70a986-7bea-482d-8acd-5e50dff8f86b") || ValidSessionID("-9c70") {
+		t.Error("ValidSessionID")
 	}
 }

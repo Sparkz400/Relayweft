@@ -318,6 +318,11 @@ func Undo(dir, key string, redo, agentOnly bool) (UndoPlan, error) {
 			return plan, err
 		}
 	}
+	if !redo {
+		// An undone task is not resumed: free the pool worktrees its
+		// interrupted steps held.
+		releaseHolds(key)
+	}
 	return plan, nil
 }
 

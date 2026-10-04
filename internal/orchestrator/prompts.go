@@ -355,6 +355,12 @@ Make the requested changes now, run the relevant tests if you can, then reply wi
 func resumePrompt(st Subtask, verify []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s Switchyard (sy) stopped while you were working on your subtask %q (%s), so your last turn was cut off. This conversation shows what you did so far.\n", runner.MarkerResume, st.ID, st.Title)
+	// The subtask again, in case the conversation does not have it.
+	fmt.Fprintf(&b, "\nYOUR SUBTASK (as given before):\n%s\n", st.Prompt)
+	if len(st.Files) > 0 {
+		b.WriteString("Files you are expected to touch: " + strings.Join(st.Files, ", ") + "\n")
+	}
+	b.WriteString("\n")
 	if st.Kind.ReadOnly() {
 		b.WriteString("Finish the subtask (it is read-only: DO NOT modify any files), then reply with your complete findings, not only what is new.\n")
 		return b.String()

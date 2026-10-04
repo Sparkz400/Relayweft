@@ -446,9 +446,13 @@ func TestMergeTreeBase(t *testing.T) {
 }
 
 // claimSlot takes the one pool worktree an agent used: as it is when it
-// still holds that agent's work, else not at all; or reset to a commit for
-// a follow-up (recreated at the same path if it was deleted).
+// still holds that agent's run (its hold mark, at its commit), else not at
+// all; or reset to a commit for a follow-up (recreated at the same path if
+// it was deleted).
 func TestClaimSlot(t *testing.T) {
+	old := claimWait
+	claimWait = 300 * time.Millisecond
+	defer func() { claimWait = old }()
 	dir := gitRepo(t)
 	g := git{dir}
 	base, err := g.snapshot("base")
@@ -460,13 +464,15 @@ func TestClaimSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := s.path
+	run := slotHold{Task: "t1", Step: "c", Token: "tok1"}
+	holdSlot(path, run)
 	os.WriteFile(filepath.Join(path, "half.txt"), []byte("half\n"), 0o644)
-	if _, err := claimSlot(dir, path, base, true); err == nil {
+	if _, err := claimSlot(dir, path, base, &run); err == nil {
 		t.Fatal("a slot in use was claimed")
 	}
 	s.release() // the sy using it died
 
-	kept, err := claimSlot(dir, path, base, true)
+	kept, err := claimSlot(dir, path, base, &run)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -475,21 +481,28 @@ func TestClaimSlot(t *testing.T) {
 	}
 	kept.release()
 
+	// Another run's mark, or none: the worktree was used since.
+	for _, h := range []slotHold{{Task: "t1", Step: "c", Token: "tok2"}, {Task: "t2", Step: "c", Token: "tok1"}} {
+		if _, err := claimSlot(dir, path, base, &h); err == nil {
+			t.Errorf("claimed with a mark of another run: %+v", h)
+		}
+	}
 	appendFile(dir, "shared.txt", "x\n")
 	other, _ := g.snapshot("other")
-	if _, err := claimSlot(dir, path, other, true); err == nil || !strings.Contains(err.Error(), "reused") {
+	if _, err := claimSlot(dir, path, other, &run); err == nil || !strings.Contains(err.Error(), "reused") {
 		t.Fatalf("a slot at another commit was claimed: %v", err)
 	}
-	if _, err := claimSlot(dir, filepath.Join(path, "sub"), base, true); err == nil {
+	if _, err := claimSlot(dir, filepath.Join(path, "sub"), base, &run); err == nil {
 		t.Fatal("a folder inside a slot was claimed as a slot")
 	}
-	if _, err := claimSlot(dir, t.TempDir(), base, true); err == nil {
+	if _, err := claimSlot(dir, t.TempDir(), base, &run); err == nil {
 		t.Fatal("a folder outside the pool was claimed")
 	}
 
 	// A follow-up: moved to the current state; recreated when deleted.
+	// (t1 has no task state: its mark is stale.)
 	for i := 0; i < 2; i++ {
-		fs, err := claimSlot(dir, path, other, false)
+		fs, err := claimSlot(dir, path, other, nil)
 		if err != nil {
 			t.Fatalf("claim for a follow-up (%d): %v", i, err)
 		}
@@ -510,8 +523,40 @@ func TestClaimSlot(t *testing.T) {
 		t.Fatal("lock")
 	}
 	defer unlock()
-	if _, err := claimSlot(dir, path, other, false); err == nil {
+	if _, err := claimSlot(dir, path, other, nil); err == nil {
 		t.Fatal("a locked slot was claimed")
+	}
+}
+
+// A slot that another task moved to a descendant of the interrupted run's
+// base (the person merged a kept sy branch, and that task's agent worked on
+// top of it) passes the commit check; its hold mark tells it apart.
+func TestClaimSlotRejectsReuseAtDescendant(t *testing.T) {
+	dir := gitRepo(t)
+	g := git{dir}
+	base, _ := g.snapshot("base")
+	s, err := acquireSlot(dir, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := s.path
+	holdSlot(path, slotHold{Task: "t1", Step: "c", Token: "tok1"})
+	s.release()
+	// Another task takes the slot at a commit built on base.
+	tree, _ := g.out("rev-parse", base+"^{tree}")
+	desc, err := g.commitTree("commit-tree", tree, "-p", base, "-m", "on top")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resetSlot(path, desc); err != nil {
+		t.Fatal(err)
+	}
+	holdSlot(path, slotHold{Task: "t2", Step: "x", Token: "tok9"})
+	if err := slotHolds(dir, path, base); err != nil {
+		t.Fatalf("the commit check alone should pass here: %v", err)
+	}
+	if _, err := claimSlot(dir, path, base, &slotHold{Task: "t1", Step: "c", Token: "tok1"}); err == nil {
+		t.Fatal("claimed a slot another task reused")
 	}
 }
 

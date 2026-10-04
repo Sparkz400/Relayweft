@@ -350,7 +350,7 @@ func (o *Orchestrator) followUpSlot(t *task, s AgentSession) (sl *slot, loc step
 	if path == "" || !within(s.Dir, path) {
 		return nil, loc, "it ran in no pool worktree of this repo"
 	}
-	sl, err := claimSlot(t.root, path, t.snapshot, false)
+	sl, err := claimSlot(t.root, path, t.snapshot, nil)
 	if err != nil {
 		return nil, loc, err.Error()
 	}

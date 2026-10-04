@@ -1270,7 +1270,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		// sy stopped while this step's agent worked in a pool worktree:
 		// its half-done edits are there, as changes against prev.Base.
 		// Continue in that worktree, as it is.
-		cs, err := claimSlot(rp.root, prev.Slot, prev.Base, true)
+		cs, err := claimSlot(rp.root, prev.Slot, prev.Base, &slotHold{Task: t.state.ID, Step: st.ID, Token: prev.Token})
 		if err == nil {
 			s, base = cs, prev.Base
 			o.logf("%s: continuing in %s, which holds the edits its agent made before sy stopped", st.ID, prev.Slot)
@@ -1643,6 +1643,8 @@ func (o *Orchestrator) resumeStep(ctx context.Context, t *task, step router.Step
 	switch {
 	case prev.Session == "":
 		why = "its CLI had not reported a session yet"
+	case !runner.ValidSessionID(prev.Session):
+		why = "the saved session id is not valid"
 	case !samePath(prev.Dir, loc.dir) || !samePath(prev.Slot, loc.slot) || prev.Base != loc.base:
 		why = "the step works in another folder now"
 	case !configured || pc.Disabled || t.runners[prev.Provider] == nil:

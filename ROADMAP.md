@@ -174,7 +174,9 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 **Remaining gaps:**
 - **2.3 Tests:** Codex runs commands in its own sandbox, not from an allowlist, so `verify.commands` can only restrict Claude. Codex offers no allowlist, so this is a limit of the CLI.
 - **2.4 Follow-ups:** a Codex agent that ran in a pool worktree is still resumed from the main tree (Codex finds its sessions anywhere). Its history names the worktree's paths.
-- **2.5 Resume:** other tasks leave a worktree with half-done edits alone for 7 days while its task is interrupted. After that, after `sy clean`, or for a cancelled task, the step starts over from the tree.
+- **2.5 Resume:**
+  - Other tasks leave a worktree with half-done edits alone for 7 days, until its task is resumed or undone. After that, or after `sy clean`, the step starts over from the tree.
+  - On macOS the agent of a killed `sy` keeps running in its worktree. `sy` cannot safely stop it there, so the step starts over in another worktree.
 - **2.8 Distribution:**
   - Code signing needs a certificate.
   - The Scoop and winget manifests must be rendered after each release.

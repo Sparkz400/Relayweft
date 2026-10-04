@@ -145,6 +145,10 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	if err != nil {
 		return fail(fmt.Errorf("%s CLI %q not found on PATH: %w", x.Provider, x.Cfg.Command, err))
 	}
+	if s.Resume != "" && !ValidSessionID(s.Resume) {
+		// It came from a saved file: never let it become an option.
+		return fail(fmt.Errorf("%s: session id %q is not safe to pass on a command line", x.Provider, clipStr(s.Resume, 40)))
+	}
 	if x.precheck != nil {
 		if err := x.precheck(s); err != nil {
 			return fail(fmt.Errorf("%s: %w", x.Provider, err))

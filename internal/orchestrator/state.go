@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/proc"
 )
 
@@ -55,6 +58,8 @@ type StepRun struct {
 	Base    string    `json:"base,omitempty"`
 	Attempt int       `json:"attempt"`
 	Started time.Time `json:"started"`
+	// Token identifies this run in its slot's hold mark (holds.go).
+	Token string `json:"token,omitempty"`
 }
 
 // TaskState is the persisted progress of one task.
@@ -88,6 +93,9 @@ func (s *TaskState) setRunning(id string, r StepRun) {
 	if s == nil {
 		return
 	}
+	if r.Slot != "" && r.Token == "" {
+		r.Token = newToken()
+	}
 	stateMu.Lock()
 	if s.Running == nil {
 		s.Running = map[string]StepRun{}
@@ -96,8 +104,8 @@ func (s *TaskState) setRunning(id string, r StepRun) {
 	stateMu.Unlock()
 	s.save()
 	if r.Slot != "" {
-		// Keep its half-done edits there if sy dies (slotHeld).
-		holdSlot(r.Slot, s.ID, id)
+		// Keep its half-done edits there if sy dies (holds.go).
+		holdSlot(r.Slot, slotHold{Task: s.ID, Step: id, Token: r.Token})
 	}
 }
 
@@ -186,9 +194,8 @@ func (s *TaskState) save() {
 	if err != nil {
 		return
 	}
-	tmp := statePath(s.ID) + ".tmp"
-	if os.WriteFile(tmp, data, 0o644) == nil {
-		os.Rename(tmp, statePath(s.ID))
+	if err := writeFileAtomic(statePath(s.ID), data); err != nil {
+		diag.Logf("task state %s not saved: %v", s.ID, err)
 	}
 }
 
@@ -237,15 +244,34 @@ func (s TaskState) Interrupted() bool {
 
 // LoadTask reads one task state.
 func LoadTask(id string) (*TaskState, error) {
-	data, err := os.ReadFile(statePath(id))
-	if err != nil {
+	s, err := readTask(id)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("no task %q (sy history lists them)", id)
 	}
-	var s TaskState
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, err
+	return s, err
+}
+
+// readTask reads one task state; the error wraps fs.ErrNotExist when there
+// is none. A read that fails while a save replaces the file is retried.
+func readTask(id string) (*TaskState, error) {
+	var err error
+	for i := 0; i < 4; i++ {
+		var data []byte
+		stateMu.Lock() // not while this process replaces it
+		data, err = readRetry(statePath(id))
+		stateMu.Unlock()
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+		if err == nil {
+			var s TaskState
+			if err = json.Unmarshal(data, &s); err == nil {
+				return &s, nil
+			}
+		}
+		time.Sleep(time.Duration(i+1) * 20 * time.Millisecond)
 	}
-	return &s, nil
+	return nil, err
 }
 
 // History lists task states, newest first; dir filters by project ("" = all).

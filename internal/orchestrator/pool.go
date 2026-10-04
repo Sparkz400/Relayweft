@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,6 +78,31 @@ func (s *slot) release() {
 // the slot must not share it with them.
 func pidFile(slot string) string { return slot + ".pid" }
 
+// claimWait is how long a resume waits for a slot another sy locked for a
+// moment (to look at it).
+var claimWait = 5 * time.Second
+
+// lockSlotWait is lockSlot that waits up to d while the lock is held by
+// someone else; a leftover agent still running in the slot is an error at
+// once.
+func lockSlotWait(path string, d time.Duration) (func(), error) {
+	deadline := time.Now().Add(d)
+	for {
+		unlock, ok := proc.TryLock(path + ".lock")
+		if ok {
+			if !proc.ReapOrphans(pidFile(path)) {
+				unlock()
+				return nil, fmt.Errorf("%s: an agent of an earlier sy is still running there", path)
+			}
+			return unlock, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%s is in use (another sy)", path)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 // lockSlot locks a slot and makes sure no leftover agent of a crashed sy is
 // still running in it.
 func lockSlot(path string) (unlock func(), ok bool) {
@@ -105,13 +129,18 @@ func acquireSlot(root, commit string) (*slot, error) {
 	var firstErr error
 	for i := 0; i < maxPoolSlots; i++ {
 		path := filepath.Join(dir, strconv.Itoa(i))
+		if held, _ := holdState(path); held {
+			// It holds an interrupted step's edits. Checked before
+			// locking too: a resume claiming it must not find it locked.
+			continue
+		}
 		unlock, ok := lockSlot(path)
 		if !ok {
 			continue
 		}
 		if slotHeld(path) {
 			unlock()
-			continue // it holds an interrupted step's edits
+			continue
 		}
 		if err := prepareSlot(root, path, commit); err != nil {
 			unlock()
@@ -221,20 +250,27 @@ func slotOf(root, dir string) string {
 // free again (the OS released it), and agents it left running in the slot
 // are dealt with as in acquireSlot.
 //
-// With keep, the slot must still hold the work of an agent that started at
-// commit: it is used as it is (nothing is reset or cleaned), and an error
-// says why it cannot be (in use, gone, or reused since). Without keep, the
-// slot is moved to commit like acquireSlot does, and recreated at the same
-// path if needed.
-func claimSlot(root, path, commit string, keep bool) (*slot, error) {
+// With keep, the slot must still hold the work of the step run that keep
+// names (its hold mark, holds.go) and that started at commit: it is used as
+// it is (nothing is reset or cleaned), and an error says why it cannot be
+// (in use, gone, or reused since). Another sy may lock the slot for a
+// moment to look at its hold mark, so a busy lock is waited for a little.
+// Without keep, the slot is moved to commit like acquireSlot does, and
+// recreated at the same path if needed.
+func claimSlot(root, path, commit string, keep *slotHold) (*slot, error) {
 	if s := slotOf(root, path); s == "" || !samePath(s, path) {
 		return nil, fmt.Errorf("%s is not a pool worktree of this repo", path)
 	}
-	unlock, ok := lockSlot(path)
-	if !ok {
-		return nil, fmt.Errorf("%s is in use (another sy, or an agent still running there)", path)
-	}
-	if keep {
+	var unlock func()
+	if keep != nil {
+		var err error
+		if unlock, err = lockSlotWait(path, claimWait); err != nil {
+			return nil, err
+		}
+		if err := ownHold(path, *keep); err != nil {
+			unlock()
+			return nil, err
+		}
 		if err := slotHolds(root, path, commit); err != nil {
 			unlock()
 			return nil, err
@@ -243,6 +279,10 @@ func claimSlot(root, path, commit string, keep bool) (*slot, error) {
 			clearStaleIndexLock(gd)
 		}
 	} else {
+		var ok bool
+		if unlock, ok = lockSlot(path); !ok {
+			return nil, fmt.Errorf("%s is in use (another sy, or an agent still running there)", path)
+		}
 		if slotHeld(path) {
 			unlock()
 			return nil, fmt.Errorf("%s holds the half-done edits of an interrupted task (sy resume)", path)
@@ -258,56 +298,6 @@ func claimSlot(root, path, commit string, keep bool) (*slot, error) {
 	}
 	touch(path)
 	return &slot{path: path, unlock: unlock, untrack: proc.TrackDir(path, pidFile(path))}, nil
-}
-
-// A pool worktree in which a step's agent works is marked as held
-// (<slot>.hold names the task and step) until the step ends. If sy dies,
-// the mark keeps the step's half-done edits there for sy resume: other
-// tasks do not take or prune the worktree while that task is interrupted
-// and the step is recorded in it, for at most holdMaxAge. sy clean still
-// removes it.
-const holdMaxAge = 7 * 24 * time.Hour
-
-type slotHold struct {
-	Task string `json:"task"`
-	Step string `json:"step"`
-}
-
-func holdPath(slot string) string { return slot + ".hold" }
-
-// holdSlot marks slot as holding the work of task's step (the slot lock is
-// held).
-func holdSlot(slot, task, step string) {
-	if data, err := json.Marshal(slotHold{task, step}); err == nil {
-		os.WriteFile(holdPath(slot), data, 0o644)
-	}
-}
-
-// unholdSlot removes the mark if it is task's step's.
-func unholdSlot(slot, task, step string) {
-	var h slotHold
-	if data, err := os.ReadFile(holdPath(slot)); err == nil && json.Unmarshal(data, &h) == nil && h == (slotHold{task, step}) {
-		os.Remove(holdPath(slot))
-	}
-}
-
-// slotHeld reports whether slot holds an interrupted step's edits; a mark
-// that no longer applies is removed. The caller holds the slot lock.
-func slotHeld(slot string) bool {
-	data, err := os.ReadFile(holdPath(slot))
-	if err != nil {
-		return false
-	}
-	var h slotHold
-	if json.Unmarshal(data, &h) == nil && h.Task != "" {
-		if st, err := LoadTask(h.Task); err == nil && st.Status == "running" {
-			if r, ok := st.Running[h.Step]; ok && samePath(r.Slot, slot) && time.Since(r.Started) < holdMaxAge {
-				return true
-			}
-		}
-	}
-	os.Remove(holdPath(slot))
-	return false
 }
 
 // slotHolds reports (as an error) whether the slot at path is still the
@@ -742,6 +732,9 @@ func PrunePools(maxIdle time.Duration) (removed int, freed uint64) {
 			}
 			path := filepath.Join(pd, s.Name())
 			if time.Since(lastUse(path)) < maxIdle {
+				continue
+			}
+			if held, _ := holdState(path); held {
 				continue
 			}
 			unlock, ok := lockSlot(path)
