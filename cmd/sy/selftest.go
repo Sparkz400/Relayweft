@@ -21,6 +21,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sparkz400/switchyard/internal/diag"
+	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/runner"
 	"gopkg.in/yaml.v3"
@@ -553,6 +554,31 @@ wait:
 	}
 	t.check(markOK, "resume", "sy resume finished the task in %s without re-running the planner or finished steps",
 		time.Since(began).Round(100*time.Millisecond))
+	// The interrupted step continued its agent's own session, in the folder
+	// it ran in (a pool worktree), instead of starting over.
+	want := fmt.Sprintf("resume:selftest-%d", agent)
+	continued, fresh := false, false
+	for _, c := range readCalls(stateDir)[before:] {
+		continued = continued || c == want
+		fresh = fresh || c == "combine"
+	}
+	wdKilled, wdResumed := fileText(filepath.Join(stateDir, "agent.wd")), fileText(filepath.Join(stateDir, "resume.wd"))
+	switch {
+	case !gone && runtime.GOOS != "windows" && runtime.GOOS != "linux" && fresh && !continued:
+		// Without /proc, sy cannot tell the killed sy's agent from a
+		// program that got its pid since, so it does not kill it, and
+		// it never resumes into a worktree an agent still works in.
+		t.check(markInfo, "resume", "the killed sy's agent still ran in its worktree on %s, so a fresh agent took the step over in another one", runtime.GOOS)
+	case !continued || fresh:
+		t.check(markFail, "resume", "the interrupted step did not continue its agent's session %s (calls: %s)", strings.TrimPrefix(want, "resume:"),
+			strings.Join(readCalls(stateDir)[before:], ", "))
+		return false
+	case wdKilled == "" || !orchestrator.SamePath(wdKilled, wdResumed):
+		t.check(markFail, "resume", "the interrupted step's session was continued in %s, not where it ran (%s)", wdResumed, wdKilled)
+		return false
+	default:
+		t.check(markOK, "resume", "the interrupted step continued its agent's session in the folder it ran in")
+	}
 	if !gone && runtime.GOOS != "windows" {
 		if waitGone(agent, 5*time.Second) {
 			t.check(markOK, "orphans", "the next sy reaped the agent sy left behind")
@@ -706,6 +732,13 @@ func cmdSelftestAgent() {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	sid := fmt.Sprintf("selftest-%d", os.Getpid())
+	resumed := ""
+	for i, a := range os.Args {
+		if a == "--resume" && i+1 < len(os.Args) {
+			resumed = os.Args[i+1]
+			sid = resumed // a resumed session keeps its id
+		}
+	}
 	enc.Encode(map[string]any{"type": "system", "subtype": "init", "session_id": sid, "model": "selftest"})
 	result := func(text string) {
 		enc.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": text,
@@ -729,7 +762,28 @@ func cmdSelftestAgent() {
 		os.Exit(1)
 	}
 
+	combine := func() {
+		a, errA := os.ReadFile(filepath.Join(wd, filepath.FromSlash(stFileA)))
+		b, errB := os.ReadFile(filepath.Join(wd, filepath.FromSlash(stFileB)))
+		if err := errors.Join(errA, errB); err != nil {
+			fail(fmt.Errorf("the finished steps' files are not here: %w", err))
+		}
+		norm := func(b []byte) string { return strings.ReplaceAll(string(b), "\r\n", "\n") }
+		if err := write(stFileC, norm(a)+norm(b)); err != nil {
+			fail(err)
+		}
+		result("combined")
+	}
+
 	switch {
+	case strings.Contains(prompt, runner.MarkerResume):
+		// sy resume continues the combine step's session (the only step
+		// that is interrupted): record which session and where.
+		note("resume:" + resumed)
+		if dir != "" {
+			os.WriteFile(filepath.Join(dir, "resume.wd"), []byte(wd), 0o644)
+		}
+		combine()
 	case strings.Contains(prompt, runner.MarkerPlanReview), strings.Contains(prompt, runner.MarkerFinalReview),
 		strings.Contains(prompt, runner.MarkerErrorReview):
 		note("review")
@@ -755,21 +809,13 @@ func cmdSelftestAgent() {
 		if os.Getenv(envSelftestHang) == "1" && dir != "" {
 			// Wait to be killed with sy; the pid tells the test who to watch.
 			note("hang")
+			os.WriteFile(filepath.Join(dir, "agent.wd"), []byte(wd), 0o644)
 			os.WriteFile(filepath.Join(dir, "agent.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
 			time.Sleep(10 * time.Minute)
 			fail(errors.New("selftest agent: was not killed within 10 minutes"))
 		}
 		note("combine")
-		a, errA := os.ReadFile(filepath.Join(wd, filepath.FromSlash(stFileA)))
-		b, errB := os.ReadFile(filepath.Join(wd, filepath.FromSlash(stFileB)))
-		if err := errors.Join(errA, errB); err != nil {
-			fail(fmt.Errorf("the finished steps' files are not here: %w", err))
-		}
-		norm := func(b []byte) string { return strings.ReplaceAll(string(b), "\r\n", "\n") }
-		if err := write(stFileC, norm(a)+norm(b)); err != nil {
-			fail(err)
-		}
-		result("combined")
+		combine()
 	default:
 		if m := reWrite.FindStringSubmatch(prompt); m != nil {
 			note("write")

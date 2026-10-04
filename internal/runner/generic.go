@@ -69,6 +69,11 @@ func GenericArgs(cfg config.ProviderCfg, s Spec) []string {
 // before it goes back on a command line (cmd.exe parses npm .cmd shims).
 var sessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$`)
 
+// ValidSessionID reports whether a session id (from a CLI's output or a
+// saved file) is plain enough to pass on a command line: letters, digits
+// and . _ : @ + -, not starting with - (it would read as an option).
+func ValidSessionID(id string) bool { return sessionID.MatchString(id) }
+
 // genericPrecheck refuses work the described CLI cannot do safely: writing
 // without write_args, read-only work without a read-only mode, and a resume
 // it has no arguments for.
@@ -407,4 +412,12 @@ func clipStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// sessionID reports a session only for a CLI sy can resume.
+func (p *jsonRuleParser) sessionID() string {
+	if len(p.g.ResumeArgs) > 0 && sessionID.MatchString(p.session) {
+		return p.session
+	}
+	return ""
 }

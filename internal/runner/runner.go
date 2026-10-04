@@ -45,6 +45,11 @@ type Spec struct {
 	// MCP is the run's MCP servers. Exec fills it from its MCP config for
 	// the spec's role; callers leave it nil.
 	MCP *MCPRun
+	// OnSession, when set, is called with the CLI's session id as soon as
+	// the CLI reports it (Claude's init line, Codex's thread.started), long
+	// before the run ends: a step whose sy dies mid-run can resume that
+	// session. It runs on the runner's goroutine.
+	OnSession func(id string)
 }
 
 // Result is what an agent run produced.
@@ -109,6 +114,8 @@ type (
 	// stderrReader reads the CLI's stderr tail before Finish (token counts
 	// some CLIs print there).
 	stderrReader interface{ Stderr(string) }
+	// sessionReporter knows the CLI's session id before the run ends.
+	sessionReporter interface{ sessionID() string }
 )
 
 func (x *Exec) kind() string {
@@ -137,6 +144,10 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	path, err := proc.Resolve(x.Cfg.Command)
 	if err != nil {
 		return fail(fmt.Errorf("%s CLI %q not found on PATH: %w", x.Provider, x.Cfg.Command, err))
+	}
+	if s.Resume != "" && !ValidSessionID(s.Resume) {
+		// It came from a saved file: never let it become an option.
+		return fail(fmt.Errorf("%s: session id %q is not safe to pass on a command line", x.Provider, clipStr(s.Resume, 40)))
 	}
 	if x.precheck != nil {
 		if err := x.precheck(s); err != nil {
@@ -218,6 +229,8 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		}
 	}
 	_, keepBlank := p.(blankKeeper)
+	sr, _ := p.(sessionReporter)
+	reported := ""
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 64<<10), 16<<20)
 	for sc.Scan() {
@@ -226,6 +239,12 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 			continue
 		}
 		handle(p.Line(line))
+		if sr != nil && s.OnSession != nil {
+			if id := sr.sessionID(); id != "" && id != reported {
+				reported = id
+				s.OnSession(id)
+			}
+		}
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, os.ErrClosed) {
 		stderr.Write([]byte("\nread stdout: " + err.Error()))

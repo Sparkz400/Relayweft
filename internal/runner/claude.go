@@ -377,3 +377,5 @@ func (p *claudeParser) Finish(r *Result) {
 		r.Err = errors.New(p.fatal)
 	}
 }
+
+func (p *claudeParser) sessionID() string { return p.session }
