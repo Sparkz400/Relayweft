@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -107,6 +108,9 @@ type HistoryCommit struct {
 	SHA, Parent string
 	Message     string
 	Files       []HistoryFile
+	// Uncounted: only the file names were read; Lines and Binary are
+	// unknown.
+	Uncounted bool
 }
 
 // HistoryFile is one file a commit changed; Lines is added plus deleted
@@ -117,16 +121,53 @@ type HistoryFile struct {
 	Binary bool
 }
 
+// historyGit keeps the history scan cheap on big repos (a pack of many GB
+// full of large binaries made `git log --numstat` grow to ~5 GB): a small
+// window into the packs instead of mapping all of them, a small delta
+// cache, and blobs over 1 MB count as binary without being read. With
+// renames off a name list compares trees only, never file content.
+var historyGit = []string{"-c", "core.quotePath=false", "-c", "core.bigFileThreshold=1m",
+	"-c", "core.packedGitLimit=256m", "-c", "core.packedGitWindowSize=16m", "-c", "core.deltaBaseCacheLimit=32m",
+	"-c", "diff.renames=false"}
+
 // History returns up to limit non-merge commits reachable from HEAD, newest
 // first. Commits with a path git had to quote (tabs, newlines, quotes) are
-// left out.
-func (b *BenchWorkspace) History(limit int) ([]HistoryCommit, error) {
-	out, err := git{b.root}.run(nil, nil, "-c", "core.quotePath=false", "log", "--no-merges", "--no-renames",
-		"-n", strconv.Itoa(limit), "--format=%x1e%H%x1f%P%x1f%B%x1f", "--numstat", "HEAD", "--")
+// left out. Only file names are read for all of them; the line counts only
+// for the commits count accepts (the rest stay Uncounted), so git never
+// diffs the content of commits that cannot become tasks.
+func (b *BenchWorkspace) History(limit int, count func(HistoryCommit) bool) ([]HistoryCommit, error) {
+	g := git{b.root}
+	out, err := g.run(nil, nil, append(slices.Clone(historyGit), "log", "--no-merges", "--no-renames",
+		"-n", strconv.Itoa(limit), "--format=%x1e%H%x1f%P%x1f%B%x1f", "--name-only", "HEAD", "--")...)
 	if err != nil {
 		return nil, err
 	}
-	return parseHistory(out), nil
+	list := parseHistory(out)
+	var want strings.Builder
+	for i := range list {
+		list[i].Uncounted = true
+		if count(list[i]) {
+			want.WriteString(list[i].SHA + "\n")
+		}
+	}
+	if want.Len() == 0 {
+		return list, nil
+	}
+	out, err = g.run(nil, []byte(want.String()), append(slices.Clone(historyGit), "log", "--no-walk=unsorted", "--stdin",
+		"--no-renames", "--no-textconv", "--no-ext-diff", "--format=%x1e%H%x1f%P%x1f%x1f", "--numstat", "--")...)
+	if err != nil {
+		return nil, err
+	}
+	counted := map[string][]HistoryFile{}
+	for _, c := range parseHistory(out) {
+		counted[c.SHA] = c.Files
+	}
+	for i, c := range list {
+		if files, ok := counted[c.SHA]; ok {
+			list[i].Files, list[i].Uncounted = files, false
+		}
+	}
+	return list, nil
 }
 
 func parseHistory(out string) []HistoryCommit {
@@ -144,6 +185,9 @@ records:
 		c := HistoryCommit{SHA: strings.TrimSpace(parts[0]), Parent: parents[0], Message: strings.TrimSpace(parts[2])}
 		for _, line := range strings.Split(parts[3], "\n") {
 			f := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 3)
+			if len(f) == 1 && f[0] != "" {
+				f = []string{"0", "0", f[0]} // --name-only
+			}
 			if len(f) != 3 {
 				continue
 			}

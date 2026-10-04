@@ -603,11 +603,47 @@ func TestWatchTaskFencesEverything(t *testing.T) {
 			t.Errorf("%q not (only) fenced:\n%s", bad, task)
 		}
 	}
-	if got := cleanLog("cut line\n\x1b[1;31mred\x1b[0m\r\nok\x07\n"); got != "red\nok" {
+	if got := cleanLog("first line\n\x1b[1;31mred\x1b[0m\r\nok\x07\n"); got != "first line\nred\nok" {
 		t.Errorf("cleanLog = %q", got)
 	}
 	if got := tailText("a\nbb\ncc\n", 5); got != "[...]\ncc\n" {
 		t.Errorf("tailText = %q", got)
+	}
+}
+
+// A job log that fits in the tail keeps its first line (it was dropped as
+// if cut); a longer one starts at a whole line.
+func TestWatchJobLogKeepsFirstLine(t *testing.T) {
+	trace := "$ go test ./...\nFAIL TestX\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch p := strings.TrimPrefix(r.URL.EscapedPath(), "/api/v4/projects/g%2Fp"); p {
+		case "/pipelines":
+			io.WriteString(w, `[{"id":1,"ref":"b"}]`)
+		case "/pipelines/1/jobs":
+			io.WriteString(w, `[{"id":9,"name":"unit","stage":"test","status":"failed"}]`)
+		case "/jobs/9/trace":
+			io.WriteString(w, trace)
+		default:
+			io.WriteString(w, "[]")
+		}
+	}))
+	defer srv.Close()
+	repo := forge.Repo{Kind: forge.GitLab, Host: "gitlab.com", Owner: "g", Name: "p"}
+	c := forge.New(forge.GitLab, srv.URL+"/api/v4", "tok", nil)
+	items, err := watchItems(c, repo, &forge.Pull{Number: 3, HeadSHA: "abc"}, "me")
+	if err != nil || len(items) != 1 {
+		t.Fatalf("%+v %v", items, err)
+	}
+	if !strings.Contains(items[0].data, "log (last lines):\n$ go test ./...\nFAIL TestX\n") {
+		t.Errorf("short log lost its first line:\n%s", items[0].data)
+	}
+	trace = strings.Repeat("x", 7000) + "\nnext line\n" + strings.Repeat("ok line\n", 700) + "FAIL TestX\n"
+	items, err = watchItems(c, repo, &forge.Pull{Number: 3, HeadSHA: "abc"}, "me")
+	if err != nil || len(items) != 1 {
+		t.Fatalf("%+v %v", items, err)
+	}
+	if !strings.Contains(items[0].data, "log (last lines):\nnext line\nok line\n") || strings.Contains(items[0].data, "xx") {
+		t.Errorf("cut log does not start at a whole line:\n%s", items[0].data)
 	}
 }
 

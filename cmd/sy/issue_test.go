@@ -24,13 +24,27 @@ func parseIssueFlags(t *testing.T, args ...string) (*issueFlags, *flag.FlagSet) 
 
 func TestIssueTaskText(t *testing.T) {
 	is := forge.Issue{Number: 12, Title: " Crash on empty input ", Body: "Steps:\r\n1. run it\r\n", Labels: []string{"bug", "sy"}}
-	got := issueTask(forge.GitHub, is, []forge.Comment{{Body: "also on Windows", Author: "bob"}})
+	ghRepo := forge.Repo{Kind: forge.GitHub, Host: "github.com", Owner: "o", Name: "r"}
+	got := issueTask(ghRepo, is, []forge.Comment{{Body: "also on Windows", Author: "bob"}})
 	want := "Fix GitHub issue #12: Crash on empty input\n\nSteps:\n1. run it\n\nLabels: bug, sy\n\nComments:\n\n@bob wrote:\nalso on Windows"
 	if got != want {
 		t.Fatalf("got:\n%q\nwant:\n%q", got, want)
 	}
-	if got := issueTask(forge.GitHub, forge.Issue{Number: 1, Title: "T"}, nil); got != "Fix GitHub issue #1: T" {
+	if got := issueTask(ghRepo, forge.Issue{Number: 1, Title: "T"}, nil); got != "Fix GitHub issue #1: T" {
 		t.Fatalf("%q", got)
+	}
+}
+
+// An issue on Forgejo (Codeberg, or a host in FORGEJO_HOST) is a Forgejo
+// issue, not a Gitea one.
+func TestIssueTaskNamesForgejo(t *testing.T) {
+	t.Setenv("FORGEJO_HOST", "https://git.example.org:3000")
+	t.Setenv("GITEA_HOST", "gitea.lan")
+	for host, want := range map[string]string{"codeberg.org": "Forgejo", "git.example.org": "Forgejo", "gitea.lan": "Gitea"} {
+		repo := forge.Repo{Kind: forge.Gitea, Host: host, Owner: "o", Name: "r"}
+		if got := issueTask(repo, forge.Issue{Number: 4, Title: "T"}, nil); got != "Fix "+want+" issue #4: T" {
+			t.Errorf("%s: %q", host, got)
+		}
 	}
 }
 

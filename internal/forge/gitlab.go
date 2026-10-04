@@ -340,7 +340,7 @@ func (g *gitlab) FailedChecks(r Repo, sha string, logTail int) ([]Check, error) 
 			}
 			// Read more than the tail: the trace's markup is dropped first.
 			if log, err := g.tailOf(fmt.Sprintf("%s/jobs/%d/trace", glProject(r), j.ID), 4*logTail); err == nil {
-				c.Log = lastBytes(cleanGLTrace(log), logTail)
+				c.Log = lineTail(cleanGLTrace(log), logTail)
 			}
 			out = append(out, c)
 		}
@@ -374,14 +374,6 @@ func cleanGLTrace(s string) string {
 		out = append(out, l)
 	}
 	return strings.Join(out, "")
-}
-
-// lastBytes keeps the last n bytes of s.
-func lastBytes(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[len(s)-n:]
 }
 
 // reGLBot matches the users of project and group access tokens.

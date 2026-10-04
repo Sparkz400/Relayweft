@@ -175,6 +175,25 @@ func TestClosedByKeywords(t *testing.T) {
 	}
 }
 
+// A log tail drops a partial first line only when the log was cut.
+func TestLineTail(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"first\nsecond\n", 100, "first\nsecond\n"},       // fits: all of it
+		{"first\nsecond\n", 13, "first\nsecond\n"},        // exactly fits
+		{"first\nsecond\nthird\n", 13, "second\nthird\n"}, // cut at a line start
+		{"first\nsecond\nthird\n", 12, "third\n"},         // cut mid-line
+		{"0123456789", 4, "6789"},                         // one long line
+	} {
+		if got := lineTail(c.in, c.n); got != c.want {
+			t.Errorf("lineTail(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+	}
+}
+
 func TestRestMessage(t *testing.T) {
 	for in, want := range map[string]string{
 		`{"message":"404 Project Not Found"}`:                         "404 Project Not Found",

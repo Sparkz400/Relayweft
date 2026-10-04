@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -16,6 +17,8 @@ import (
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/switchyard/internal/sysload"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,7 +41,7 @@ const historyHeader = `# sy bench tasks from this repo's history (written by sy 
 # pipeline with that role on another route: that is what gives the learner
 # an alternative to the current route. Single-agent modes do not count.
 #
-# Run it with: sy bench --file %s
+# Run it with: %s
 `
 
 // historyLimits are the size limits for picking commits.
@@ -68,15 +71,14 @@ type historyOpts struct {
 	lim                historyLimits
 	hidden, noValidate bool
 	timeout            time.Duration
+	runCmd             string // how to run the written file
 }
 
 // benchFromHistory writes a bench file whose tasks are past multi-file
 // commits of the repo, each checked by the repo's tests with the commit's
-// test files in place.
+// test files in place. With --no-validate and no check command it only
+// lists the commits that fit.
 func benchFromHistory(c common, o historyOpts) error {
-	if _, err := os.Stat(o.out); err == nil {
-		return fmt.Errorf("%s exists (choose another with --file)", o.out)
-	}
 	store, dir, err := c.setup()
 	if err != nil {
 		return err
@@ -88,14 +90,28 @@ func benchFromHistory(c common, o historyOpts) error {
 		}
 		o.check = strings.Join(cmds, " && ")
 	}
-	if o.check == "" {
-		return fmt.Errorf("no test command found in verify.commands or the build files: pass --check \"<command>\"")
+	listOnly := o.check == "" && o.noValidate
+	if o.check == "" && !listOnly {
+		return fmt.Errorf("no test command found in verify.commands or the build files: pass --check \"<command>\" (or --no-validate to only list the commits)")
 	}
+	if _, err := os.Stat(o.out); err == nil && !listOnly {
+		return fmt.Errorf("%s exists (choose another with --file)", o.out)
+	}
+	o.runCmd = historyRunCmd(o.out, dir, c.dir != "")
 	ws, err := orchestrator.NewBenchWorkspace(dir)
 	if err != nil {
 		return err
 	}
-	commits, err := ws.History(o.scan)
+	oc := store.Get().Orchestrator
+	proc.SetLowPriority(oc.LowPriority)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	waitForMemory(ctx, oc, "reading the history")
+	// Names first; line counts only for the commits that can still fit.
+	commits, err := ws.History(o.scan, func(hc orchestrator.HistoryCommit) bool {
+		_, why := judgeHistory(hc, o.lim)
+		return why == ""
+	})
 	if err != nil {
 		return fmt.Errorf("reading the history: %w", err)
 	}
@@ -110,34 +126,44 @@ func benchFromHistory(c common, o historyOpts) error {
 	var picked []historyCandidate
 	if o.noValidate {
 		picked = cands[:min(o.count, len(cands))]
+		for _, h := range picked {
+			fmt.Printf("  %s %s (%d code files, %d lines; tests: %s)\n", h.short(), oneLine(h.subject(), 60), len(h.code), h.lines, oneLine(strings.Join(h.tests, ", "), 80))
+		}
+		if listOnly {
+			fmt.Println("no check command (verify.commands, the build files or --check): listed only, no file written")
+			return nil
+		}
 	} else {
 		unlock, err := ws.Lock()
 		if err != nil {
 			return err
 		}
 		defer unlock()
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer stop()
 		fmt.Printf("validating with %q: the check must pass on the commit and fail on its parent (in %s)\n", o.check, ws.Path)
+		skips := map[string]int{}
 		for _, h := range cands {
 			if len(picked) == o.count || ctx.Err() != nil {
 				break
 			}
+			waitForMemory(ctx, oc, "the next check")
 			fmt.Printf("  %s %s ... ", h.short(), oneLine(h.subject(), 60))
 			why := validateHistory(ctx, ws, h, o)
 			if why != "" {
 				fmt.Println("skip:", why)
+				skips[skipKind(why)]++
 				continue
 			}
 			fmt.Println("ok")
 			picked = append(picked, h)
 		}
-		if ctx.Err() != nil {
+		switch {
+		case len(picked) == 0 && ctx.Err() != nil:
+			return fmt.Errorf("cancelled before a commit passed validation")
+		case len(picked) == 0:
+			return noValidCommit(skips, o.setup)
+		case ctx.Err() != nil:
 			fmt.Println("cancelled; writing the tasks validated so far")
 		}
-	}
-	if len(picked) == 0 {
-		return fmt.Errorf("no commit passed validation (does the check need a --setup command, like \"npm ci\"?)")
 	}
 	data, err := historyBenchFile(picked, o, historyVariants(store.Get()))
 	if err != nil {
@@ -149,41 +175,173 @@ func benchFromHistory(c common, o historyOpts) error {
 	if len(picked) < o.count {
 		fmt.Printf("note: found %d of the %d tasks asked for; --scan looks further back\n", len(picked), o.count)
 	}
-	fmt.Printf("wrote %d task(s) to %s\nnext: read the prompts, then run `sy bench --file %s`\n", len(picked), o.out, o.out)
+	fmt.Printf("wrote %d task(s) to %s\nnext: read the prompts, then run `%s`\n", len(picked), o.out, o.runCmd)
 	diag.Logf("bench from history: %d candidates, %d picked", len(cands), len(picked))
 	return nil
 }
+
+// historyRunCmd is the command that runs the bench file out of the project
+// in dir. It names the project (--dir) unless sy bench finds it on its own:
+// a file inside the project, written without --dir.
+func historyRunCmd(out, dir string, dirFlag bool) string {
+	abs, err := filepath.Abs(out)
+	if err != nil {
+		abs = out
+	}
+	// Compare real paths: the working directory can be the same folder by
+	// another name (macOS: /var is /private/var).
+	rel, err := filepath.Rel(realPath(dir), filepath.Join(realPath(filepath.Dir(abs)), filepath.Base(abs)))
+	inside := err == nil && !filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	if inside && !dirFlag {
+		return "sy bench --file " + argQuote(out)
+	}
+	return "sy bench --dir " + argQuote(dir) + " --file " + argQuote(abs)
+}
+
+// realPath is p with symlinks resolved, or p when that fails.
+func realPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
+// argQuote quotes a path for a command line when it needs it.
+func argQuote(s string) string {
+	if s == "" || strings.ContainsAny(s, " \t\"'&|<>;()$`") {
+		return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+	}
+	return s
+}
+
+// benchLoad reads the machine's load (tests swap it); benchPoll is how
+// often a held step looks again.
+var (
+	benchLoad = sysload.NewSampler(2 * time.Second).Get
+	benchPoll = 5 * time.Second
+)
+
+// waitForMemory holds the next step while less RAM is free than
+// orchestrator.min_free_memory_mb, like sy holds new agents: at most
+// busy_max_wait, then it goes on anyway.
+func waitForMemory(ctx context.Context, oc config.OrchestratorCfg, what string) {
+	if oc.MinFreeMemoryMB <= 0 {
+		return
+	}
+	low := func() (bool, uint64) {
+		s := benchLoad()
+		return s.MemOK && s.MemFree < uint64(oc.MinFreeMemoryMB)<<20, s.MemFree >> 20
+	}
+	isLow, free := low()
+	if !isLow {
+		return
+	}
+	fmt.Printf("only %d MB RAM free (< min_free_memory_mb %d): holding %s until memory frees up (at most %s)\n",
+		free, oc.MinFreeMemoryMB, what, oc.BusyMaxWait.D())
+	deadline := time.Now().Add(oc.BusyMaxWait.D())
+	for isLow && time.Now().Before(deadline) && ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+		case <-time.After(benchPoll):
+		}
+		isLow, _ = low()
+	}
+	if isLow && ctx.Err() == nil {
+		fmt.Printf("RAM still low after %s: going on with %s\n", oc.BusyMaxWait.D(), what)
+	}
+}
+
+// Why validation skipped a commit.
+const (
+	skipFailsOnCommit = "the check fails on the commit itself"
+	skipPassesBefore  = "the check already passes before the change"
+)
 
 // validateHistory checks that a commit makes a meaningful task: its check
 // passes on the commit and fails on the parent with the commit's tests in
 // place. It returns why not, or "".
 func validateHistory(ctx context.Context, ws *orchestrator.BenchWorkspace, h historyCandidate, o historyOpts) string {
-	run := func(base string, tests *benchTests) (bool, string) {
+	// run reports checked=false when the check did not get to run to the
+	// end (setup failed, cancelled, timed out).
+	run := func(base string, tests *benchTests) (ok, checked bool, why string) {
 		rctx, cancel := context.WithTimeout(ctx, o.timeout)
 		defer cancel()
 		t := benchTask{Check: o.check, Base: base, Tests: tests}
-		if note := prepareBenchRun(rctx, ws, base, o.setup, t); note != "" {
-			return false, note
+		note := prepareBenchRun(rctx, ws, base, o.setup, t)
+		ok, out := false, ""
+		if note == "" {
+			ok, out = benchCheck(rctx, ws, t)
 		}
-		ok, out := benchCheck(rctx, ws, t)
 		switch {
 		case ctx.Err() != nil:
-			return false, "cancelled"
+			return false, false, "cancelled"
 		case rctx.Err() != nil:
-			return false, "timed out"
+			return false, false, "timed out"
+		case note != "":
+			return false, false, note
 		}
-		return ok, lastLine(out)
+		return ok, true, lastLine(out)
 	}
-	if ok, why := run(h.SHA, nil); !ok {
-		return "the check fails on the commit itself: " + why
+	switch ok, checked, why := run(h.SHA, nil); {
+	case !checked:
+		return "on the commit: " + why
+	case !ok:
+		return skipFailsOnCommit + ": " + why
 	}
-	switch ok, why := run(h.Parent, &benchTests{From: h.SHA, Files: h.tests}); {
-	case why == "cancelled" || why == "timed out":
+	switch ok, checked, why := run(h.Parent, &benchTests{From: h.SHA, Files: h.tests}); {
+	case !checked:
 		return "on the parent: " + why
 	case ok:
-		return "the check already passes before the change"
+		return skipPassesBefore
 	}
 	return ""
+}
+
+// skipKind groups validation skips for the final hint.
+func skipKind(why string) string {
+	switch {
+	case strings.HasPrefix(why, skipFailsOnCommit):
+		return "fails"
+	case why == skipPassesBefore:
+		return "passes"
+	case strings.Contains(why, "setup failed"):
+		return "setup"
+	case strings.HasSuffix(why, "timed out"):
+		return "timeout"
+	}
+	return "other"
+}
+
+// noValidCommit says why no commit passed validation, by the most common
+// reason.
+func noValidCommit(skips map[string]int, setup string) error {
+	total, top := 0, "other"
+	for _, k := range []string{"fails", "setup", "passes", "timeout", "other"} {
+		total += skips[k]
+		if skips[k] > skips[top] {
+			top = k
+		}
+	}
+	n := skips[top]
+	of := fmt.Sprintf("%d of the %d commits tried", n, total)
+	if n == total {
+		of = fmt.Sprintf("all %d commits tried", total)
+	}
+	switch {
+	case total == 0 || top == "other":
+		return fmt.Errorf("no commit passed validation: see the reasons above")
+	case top == "fails":
+		hint := ""
+		if setup == "" {
+			hint = "; if it only needs its dependencies installed, add a --setup command like \"npm ci\""
+		}
+		return fmt.Errorf("no commit passed validation: the check already fails on %s, with the commit's own change in place (tests that were failing then?): fix or narrow the check (--check) first%s", of, hint)
+	case top == "setup":
+		return fmt.Errorf("no commit passed validation: the --setup command failed on %s: fix it first", of)
+	case top == "passes":
+		return fmt.Errorf("no commit passed validation: the check already passes before the change on %s (its tests do not catch the change): try another --check, or --scan further back", of)
+	}
+	return fmt.Errorf("no commit passed validation: the check timed out on %s: raise --check-timeout", of)
 }
 
 // historyTask turns a candidate into a bench task.
@@ -215,8 +373,12 @@ func historyBenchFile(picked []historyCandidate, o historyOpts, variants []strin
 	for _, h := range picked {
 		bf.Tasks = append(bf.Tasks, historyTask(h, o))
 	}
+	runCmd := o.runCmd
+	if runCmd == "" {
+		runCmd = "sy bench --file " + argQuote(o.out)
+	}
 	var b bytes.Buffer
-	b.WriteString(fmt.Sprintf(historyHeader, o.out) + "\n")
+	b.WriteString(fmt.Sprintf(historyHeader, runCmd) + "\n")
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
 	if err := enc.Encode(bf); err != nil {
@@ -231,34 +393,9 @@ func pickHistory(commits []orchestrator.HistoryCommit, lim historyLimits) ([]his
 	skipped := map[string]int{}
 	var out []historyCandidate
 	for _, c := range commits {
-		h := historyCandidate{HistoryCommit: c, prompt: cleanCommitMessage(c.Message)}
-		why := ""
-		for _, f := range c.Files {
-			switch {
-			case isTestPath(f.Path):
-				h.tests = append(h.tests, f.Path)
-			case isLockPath(f.Path):
-			case f.Binary:
-				why = "binary files outside the tests"
-			default:
-				h.lines += f.Lines
-				if !isDocPath(f.Path) {
-					h.code = append(h.code, f.Path)
-				}
-			}
-		}
-		switch {
-		case why != "":
-		case !taskLikeSubject(h.subject()):
-			why = "message is not a task (merge, revert, bump, wip or too short)"
-		case len(h.tests) == 0:
-			why = "no test changes"
-		case len(h.code) < lim.minFiles:
-			why = fmt.Sprintf("fewer than %d code files", lim.minFiles)
-		case len(c.Files) > lim.maxFiles:
-			why = fmt.Sprintf("more than %d files", lim.maxFiles)
-		case h.lines > lim.maxLines:
-			why = fmt.Sprintf("more than %d changed lines", lim.maxLines)
+		h, why := judgeHistory(c, lim)
+		if why == "" && c.Uncounted {
+			why = "changed lines not counted"
 		}
 		if why != "" {
 			skipped[why]++
@@ -267,6 +404,45 @@ func pickHistory(commits []orchestrator.HistoryCommit, lim historyLimits) ([]his
 		out = append(out, h)
 	}
 	return out, skipped
+}
+
+// judgeHistory sorts a commit's files and says why it makes no task (""
+// when it does). The checks that need line counts (binary files, changed
+// lines) only apply once the commit is counted.
+func judgeHistory(c orchestrator.HistoryCommit, lim historyLimits) (historyCandidate, string) {
+	h := historyCandidate{HistoryCommit: c, prompt: cleanCommitMessage(c.Message)}
+	binary := false
+	for _, f := range c.Files {
+		switch {
+		case isTestPath(f.Path):
+			h.tests = append(h.tests, f.Path)
+		case isLockPath(f.Path):
+		case f.Binary:
+			binary = true
+		default:
+			h.lines += f.Lines
+			if !isDocPath(f.Path) {
+				h.code = append(h.code, f.Path)
+			}
+		}
+	}
+	switch {
+	case !taskLikeSubject(h.subject()):
+		return h, "message is not a task (merge, revert, sync, bump, wip or too short)"
+	case len(h.tests) == 0:
+		return h, "no test changes"
+	case len(h.code) < lim.minFiles:
+		return h, fmt.Sprintf("fewer than %d code files", lim.minFiles)
+	case len(c.Files) > lim.maxFiles:
+		return h, fmt.Sprintf("more than %d files", lim.maxFiles)
+	case c.Uncounted:
+		return h, ""
+	case binary:
+		return h, "binary files outside the tests"
+	case h.lines > lim.maxLines:
+		return h, fmt.Sprintf("more than %d changed lines", lim.maxLines)
+	}
+	return h, ""
 }
 
 func printSkipped(skipped map[string]int) {
@@ -286,12 +462,14 @@ func printSkipped(skipped map[string]int) {
 }
 
 // isTestPath reports whether p is a test or test data file, by the common
-// conventions of Go, Python, JS/TS, Rust, Java/Kotlin, C# and Ruby.
+// conventions of Go, Python, JS/TS, Rust, Java/Kotlin, C#, Ruby and
+// Dart/Flutter.
 func isTestPath(p string) bool {
 	l := strings.ToLower(p)
 	for _, seg := range strings.Split(path.Dir(l), "/") {
 		switch seg {
-		case "test", "tests", "__tests__", "spec", "specs", "testdata", "fixtures", "__snapshots__", "__fixtures__":
+		case "test", "tests", "__tests__", "spec", "specs", "testdata", "fixtures", "__snapshots__", "__fixtures__",
+			"integration_test", "integration_tests", "test_driver":
 			return true
 		}
 	}
@@ -303,7 +481,7 @@ func isTestPath(p string) bool {
 		return true
 	case ext == ".py" && (strings.HasPrefix(name, "test_") || strings.HasSuffix(name, "_test") || name == "conftest"):
 		return true
-	case (ext == ".go" || ext == ".rb" || ext == ".exs") && (strings.HasSuffix(name, "_test") || strings.HasSuffix(name, "_spec")):
+	case (ext == ".go" || ext == ".rb" || ext == ".exs" || ext == ".dart") && (strings.HasSuffix(name, "_test") || strings.HasSuffix(name, "_spec")):
 		return true
 	case (ext == ".java" || ext == ".kt" || ext == ".cs" || ext == ".scala") && (strings.HasSuffix(name, "test") || strings.HasSuffix(name, "tests")):
 		return true
@@ -330,9 +508,13 @@ func isLockPath(p string) bool {
 
 var (
 	reTrailer   = regexp.MustCompile(`^[A-Za-z][A-Za-z-]*: `)
-	reNotATask  = regexp.MustCompile(`(?i)^(merge|revert|bump|release|fixup!|squash!|amend!|wip\b|chore\(deps|chore\(release|v?\d+\.\d+)`)
 	reSlugJunk  = regexp.MustCompile(`[^a-z0-9]+`)
 	reGenerated = regexp.MustCompile(`(?i)generated with \[?claude code`)
+
+	// Merges, reverts and mirror or sync commits ("Sync from upstream",
+	// "Mirror of ...") are not something a person asked for.
+	reNotATask = regexp.MustCompile(`(?i)^(merge|revert|bump|release|fixup!|squash!|amend!|wip\b|chore\(deps|chore\(release|v?\d+\.\d+|` +
+		`(auto[- ]?)?sync(ed|ing)?\s+(from|with|to)\b|mirror(ed|ing)?\b|import(ed)?\s+from\b|update(d)?\s+from\s+upstream\b)`)
 )
 
 // cleanCommitMessage drops the trailer block (Signed-off-by, Co-Authored-By,
