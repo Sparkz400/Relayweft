@@ -499,7 +499,7 @@ const PROV_PALETTE = ['#E5C07B', '#56B6C2', '#C678DD', '#98C379', '#E06C75'];
 function provColor(p) {
   if (!p) return 'var(--muted)';
   if (p === 'codex' || p === 'claude') return `var(--${p})`;
-  if (PROV_COLORS[p]) return PROV_COLORS[p];
+  if (Object.prototype.hasOwnProperty.call(PROV_COLORS, p)) return PROV_COLORS[p];
   let x = 0;
   for (const ch of p) x = (x * 31 + ch.codePointAt(0)) | 0;
   return PROV_PALETTE[((x % PROV_PALETTE.length) + PROV_PALETTE.length) % PROV_PALETTE.length];
@@ -913,7 +913,7 @@ function emptyLog() {
   return h('div', { class: 'log-empty' },
     S.search || S.agentFilter || S.filter !== 'all' ? h('div', null, 'Nothing matches the filter.') :
       h('div', null, h('div', { style: 'font-size:15px;color:var(--text);font-weight:600' }, 'Ready when you are'),
-        h('div', { class: 'tips' }, tips.map(([ic, t, fn]) => h('div', { class: 'tip' + (fn ? ' click' : ''), onclick: fn }, icon(ic), h('span', null, t))))));
+        h('div', { class: 'tips' }, tips.map(([ic, t, fn]) => h('div', { class: 'tip' + (fn ? ' click' : ''), onclick: fn }, icon(ic), h('span', null, t)))), dashPeek()));
 }
 function setFilter(f) {
   S.filter = f;
@@ -1433,6 +1433,7 @@ function highlight(code, lang) {
 
 // ---------- drawers ----------
 const DRAWERS = {
+  dashboard: { title: 'Dashboard', render: drawDashboard, wide: true },
   models: { title: 'Models & routes', render: drawModels, wide: true },
   queue: { title: 'Queue', render: drawQueue, narrow: true },
   history: { title: 'History', render: drawHistory },
@@ -1740,6 +1741,399 @@ async function drawHealth(body) {
     'logs: ', h('code', null, v.dir), ' · the same report on the terminal: ', h('code', null, 'sy health')));
   function localDay(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 }
+// ---------- dashboard ----------
+// Charts are inline SVG built with createElementNS; every text from the
+// logs goes in as a text node.
+const SVGNS = 'http://www.w3.org/2000/svg';
+function sv(tag, attrs, ...kids) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const k in attrs || {}) {
+    const v = attrs[k];
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+const DASH_RANGES = [7, 30, 90];
+const usd = (v) => '$' + (Number(v) || 0).toFixed(2);
+const pct = (v) => Math.round((Number(v) || 0) * 100) + '%';
+function dayOf(date) { const [y, m, d] = String(date).split('-').map(Number); return new Date(y, m - 1, d); }
+function dayLabel(date, weekday) { return dayOf(date).toLocaleDateString([], weekday ? { weekday: 'short', day: 'numeric' } : { month: 'short', day: 'numeric' }); }
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * mag >= v) return m * mag;
+  return 10 * mag;
+}
+// barPath is a column with a rounded top and a square foot.
+function barPath(x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h));
+  if (!r) return `M${x} ${y + h}V${y}H${x + w}V${y + h}Z`;
+  return `M${x} ${y + h}V${y + r}Q${x} ${y} ${x + r} ${y}H${x + w - r}Q${x + w} ${y} ${x + w} ${y + r}V${y + h}Z`;
+}
+let chartSeq = 0;
+// columnChart draws one stacked column per day. series: [{key, label,
+// color, hatch}]; get(day, key) is a value; lines are dashed thresholds
+// [{v, label, color}]; tip(day) is what a column says on hover and focus.
+function columnChart(days, o) {
+  const W = Math.max(260, Math.floor(o.width)), H = o.height || 150;
+  const lines = (o.lines || []).filter((l) => l.v > 0);
+  const padL = 46, padR = lines.length ? 84 : 10, padT = 10, padB = 22;
+  const n = days.length, band = (W - padL - padR) / n, bw = Math.max(2, Math.min(24, band * 0.7));
+  const totals = days.map((d) => o.series.reduce((a, se) => a + (o.get(d, se.key) || 0), 0));
+  const top = niceMax(Math.max(...totals, ...lines.map((l) => l.v)));
+  const y = (v) => padT + (H - padT - padB) * (1 - v / top);
+  const id = 'c' + (++chartSeq);
+  const root = sv('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'group', 'aria-label': o.label });
+  const defs = sv('defs');
+  for (const se of o.series) {
+    if (!se.hatch) continue;
+    defs.append(sv('pattern', { id: id + se.key, width: 5, height: 5, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' },
+      sv('rect', { width: 5, height: 5, style: `fill:${se.color}` }), sv('line', { x1: 0, y1: 0, x2: 0, y2: 5, class: 'hatch' })));
+  }
+  root.append(defs);
+  for (const t of [top / 2, top]) root.append(sv('line', { class: 'grid', x1: padL, x2: W - padR, y1: y(t), y2: y(t) }));
+  for (const t of [0, top / 2, top]) root.append(sv('text', { class: 'axis', x: padL - 6, y: y(t) + 3.5, 'text-anchor': 'end' }, o.fmt(t)));
+  days.forEach((d, i) => {
+    const x = padL + band * i + (band - bw) / 2;
+    const g = sv('g', { class: 'col', tabindex: i === n - 1 ? '0' : '-1', role: 'img', 'aria-label': o.tip(d) });
+    g.append(sv('rect', { class: 'hit', x: padL + band * i, y: padT, width: band, height: H - padT - padB }));
+    const segs = o.series.map((se) => [se, o.get(d, se.key) || 0]).filter(([, v]) => v > 0);
+    let acc = 0;
+    segs.forEach(([se, v], j) => {
+      const y0 = y(acc), y1 = y(acc + v);
+      acc += v;
+      let hh = y0 - y1;
+      if (j > 0 && hh > 3) hh -= 2; // a 2px gap to the segment below
+      g.append(sv('path', { d: barPath(x, y1, bw, Math.max(1, hh), j === segs.length - 1 ? 3 : 0), style: `fill:${se.hatch ? `url(#${id + se.key})` : se.color}` }));
+    });
+    root.append(g);
+  });
+  root.append(sv('line', { class: 'base', x1: padL, x2: W - padR, y1: y(0), y2: y(0) }));
+  const step = n <= 7 ? 1 : n <= 31 ? 7 : 14;
+  for (let i = n - 1; i >= 0; i -= step) root.append(sv('text', { class: 'axis', x: padL + band * (i + 0.5), y: H - 6, 'text-anchor': 'middle' }, dayLabel(days[i].date, n <= 7)));
+  for (const l of lines) {
+    const yy = y(l.v);
+    root.append(sv('line', { class: 'limit', x1: padL, x2: W - padR, y1: yy, y2: yy, style: `stroke:${l.color}` }),
+      sv('text', { class: 'axis', x: W - padR + 6, y: yy + 3.5 }, l.label));
+  }
+  return root;
+}
+// lineChart draws a share (0..1) per day; days without a value are skipped.
+function lineChart(days, o) {
+  const W = Math.max(260, Math.floor(o.width)), H = o.height || 90, padL = 46, padR = 10, padT = 8, padB = 8;
+  const n = days.length, band = (W - padL - padR) / n;
+  const y = (v) => padT + (H - padT - padB) * (1 - v);
+  const root = sv('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'group', 'aria-label': o.label });
+  for (const t of [0, 0.5, 1]) {
+    root.append(sv('line', { class: t ? 'grid' : 'base', x1: padL, x2: W - padR, y1: y(t), y2: y(t) }),
+      sv('text', { class: 'axis', x: padL - 6, y: y(t) + 3.5, 'text-anchor': 'end' }, pct(t)));
+  }
+  const pts = [];
+  days.forEach((d, i) => { const v = o.get(d); if (v != null) pts.push([padL + band * (i + 0.5), y(v), d]); });
+  if (pts.length > 1) root.append(sv('polyline', { class: 'line', points: pts.map(([x, yy]) => `${x.toFixed(1)},${yy.toFixed(1)}`).join(' ') }));
+  for (const [x, yy, d] of pts) {
+    const g = sv('g', { class: 'col', tabindex: d === pts[pts.length - 1][2] ? '0' : '-1', role: 'img', 'aria-label': o.tip(d) });
+    g.append(sv('rect', { class: 'hit', x: x - band / 2, y: padT, width: band, height: H - padT - padB }), sv('circle', { class: 'dot', cx: x, cy: yy, r: 4 }));
+    root.append(g);
+  }
+  return root;
+}
+// The hover/focus tooltip of the chart columns (one per page, on the body:
+// the drawer moves while it slides in).
+function dashTip(host) {
+  let tip = $('#dash-tip');
+  if (!tip) document.body.append(tip = h('div', { class: 'dash-tip', id: 'dash-tip', role: 'tooltip', hidden: true }));
+  const show = (e) => {
+    const g = e.target.closest && e.target.closest('.col');
+    if (!g) return;
+    tip.textContent = g.getAttribute('aria-label');
+    tip.hidden = false;
+    const r = g.getBoundingClientRect(), tw = tip.offsetWidth;
+    tip.style.left = Math.max(8, Math.min(window.innerWidth - tw - 8, r.left + r.width / 2 - tw / 2)) + 'px';
+    tip.style.top = Math.max(8, r.top - tip.offsetHeight - 6) + 'px';
+  };
+  const hide = (e) => { if (!e.relatedTarget || !e.relatedTarget.closest || !e.relatedTarget.closest('.col')) tip.hidden = true; };
+  host.addEventListener('mouseover', show);
+  host.addEventListener('focusin', show);
+  host.addEventListener('mouseout', hide);
+  host.addEventListener('focusout', () => { tip.hidden = true; });
+  // One tab stop per chart (its newest day); the arrow keys move along it.
+  host.addEventListener('keydown', (e) => {
+    const g = e.target.closest && e.target.closest('.col');
+    if (!g || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    const cols = [...g.ownerSVGElement.querySelectorAll('.col')];
+    const i = cols.indexOf(g);
+    const next = cols[e.key === 'Home' ? 0 : e.key === 'End' ? cols.length - 1 : Math.max(0, Math.min(cols.length - 1, i + (e.key === 'ArrowLeft' ? -1 : 1)))];
+    e.preventDefault();
+    cols.forEach((c) => c.setAttribute('tabindex', c === next ? '0' : '-1'));
+    next.focus();
+  });
+  host.addEventListener('scroll', () => {
+    const a = document.activeElement;
+    if (a && a.closest && a.closest('.col') && host.contains(a)) show({ target: a });
+    else tip.hidden = true;
+  }, { passive: true });
+}
+function legend(items) {
+  return h('div', { class: 'legend' }, items.map((it) => h('span', null, h('i', { class: it.hatch ? 'hatched' : '', style: `background:${it.color}` }), it.label)));
+}
+// dayTable is the table view of a chart (screen readers, exact numbers).
+function dayTable(days, cols) {
+  return h('details', { class: 'dash-table' }, h('summary', null, 'Show as table'),
+    h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl' },
+      h('tr', null, h('th', null, 'Day'), cols.map((c) => h('th', { class: 'num' }, c[0]))),
+      days.slice().reverse().filter((d) => cols.some((c) => c[2] ? c[2](d) : c[1](d))).map((d) => h('tr', null,
+        h('td', { class: 'mono' }, d.date), cols.map((c) => h('td', { class: 'num' }, c[1](d))))))));
+}
+const FLAG_LABELS = { judged: ['judged', 'routed by the judge'], learned: ['learned', 'on a learned route'], tier: ['tier', 'model picked by the cost tiers'],
+  repeat_error: ['retry', 'escalated here after the same error twice'], fallback: ['fallback', 'moved here after a limit hit'], preempt: ['pre-empt', 'moved here before the limit'] };
+const WINDOW_LABELS = { five_hour: '5h', seven_day: '7d', seven_day_opus: '7d Opus', seven_day_sonnet: '7d Sonnet' };
+const SEV_LABEL = { high: 'act', medium: 'consider', info: 'hint' };
+
+async function drawDashboard(body) {
+  let days = Number(store.get('sy-dash-days'));
+  if (!DASH_RANGES.includes(days)) days = 7;
+  const here = store.get('sy-dash-here') === '1';
+  if (!body.firstChild) body.append(h('div', { class: 'muted small' }, 'Loading…'));
+  const seq = S.dashSeq = (S.dashSeq || 0) + 1; // a slower, older answer must not win
+  let v;
+  try { v = await api('GET', `/api/dashboard?days=${days}${here ? '&here=1' : ''}`); } catch (e) { if (seq === S.dashSeq) body.textContent = e.message; return; }
+  if (seq !== S.dashSeq) return;
+  S.dash = v;
+  if (days === 7 && !here) S.peek = v;
+  if (S.drawer === 'dashboard') renderDashboard(body, v);
+}
+
+function renderDashboard(body, v) {
+  const st = body.scrollTop;
+  body.textContent = '';
+  const cs = getComputedStyle(body);
+  const cw = Math.max(260, body.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 32); // minus the card's padding
+  const t = v.totals, ndays = v.range_days;
+  const reload = () => drawDashboard(body);
+  // Range and scope.
+  body.append(h('div', { class: 'toolbar' },
+    h('div', { class: 'seg', role: 'group', 'aria-label': 'Range' }, DASH_RANGES.map((n) => h('button', { class: 'chip' + (n === ndays ? ' on' : ''), 'aria-pressed': n === ndays ? 'true' : 'false',
+      onclick: () => { store.set('sy-dash-days', String(n)); reload(); } }, n + ' days'))),
+    h('label', { class: 'small muted', style: 'display:flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: v.here,
+      onchange: (e) => { store.set('sy-dash-here', e.target.checked ? '1' : '0'); reload(); } }), 'this project only'),
+    h('div', { class: 'grow' }),
+    h('span', { class: 'muted small', title: `built in ${v.elapsed_ms} ms` }, `${dayLabel(v.from)} – ${dayLabel(v.to)}`),
+    h('button', { class: 'btn sm ghost', onclick: reload, title: 'Read the logs again' }, 'Refresh')));
+  for (const w of v.warnings || []) body.append(h('div', { class: 'sug medium small', style: 'margin-bottom:8px' }, w));
+  if (!body._tip) { dashTip(body); body._tip = true; }
+
+  // Headline numbers.
+  const used = v.providers.filter((p) => t.providers[p]);
+  const kpi = (val, label, sub) => h('div', { class: 'kpi' }, h('div', { class: 'v' }, String(val)), h('div', { class: 'l' }, label), sub ? h('div', { class: 'l faint' }, sub) : '');
+  body.append(h('div', { class: 'kpis' },
+    kpi(t.tasks, 'tasks', t.tasks ? `${t.ok} done · ${t.failed} failed · ${t.cancelled} cancelled` : ''),
+    kpi(t.tasks ? pct(t.ok / t.tasks) : '-', 'succeeded', t.tasks ? `avg ${dur(t.wall_ms / t.tasks)} per task` : ''),
+    kpi(human(t.fresh_tokens), 'fresh tokens', used.map((p) => `${p} ${human(t.providers[p])}`).join(' · ')),
+    kpi(t.usd ? usd(t.usd) : '-', 'API-equivalent', t.tasks && t.usd ? `${usd(t.usd / t.tasks)} per task` : '')));
+
+  // Tasks per day.
+  const card = (title, sub, ...kids) => h('section', { class: 'dash-card' }, h('div', { class: 'dash-h' }, h('h3', null, title), sub ? h('span', { class: 'muted small' }, sub) : ''), ...kids);
+  if (!t.tasks) {
+    body.append(card('Tasks per day', '', h('div', { class: 'empty-list' }, v.here ? `No tasks in this project in the last ${ndays} days.` : `No tasks in the last ${ndays} days. Run one, then come back here.`)));
+  } else {
+    const series = [
+      { key: 'ok', label: 'done', color: 'var(--ok)' },
+      { key: 'failed', label: 'failed', color: 'var(--fail)', hatch: true },
+      { key: 'cancelled', label: 'cancelled', color: 'var(--faint)' },
+    ];
+    const rate = (d) => (d.tasks ? d.ok / d.tasks : null);
+    body.append(card('Tasks per day', `${t.tasks} tasks, ${pct(t.ok / t.tasks)} succeeded`,
+      legend(series),
+      columnChart(v.days, { width: cw, height: 150, series, get: (d, k) => d[k], fmt: (n) => String(Math.round(n * 10) / 10),
+        label: `Tasks per day over the last ${ndays} days`,
+        tip: (d) => `${dayLabel(d.date)}: ${d.tasks} task${d.tasks === 1 ? '' : 's'} (${d.ok} done, ${d.failed} failed, ${d.cancelled} cancelled)` }),
+      h('div', { class: 'dash-sub muted small' }, 'Success rate (days with tasks)'),
+      lineChart(v.days, { width: cw, height: 80, get: rate, label: 'Success rate per day',
+        tip: (d) => `${dayLabel(d.date)}: ${pct(rate(d))} of ${d.tasks} succeeded` }),
+      dayTable(v.days, [['Tasks', (d) => d.tasks], ['Done', (d) => d.ok], ['Failed', (d) => d.failed], ['Cancelled', (d) => d.cancelled], ['Success', (d) => (d.tasks ? pct(d.ok / d.tasks) : '-'), (d) => d.tasks]])));
+
+    // Cost per day.
+    const b = v.budget, team = b.team_days || {};
+    const all = !v.here;
+    const provSeries = v.providers.map((p) => ({ key: p, label: p, color: provColor(p) }));
+    const tokLines = [], usdLines = [];
+    if (all && b.day_tokens) tokLines.push({ v: b.day_tokens, label: 'day ' + human(b.day_tokens), color: 'var(--warn)' });
+    if (all && b.day_usd) usdLines.push({ v: b.day_usd, label: 'day ' + usd(b.day_usd), color: 'var(--warn)' });
+    if (all && b.team && b.team_day_tokens) tokLines.push({ v: b.team_day_tokens, label: 'team ' + human(b.team_day_tokens), color: 'var(--fail)' });
+    if (all && b.team && b.team_day_usd) usdLines.push({ v: b.team_day_usd, label: 'team ' + usd(b.team_day_usd), color: 'var(--fail)' });
+    const others = b.team && all && Object.keys(team).length;
+    const tokSeries = others ? [...provSeries, { key: '_team', label: 'other machines', color: 'var(--wire)', hatch: true }] : provSeries;
+    const usdSeries = others ? [{ key: 'usd', label: 'this machine', color: 'var(--router)' }, { key: '_team', label: 'other machines', color: 'var(--wire)', hatch: true }] : [{ key: 'usd', label: '$', color: 'var(--router)' }];
+    const tokOf = (d, k) => (k === '_team' ? (team[d.date] || {}).fresh_tokens || 0 : d.providers[k] || 0);
+    const usdOf = (d, k) => (k === '_team' ? (team[d.date] || {}).usd || 0 : d.usd);
+    const budgetNote = v.here && (b.day_usd || b.day_tokens || b.team) ? 'Budgets count every project: switch off "this project only" to see them.' : '';
+    body.append(card('Cost per day', `$ is Claude's API-equivalent price, not billed on a subscription`,
+      h('div', { class: 'dash-sub muted small' }, 'Fresh tokens per provider'), legend(tokSeries),
+      columnChart(v.days, { width: cw, height: 150, series: tokSeries, get: tokOf, fmt: human, lines: tokLines, label: 'Fresh tokens per day and provider',
+        tip: (d) => `${dayLabel(d.date)}: ` + tokSeries.map((s) => `${s.label} ${human(tokOf(d, s.key))}`).join(', ') }),
+      h('div', { class: 'dash-sub muted small' }, 'API-equivalent $'), others ? legend(usdSeries) : '',
+      columnChart(v.days, { width: cw, height: 110, series: usdSeries, get: usdOf, fmt: (n) => '$' + (n >= 10 ? Math.round(n) : n.toFixed(2)), lines: usdLines, label: 'API-equivalent dollars per day',
+        tip: (d) => `${dayLabel(d.date)}: ${usd(d.usd)}` + (others ? `, other machines ${usd(usdOf(d, '_team'))}` : '') + (b.day_usd && all ? ` (${pct(d.usd / b.day_usd)} of the daily budget)` : '') }),
+      budgetNote ? h('div', { class: 'muted small' }, budgetNote) : '',
+      dayTable(v.days, [...v.providers.map((p) => [p, (d) => human(d.providers[p] || 0)]), ['$', (d) => usd(d.usd), (d) => d.tasks || d.usd],
+        ...(others ? [['Other machines $', (d) => usd(usdOf(d, '_team'))]] : [])])));
+  }
+
+  // Routes.
+  const sugs = v.suggestions || [];
+  const routes = v.routes || [];
+  const rc = card('Routes', 'per role and provider:model[:effort]; limit hits are counted apart');
+  if (!routes.length) rc.append(h('div', { class: 'empty-list' }, 'No agent runs in this range yet.'));
+  else {
+    const flags = v.decision_flags || [];
+    const tbl = h('table', { class: 'tbl routes' }, h('tr', null, ['Route', 'Runs', 'Success', 'Avg tokens', 'Avg $', 'Avg time', 'Escalated', 'Final review', 'Decisions', 'Limit hits', 'sy tune']
+      .map((x, i) => h('th', { class: i && i < 8 || i === 9 ? 'num' : '' }, x))));
+    let role = null;
+    for (const r of routes) {
+      if (r.role !== role) {
+        role = r.role;
+        tbl.append(h('tr', { class: 'grp' }, h('td', { colspan: 11 }, h('span', { class: 'rolecell', style: `--rc:${Object.prototype.hasOwnProperty.call(ROLE_COLORS, r.role) ? ROLE_COLORS[r.role] : 'var(--muted)'}` }, h('i'), String(r.role).replace('_', ' ')))));
+      }
+      const dec = flags.filter((f) => r.decisions && r.decisions[f]).map((f) => {
+        const c = r.decisions[f], [lab, what] = FLAG_LABELS[f] || [f, f];
+        return h('span', { class: 'cp' + (c.failed ? ' bad' : ''), title: `${c.runs} run${c.runs === 1 ? '' : 's'} ${what}, ${c.failed} failed` }, `${lab} ${c.runs}` + (c.failed ? ` (${c.failed}✗)` : ''));
+      });
+      tbl.append(h('tr', null,
+        h('td', null, h('span', { class: 'now', style: `--c:${provColor(r.provider)}` }, r.route)),
+        h('td', { class: 'num' }, r.runs),
+        h('td', { class: 'num' }, r.runs ? h('span', { class: 'meter-cell' }, h('span', { class: 'meter', 'aria-hidden': 'true' }, h('span', { style: `width:${Math.round(r.success * 100)}%` })), pct(r.success)) : '-'),
+        h('td', { class: 'num' }, r.runs ? human(r.avg_tokens) : '-'),
+        h('td', { class: 'num' }, r.runs && r.avg_usd ? usd(r.avg_usd) : '-'),
+        h('td', { class: 'num' }, r.runs ? dur(r.avg_ms) : '-'),
+        h('td', { class: 'num' }, r.escalated || '-'),
+        h('td', { class: 'num', title: r.reviews ? `${r.rejected} of ${r.reviews} final reviews of tasks this route wrote in asked for changes` : '' }, r.reviews ? `${r.rejected}/${r.reviews} rejected` : '-'),
+        h('td', null, h('div', { class: 'chips', style: 'margin:0' }, dec)),
+        h('td', { class: 'num' }, r.limit_hits || '-'),
+        h('td', null, (r.suggested || []).map((i) => sugs[i] ? h('span', { class: 'sev ' + sugs[i].Severity, title: sugs[i].Title }, `#${i + 1} ${SEV_LABEL[sugs[i].Severity] || ''}`) : ''))));
+    }
+    rc.append(h('div', { class: 'tbl-wrap' }, tbl));
+  }
+  rc.append(h('div', { class: 'dash-sub muted small' }, 'What sy tune suggests for this range'));
+  if (!sugs.length) {
+    rc.append(h('div', { class: 'empty-list' }, t.tasks < v.min_tasks ? `Only ${t.tasks} task(s) here - suggestions need about ${v.min_tasks}.` : `No suggestions from ${t.tasks} tasks: the routing looks fine.`));
+  } else {
+    if (t.tasks < v.min_tasks) rc.append(h('div', { class: 'muted small', style: 'margin-bottom:8px' }, `Few tasks - treat these as hints until ~${v.min_tasks} tasks.`));
+    rc.append(h('div', { class: 'list' }, sugs.map((s, i) => h('div', { class: 'sug ' + s.Severity },
+      h('div', { class: 't' }, h('span', { class: 'sev ' + s.Severity }, `#${i + 1} ${SEV_LABEL[s.Severity] || ''}`), ' ', s.Title), h('div', { class: 'd' }, s.Detail),
+      (s.Commands || []).length ? h('div', { class: 'cmds' }, s.Commands.map((c) => [h('code', null, c), applyable(c) ? h('button', { class: 'btn sm', onclick: () => applyCmd(c) }, 'Apply') : ''])) : ''))));
+  }
+  body.append(rc);
+
+  // Learned routes.
+  const L = v.learned || { routes: [], pending: [] };
+  const ev = v.learned_events || [];
+  const lc = card('Learned routes', `routing.learn: ${L.mode}` + (L.updated ? ` · last update ${when(L.updated)}` : ''));
+  if (L.note) lc.append(h('div', { class: 'muted small', style: 'margin-bottom:8px' }, L.note));
+  if (L.routes.length) {
+    lc.append(h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl' }, h('tr', null, ['Role', 'Route', 'Since', 'Evidence', ''].map((x) => h('th', null, x))),
+      L.routes.map((r) => h('tr', null, h('td', null, String(r.role).replace('_', ' ')), h('td', null, h('code', null, r.route)), h('td', { class: 'mono small' }, when(r.since)),
+        h('td', null, h('div', null, r.why), (r.evidence || []).length ? h('div', { class: 'muted small' }, r.evidence.map((e) => `${e.route}: ${e.samples} runs, ${pct(e.success)} ok, ${human(e.tokens)} tok/run`).join(' · ')) : ''),
+        h('td', null, h('span', { class: 'pill' + (r.in_use ? ' done' : '') }, r.in_use ? 'in use' : 'not used')))))));
+  } else if (!L.note) lc.append(h('div', { class: 'muted small' }, 'No learned routes for this repo yet: ', h('code', null, 'sy tune --apply'), ' learns them from its logs on clear evidence only.'));
+  if (L.pending.length) {
+    lc.append(h('div', { class: 'dash-sub muted small' }, h('code', null, 'sy tune --apply'), ' would change'),
+      h('div', { class: 'list' }, L.pending.map((p) => h('div', { class: 'sug info' }, h('div', { class: 't' }, `${String(p.role).replace('_', ' ')}: ${p.from} → ${p.to}${p.remove ? ' (back to the configured route)' : ''}`), h('div', { class: 'd' }, p.why)))));
+  }
+  lc.append(h('div', { class: 'dash-sub muted small' }, 'Changes seen in the decisions of this range'));
+  if (!ev.length) lc.append(h('div', { class: 'muted small' }, 'No decision used a learned route in this range.'));
+  else lc.append(h('ol', { class: 'timeline' }, ev.map((e) => h('li', null,
+    h('span', { class: 'mono small muted' }, when(e.ts)), ' ', h('b', null, String(e.role).replace('_', ' ')), ': ',
+    e.from ? [h('code', null, e.from), ' → '] : 'configured → ', h('code', null, e.to),
+    h('span', { class: 'muted small' }, ` · ${e.runs} decision${e.runs === 1 ? '' : 's'}, last ${when(e.last)}`),
+    h('div', { class: 'muted small' }, e.why)))));
+  body.append(lc);
+
+  // Limits and health side by side when there is room.
+  const lim = v.limits || {}, per = lim.per_provider || {};
+  const lm = card('Limits', 'per account: every project');
+  const quota = v.quota || {};
+  const qprov = provOrder(quota);
+  if (!qprov.length) lm.append(h('div', { class: 'muted small' }, 'No quota reading yet: Claude reports its 5-hour and 7-day use while it works.'));
+  for (const p of qprov) {
+    const q = quota[p];
+    const wins = Object.keys(q.windows || {}).sort();
+    lm.append(h('div', { class: 'quota' }, h('div', { class: 'quota-h' }, h('b', { class: 'prov-head', style: `--c:${provColor(p)}` }, h('i'), p),
+      h('span', { class: 'muted small' }, (q.source === 'live' ? 'live' : `logged ${when(q.seen)}`) + (q.resets_at ? ` · resets ${when(q.resets_at)}` : ''))),
+      q.limited_until ? h('div', { class: 'small', style: 'color:var(--fail)' }, `at its limit until ${when(q.limited_until)}`) : '',
+      wins.map((w) => {
+        const u = q.windows[w], lvl = u >= 0.9 ? 'bad' : u >= 0.7 ? 'warn' : '';
+        return h('div', { class: 'hbar' }, h('div', { class: 'hbar-l small' }, h('span', null, WINDOW_LABELS[w] || w), h('span', { class: 'mono' }, pct(u) + (lvl === 'bad' ? ' - nearly full' : lvl === 'warn' ? ' - high' : ''))),
+          h('div', { class: 'hbar-t ' + lvl, role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(u * 100)), 'aria-label': `${p} ${WINDOW_LABELS[w] || w} window` },
+            h('span', { style: `width:${Math.min(100, u * 100)}%` })));
+      })));
+  }
+  const lp = provOrder(per);
+  if (lp.length) {
+    lm.append(h('table', { class: 'tbl', style: 'margin-top:10px' }, h('tr', null, ['Provider', 'Limit hits', 'Switched before', 'Fell back after'].map((x, i) => h('th', { class: i ? 'num' : '' }, x))),
+      lp.map((p) => h('tr', null, h('td', null, h('span', { class: 'prov-head', style: `--c:${provColor(p)}` }, h('i'), p)), h('td', { class: 'num' }, per[p].hits), h('td', { class: 'num' }, per[p].preempts), h('td', { class: 'num' }, per[p].fallbacks)))));
+  } else lm.append(h('div', { class: 'muted small', style: 'margin-top:8px' }, `No limit hits or switches in the last ${ndays} days.`));
+  const recent = [...(lim.hits || []).map((x) => ({ ...x, k: 'hit' })), ...(lim.switches || []).map((x) => ({ ...x, k: 'switch' }))].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 8);
+  if (recent.length) {
+    lm.append(h('div', { class: 'dash-sub muted small' }, 'Recent'), h('ul', { class: 'events' }, recent.map((x) => h('li', null, h('span', { class: 'mono small muted' }, when(x.ts)), ' ',
+      x.k === 'hit' ? [h('b', null, x.provider), ' hit its limit', x.until ? ` (until ${when(x.until)})` : '', x.text ? h('div', { class: 'muted small ell', title: x.text }, x.text) : '']
+        : [x.role ? String(x.role).replace('_', ' ') + ': ' : '', h('b', null, x.provider), ' → ', h('b', null, x.to), x.rule === 'quota-preempt' ? ' before the limit' : ' after a limit hit']))));
+  }
+  const hc = card('Health streak', 'toward the Phase 1 exit criterion');
+  const H = v.health;
+  if (!H) hc.append(h('div', { class: 'muted small' }, 'The health report could not be built (see the warning above).'));
+  else {
+    const c = H.criterion, set = (x) => x && !String(x).startsWith('0001');
+    const state = c.met ? 'met' : set(c.clean_since) ? 'open' : 'none';
+    const bar = (val, need, label) => h('div', { class: 'hbar' },
+      h('div', { class: 'hbar-l small' }, h('span', null, label), h('span', { class: 'mono muted' }, `${Math.floor(val)} / ${need}`)),
+      h('div', { class: 'hbar-t', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': String(need), 'aria-valuenow': String(Math.floor(val)), 'aria-label': label }, h('span', { style: `width:${Math.min(100, val / need * 100)}%` })));
+    const usedDays = new Set(H.use_days || []), bad = H.bad_days || {};
+    const strip = h('div', { class: 'hstrip', role: 'img', 'aria-label': `Last ${H.days} days: ${usedDays.size} used, ${Object.keys(bad).length} with a crash or hang` });
+    for (let i = H.days - 1; i >= 0; i--) {
+      const d = new Date(H.now); d.setDate(d.getDate() - i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      strip.append(h('span', { class: bad[key] ? 'bad' : usedDays.has(key) ? 'used' : '', title: `${key}: ${bad[key] ? bad[key] + ' crash or hang' : usedDays.has(key) ? 'used, clean' : 'not used'}` }));
+    }
+    hc.append(h('div', { class: 'hverdict ' + state },
+      h('div', { class: 'hv-head' }, h('b', null, state === 'met' ? 'Exit criterion met' : state === 'none' ? 'No records yet' : 'Not yet'),
+        h('span', { class: 'muted small' }, `${c.need_days} days of daily use without a crash or hang`)),
+      h('div', { class: 'small' }, String(c.summary || '').replace(/^(met|not yet): /, '')),
+      state === 'none' ? '' : [bar(c.clean_days, c.need_days, 'days clean'), bar(c.use_days, c.need_use_days, 'days used')], strip,
+      h('div', { class: 'legend', style: 'margin:0' }, h('span', null, h('i', { style: 'background:var(--ok)' }), 'used'), h('span', null, h('i', { style: 'background:var(--fail)' }), 'crash or hang'), h('span', null, h('i', { style: 'background:var(--panel-3)' }), 'not used'))),
+      h('button', { class: 'btn sm', style: 'margin-top:10px', onclick: () => openDrawer('health') }, 'Open the Reliability report'));
+  }
+  body.append(h('div', { class: 'dash-grid' }, lm, hc));
+  body.append(h('div', { class: 'muted small', style: 'margin-top:12px' }, 'logs: ', h('code', null, v.log_dir), ' · the same numbers on the terminal: ', h('code', null, 'sy stats'), ', ', h('code', null, 'sy tune'), ', ', h('code', null, 'sy health')));
+  body.scrollTop = st;
+}
+
+// peek is the dashboard's summary on the empty start page.
+function dashPeek() {
+  const el = h('div', { class: 'dash-peek', hidden: true });
+  const fill = (v) => {
+    el.textContent = '';
+    const t = v.totals, c = v.health && v.health.criterion;
+    el.append(h('div', { class: 'grow' }, h('b', null, 'Last 7 days: '),
+      t.tasks ? `${t.tasks} task${t.tasks === 1 ? '' : 's'} · ${pct(t.ok / t.tasks)} succeeded` + (t.usd ? ` · ${usd(t.usd)} API-equivalent` : '') : 'no tasks yet',
+      c && c.clean_days >= 1 ? ` · ${Math.floor(c.clean_days)} of ${c.need_days} days clean` : ''),
+      h('button', { class: 'btn sm', onclick: () => openDrawer('dashboard') }, 'Dashboard'));
+    el.hidden = false;
+  };
+  if (S.peek) fill(S.peek);
+  else if (!S.peekLoading && S.connected) {
+    S.peekLoading = true;
+    api('GET', '/api/dashboard?days=7').then((v) => { S.peek = v; if (el.isConnected) fill(v); }).catch(() => {}).finally(() => { S.peekLoading = false; });
+  }
+  return el;
+}
+
 function applyable(c) { return /^\/(route|prefer) \S+ \S+$/.test(c) || /^\/(judge|tiers|review|parallel) (on|off)$/.test(c); }
 async function applyCmd(c) {
   const f = c.split(/\s+/);
@@ -1890,6 +2284,8 @@ function wire() {
     if (e.key === '/' && !inField && $('#modal').hidden) { e.preventDefault(); p.focus(); }
   });
   window.addEventListener('focus', () => { S.dirtyGraph = true; });
+  let rt;
+  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (S.drawer === 'dashboard' && S.dash) renderDashboard($('#drawer-body'), S.dash); }, 150); });
   setInterval(() => {
     tickElapsed();
     for (const [k, c] of cards) {

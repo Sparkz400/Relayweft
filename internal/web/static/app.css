@@ -558,3 +558,46 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin:
 .hstrip span { height: 22px; border-radius: 4px; background: var(--panel-3); }
 .hstrip span.used { background: var(--ok); } .hstrip span.bad { background: var(--fail); }
 .kpi.bad .v { color: var(--fail); } .kpi.warn .v { color: var(--warn); }
+
+/* Dashboard (inline SVG charts) */
+.seg { display: flex; gap: 4px; }
+.dash-card { margin-top: 14px; padding: 14px 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); min-width: 0; }
+.dash-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.drawer-body .dash-h h3 { margin: 0; }
+.dash-sub { margin: 14px 0 6px; }
+.dash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 14px; }
+.chart { display: block; width: 100%; height: auto; stroke: none; fill: none; stroke-width: 1; overflow: visible; }
+.chart .grid { stroke: var(--border); }
+.chart .base { stroke: var(--border-strong); }
+.chart .axis { fill: var(--muted); font: 10.5px var(--font); }
+.chart .limit { stroke-width: 1.5; stroke-dasharray: 5 4; }
+.chart .line { stroke: var(--router); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .dot { fill: var(--router); stroke: var(--panel-2); stroke-width: 2; }
+.chart .hatch { stroke: var(--panel-2); stroke-width: 2; opacity: .6; }
+.chart .col { outline: none; }
+.chart .hit { fill: transparent; }
+.chart .col:hover .hit, .chart .col:focus .hit { fill: var(--hover); }
+.chart .col:focus-visible .hit { stroke: var(--focus); stroke-width: 1.5; }
+.dash-tip { position: fixed; z-index: 70; max-width: 320px; padding: 6px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border-strong); box-shadow: var(--shadow); font-size: 12px; color: var(--text); pointer-events: none; }
+.legend i.hatched { background-image: repeating-linear-gradient(45deg, transparent 0 2px, rgba(255, 255, 255, .6) 2px 3.5px); }
+.dash-table summary { margin: 8px 0 4px; font-size: 12px; }
+.tbl-wrap { overflow-x: auto; }
+.tbl.routes td { white-space: nowrap; }
+.tbl tr.grp td { padding-top: 12px; border-top: 0; }
+.tbl tr.grp:hover td { background: transparent; }
+.meter-cell { display: inline-flex; align-items: center; gap: 6px; }
+.meter { width: 44px; height: 5px; border-radius: 3px; background: var(--panel-3); overflow: hidden; display: inline-block; }
+.meter span { display: block; height: 100%; background: var(--router); }
+.sev { display: inline-block; font-size: 11px; font-weight: 650; padding: 0 7px; border-radius: 99px; white-space: nowrap; border: 1px solid currentColor; margin-right: 4px; }
+.sev.high { color: var(--fail); } .sev.medium { color: var(--warn); } .sev.info { color: var(--router); }
+.hbar-t.warn span { background: var(--warn); } .hbar-t.bad span { background: var(--fail); }
+.quota { margin-bottom: 12px; display: grid; gap: 6px; }
+.quota-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.timeline, .events { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
+.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.dash-peek { display: flex; align-items: center; gap: 10px; max-width: 520px; margin: 12px auto 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); text-align: left; font-size: 13px; color: var(--text-2); }
+.dash-peek .grow { flex: 1; min-width: 0; }
+@media (max-width: 640px) {
+  .dash-card { padding: 12px 10px; }
+  .drawer-body { padding: 14px 12px 20px; }
+}

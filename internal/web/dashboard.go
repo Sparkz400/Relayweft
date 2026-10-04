@@ -1,0 +1,293 @@
+package web
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"sort"
+	"strconv"
+	"time"
+
+	"github.com/sparkz400/switchyard/internal/config"
+	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/health"
+	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/switchyard/internal/sessionlog"
+)
+
+// The Dashboard panel: GET /api/dashboard?days=7|30|90[&here=1]. The
+// session-log part is sessionlog.BuildDashboard (the counting of `sy stats`
+// and `sy tune`); this adds what lives elsewhere: the budget, the team
+// folder, the current quota, this repo's learned routes and the health
+// streak. Fields only ever get added (the JetBrains client reads it too).
+
+// dashMaxDays caps the range; dashLearnDays is how far back the dry run of
+// `sy tune --apply` looks (older runs weigh 1/8 or less there anyway).
+const (
+	dashMaxDays   = 366
+	dashLearnDays = 90
+)
+
+type dashboardView struct {
+	sessionlog.Dashboard
+	Generated     time.Time            `json:"generated"`
+	RangeDays     int                  `json:"range_days"`
+	Here          bool                 `json:"here"`
+	Dir           string               `json:"dir"`
+	LogDir        string               `json:"log_dir"`
+	MinTasks      int                  `json:"min_tasks"` // below it suggestions are hints (sy tune)
+	Budget        dashBudget           `json:"budget"`
+	Quota         map[string]dashQuota `json:"quota"` // current use of each provider's limit
+	LearnedRoutes *dashLearned         `json:"learned"`
+	Health        *dashHealth          `json:"health"`
+	Warnings      []string             `json:"warnings"`
+	ElapsedMS     int64                `json:"elapsed_ms"`
+}
+
+type dashBudget struct {
+	DayUSD        float64 `json:"day_usd,omitempty"`
+	DayTokens     int64   `json:"day_tokens,omitempty"`
+	TeamDayUSD    float64 `json:"team_day_usd,omitempty"`
+	TeamDayTokens int64   `json:"team_day_tokens,omitempty"`
+	Team          bool    `json:"team"` // a team folder is set
+	// TeamDays are the other machines' totals per date (from the team
+	// folder; this machine's own are the days above).
+	TeamDays map[string]teamDay `json:"team_days,omitempty"`
+}
+
+type teamDay struct {
+	Tokens int64   `json:"fresh_tokens"`
+	USD    float64 `json:"usd"`
+}
+
+type dashQuota struct {
+	Source       string             `json:"source"` // live (this sy) or log (the newest logged reading)
+	Seen         time.Time          `json:"seen"`
+	Utilization  float64            `json:"utilization"`
+	Window       string             `json:"window,omitempty"`
+	ResetsAt     *time.Time         `json:"resets_at,omitempty"`
+	Status       string             `json:"status,omitempty"`
+	Windows      map[string]float64 `json:"windows,omitempty"` // e.g. five_hour, seven_day
+	LimitedUntil *time.Time         `json:"limited_until,omitempty"`
+}
+
+type dashLearned struct {
+	Root    string           `json:"root,omitempty"`
+	Mode    string           `json:"mode"` // routing.learn
+	Updated *time.Time       `json:"updated,omitempty"`
+	Routes  []learnedRow     `json:"routes"`
+	Pending []learnedPending `json:"pending"` // what `sy tune --apply` would change
+	Note    string           `json:"note,omitempty"`
+}
+
+type learnedRow struct {
+	Role     string                 `json:"role"`
+	Route    string                 `json:"route"`
+	Since    time.Time              `json:"since"`
+	Why      string                 `json:"why"`
+	InUse    bool                   `json:"in_use"`
+	Evidence []config.RouteEvidence `json:"evidence"`
+}
+
+type learnedPending struct {
+	Role   string `json:"role"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Remove bool   `json:"remove,omitempty"`
+	Why    string `json:"why"`
+}
+
+type dashHealth struct {
+	Criterion health.Criterion `json:"criterion"`
+	Days      int              `json:"days"`
+	Now       time.Time        `json:"now"`
+	UseDays   []string         `json:"use_days"`
+	BadDays   map[string]int   `json:"bad_days"` // crashes and hangs per date
+}
+
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	days := 7
+	if v := q.Get("days"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > dashMaxDays {
+			fail(w, http.StatusBadRequest, fmt.Errorf("days %q: want 1-%d", v, dashMaxDays))
+			return
+		}
+		days = n
+	}
+	v, err := s.dashboard(days, q.Get("here") == "1", time.Now())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, v)
+}
+
+// dashboard builds the view for the last days days (today included).
+func (s *Server) dashboard(days int, here bool, now time.Time) (*dashboardView, error) {
+	began := time.Now()
+	cfg := s.store.Get()
+	dir := cfg.SessionDir()
+	v := &dashboardView{Generated: now, RangeDays: days, Here: here, Dir: s.opt.Dir, LogDir: dir, MinTasks: minTuneTasks,
+		Quota: map[string]dashQuota{}, Warnings: []string{}}
+	// One read covers the range and the learned-routes dry run; files not
+	// written to since then are skipped unread.
+	readFrom := sessionlog.DashboardSince(now, max(days, dashLearnDays))
+	recs, err := sessionlog.ReadDirSince(dir, readFrom)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if len(recs) == 0 {
+			return nil, err
+		}
+		v.Warnings = append(v.Warnings, "some session logs could not be read: "+err.Error())
+	}
+	o := sessionlog.DashboardOptions{Days: days, Now: now, Catalog: sessionlog.CatalogFrom(cfg)}
+	if here {
+		o.Cwd = s.opt.Dir
+	}
+	v.Dashboard = sessionlog.BuildDashboard(recs, o)
+	v.Budget = s.dashBudget(cfg, now, v)
+	v.quota(s, cfg, now)
+	v.LearnedRoutes = s.dashLearned(cfg, recs, now)
+	v.Health = s.dashHealth(v)
+	v.ElapsedMS = time.Since(began).Milliseconds()
+	return v, nil
+}
+
+// dashBudget is the daily and team budget, with the other machines' days.
+func (s *Server) dashBudget(cfg *config.Config, now time.Time, v *dashboardView) dashBudget {
+	b := dashBudget{DayUSD: cfg.Budget.DayUSD, DayTokens: cfg.Budget.DayTokens}
+	tb := cfg.Budget.Team
+	if tb.Dir == "" {
+		return b
+	}
+	b.Team, b.TeamDayUSD, b.TeamDayTokens = true, tb.DayUSD, tb.DayTokens
+	folder, err := tb.Folder()
+	if err != nil {
+		v.Warnings = append(v.Warnings, "team budget: "+err.Error())
+		return b
+	}
+	me, err := sessionlog.MachineID()
+	if err != nil {
+		v.Warnings = append(v.Warnings, "team budget: no machine id ("+err.Error()+"); this machine's own file may be counted twice")
+	}
+	exps, warns, err := sessionlog.ReadTeamDir(folder, me, now)
+	if err != nil {
+		v.Warnings = append(v.Warnings, "team budget: cannot read the team folder "+folder+": "+err.Error())
+		return b
+	}
+	for _, w := range warns {
+		v.Warnings = append(v.Warnings, "team folder: "+w)
+	}
+	b.TeamDays = map[string]teamDay{}
+	for _, d := range v.Days {
+		tok, usd := sessionlog.TeamDay(exps, d.Date)
+		if tok > 0 || usd > 0 {
+			b.TeamDays[d.Date] = teamDay{Tokens: tok, USD: usd}
+		}
+	}
+	return b
+}
+
+// quota fills the current use of each provider's limit: this sy's live
+// reading, else the newest logged one whose window has not reset yet.
+func (v *dashboardView) quota(s *Server, cfg *config.Config, now time.Time) {
+	tr := s.orc.Tracker()
+	for _, p := range cfg.ProviderNames() {
+		st := tr.Snapshot(p)
+		var dq dashQuota
+		var qi *dashQuota
+		if _, ok := tr.Utilization(p); ok && st.Quota != nil {
+			dq = quotaView(*st.Quota, "live", now)
+			qi = &dq
+		} else if lq, ok := v.Limits.Quota[p]; ok && (lq.Quota.ResetsAt.IsZero() || now.Before(lq.Quota.ResetsAt)) {
+			dq = quotaView(lq.Quota, "log", lq.TS)
+			qi = &dq
+		}
+		if st.Limited(now) {
+			if qi == nil {
+				dq = dashQuota{Source: "live", Seen: now}
+				qi = &dq
+			}
+			u := st.LimitedUntil
+			qi.LimitedUntil = &u
+		}
+		if qi != nil {
+			v.Quota[p] = *qi
+		}
+	}
+}
+
+func quotaView(q event.QuotaInfo, source string, seen time.Time) dashQuota {
+	dq := dashQuota{Source: source, Seen: seen, Utilization: q.Utilization, Window: q.Window, Status: q.Status, Windows: q.Windows}
+	if !q.ResetsAt.IsZero() {
+		t := q.ResetsAt
+		dq.ResetsAt = &t
+	}
+	if len(dq.Windows) == 0 && q.Window != "" {
+		dq.Windows = map[string]float64{q.Window: q.Utilization}
+	}
+	return dq
+}
+
+// dashLearned is this repo's learned routes and what `sy tune --apply`
+// would change now.
+func (s *Server) dashLearned(cfg *config.Config, recs []sessionlog.Record, now time.Time) *dashLearned {
+	l := &dashLearned{Mode: cfg.LearnMode(), Routes: []learnedRow{}, Pending: []learnedPending{}}
+	if s.opt.Demo {
+		l.Note = "demo mode: no repo, no learned routes"
+		return l
+	}
+	root, err := orchestrator.LearnedRoot(s.opt.Dir)
+	if err != nil {
+		l.Note = err.Error()
+		return l
+	}
+	l.Root = root
+	stored, err := config.LoadLearned(root)
+	if err != nil {
+		l.Note = "learned routes: " + err.Error()
+		return l
+	}
+	if !stored.Updated.IsZero() {
+		u := stored.Updated
+		l.Updated = &u
+	}
+	live := s.store.Learned()
+	for role, lr := range stored.Routes {
+		cur, ok := live[role]
+		l.Routes = append(l.Routes, learnedRow{Role: role, Route: lr.Spec(), Since: lr.Since, Why: lr.Why, Evidence: lr.Evidence,
+			InUse: ok && cur.Spec() == lr.Spec()})
+	}
+	sort.Slice(l.Routes, func(i, j int) bool { return l.Routes[i].Role < l.Routes[j].Role })
+	rep, err := orchestrator.UpdateLearned(s.opt.Dir, s.store.Unlearned(), recs, now, true)
+	if err != nil {
+		l.Note = "sy tune --apply dry run: " + err.Error()
+		return l
+	}
+	for _, c := range rep.Result.Changes {
+		l.Pending = append(l.Pending, learnedPending{Role: c.Role, From: c.From.String(), To: c.To.String(), Remove: c.Remove, Why: c.Why})
+	}
+	return l
+}
+
+// dashHealth is the clean streak of `sy health`. The scan for leftovers is
+// skipped: it walks the worktree pools, and the Health panel has it.
+func (s *Server) dashHealth(v *dashboardView) *dashHealth {
+	o := healthOptions
+	o.NoLeftovers = true
+	rep, err := health.Build(o)
+	if err != nil {
+		v.Warnings = append(v.Warnings, "health: "+err.Error())
+		return nil
+	}
+	h := &dashHealth{Criterion: rep.Criterion, Days: rep.Days, Now: rep.Now, UseDays: rep.UseDays, BadDays: map[string]int{}}
+	if h.UseDays == nil {
+		h.UseDays = []string{}
+	}
+	for _, in := range append(append([]health.Incident{}, rep.Crashes...), rep.Hangs...) {
+		h.BadDays[in.Time.Local().Format("2006-01-02")]++
+	}
+	return h
+}

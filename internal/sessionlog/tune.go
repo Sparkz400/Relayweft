@@ -18,6 +18,11 @@ type Suggestion struct {
 	Title    string
 	Detail   string   // the evidence, with numbers
 	Commands []string // TUI slash commands that apply it, e.g. "/route worker claude:sonnet:high"
+	// Role, Provider and Model name the role or route it is about ("" when
+	// it is not about one), so the dashboard can flag that route.
+	Role     string `json:",omitempty"`
+	Provider string `json:",omitempty"`
+	Model    string `json:",omitempty"`
 }
 
 // Severities, most urgent first.
@@ -305,6 +310,7 @@ func (c Catalog) failingRoutes(recs []Record) []Suggestion {
 			Detail: fmt.Sprintf("%d of %d runs failed (%.0f%%, limit hits excluded). Raise the effort or move %s to %s.",
 				g.fails, g.runs, rate*100, g.role, c.other(g.prov)),
 			Commands: cmds,
+			Role:     g.role, Provider: g.prov, Model: g.model,
 		})
 	}
 	return out
@@ -376,7 +382,8 @@ func (c Catalog) escalations(recs []Record) []Suggestion {
 				cmds = append(cmds, fmt.Sprintf("/route %s %s", role, hi))
 			}
 		}
-		if p := prov[role].top(); p != "" {
+		p := prov[role].top()
+		if p != "" {
 			cmds = append(cmds, fmt.Sprintf("/prefer %s %s", role, c.other(p)))
 		}
 		out = append(out, Suggestion{
@@ -385,6 +392,7 @@ func (c Catalog) escalations(recs []Record) []Suggestion {
 			Detail: fmt.Sprintf("%d of %d %s steps hit the same error twice and were escalated (%.0f%%). Start them on the stronger route (worker_high) or the other provider.",
 				n, total, role, rate*100),
 			Commands: cmds,
+			Role:     role, Provider: p,
 		})
 	}
 	return out
@@ -418,8 +426,10 @@ func (c Catalog) finalReviews(recs []Record) []Suggestion {
 		sev = SevHigh
 	}
 	var cmds []string
+	var prov, model string
 	if w := worker.top(); w != "" {
 		p := strings.SplitN(w, "|", 3)
+		prov, model = p[0], p[1]
 		if e := c.nextEffort(p[0], p[2]); e != "" {
 			cmds = append(cmds, fmt.Sprintf("/route worker %s", routeSpec(p[0], p[1], e)))
 		}
@@ -430,6 +440,7 @@ func (c Catalog) finalReviews(recs []Record) []Suggestion {
 		Detail: fmt.Sprintf("%d of %d final reviews requested changes (%.0f%%). Use a stronger worker route, or raise orchestrator.max_fix_rounds in switchyard.yaml so rejected work gets another fix round.",
 			rejected, n, rate*100),
 		Commands: cmds,
+		Role:     event.RoleWorker, Provider: prov, Model: model,
 	}}
 }
 
@@ -566,6 +577,7 @@ func (c Catalog) cheaperReadOnly(recs []Record) []Suggestion {
 			Detail: fmt.Sprintf("%d %s runs on %s:%s, none failed, avg %s fresh tokens. A fast model is likely enough.",
 				g.runs, g.role, g.prov, g.model, human(avg)),
 			Commands: []string{fmt.Sprintf("/route %s %s:%s", g.role, g.prov, cheap)},
+			Role:     g.role, Provider: g.prov, Model: g.model,
 		})
 	}
 	return out
