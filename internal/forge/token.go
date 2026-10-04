@@ -25,11 +25,13 @@ import (
 //
 // When GITLAB_HOST (GITEA_HOST, FORGEJO_HOST) is set, the GitLab (Gitea)
 // variables are for the hosts it names only, as with glab: a token for a
-// company's server is never sent to gitlab.com or codeberg.org.
+// company's server is never sent to gitlab.com or codeberg.org. In a
+// Forgejo or Gitea Actions job the job's server counts as named, so the
+// job's token stays with its server.
 func Token(k Kind, host string) (token, source string) {
 	switch k {
 	case GitLab:
-		if envTokenFor(host, "GITLAB_HOST") {
+		if envTokenFor(host, envHostValues("GITLAB_HOST")) {
 			if t, v := firstEnv("GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN"); t != "" {
 				return t, v
 			}
@@ -39,22 +41,37 @@ func Token(k Kind, host string) (token, source string) {
 		}
 		return "", ""
 	case Gitea:
-		if envTokenFor(host, "GITEA_HOST", "FORGEJO_HOST") {
+		if envTokenFor(host, giteaHostValues()) {
 			if t, v := firstEnv("GITEA_TOKEN", "FORGEJO_TOKEN"); t != "" {
 				return t, v
 			}
 		}
 		return "", ""
 	}
-	return gh.Token(host)
+	t, src := gh.Token(host)
+	if src == "GITHUB_TOKEN" {
+		if s, _ := actionsServer(); s != "" {
+			// A Forgejo or Gitea runner sets GITHUB_TOKEN to the job's
+			// token for its own server: it never goes to GitHub.
+			if t, v := firstEnv("GH_TOKEN"); t != "" {
+				return t, v
+			}
+			if t := gh.GHCLIToken("github.com"); t != "" {
+				return t, "gh auth token"
+			}
+			return "", ""
+		}
+	}
+	return t, src
 }
 
 // envTokenFor reports whether the token variables of a forge may go to
-// host: when none of the host variables is set, or one of them names it.
-func envTokenFor(host string, vars ...string) bool {
+// host: when no hosts are configured for the forge (entries, as
+// envHostValues gives them), or one of them is host.
+func envTokenFor(host string, entries []string) bool {
 	set := false
-	for _, v := range vars {
-		for _, h := range envHostList(v) {
+	for _, e := range entries {
+		if h := hostName(e); h != "" {
 			set = true
 			if h == hostName(host) {
 				return true
