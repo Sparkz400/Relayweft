@@ -25,11 +25,15 @@ import (
 
 const benchExample = `# sy bench: compare Switchyard (routed) with single agents on YOUR tasks.
 #
-# Every run starts from a clean checkout of HEAD in a separate worktree
-# (outside your repo), so your working tree is never touched. Commit first:
-# uncommitted changes are not part of the runs. Each run uses real quota.
+# Every run starts in a fresh repository outside your repo that holds only
+# HEAD's files, as one commit without the history, so your working tree is
+# never touched. Commit first: uncommitted changes are not part of the runs.
+# Each run uses real quota.
 #
-# A run passes when its check command exits with 0.
+# A run passes when its check command exits with 0. In a task with tests
+# (tests: {from: <commit>, files: [...]}), {tests} in the check stands for
+# its test files and {test_dirs} for their folders: "flutter test {tests}",
+# "go test {test_dirs}".
 
 modes:
   - routed                          # Switchyard with your switchyard.yaml routes
@@ -110,6 +114,7 @@ func cmdBench(args []string) error {
 	fs.IntVar(&ho.lim.minFiles, "min-files", 2, "--from-history: minimum code files a commit changed (tests, docs and lock files do not count)")
 	fs.IntVar(&ho.lim.maxFiles, "max-files", 15, "--from-history: maximum files a commit changed")
 	fs.IntVar(&ho.lim.maxLines, "max-lines", 800, "--from-history: maximum changed lines outside tests and lock files")
+	fs.BoolVar(&ho.ownTests, "own-tests", false, "--from-history: each task's check runs only the commit's test files (go test, flutter/dart test, pytest, jest, vitest, npm test; or put {tests} or {test_dirs} in --check)")
 	fs.BoolVar(&ho.hidden, "hidden-tests", false, "--from-history: keep the commit's tests from the agents until the check (default: in place from the start)")
 	fs.BoolVar(&ho.noValidate, "no-validate", false, "--from-history: skip running the check on each commit and its parent")
 	fs.DurationVar(&ho.timeout, "check-timeout", 15*time.Minute, "--from-history: time limit per validation check")
@@ -180,6 +185,9 @@ func cmdBench(args []string) error {
 	for _, t := range bf.Tasks {
 		if t.Prompt == "" || t.Check == "" {
 			return fmt.Errorf("task %q needs a prompt and a check", t.Name)
+		}
+		if usesTestsPlaceholder(t.Check) && (t.Tests == nil || len(t.Tests.Files) == 0) {
+			return fmt.Errorf("task %q: the check uses %s or %s, but the task has no tests.files", t.Name, phTests, phTestDirs)
 		}
 		if len(want) == 0 || want[t.Name] {
 			tasks = append(tasks, t)
@@ -393,14 +401,18 @@ func prepareBenchRun(ctx context.Context, ws *orchestrator.BenchWorkspace, head,
 }
 
 // benchCheck runs a task's check, with its tests set to the reference
-// commit's version first.
+// commit's version first and its placeholders filled in.
 func benchCheck(ctx context.Context, ws *orchestrator.BenchWorkspace, t benchTask) (bool, string) {
 	if t.Tests != nil {
 		if err := ws.RestoreFiles(t.Tests.From, t.Tests.Files); err != nil {
 			return false, "restoring the tests: " + err.Error()
 		}
 	}
-	return shell(ctx, ws.Path, t.Check)
+	check, err := expandTests(t.Check, ws.Path, t.Tests)
+	if err != nil {
+		return false, err.Error()
+	}
+	return shell(ctx, ws.Path, check)
 }
 
 // benchReport renders per-task rows and per-mode totals.

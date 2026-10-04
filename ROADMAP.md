@@ -180,7 +180,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 | # | Item | Why |
 |---|---|---|
-| 3.1 | ✅ **Benchmark command**: `sy bench` with `bench.yaml`, check commands, routed vs single, saved results, `sy bench --starter` (five Python tasks with check scripts), and `sy bench --from-history` (real tasks from past multi-file commits, checked by the repo's tests with the commit's test files in place, each validated to fail before and pass after). | This is the success measure from `plan.md` §9, automated. |
+| 3.1 | ✅ **Benchmark command**: `sy bench` with `bench.yaml`, check commands, routed vs single, saved results, `sy bench --starter` (five Python tasks with check scripts), and `sy bench --from-history` (real tasks from past multi-file commits, checked by the repo's tests with the commit's test files in place, each validated to fail before and pass after). Every run starts in a fresh repository with only the starting commit's files, so agents cannot find a solution in the history. `--own-tests` (or `{tests}`/`{test_dirs}` in the check) runs only the commit's tests. | This is the success measure from `plan.md` §9, automated. |
 | 3.2 | ✅ **Quota-aware scheduling** (done early, Claude; Codex as soon as its CLI reports `rate_limits`): `quota-preempt` at `switch_at_utilization`, and the planner and reviewer retry on the other provider. Was planned as: use Claude's live 5-hour and 7-day utilization (already received) and Codex limits to move work to the other provider *before* hitting the limit, not after. | Avoids stalls entirely. |
 | 3.3 | ✅ **Rule tuning from stats**: `sy tune` flags failing routes, frequent escalations, rejected reviews, quota pressure and over-sized read-only models, and prints the `/route` / `/prefer` command for each. | Routing improves from your own data. |
 | 3.4 | ✅ **Judge model** (measurement): decisions record whether the judge ran, and `sy tune` compares judged with rule-routed steps to suggest `/judge on` or `/judge off`. | Spend quota only where it pays. |
@@ -194,6 +194,8 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - `routed-nohandoff` measures the hand-off; the first run showed a small saving.
 - `sy bench --from-history` builds the multi-file benchmark from your own history instead of hand-written tasks.
 - Notes are dropped when they are older than 60 days or all their files are gone.
+- Bench runs no longer share the repo's history: `git log --all` or `git show <sha>` in a run found the solution of a history task. Each run now gets a standalone repository with one commit of the starting files.
+- `--own-tests` narrows a history task's check to the commit's own tests, so one long-failing test no longer fails every candidate.
 
 **First measurements** ([docs/bench](docs/bench/2026-10-03-starter-claude.md)):
 - On five small one-file tasks, a single Claude agent was about 3x faster and used half the tokens.
