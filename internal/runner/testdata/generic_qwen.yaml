@@ -1,0 +1,21 @@
+# Qwen Code (0.24.7) described as a generic provider. The test checks it
+# reads the recorded runs exactly like the built-in qwen kind.
+kind: generic
+command: qwen
+generic:
+  args: [--output-format, stream-json]
+  model_args: [-m, "{model}"]
+  read_only_args: [--approval-mode, plan]
+  write_args: [--approval-mode, auto-edit]
+  resume_args: [--resume, "{session}"]
+  output: jsonl
+  json:
+    - {match: {type: system, subtype: init}, session: session_id}
+    - match: {type: assistant}
+      each: message.content
+      rules:
+        - {match: {type: text}, text: text}
+        - {match: {type: tool_use}, tool: name, tool_input: input}
+    - {match: {type: result}, session: session_id, final: result, input_tokens: usage.input_tokens, cached_tokens: usage.cache_read_input_tokens, output_tokens: usage.output_tokens}
+    - {match: {type: result, is_error: "true"}, error: error.message, fatal: true}
+  edit_tools: [write_file, edit, replace]

@@ -70,12 +70,13 @@ func ParseIn(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// Providers accepted by --when-reset.
-var resetChoices = []string{event.Claude, event.Codex, "any"}
-
-// ValidReset reports whether p names a --when-reset choice.
-func ValidReset(p string) bool {
-	for _, c := range resetChoices {
+// ValidReset reports whether p is a --when-reset choice: "any" or one of
+// the providers.
+func ValidReset(p string, providers []string) bool {
+	if p == "any" {
+		return true
+	}
+	for _, c := range providers {
 		if c == p {
 			return true
 		}
@@ -89,10 +90,15 @@ func ValidReset(p string) bool {
 // either has no known future reset: that one is usable). A zero time means
 // unknown or already past: start now. note says where the time came from.
 func ResetTime(provider string, tr *limits.Tracker, recs []sessionlog.Record, now time.Time) (time.Time, string) {
+	return ResetTimeIn(provider, []string{event.Claude, event.Codex}, tr, recs, now)
+}
+
+// ResetTimeIn is ResetTime with "any" meaning any of providers.
+func ResetTimeIn(provider string, providers []string, tr *limits.Tracker, recs []sessionlog.Record, now time.Time) (time.Time, string) {
 	if provider == "any" {
 		var best time.Time
-		for _, p := range event.Providers {
-			t, _ := ResetTime(p, tr, recs, now)
+		for _, p := range providers {
+			t, _ := ResetTimeIn(p, providers, tr, recs, now)
 			if t.IsZero() {
 				return time.Time{}, p + " has no known limit waiting to reset: starting now"
 			}
@@ -166,8 +172,12 @@ type ResetFunc func(provider string) (time.Time, string)
 // ("/schedule in 2h fix it", "/schedule reset claude fix it",
 // "/schedule 02:30 fix it", "/schedule 2026-10-04 02:30 fix it") and says
 // how many words it used. A zero time means "now" (a reset that is unknown
-// or past); note explains reset lookups.
-func ParseWords(words []string, now time.Time, reset ResetFunc) (at time.Time, used int, note string, err error) {
+// or past); note explains reset lookups. providers are the names "reset"
+// accepts besides "any" (none given: claude and codex).
+func ParseWords(words []string, now time.Time, reset ResetFunc, providers ...string) (at time.Time, used int, note string, err error) {
+	if len(providers) == 0 {
+		providers = []string{event.Claude, event.Codex}
+	}
 	if len(words) == 0 {
 		return time.Time{}, 0, "", errors.New("when? e.g. 02:30, in 2h or reset claude")
 	}
@@ -182,8 +192,8 @@ func ParseWords(words []string, now time.Time, reset ResetFunc) (at time.Time, u
 		}
 		return now.Add(d), 2, "", nil
 	case "reset", "when-reset":
-		if len(words) < 2 || !ValidReset(strings.ToLower(words[1])) {
-			return time.Time{}, 0, "", errors.New("reset of which provider? reset claude|codex|any")
+		if len(words) < 2 || !ValidReset(strings.ToLower(words[1]), providers) {
+			return time.Time{}, 0, "", fmt.Errorf("reset of which provider? reset %s|any", strings.Join(providers, "|"))
 		}
 		if reset == nil {
 			return time.Time{}, 2, "reset time unknown: starting now", nil

@@ -153,8 +153,9 @@ func TestPickerChangesAndSavesModels(t *testing.T) {
 		t.Fatalf("worker claude model = %q", got)
 	}
 	// Change the worker's prefer to claude via the list.
-	m.Update(key("right"))
-	m.Update(key("right")) // wraps to column 0 (prefer)
+	m.Update(key("left"))
+	m.Update(key("left"))
+	m.Update(key("left")) // back to column 0 (prefer)
 	m.Update(key("enter"))
 	for i, o := range m.picker.options {
 		if o.value == config.PreferClaude {

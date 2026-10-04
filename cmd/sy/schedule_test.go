@@ -50,7 +50,7 @@ func TestScheduleFlagsTarget(t *testing.T) {
 	if _, _, err := sf.target(cfg, nil, now); err == nil {
 		t.Error("two start flags accepted")
 	}
-	sf = scheduleFlags{whenReset: "gemini"}
+	sf = scheduleFlags{whenReset: "bard"}
 	if _, _, err := sf.target(cfg, nil, now); err == nil {
 		t.Error("unknown provider accepted")
 	}

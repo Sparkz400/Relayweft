@@ -1,6 +1,6 @@
 # Switchyard
 
-A Windows-first, animated terminal app that routes coding work between your **ChatGPT (Codex CLI)** and **Claude (Claude Code)** subscriptions. It picks a model for each step, runs agents in parallel and only calls the expensive models when it matters.
+A Windows-first, animated terminal app that routes coding work between your **ChatGPT (Codex CLI)** and **Claude (Claude Code)** subscriptions, and optionally **Gemini CLI**, **Qwen Code**, **DeepSeek** and **local models** ([more providers](docs/providers.md)). It picks a model for each step, runs agents in parallel and only calls the expensive models when it matters.
 
 ```
 sy            # start the TUI in your project
@@ -10,7 +10,7 @@ sy --demo     # see the whole thing animate with fake agents (no CLIs, no quota)
 
 ![sy web: agent tree and live activity](docs/web/running.png)
 
-Switchyard uses **subscriptions only**. It never touches model API keys or tokens (only the optional GitHub features use a GitHub token); it drives the official `codex` and `claude` CLIs exactly as you would, with their normal login.
+Out of the box Switchyard uses **subscriptions only**: it drives the official `codex` and `claude` CLIs exactly as you would, with their normal login, and never touches model API keys (only the optional GitHub features use a GitHub token). The [extra providers](docs/providers.md) are opt-in; one that needs an API key (DeepSeek) reads it from your environment, and sy never stores it or puts it on a command line.
 
 ---
 
@@ -104,7 +104,7 @@ With the defaults, two more steps involve you or your repo's checks:
 
 ## Choosing models: any model for any job
 
-Each **role** has a route on **both** providers, and `prefer` decides which one is used:
+Each **role** has a route on every provider, and `prefer` decides which one is used (the routes on the [extra providers](docs/providers.md) are left out here):
 
 | Role | Default prefer | Codex default | Claude default |
 |---|---|---|---|
@@ -116,16 +116,18 @@ Each **role** has a route on **both** providers, and `prefer` decides which one 
 | reviewer | **other** | gpt-6.1-sol @xhigh | opus @high |
 | judge | claude | gpt-6-luna @low | haiku @low |
 
-`prefer` can be `codex`, `claude`, `other` (the opposite of the planner's provider, which is what the reviewer uses), or `auto` (whichever provider has used fewer tokens this session). If the preferred provider is at its usage limit, the role's route on the other provider is used automatically.
+`prefer` can be any provider (`codex`, `claude`, `gemini`, ...), `other` (another provider than the planner's, which is what the reviewer uses), or `auto` (whichever provider has used fewer tokens this session). If the preferred provider is at its usage limit, the role's route on the next provider in `routing.provider_order` is used automatically.
 
 There are four ways to change any of this, at any time:
 
 - **In the TUI:** press `m` (or `ctrl+o`) for the **model picker**. Arrow keys pick a role and column, `enter` lists the catalog (or `custom…` to type any model id), and `s` saves to `switchyard.yaml`. The "NOW USES" column shows the live result, including limit fallbacks. Changes apply to the next agent that starts.
 - **At the prompt:** `/route worker claude:sonnet:high`, `/prefer all claude`, `/save`.
-- **On the command line:** `sy --route reviewer=claude:fable:max --prefer explorer=codex`. Naming a route on the command line also sets that role's `prefer`. `sy --provider claude` forces every role onto one provider.
+- **On the command line:** `sy --route reviewer=claude:fable:max --prefer explorer=codex`. Naming a route on the command line also sets that role's `prefer`. `sy --provider claude` forces every role onto one provider. Model ids may contain a colon (Ollama tags such as `ollama:qwen3.6:35b`): a last part is read as the effort only when it is one of that provider's efforts.
 - **In the file:** `sy init` writes a commented `switchyard.yaml` you can edit.
 
 **Model catalogs.** The Codex catalog comes from `codex debug models`; run `sy models --refresh` to update it after a Codex release (`--all` includes hidden models). Claude takes aliases (`fable`, `opus`, `sonnet`, `haiku`) or full ids (`claude-opus-5-5`, ...). Efforts: Codex `low|medium|high|xhigh|max|ultra`, Claude `low|medium|high|xhigh|max`, or empty for the CLI default.
+
+**More providers.** Gemini CLI, Qwen Code, DeepSeek (through Claude Code) and local Ollama models ship as disabled presets; set `disabled: false` and point a role's `prefer` at one. Any other agent CLI that speaks one of the four protocols can be added as a named provider with a `kind`, a `command` and an `env`; one that speaks none of them is described in config with `kind: generic` (arguments, output, resume, limits). A local model can stand by to take read-only work when Codex and Claude are nearly out (`standby`). See [docs/providers.md](docs/providers.md).
 
 ## The TUI
 
@@ -451,7 +453,7 @@ A `./switchyard.yaml` may have come with a repository you cloned, so the setting
 A `.switchyard.yaml` in a repository holds the settings for that repo (in the repo root, or in the project folder). It is layered over your own config: built-in defaults < your config < the repo file < command-line flags. It only needs what the repo cares about; roles merge per key, so `roles: {worker: {prefer: claude}}` keeps the worker's routes.
 
 - Create one with `sy init --repo`, which detects the test commands, or with `/save repo` from the TUI. Commit it to share.
-- **Commands need your trust.** The parts that run commands or reach other folders are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers`, `log_dir`, `mcp`, `workspace`, `budget.team.dir` and `notify.webhooks` (they say where your task results are sent). A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply.
+- **Commands need your trust.** The parts that run commands or reach other folders are ignored until you have reviewed them with `sy trust`: `verify`, `hooks`, `providers`, `log_dir`, `mcp`, `workspace`, `budget.team.dir` and `notify.webhooks` (they say where your task results are sent). A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `sy trust`. `sy trust --revoke` withdraws it. Routes, preferences and toggles always apply, except those that name a provider the untrusted file adds (`providers` covers `kind: generic` descriptions and `env` too).
 
 ### The repo's own conventions
 

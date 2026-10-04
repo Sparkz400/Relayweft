@@ -49,6 +49,33 @@ type Catalog struct {
 	Cheap   map[string]string   // provider -> "model[:effort]"
 	Efforts map[string][]string // provider -> ladder, lowest first
 	Fast    map[string]bool     // model ids of the fast tier
+	// Order is where work may move, in routing order (the enabled
+	// providers that may take over); empty = codex, claude.
+	Order []string
+}
+
+// other is where a suggestion moves work away from p: the first other
+// provider in routing order.
+func (c Catalog) other(p string) string {
+	order := c.Order
+	if len(order) == 0 {
+		order = []string{event.Codex, event.Claude}
+	}
+	for _, q := range order {
+		if q != p {
+			return q
+		}
+	}
+	return p
+}
+
+// from is the provider a fallback decision moved away from (logs written
+// before it was recorded had only two providers).
+func (c Catalog) from(r Record) string {
+	if r.From != "" {
+		return r.From
+	}
+	return c.other(r.Provider)
 }
 
 // DefaultCatalog matches default.yaml. Its ladders stop below the premium
@@ -70,6 +97,11 @@ var premiumEfforts = map[string]bool{"max": true, "ultra": true}
 // provider's efforts form its ladder.
 func CatalogFrom(cfg *config.Config) Catalog {
 	c := Catalog{Cheap: map[string]string{}, Efforts: map[string][]string{}, Fast: map[string]bool{}}
+	for _, p := range cfg.Enabled() {
+		if !cfg.Providers[p].OnlyPreferred {
+			c.Order = append(c.Order, p)
+		}
+	}
 	for name, p := range cfg.Providers {
 		for _, m := range p.Models {
 			if m.Tier == "fast" {
@@ -87,8 +119,8 @@ func CatalogFrom(cfg *config.Config) Catalog {
 		}
 	}
 	if ex, ok := cfg.Roles[event.RoleExplorer]; ok {
-		for prov, r := range map[string]config.Route{event.Codex: ex.Codex, event.Claude: ex.Claude} {
-			if r.Model != "" {
+		for _, prov := range cfg.ProviderNames() {
+			if r := ex.For(prov); r.Model != "" {
 				c.Cheap[prov] = strings.TrimSuffix(r.Model+":"+r.Effort, ":")
 			}
 		}
@@ -122,7 +154,7 @@ func SuggestFor(recs []Record, f Filter, cat Catalog) []Suggestion {
 	}
 	var out []Suggestion
 	for _, h := range []func([]Record) []Suggestion{
-		routedVsSingle, cat.failingRoutes, escalations, cat.finalReviews, limitPressure, judgeAdvice, cat.cheaperReadOnly,
+		routedVsSingle, cat.failingRoutes, cat.escalations, cat.finalReviews, cat.limitPressure, judgeAdvice, cat.cheaperReadOnly,
 	} {
 		out = append(out, h(kept)...)
 	}
@@ -224,12 +256,12 @@ func (c Catalog) failingRoutes(recs []Record) []Suggestion {
 		if e := c.nextEffort(g.prov, g.effort.top()); e != "" {
 			cmds = append(cmds, fmt.Sprintf("/route %s %s", g.role, routeSpec(g.prov, g.model, e)))
 		}
-		cmds = append(cmds, fmt.Sprintf("/prefer %s %s", g.role, event.Other(g.prov)))
+		cmds = append(cmds, fmt.Sprintf("/prefer %s %s", g.role, c.other(g.prov)))
 		out = append(out, Suggestion{
 			Severity: sev,
 			Title:    fmt.Sprintf("%s on %s:%s fails often", g.role, g.prov, g.model),
 			Detail: fmt.Sprintf("%d of %d runs failed (%.0f%%, limit hits excluded). Raise the effort or move %s to %s.",
-				g.fails, g.runs, rate*100, g.role, event.Other(g.prov)),
+				g.fails, g.runs, rate*100, g.role, c.other(g.prov)),
 			Commands: cmds,
 		})
 	}
@@ -240,7 +272,9 @@ var escalateRe = regexp.MustCompile(`same error twice: (\S+) -> (\S+)`)
 
 // escalations flags roles whose steps keep hitting the same error twice and
 // get bumped up the ladder: the first attempt is wasted every time.
-func escalations(recs []Record) []Suggestion {
+func escalations(recs []Record) []Suggestion { return DefaultCatalog.escalations(recs) }
+
+func (c Catalog) escalations(recs []Record) []Suggestion {
 	steps := map[string]int{}      // first-attempt decisions per role
 	esc := map[string]int{}        // error-repeats escalations away from a role
 	prov := map[string]counter{}   // where each role usually runs
@@ -284,7 +318,7 @@ func escalations(recs []Record) []Suggestion {
 			}
 		}
 		if p := prov[role].top(); p != "" {
-			cmds = append(cmds, fmt.Sprintf("/prefer %s %s", role, event.Other(p)))
+			cmds = append(cmds, fmt.Sprintf("/prefer %s %s", role, c.other(p)))
 		}
 		out = append(out, Suggestion{
 			Severity: SevMedium,
@@ -343,7 +377,9 @@ func (c Catalog) finalReviews(recs []Record) []Suggestion {
 // limitPressure flags a provider that keeps running out: the cheap roles
 // still preferring it should move to the other provider so the scarce quota
 // goes to the work that needs it.
-func limitPressure(recs []Record) []Suggestion {
+func limitPressure(recs []Record) []Suggestion { return DefaultCatalog.limitPressure(recs) }
+
+func (c Catalog) limitPressure(recs []Record) []Suggestion {
 	away := map[string]int{}        // switches away from a provider
 	cheapOn := map[string]counter{} // cheap role -> preferred provider (non-fallback decisions)
 	for _, r := range recs {
@@ -351,7 +387,7 @@ func limitPressure(recs []Record) []Suggestion {
 			continue
 		}
 		if r.Rule == "limit-fallback" || r.Rule == "quota-preempt" {
-			away[event.Other(r.Provider)]++
+			away[c.from(r)]++
 			continue
 		}
 		for _, c := range cheapRoles {
@@ -364,12 +400,12 @@ func limitPressure(recs []Record) []Suggestion {
 		}
 	}
 	var out []Suggestion
-	for _, from := range []string{event.Codex, event.Claude} {
+	for _, from := range event.ProvidersOf(away) {
 		n := away[from]
 		if n < minLimitSwitches {
 			continue
 		}
-		to := event.Other(from)
+		to := c.other(from)
 		var cmds, moved []string
 		for _, c := range cheapRoles {
 			if cheapOn[c].top() == from {

@@ -89,7 +89,7 @@ func (m *Model) command(line string) tea.Cmd {
 		}
 		for _, r := range roles {
 			v := args[1]
-			if args[0] == "all" && r == event.RoleReviewer && (v == "codex" || v == "claude") {
+			if args[0] == "all" && r == event.RoleReviewer && m.store.Get().IsProvider(v) {
 				// keep the reviewer on the other provider unless asked by name
 				continue
 			}
@@ -121,26 +121,26 @@ func (m *Model) command(line string) tea.Cmd {
 			say("usage: /single <provider>:<model>[:effort] <task>")
 			return nil
 		}
-		prov, r, err := config.ParseRouteSpec(args[0])
+		prov, r, err := m.store.Get().ParseRouteFor(args[0])
 		if err != nil {
 			say("%v", err)
 			return nil
 		}
 		m.startSingle(strings.Join(args[1:], " "), prov, r)
 	case "limit":
-		if len(args) < 1 || (args[0] != event.Codex && args[0] != event.Claude) {
-			say("usage: /limit <codex|claude> [reset|set]")
+		if len(args) < 1 || !m.store.Get().IsProvider(args[0]) {
+			say("usage: /limit <%s> [reset|set]", strings.Join(m.store.Get().ProviderNames(), "|"))
 			return nil
 		}
 		tr := m.orc.Tracker()
 		if len(args) > 1 && args[1] == "set" {
 			until := time.Now().Add(m.store.Get().Providers[args[0]].LimitCooldown.D())
 			tr.MarkLimited(args[0], until)
-			m.provs[args[0]].until = until
+			m.prov(args[0]).until = until
 			say("%s marked at limit until %s", args[0], until.Format("15:04"))
 		} else {
 			tr.Clear(args[0])
-			m.provs[args[0]].until = time.Time{}
+			m.prov(args[0]).until = time.Time{}
 			say("%s marked available", args[0])
 		}
 	case "threads":
@@ -183,7 +183,7 @@ func (m *Model) command(line string) tea.Cmd {
 		}
 		m.logs = nil
 	case "usage":
-		for _, p := range event.Providers {
+		for _, p := range m.shownProviders() {
 			s := m.orc.Tracker().Snapshot(p)
 			q := ""
 			if s.Quota != nil {

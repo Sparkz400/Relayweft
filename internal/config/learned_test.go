@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -120,7 +121,7 @@ func TestLearnedLayering(t *testing.T) {
 	}
 	data, _ := os.ReadFile(userPath)
 	saved, _ := Parse(data)
-	if saved.Roles[event.RoleWorker] != def.Roles[event.RoleWorker] {
+	if !reflect.DeepEqual(saved.Roles[event.RoleWorker], def.Roles[event.RoleWorker]) {
 		t.Fatalf("saved worker = %+v", saved.Roles[event.RoleWorker])
 	}
 
@@ -137,7 +138,7 @@ func TestLearnedLayering(t *testing.T) {
 		t.Fatalf("refresh moved a pinned role: %+v", e)
 	}
 	// The worker's learned route is gone with the new set: back to yours.
-	if w := s.Get().Roles[event.RoleWorker]; w != def.Roles[event.RoleWorker] {
+	if w := s.Get().Roles[event.RoleWorker]; !reflect.DeepEqual(w, def.Roles[event.RoleWorker]) {
 		t.Fatalf("worker after refresh = %+v", w)
 	}
 }

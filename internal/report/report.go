@@ -379,11 +379,5 @@ func (d *Data) fromPlan(st *orchestrator.TaskState) {
 
 // Providers lists the providers with cost in display order.
 func (d *Data) Providers() []string {
-	var out []string
-	for _, p := range event.Providers {
-		if _, ok := d.Cost.PerProvider[p]; ok {
-			out = append(out, p)
-		}
-	}
-	return out
+	return event.ProvidersOf(d.Cost.PerProvider)
 }

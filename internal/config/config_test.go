@@ -97,9 +97,13 @@ func TestStoreEditAndSave(t *testing.T) {
 	if err := s.SetRoute("nobody", event.Codex, Route{Model: "x"}); err == nil {
 		t.Fatal("unknown role accepted")
 	}
-	// Removing both models of a role must be rejected and rolled back.
-	if err := s.SetRoute("judge", event.Codex, Route{}); err != nil {
-		t.Fatal(err)
+	// Removing every model of a role must be rejected and rolled back.
+	for _, p := range s.Get().ProviderNames() {
+		if p != event.Claude {
+			if err := s.SetRoute("judge", p, Route{}); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	if err := s.SetRoute("judge", event.Claude, Route{}); err == nil {
 		t.Fatal("role without any model accepted")
@@ -131,7 +135,7 @@ func TestParseRouteSpec(t *testing.T) {
 	if err != nil || p != "codex" || r.Effort != "" {
 		t.Errorf("got %s %+v %v", p, r, err)
 	}
-	for _, bad := range []string{"opus", "gemini:x", "claude:"} {
+	for _, bad := range []string{"opus", "Gem ini:x", "claude:", "9x:m"} {
 		if _, _, err := ParseRouteSpec(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}

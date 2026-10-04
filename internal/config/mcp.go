@@ -68,7 +68,10 @@ func (m MCPCfg) RoleList() []string {
 }
 
 // For returns the sorted names of the servers a role gets on a provider.
-func (m MCPCfg) For(role, provider string) []string {
+func (m MCPCfg) For(role, provider string) []string { return m.ForKind(role, provider, provider) }
+
+// ForKind is For for a provider whose CLI is of the given kind.
+func (m MCPCfg) ForKind(role, provider, kind string) []string {
 	if len(m.Servers) == 0 || !contains(m.RoleList(), role) {
 		return nil
 	}
@@ -77,7 +80,7 @@ func (m MCPCfg) For(role, provider string) []string {
 		if len(s.Providers) > 0 && !contains(s.Providers, provider) {
 			continue
 		}
-		if provider == event.Codex && s.URL != "" && s.Transport() == "sse" {
+		if kind == event.Codex && s.URL != "" && s.Transport() == "sse" {
 			continue // codex has no SSE client
 		}
 		out = append(out, name)
@@ -184,11 +187,7 @@ func (m MCPCfg) validate() []string {
 		default:
 			errs = append(errs, fmt.Sprintf("mcp server %s: type must be http or sse, got %q", name, s.Type))
 		}
-		for _, p := range s.Providers {
-			if !contains(event.Providers, p) {
-				errs = append(errs, fmt.Sprintf("mcp server %s: unknown provider %q", name, p))
-			}
-		}
+		// Provider names are checked by Config.validateProviders.
 		for k := range s.Env {
 			if !mcpName.MatchString(k) {
 				errs = append(errs, fmt.Sprintf("mcp server %s: env name %q may use only letters, digits, _ and -", name, k))

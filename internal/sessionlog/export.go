@@ -15,8 +15,6 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
-
-	"github.com/sparkz400/switchyard/internal/event"
 )
 
 // Usage exports (`sy stats --json`) let a team add up what several
@@ -606,8 +604,9 @@ func PrintMerged(w io.Writer, exps []Export, dayUSD float64, dayTokens int64) {
 			}
 			ds.Tasks += d.Tasks
 			ds.OK += d.OK
-			ds.Codex += d.Providers[event.Codex]
-			ds.Claude += d.Providers[event.Claude]
+			for p, n := range d.Providers {
+				ds.add(p, n)
+			}
 			ds.USD += d.USD
 		}
 	}
@@ -638,27 +637,33 @@ func PrintMerged(w io.Writer, exps []Export, dayUSD float64, dayTokens int64) {
 
 	fmt.Fprintln(w, "\nPer machine")
 	tw = tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "  MACHINE\tNAME\tDAYS\tTASKS\tOK\tCODEX\tCLAUDE\t$\tLIMIT HITS\tLAST DAY\tEXPORTED")
+	cols := st.provColumns()
+	fmt.Fprintln(tw, "  MACHINE\tNAME\tDAYS\tTASKS\tOK\t"+provHead(cols, "")+"\t$\tLIMIT HITS\tLAST DAY\tEXPORTED")
 	for _, e := range exps {
 		var tasks, ok, hits int
-		var cx, cl int64
+		per := map[string]int64{}
 		var usd float64
 		lastDay := "-"
 		for _, d := range e.Days {
 			tasks += d.Tasks
 			ok += d.OK
 			hits += d.LimitHits
-			cx += d.Providers[event.Codex]
-			cl += d.Providers[event.Claude]
+			for p, n := range d.Providers {
+				per[p] += n
+			}
 			usd += d.USD
 			lastDay = d.Date
+		}
+		toks := make([]string, len(cols))
+		for i, p := range cols {
+			toks[i] = human(per[p])
 		}
 		name := e.Name
 		if name == "" {
 			name = "-"
 		}
-		fmt.Fprintf(tw, "  %s\t%s\t%d\t%d\t%d\t%s\t%s\t%.2f\t%d\t%s\t%s\n", e.Machine, oneLineName(name), len(e.Days), tasks, ok,
-			human(cx), human(cl), usd, hits, lastDay, e.Generated.Local().Format("2006-01-02 15:04"))
+		fmt.Fprintf(tw, "  %s\t%s\t%d\t%d\t%d\t%s\t%.2f\t%d\t%s\t%s\n", e.Machine, oneLineName(name), len(e.Days), tasks, ok,
+			strings.Join(toks, "\t"), usd, hits, lastDay, e.Generated.Local().Format("2006-01-02 15:04"))
 	}
 	tw.Flush()
 }

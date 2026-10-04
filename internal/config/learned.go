@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/sparkz400/switchyard/internal/canon"
-	"github.com/sparkz400/switchyard/internal/event"
 )
 
 // Learned routes: `sy tune --apply` (and, with routing.learn: auto, the
@@ -222,12 +221,7 @@ func (c *Config) RouteAvailable(provider string, r Route) bool {
 // with that model and effort.
 func withLearned(rc RoleCfg, lr LearnedRoute) RoleCfg {
 	rc.Prefer = lr.Provider
-	if lr.Provider == event.Claude {
-		rc.Claude = Route{Model: lr.Model, Effort: lr.Effort}
-	} else {
-		rc.Codex = Route{Model: lr.Model, Effort: lr.Effort}
-	}
-	return rc
+	return rc.With(lr.Provider, Route{Model: lr.Model, Effort: lr.Effort})
 }
 
 func cloneLearned(m map[string]LearnedRoute) map[string]LearnedRoute {

@@ -1,0 +1,4 @@
+{"type":"init","timestamp":"2026-10-04T15:00:00.000Z","session_id":"0c9d8e7f-1a2b-4c3d-9e8f-7a6b5c4d3e2f","model":"gemini-3.1-pro-preview"}
+{"type":"message","timestamp":"2026-10-04T15:00:00.010Z","role":"user","content":"fix the bug"}
+{"type":"error","timestamp":"2026-10-04T15:00:01.000Z","severity":"error","message":"You have exhausted your daily quota on this model. Quota resets at 15:05."}
+{"type":"result","timestamp":"2026-10-04T15:00:01.100Z","status":"error","error":{"type":"Error","message":"[API Error: RESOURCE_EXHAUSTED: You have exhausted your daily quota on this model.]"},"stats":{"total_tokens":0,"input_tokens":0,"output_tokens":0,"cached":0,"input":0,"duration_ms":0,"tool_calls":0,"models":{}}}

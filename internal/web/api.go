@@ -340,11 +340,14 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 // --- routes ------------------------------------------------------------------
 
 type routeRow struct {
-	Role   string         `json:"role"`
-	Prefer string         `json:"prefer"`
-	Codex  routeJSON      `json:"codex"`
-	Claude routeJSON      `json:"claude"`
-	Now    event.Decision `json:"now"`
+	Role   string `json:"role"`
+	Prefer string `json:"prefer"`
+	// Codex and Claude repeat Routes for clients written before other
+	// providers existed (the VS Code extension).
+	Codex  routeJSON            `json:"codex"`
+	Claude routeJSON            `json:"claude"`
+	Routes map[string]routeJSON `json:"routes"`
+	Now    event.Decision       `json:"now"`
 }
 
 // routeJSON and modelJSON give the config types (YAML-tagged) JSON names.
@@ -363,11 +366,14 @@ type catalog struct {
 	Models   []modelJSON `json:"models"`
 	Efforts  []string    `json:"efforts"`
 	Disabled bool        `json:"disabled,omitempty"`
+	Label    string      `json:"label"`
+	Kind     string      `json:"kind"`
 }
 
 type routesView struct {
 	Roles     []routeRow         `json:"roles"`
 	Providers map[string]catalog `json:"providers"`
+	Order     []string           `json:"provider_order"` // every provider, in routing order
 	Prefer    []string           `json:"prefer_options"`
 	Dirty     bool               `json:"dirty"`
 	Path      string             `json:"path"`
@@ -378,14 +384,20 @@ func (s *Server) routes() routesView {
 	s.mu.Lock()
 	mainProv, dirty := s.mainProv, s.dirty
 	s.mu.Unlock()
-	v := routesView{Providers: map[string]catalog{}, Prefer: config.PreferOptions, Dirty: dirty, Path: s.store.Path()}
+	v := routesView{Providers: map[string]catalog{}, Order: cfg.ProviderNames(), Dirty: dirty, Path: s.store.Path()}
+	v.Prefer = append(append(v.Prefer, v.Order...), config.PreferOptions...)
 	for _, role := range event.Roles {
 		rc := cfg.Roles[role]
-		v.Roles = append(v.Roles, routeRow{Role: role, Prefer: rc.Prefer, Codex: routeJSON(rc.Codex), Claude: routeJSON(rc.Claude), Now: s.orc.Router().Preview(role, mainProv)})
+		row := routeRow{Role: role, Prefer: rc.Prefer, Codex: routeJSON(rc.Codex), Claude: routeJSON(rc.Claude),
+			Routes: map[string]routeJSON{}, Now: s.orc.Router().Preview(role, mainProv)}
+		for _, p := range v.Order {
+			row.Routes[p] = routeJSON(rc.For(p))
+		}
+		v.Roles = append(v.Roles, row)
 	}
-	for _, p := range event.Providers {
+	for _, p := range v.Order {
 		pc := cfg.Providers[p]
-		c := catalog{Models: []modelJSON{}, Efforts: pc.Efforts, Disabled: pc.Disabled}
+		c := catalog{Models: []modelJSON{}, Efforts: pc.Efforts, Disabled: pc.Disabled, Label: cfg.ProviderLabel(p), Kind: cfg.Kind(p)}
 		for _, m := range pc.Models {
 			c.Models = append(c.Models, modelJSON(m))
 		}
@@ -421,7 +433,7 @@ func (s *Server) handleSetRoute(w http.ResponseWriter, r *http.Request) {
 			roles = event.Roles
 		}
 		for _, role := range roles {
-			if req.Role == "all" && role == event.RoleReviewer && (req.Prefer == config.PreferCodex || req.Prefer == config.PreferClaude) {
+			if req.Role == "all" && role == event.RoleReviewer && s.store.Get().IsProvider(req.Prefer) {
 				continue // keep the reviewer on the other provider unless asked by name
 			}
 			if err = s.store.SetPrefer(role, req.Prefer); err != nil {
@@ -429,7 +441,7 @@ func (s *Server) handleSetRoute(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		what = fmt.Sprintf("%s: prefer %s", req.Role, req.Prefer)
-	case req.Provider == event.Codex || req.Provider == event.Claude:
+	case s.store.Get().IsProvider(req.Provider):
 		rt := s.store.Get().Roles[req.Role].For(req.Provider)
 		if req.Model != nil {
 			rt.Model = strings.TrimSpace(*req.Model)
@@ -440,7 +452,7 @@ func (s *Server) handleSetRoute(w http.ResponseWriter, r *http.Request) {
 		err = s.store.SetRoute(req.Role, req.Provider, rt)
 		what = fmt.Sprintf("%s on %s: %s", req.Role, req.Provider, routeLabel(rt))
 	default:
-		err = errors.New("want prefer, or provider codex|claude with model and/or effort")
+		err = fmt.Errorf("want prefer, or a provider (%s) with model and/or effort", strings.Join(s.store.Get().ProviderNames(), ", "))
 	}
 	if err != nil {
 		fail(w, http.StatusBadRequest, fmt.Errorf("not changed: %w", err))
@@ -713,8 +725,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		v.Tasks += m.Tasks
 	}
 	for _, d := range st.Days {
-		v.Totals[event.Codex] += d.Codex
-		v.Totals[event.Claude] += d.Claude
+		for p, n := range d.Providers {
+			v.Totals[p] += n
+		}
 		v.USD += d.USD
 	}
 	writeJSON(w, v)
@@ -773,8 +786,8 @@ func (s *Server) handleLimit(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if req.Provider != event.Codex && req.Provider != event.Claude {
-		fail(w, http.StatusBadRequest, errors.New("provider must be codex or claude"))
+	if !s.store.Get().IsProvider(req.Provider) {
+		fail(w, http.StatusBadRequest, fmt.Errorf("provider must be one of %s", strings.Join(s.store.Get().ProviderNames(), ", ")))
 		return
 	}
 	tr := s.orc.Tracker()

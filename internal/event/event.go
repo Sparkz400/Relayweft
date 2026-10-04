@@ -5,25 +5,43 @@ package event
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
 
-// Providers.
+// Built-in providers. They are also the provider kinds: the CLI protocol a
+// configured provider speaks (providers.<name>.kind; a provider named after
+// a kind needs none). Any other provider name comes from the config.
 const (
 	Codex  = "codex"
 	Claude = "claude"
+	Gemini = "gemini"
+	Qwen   = "qwen"
+	// Generic is a CLI described entirely in the config (providers.<name>.generic).
+	Generic = "generic"
 )
 
-// Providers lists every supported provider in display order.
-var Providers = []string{Codex, Claude}
+// Kinds lists every CLI protocol sy can drive.
+var Kinds = []string{Codex, Claude, Gemini, Qwen, Generic}
 
-// Other returns the opposite provider.
-func Other(p string) string {
-	if p == Codex {
-		return Claude
+// ProvidersOf returns the provider keys of a per-provider map in display
+// order: codex, claude, then the rest by name.
+func ProvidersOf[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for _, p := range []string{Codex, Claude} {
+		if _, ok := m[p]; ok {
+			out = append(out, p)
+		}
 	}
-	return Codex
+	rest := make([]string, 0, len(m))
+	for p := range m {
+		if p != Codex && p != Claude {
+			rest = append(rest, p)
+		}
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
 }
 
 // Roles.
@@ -129,8 +147,8 @@ type TaskCost struct {
 // "codex 12k · claude 40k fresh tokens · ≈$0.31 API-equivalent · claude limit 61%→64%".
 func (c TaskCost) Summary() string {
 	var parts []string
-	for _, p := range Providers {
-		if u, ok := c.PerProvider[p]; ok && u.Total() > 0 {
+	for _, p := range ProvidersOf(c.PerProvider) {
+		if u := c.PerProvider[p]; u.Total() > 0 {
 			parts = append(parts, p+" "+HumanTokens(u.Total()))
 		}
 	}
@@ -141,7 +159,7 @@ func (c TaskCost) Summary() string {
 	if c.CostUSD > 0 {
 		s += fmt.Sprintf(" · ≈$%.2f API-equivalent", c.CostUSD)
 	}
-	for _, p := range Providers {
+	for _, p := range ProvidersOf(c.QuotaAfter) {
 		b, okB := c.QuotaBefore[p]
 		a, okA := c.QuotaAfter[p]
 		if okA {
@@ -180,7 +198,9 @@ type Decision struct {
 	Reason     string  `json:"reason"`
 	Confidence float64 `json:"confidence"`
 	Fallback   bool    `json:"fallback,omitempty"`
-	Judged     bool    `json:"judged,omitempty"`
+	// From is the provider the route preferred before a fallback moved it.
+	From   string `json:"from,omitempty"`
+	Judged bool   `json:"judged,omitempty"`
 }
 
 // Label is a short "provider:model@effort" description.

@@ -185,7 +185,20 @@ func cmdBugreport(args []string) error {
 	for _, e := range badPath {
 		fmt.Fprintf(&env, "repaired PATH entry with stray quote: %s\n", e)
 	}
-	for _, c := range []string{"git", "codex", "claude"} {
+	tools := []string{"git"}
+	if cfg, _, err := config.Load(*cfgPath); err == nil {
+		for _, p := range cfg.ProviderNames() {
+			tools = append(tools, cfg.Providers[p].Command)
+		}
+	} else {
+		tools = append(tools, "codex", "claude")
+	}
+	seenTool := map[string]bool{}
+	for _, c := range tools {
+		if c == "" || seenTool[c] {
+			continue
+		}
+		seenTool[c] = true
 		if bin, err := proc.Resolve(c); err == nil {
 			v, _ := exec.Command(bin, "--version").CombinedOutput()
 			fmt.Fprintf(&env, "%s: %s (%s)\n", c, strings.TrimSpace(string(v)), bin)
@@ -204,6 +217,10 @@ func cmdBugreport(args []string) error {
 	if cfg, path, err := config.Load(*cfgPath); err == nil {
 		cfg.MCP = cfg.MCP.Redacted() // env and header values may be secrets
 		cfg.Notify = cfg.Notify.Redacted()
+		for name, pc := range cfg.Providers {
+			pc.Env = config.RedactEnv(pc.Env) // API keys
+			cfg.Providers[name] = pc
+		}
 		data, _ := yaml.Marshal(cfg)
 		add("config.yaml", append([]byte("# effective config, loaded from "+path+"\n"), data...))
 

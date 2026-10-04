@@ -67,6 +67,68 @@ type DayStats struct {
 	Codex  int64   // fresh tokens
 	Claude int64   // fresh tokens
 	USD    float64 // Claude API-equivalent price
+	// Providers are the fresh tokens of every provider, codex and claude
+	// included.
+	Providers map[string]int64
+}
+
+// add counts fresh tokens on a provider.
+func (d *DayStats) add(p string, n int64) {
+	if n == 0 {
+		return
+	}
+	switch p {
+	case event.Codex:
+		d.Codex += n
+	case event.Claude:
+		d.Claude += n
+	}
+	if d.Providers == nil {
+		d.Providers = map[string]int64{}
+	}
+	d.Providers[p] += n
+}
+
+// Total is the day's fresh tokens on every provider.
+func (d *DayStats) Total() int64 {
+	var t int64
+	for _, n := range d.Providers {
+		t += n
+	}
+	return t
+}
+
+// provColumns are the provider columns of the tables: codex and claude
+// always, then every other provider that used tokens.
+func (s Stats) provColumns() []string {
+	seen := map[string]int64{event.Codex: 0, event.Claude: 0}
+	for _, d := range s.Days {
+		for p := range d.Providers {
+			seen[p] = 0
+		}
+	}
+	for _, r := range s.Recent {
+		if r.Cost != nil {
+			for p := range r.Cost.PerProvider {
+				seen[p] = 0
+			}
+		}
+	}
+	for _, m := range s.Modes {
+		for p := range m.PerProv {
+			seen[p] = 0
+		}
+	}
+	return event.ProvidersOf(seen)
+}
+
+// provHead is the column headings for providers, e.g. "CODEX\tCLAUDE".
+func provHead(cols []string, suffix string) string {
+	out := make([]string, len(cols))
+	for i, p := range cols {
+		out[i] = strings.ToUpper(p) + suffix
+	}
+	return strings.Join(out, "\t")
 }
 
 // statsDays is how many calendar days the per-day table covers.
@@ -206,8 +268,9 @@ func addDay(days map[string]*DayStats, r Record) {
 		d.OK++
 	}
 	if r.Cost != nil {
-		d.Codex += r.Cost.PerProvider[event.Codex].Total()
-		d.Claude += r.Cost.PerProvider[event.Claude].Total()
+		for p, u := range r.Cost.PerProvider {
+			d.add(p, u.Total())
+		}
 		d.USD += r.Cost.CostUSD
 	}
 }
@@ -273,17 +336,22 @@ func (s Stats) Print(w io.Writer) {
 	if len(s.Modes) > 0 {
 		fmt.Fprintln(w, "\nTasks: Switchyard (routed) vs single-agent baseline (`sy run --single ...`)")
 		tw = tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-		fmt.Fprintln(tw, "  MODE\tTASKS\tOK\tSUCCESS\tAVG WALL\tCODEX FRESH TOK/TASK\tCLAUDE FRESH TOK/TASK")
+		cols := s.provColumns()
+		fmt.Fprintln(tw, "  MODE\tTASKS\tOK\tSUCCESS\tAVG WALL\t"+provHead(cols, " FRESH TOK/TASK"))
 		for _, m := range s.Modes {
 			rate, avg := 0.0, time.Duration(0)
-			cx, cl := int64(0), int64(0)
+			per := make([]string, len(cols))
+			for i, p := range cols {
+				per[i] = human(0)
+				if m.Tasks > 0 {
+					per[i] = human(m.PerProv[p] / int64(m.Tasks))
+				}
+			}
 			if m.Tasks > 0 {
 				rate = float64(m.OK) / float64(m.Tasks) * 100
 				avg = m.Duration / time.Duration(m.Tasks)
-				cx = m.PerProv[event.Codex] / int64(m.Tasks)
-				cl = m.PerProv[event.Claude] / int64(m.Tasks)
 			}
-			fmt.Fprintf(tw, "  %s\t%d\t%d\t%.0f%%\t%s\t%s\t%s\n", m.Mode, m.Tasks, m.OK, rate, avg.Round(time.Second), human(cx), human(cl))
+			fmt.Fprintf(tw, "  %s\t%d\t%d\t%.0f%%\t%s\t%s\n", m.Mode, m.Tasks, m.OK, rate, avg.Round(time.Second), strings.Join(per, "\t"))
 		}
 		tw.Flush()
 	}
@@ -303,13 +371,18 @@ func (s Stats) printDays(w io.Writer) {
 	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	limited := s.DayLimitUSD > 0 || s.DayLimitTokens > 0
-	head := "  DATE\tTASKS\tOK\tCODEX\tCLAUDE\t$"
+	cols := s.provColumns()
+	head := "  DATE\tTASKS\tOK\t" + provHead(cols, "") + "\t$"
 	if limited {
 		head += "\tDAILY BUDGET"
 	}
 	fmt.Fprintln(tw, head)
 	for _, d := range s.Days {
-		line := fmt.Sprintf("  %s\t%d\t%d\t%s\t%s\t%.2f", d.Date, d.Tasks, d.OK, human(d.Codex), human(d.Claude), d.USD)
+		per := make([]string, len(cols))
+		for i, p := range cols {
+			per[i] = human(d.Providers[p])
+		}
+		line := fmt.Sprintf("  %s\t%d\t%d\t%s\t%.2f", d.Date, d.Tasks, d.OK, strings.Join(per, "\t"), d.USD)
 		if limited {
 			line += "\t" + s.dayBudget(d)
 		}
@@ -331,7 +404,7 @@ func (s Stats) dayBudget(d *DayStats) string {
 		parts = append(parts, fmt.Sprintf("%s of $%.2f", mark(d.USD/s.DayLimitUSD*100), s.DayLimitUSD))
 	}
 	if s.DayLimitTokens > 0 {
-		parts = append(parts, fmt.Sprintf("%s of %s tok", mark(float64(d.Codex+d.Claude)/float64(s.DayLimitTokens)*100), human(s.DayLimitTokens)))
+		parts = append(parts, fmt.Sprintf("%s of %s tok", mark(float64(d.Total())/float64(s.DayLimitTokens)*100), human(s.DayLimitTokens)))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -343,17 +416,23 @@ func (s Stats) printRecent(w io.Writer) {
 	}
 	fmt.Fprintln(w, "\nRecent tasks (fresh tokens; $ is Claude's API-equivalent price, not billed on a subscription)")
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "  WHEN\tMODE\tOK\tWALL\tCODEX\tCLAUDE\t$\tTASK")
+	cols := s.provColumns()
+	fmt.Fprintln(tw, "  WHEN\tMODE\tOK\tWALL\t"+provHead(cols, "")+"\t$\tTASK")
 	for _, r := range s.Recent {
 		ok := "yes"
 		if r.OK == nil || !*r.OK {
 			ok = "no"
 		}
-		var cx, cl int64
+		per := make([]string, len(cols))
 		var usd float64
+		for i, p := range cols {
+			var n int64
+			if r.Cost != nil {
+				n = r.Cost.PerProvider[p].Total()
+			}
+			per[i] = human(n)
+		}
 		if r.Cost != nil {
-			cx = r.Cost.PerProvider[event.Codex].Total()
-			cl = r.Cost.PerProvider[event.Claude].Total()
 			usd = r.Cost.CostUSD
 		}
 		task := strings.Join(strings.Fields(r.Task), " ")
@@ -364,8 +443,8 @@ func (s Stats) printRecent(w io.Writer) {
 		if r.Bench != "" {
 			mode += " (bench)"
 		}
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%s\n", r.TS.Format("Jan 2 15:04"), mode, ok,
-			(time.Duration(r.DurationMS) * time.Millisecond).Round(time.Second), human(cx), human(cl), usd, task)
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%.2f\t%s\n", r.TS.Format("Jan 2 15:04"), mode, ok,
+			(time.Duration(r.DurationMS) * time.Millisecond).Round(time.Second), strings.Join(per, "\t"), usd, task)
 	}
 	tw.Flush()
 }

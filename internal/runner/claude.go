@@ -95,16 +95,27 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 //	{"type":"system","subtype":"permission_denied","tool_name":"PowerShell","tool_use_id":"...","message":"<why>"}
 //	{"type":"result","subtype":"success","is_error":false,"result":"...","usage":{...},"total_cost_usd":0.01,"permission_denials":[...]}
 type claudeParser struct {
-	session string
-	final   string
-	lastMsg string
-	tokens  event.TokenUsage
-	fatal   string
-	limit   bool
-	files   fileSet
-	gotDone bool
-	calls   map[string]string // tool_use id -> "Tool arg", to name denied calls
-	denied  map[string]bool   // tool_use ids already reported as denied
+	// inputHasCache: input_tokens already include the cached part (Qwen
+	// Code); Claude Code reports cache reads and writes separately.
+	inputHasCache bool
+	// noCost drops the API-equivalent price: Claude Code computes it for
+	// Anthropic's models, which another backend is not.
+	noCost bool
+	// cacheGuess: another backend behind Claude Code may count the cached
+	// part inside input_tokens (Ollama does). Anthropic never reports
+	// input_tokens >= cache_read_input_tokens with a cache hit that large,
+	// so such a reading is taken as including the cache.
+	cacheGuess bool
+	session    string
+	final      string
+	lastMsg    string
+	tokens     event.TokenUsage
+	fatal      string
+	limit      bool
+	files      fileSet
+	gotDone    bool
+	calls      map[string]string // tool_use id -> "Tool arg", to name denied calls
+	denied     map[string]bool   // tool_use ids already reported as denied
 }
 
 type claudeLine struct {
@@ -132,6 +143,10 @@ type claudeLine struct {
 		ToolUseID string          `json:"tool_use_id"`
 		ToolInput json.RawMessage `json:"tool_input"`
 	} `json:"permission_denials"`
+	// Error is how Qwen Code reports a failed run.
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 type claudeMessage struct {
@@ -168,7 +183,10 @@ type claudeRateInfo struct {
 	} `json:"unifiedWindows"`
 }
 
-var editTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
+// editTools are the tools that change files: Claude Code's, and Qwen
+// Code's (named like Gemini CLI's).
+var editTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true,
+	"write_file": true, "edit": true, "replace": true}
 
 func (p *claudeParser) Line(line []byte) []event.Event {
 	var l claudeLine
@@ -275,11 +293,20 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 				Reasoning: u.OutputTokensDetails.ThinkingTokens,
 				CostUSD:   l.TotalCostUSD,
 			}
+			if p.inputHasCache || (p.cacheGuess && u.CacheReadInputTokens > 0 && u.InputTokens >= u.CacheReadInputTokens) {
+				p.tokens.Input = u.InputTokens + u.CacheCreationInputTokens
+			}
+			if p.noCost {
+				p.tokens.CostUSD = 0
+			}
 		}
 		if l.IsError || strings.HasPrefix(l.Subtype, "error") {
 			msg := strings.TrimSpace(l.Result)
 			if msg == "" && len(l.Errors) > 0 {
 				msg = strings.Join(l.Errors, "; ")
+			}
+			if msg == "" && l.Error != nil {
+				msg = strings.TrimSpace(l.Error.Message)
 			}
 			if msg == "" {
 				msg = "claude: " + l.Subtype

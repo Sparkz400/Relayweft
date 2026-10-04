@@ -56,11 +56,11 @@ func (s *scheduleFlags) target(cfg *config.Config, tr *limits.Tracker, now time.
 		return now.Add(d), "", err
 	case s.whenReset != "":
 		p := strings.ToLower(s.whenReset)
-		if !schedule.ValidReset(p) {
-			return time.Time{}, "", fmt.Errorf("--when-reset %q: want claude, codex or any", s.whenReset)
+		if !schedule.ValidReset(p, cfg.ProviderNames()) {
+			return time.Time{}, "", fmt.Errorf("--when-reset %q: want %s or any", s.whenReset, strings.Join(cfg.ProviderNames(), ", "))
 		}
 		recs, _ := sessionlog.ReadDir(cfg.SessionDir())
-		t, note := schedule.ResetTime(p, tr, recs, now)
+		t, note := schedule.ResetTimeIn(p, cfg.Enabled(), tr, recs, now)
 		return t, note, nil
 	}
 	return time.Time{}, "", nil

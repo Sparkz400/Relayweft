@@ -177,7 +177,38 @@ func restoreCommandSettings(c, before *Config) []string {
 	c.Notify.Webhooks = before.Notify.Webhooks
 	c.Verify, c.Hooks, c.Providers, c.LogDir, c.MCP, c.Workspace = before.Verify, before.Hooks, before.Providers, before.LogDir, before.MCP, before.Workspace
 	c.Budget.Team.Dir = before.Budget.Team.Dir
+	dropUnknownProviders(c, before)
 	return changed
+}
+
+// dropUnknownProviders removes what still names a provider the file added
+// but restoreCommandSettings took out again (a route, prefer, the provider
+// order): otherwise the whole config fails validation instead of loading
+// without the untrusted provider.
+func dropUnknownProviders(c, before *Config) {
+	for role, rc := range c.Roles {
+		if rc.Prefer != PreferOther && rc.Prefer != PreferAuto && !c.IsProvider(rc.Prefer) {
+			rc.Prefer = before.Roles[role].Prefer
+		}
+		var extra map[string]Route
+		for p, r := range rc.Extra {
+			if c.IsProvider(p) {
+				if extra == nil {
+					extra = map[string]Route{}
+				}
+				extra[p] = r
+			}
+		}
+		rc.Extra = extra
+		c.Roles[role] = rc
+	}
+	var order []string
+	for _, p := range c.Routing.ProviderOrder {
+		if c.IsProvider(p) {
+			order = append(order, p)
+		}
+	}
+	c.Routing.ProviderOrder = order
 }
 
 // teamDirKey is the one budget setting that needs trust.

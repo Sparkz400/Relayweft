@@ -238,9 +238,10 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 		spec := runner.Spec{AgentID: s.AgentID, StepID: "followup", Attempt: 1, Role: s.Role, Provider: s.Provider,
 			Model: s.Model, Effort: s.Effort, Prompt: text, Dir: o.opts.Dir, Timeout: cfg.Orchestrator.AgentTimeout.D(),
 			AllowedCommands: cfg.Verify.Commands}
-		// Claude keys its sessions by working directory: one that ran in a
-		// pool worktree cannot be resumed from the main tree.
-		resumable := s.SessionID != "" && (s.Provider != event.Claude || canonPath(s.Dir) == canonPath(o.opts.Dir))
+		// Claude Code (and Gemini CLI, Qwen Code) key their sessions by
+		// working directory: one that ran in a pool worktree cannot be
+		// resumed from the main tree.
+		resumable := s.SessionID != "" && (!cfg.SessionPerDir(s.Provider) || canonPath(s.Dir) == canonPath(o.opts.Dir))
 		run := func(title string) runner.Result {
 			if !o.checkBudget(bctx, t, "start "+title) {
 				return runner.Result{Err: errBudget, Killed: true}

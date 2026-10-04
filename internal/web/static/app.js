@@ -492,6 +492,24 @@ function applySnap(s) {
 
 // ---------- header ----------
 const PROV = {};
+// Provider colors: the two built-in ones from the theme, the shipped
+// presets by brand, any other from a palette (stable per name).
+const PROV_COLORS = { gemini: '#4796E3', qwen: '#8B7CF6', deepseek: '#4D6BFE', ollama: '#C9C9C9' };
+const PROV_PALETTE = ['#E5C07B', '#56B6C2', '#C678DD', '#98C379', '#E06C75'];
+function provColor(p) {
+  if (!p) return 'var(--muted)';
+  if (p === 'codex' || p === 'claude') return `var(--${p})`;
+  if (PROV_COLORS[p]) return PROV_COLORS[p];
+  let x = 0;
+  for (const ch of p) x = (x * 31 + ch.codePointAt(0)) | 0;
+  return PROV_PALETTE[((x % PROV_PALETTE.length) + PROV_PALETTE.length) % PROV_PALETTE.length];
+}
+// provOrder lists a per-provider object's keys: codex, claude, then by name.
+function provOrder(m) {
+  const keys = Object.keys(m || {});
+  const head = ['codex', 'claude'].filter((p) => keys.includes(p));
+  return head.concat(keys.filter((p) => p !== 'codex' && p !== 'claude').sort());
+}
 function renderHeader() {
   const s = S.snap;
   if (!s) return;
@@ -513,14 +531,16 @@ function renderHeader() {
   tt.title = tt.textContent;
 
   const pv = $('#providers');
-  for (const p of ['codex', 'claude']) {
+  const shown = provOrder(s.providers).filter((p) => !s.providers[p].disabled || s.providers[p].calls || s.providers[p].limited_until);
+  for (const p of Object.keys(PROV)) if (!shown.includes(p)) { PROV[p].root.remove(); delete PROV[p]; }
+  for (const p of shown) {
     const d = s.providers[p] || {};
     let val, pct, title;
     const limited = d.limited_until && Date.parse(d.limited_until) > Date.now() - S.timeOffset;
     if (limited) {
       val = 'limit · ' + new Date(Date.parse(d.limited_until) + S.timeOffset).toTimeString().slice(0, 5);
       pct = 1;
-      title = p + ' is at its usage limit; its roles use the other provider until then';
+      title = p + ' is at its usage limit; its roles use the next provider until then';
     } else if (d.quota) {
       pct = d.quota.utilization;
       val = Math.round(pct * 100) + '%' + (d.quota.window ? ' · ' + d.quota.window.replace('five_hour', '5h').replace('seven_day', '7d') : '');
@@ -533,7 +553,7 @@ function renderHeader() {
     let el = PROV[p];
     if (!el) {
       el = PROV[p] = { val: h('span', { class: 'prov-val' }), fill: h('span') };
-      el.root = h('div', { class: 'prov', style: `--c: var(--${p})` },
+      el.root = h('div', { class: 'prov', style: `--c: ${provColor(p)}` },
         h('div', { class: 'prov-top' }, h('span', { class: 'prov-name' }, h('i'), p), el.val), h('div', { class: 'bar' }, el.fill));
       pv.append(el.root);
     }
@@ -664,6 +684,7 @@ function updateCard(c, n, opts) {
   const { el, refs } = c;
   el.classList.toggle('codex', n.provider === 'codex');
   el.classList.toggle('claude', n.provider === 'claude');
+  if (n.provider && n.provider !== 'codex' && n.provider !== 'claude') el.style.setProperty('--c', provColor(n.provider));
   el.classList.toggle('sel', S.agentFilter === n.id);
   if (opts && opts.extra) el.classList.add(opts.extra);
   refs.id.textContent = opts && opts.name ? opts.name : n.id;
@@ -782,7 +803,7 @@ function renderGraph(force) {
     });
     updateCard(c, n);
     c.wrap.classList.toggle('flow', n.status === 'running');
-    c.wrap.style.setProperty('--c', n.provider === 'claude' ? 'var(--claude)' : 'var(--codex)');
+    c.wrap.style.setProperty('--c', n.provider ? provColor(n.provider) : 'var(--codex)');
     if (G.kids.children[i] !== c.wrap) G.kids.insertBefore(c.wrap, G.kids.children[i] || null);
   });
   G.kids.hidden = !want.length;
@@ -835,7 +856,7 @@ function matches(e) {
 function rowEl(e, animate) {
   if (e.kind === 'task_done') {
     const per = [];
-    if (e.cost && e.cost.per_provider) for (const p of ['codex', 'claude']) { const u = e.cost.per_provider[p]; if (u && fresh(u)) per.push(p + ' ' + human(fresh(u))); }
+    if (e.cost && e.cost.per_provider) for (const p of provOrder(e.cost.per_provider)) { const u = e.cost.per_provider[p]; if (u && fresh(u)) per.push(p + ' ' + human(fresh(u))); }
     let line = per.length ? per.join(' · ') + ' fresh tokens' : '';
     if (e.cost && e.cost.cost_usd) line += ` · ≈$${e.cost.cost_usd.toFixed(2)} API-equivalent`;
     if (e.took) line += (line ? ' · ' : '') + dur(e.took);
@@ -848,6 +869,7 @@ function rowEl(e, animate) {
   if (e.ok === false) cls.push('bad');
   if (animate) cls.push('new');
   const who = h('span', { class: 'who ' + (e.prov || ''), title: e.agent ? 'Show only ' + e.agent : '' }, e.agent || 'sy');
+  if (e.prov && e.prov !== 'codex' && e.prov !== 'claude') who.style.color = provColor(e.prov);
   if (e.agent) who.addEventListener('click', () => selectAgent(e.agent));
   let ic = KIND_ICON[e.kind] || 'dot';
   if ((e.kind === 'done' || e.kind === 'merge' || e.kind === 'checkpoint') && e.ok === false) ic = 'x';
@@ -1453,10 +1475,12 @@ async function drawModels(body) {
         h('select', { class: 'sel-in', onchange: async (e) => { if (!e.target.value) return; const r = await set({ role: 'all', prefer: e.target.value }); if (r) render(r); } },
           h('option', { value: '' }, '…'), v.prefer_options.map((p) => h('option', { value: p }, p)))),
       save));
+    const order = v.provider_order || ['codex', 'claude'];
+    const provs = order.filter((p) => S.showAllProviders || !v.providers[p].disabled);
+    const hidden = order.length - provs.length;
     const tbl = h('table', { class: 'tbl' });
     tbl.append(h('tr', null, h('th', null, 'Role'), h('th', null, 'Prefer'),
-      h('th', null, h('span', { class: 'prov-head', style: '--c:var(--codex)' }, h('i'), 'Codex model')), h('th', null, 'Effort'),
-      h('th', null, h('span', { class: 'prov-head', style: '--c:var(--claude)' }, h('i'), 'Claude model')), h('th', null, 'Effort'),
+      provs.map((p) => [h('th', null, h('span', { class: 'prov-head', style: `--c:${provColor(p)}` }, h('i'), (v.providers[p].label || p) + ' model' + (v.providers[p].disabled ? ' (off)' : ''))), h('th', null, 'Effort')]),
       h('th', null, 'Now uses')));
     for (const r of v.roles) {
       const prefer = h('select', { class: 'sel-in', onchange: async (e) => { const n = await set({ role: r.role, prefer: e.target.value }); if (n) render(n); } },
@@ -1465,25 +1489,29 @@ async function drawModels(body) {
       tbl.append(h('tr', null,
         h('td', null, h('span', { class: 'rolecell', style: `--rc:${ROLE_COLORS[r.role]}` }, h('i'), r.role.replace('_', ' '))),
         h('td', null, prefer),
-        h('td', null, modelSel(v, r, 'codex')), h('td', null, effortSel(v, r, 'codex')),
-        h('td', null, modelSel(v, r, 'claude')), h('td', null, effortSel(v, r, 'claude')),
-        h('td', null, h('span', { class: 'now', style: `--c:var(--${now.provider || 'muted'})` }, now.provider ? `${now.provider}:${now.model}${now.effort ? '@' + now.effort : ''}` : '-'),
+        provs.map((p) => [h('td', null, modelSel(v, r, p)), h('td', null, effortSel(v, r, p))]),
+        h('td', null, h('span', { class: 'now', style: `--c:${provColor(now.provider)}` }, now.provider ? `${now.provider}:${now.model}${now.effort ? '@' + now.effort : ''}` : '-'),
           now.fallback ? h('div', { class: 'small', style: 'color:var(--warn)' }, 'limit fallback') : '')));
     }
     body.append(tbl);
+    if (hidden || S.showAllProviders) {
+      body.append(h('label', { class: 'small muted', style: 'display:flex;gap:6px;align-items:center;margin-top:8px' },
+        h('input', { type: 'checkbox', checked: !!S.showAllProviders, onchange: (e) => { S.showAllProviders = e.target.checked; render(v); } }),
+        `show disabled providers (${order.filter((p) => v.providers[p].disabled).join(', ')}) - turn one on with disabled: false in the config`));
+    }
     body.append(h('h3', null, 'How routing works'),
       h('div', { class: 'muted small', style: 'display:grid;gap:6px' },
-        h('div', null, h('b', null, 'prefer'), ': codex | claude = that provider · other = opposite of the planner (good for review) · auto = whichever has used fewer tokens this session.'),
-        h('div', null, 'At a usage limit the role\'s route on the other provider is used automatically.'),
+        h('div', null, h('b', null, 'prefer'), ': a provider = that one · other = not the planner\'s (good for review) · auto = whichever has used fewer tokens this session.'),
+        h('div', null, 'At a usage limit the role\'s route on the next provider (routing.provider_order) is used automatically.'),
         h('div', null, 'Tip: ', h('code', null, 'sy models --refresh'), ' reads the current Codex catalog from ', h('code', null, 'codex debug models'), '.')));
   }
   function modelSel(v, r, prov) {
-    const cur = r[prov].model || '';
+    const cur = ((r.routes || r)[prov] || {}).model || '';
     const cat = v.providers[prov].models || [];
     const opts = cat.map((m) => h('option', { value: m.id, selected: m.id === cur }, m.id + (m.tier ? '  · ' + m.tier : '')));
     if (cur && !cat.some((m) => m.id === cur)) opts.unshift(h('option', { value: cur, selected: true }, cur + '  · custom'));
     opts.push(h('option', { value: '__custom' }, 'custom…'), h('option', { value: '', selected: !cur }, '(none)'));
-    const sel = h('select', { class: 'sel-in select-' + prov, onchange: async (e) => {
+    const sel = h('select', { class: 'sel-in select-' + prov, style: `border-color: color-mix(in srgb, ${provColor(prov)} 30%, var(--border))`, onchange: async (e) => {
       let val = e.target.value;
       if (val === '__custom') {
         val = window.prompt(`Model id for ${r.role} on ${prov} (any id the CLI accepts):`, cur);
@@ -1495,8 +1523,8 @@ async function drawModels(body) {
     return sel;
   }
   function effortSel(v, r, prov) {
-    const cur = r[prov].effort || '';
-    return h('select', { class: 'sel-in select-' + prov, onchange: async (e) => { const n = await set({ role: r.role, provider: prov, effort: e.target.value }); if (n) render(n); else e.target.value = cur; } },
+    const cur = ((r.routes || r)[prov] || {}).effort || '';
+    return h('select', { class: 'sel-in select-' + prov, style: `border-color: color-mix(in srgb, ${provColor(prov)} 30%, var(--border))`, onchange: async (e) => { const n = await set({ role: r.role, provider: prov, effort: e.target.value }); if (n) render(n); else e.target.value = cur; } },
       h('option', { value: '', selected: !cur }, 'default'), (v.providers[prov].efforts || []).map((x) => h('option', { value: x, selected: x === cur }, x)));
   }
   async function set(body) {
@@ -1513,7 +1541,7 @@ function drawQueue(body) {
     q.length ? h('button', { class: 'btn sm danger', onclick: () => act('POST', '/api/queue/clear', {}, 'warn') }, 'Clear all') : ''));
   // The drawer re-renders on every state update: keep what is typed.
   const sf = S.sched || (S.sched = { when: '', what: '' });
-  const when = h('input', { class: 'in when', placeholder: '02:30 · in 2h · reset claude', value: sf.when, dataset: { sched: 'when' }, title: 'When: HH:MM (today or tomorrow), "2026-10-04 02:30", in 2h, or reset claude|codex|any (when that usage limit resets)' });
+  const when = h('input', { class: 'in when', placeholder: '02:30 · in 2h · reset claude', value: sf.when, dataset: { sched: 'when' }, title: 'When: HH:MM (today or tomorrow), "2026-10-04 02:30", in 2h, or reset <provider>|any (when that usage limit resets)' });
   const what = h('input', { class: 'in what', placeholder: 'Task to run then…', value: sf.what, dataset: { sched: 'what' } });
   for (const [el, k] of [[when, 'when'], [what, 'what']]) el.addEventListener('input', () => { sf[k] = el.value; });
   const go = async () => {
@@ -1582,17 +1610,26 @@ async function drawStats(body) {
   (st.Modes || []).forEach((m) => { ok += m.OK; });
   body.append(h('div', { class: 'kpis' },
     kpi(v.tasks, 'tasks'), kpi(v.tasks ? Math.round(ok / v.tasks * 100) + '%' : '-', 'succeeded'),
-    kpi(human(v.totals.codex || 0) + ' / ' + human(v.totals.claude || 0), 'codex / claude tokens'), kpi(v.usd ? '$' + v.usd.toFixed(2) : '-', 'API-equivalent')));
+    ...(() => {
+      const ps = provOrder(v.totals).filter((p) => v.totals[p]);
+      const used = ps.length ? ps : ['codex', 'claude'];
+      return [kpi(used.map((p) => human(v.totals[p] || 0)).join(' / '), used.join(' / ') + ' tokens')];
+    })(), kpi(v.usd ? '$' + v.usd.toFixed(2) : '-', 'API-equivalent')));
   // Days.
   const days = st.Days || [];
   if (days.length) {
-    const maxT = Math.max(1, ...days.map((d) => d.Codex + d.Claude));
-    body.append(h('h3', null, 'Per day'), h('div', { class: 'legend' }, h('span', null, h('i', { style: 'background:var(--codex)' }), 'codex'), h('span', null, h('i', { style: 'background:var(--claude)' }), 'claude')));
+    const per = (d) => d.Providers || { codex: d.Codex, claude: d.Claude };
+    const total = (d) => Object.values(per(d)).reduce((a, b) => a + (b || 0), 0);
+    const maxT = Math.max(1, ...days.map(total));
+    const seen = {};
+    days.forEach((d) => Object.keys(per(d)).forEach((p) => { seen[p] = 1; }));
+    const ps = provOrder(Object.keys(seen).length ? seen : { codex: 1, claude: 1 });
+    body.append(h('h3', null, 'Per day'), h('div', { class: 'legend' }, ps.map((p) => h('span', null, h('i', { style: `background:${provColor(p)}` }), p))));
     const box = h('div', { class: 'days' });
     for (const d of days) {
       box.append(h('div', { class: 'day' }, h('span', { class: 'muted mono' }, d.Date),
-        h('div', { class: 'bars', title: `codex ${human(d.Codex)} · claude ${human(d.Claude)}` },
-          h('span', { style: `width:${d.Codex / maxT * 100}%;background:var(--codex)` }), h('span', { style: `width:${d.Claude / maxT * 100}%;background:var(--claude)` })),
+        h('div', { class: 'bars', title: ps.map((p) => `${p} ${human(per(d)[p] || 0)}`).join(' · ') },
+          ps.map((p) => h('span', { style: `width:${(per(d)[p] || 0) / maxT * 100}%;background:${provColor(p)}` }))),
         h('span', { class: 'muted small', style: 'text-align:right' }, `${d.OK}/${d.Tasks} ok${d.USD ? ' · $' + d.USD.toFixed(2) : ''}`)));
     }
     body.append(box);
@@ -1680,12 +1717,12 @@ function drawSettings(body) {
       h('select', { class: 'sel-in', onchange: (e) => setTheme(e.target.value) }, ['system', 'dark', 'light'].map((t) => h('option', { value: t, selected: (store.get('sy-theme') || 'system') === t }, t)))));
   // Providers.
   body.append(h('h3', null, 'Providers'));
-  for (const p of ['codex', 'claude']) {
+  for (const p of provOrder(s.providers)) {
     const d = s.providers[p] || {};
     const limited = d.limited_until && Date.parse(d.limited_until) > Date.now() - S.timeOffset;
-    body.append(h('div', { class: 'setting' }, h('div', { class: 'txt' }, h('b', { style: `color:var(--${p})` }, p),
-      h('span', null, `${d.calls || 0} calls · ${human(d.fresh)} fresh tokens · ${d.limit_hits || 0} limit hits` + (limited ? ' · at its limit' : ''))),
-      limited ? h('button', { class: 'btn sm', onclick: () => act('POST', '/api/limit', { provider: p, action: 'reset' }) }, 'Mark available')
+    body.append(h('div', { class: 'setting' }, h('div', { class: 'txt' }, h('b', { style: `color:${provColor(p)}` }, p),
+      h('span', null, d.disabled ? 'disabled (providers.' + p + '.disabled in the config)' : `${d.calls || 0} calls · ${human(d.fresh)} fresh tokens · ${d.limit_hits || 0} limit hits` + (limited ? ' · at its limit' : ''))),
+      d.disabled ? '' : limited ? h('button', { class: 'btn sm', onclick: () => act('POST', '/api/limit', { provider: p, action: 'reset' }) }, 'Mark available')
         : h('button', { class: 'btn sm ghost', onclick: () => act('POST', '/api/limit', { provider: p, action: 'set' }) }, 'Mark at limit')));
   }
   if (s.demo) {

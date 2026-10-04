@@ -3,7 +3,6 @@ package config
 import (
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/event"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,10 +39,11 @@ func FuzzParse(f *testing.F) {
 	})
 }
 
-// FuzzParseRouteSpec: accepted specs name a known provider and a model, and
+// FuzzParseRouteSpec: accepted specs name a valid provider and a model, and
 // print back to a spec that parses to the same route.
 func FuzzParseRouteSpec(f *testing.F) {
-	for _, s := range []string{"claude:opus:high", "codex:gpt-6.1-sol", "opus", "gemini:x", "claude:", "CLAUDE:m:", "codex:m:a:b", ":", ""} {
+	for _, s := range []string{"claude:opus:high", "codex:gpt-6.1-sol", "opus", "gemini:x", "claude:", "CLAUDE:m:", "codex:m:a:b",
+		"ollama:qwen3.6:35b-a3b-coding", "ollama:qwen3.6:35b:low", "codex:m:high:", ":", ""} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
@@ -51,7 +51,7 @@ func FuzzParseRouteSpec(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if p != event.Codex && p != event.Claude {
+		if !providerName.MatchString(p) {
 			t.Fatalf("provider %q accepted", p)
 		}
 		if r.Model == "" {

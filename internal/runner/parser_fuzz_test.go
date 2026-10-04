@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
+	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
 )
 
@@ -17,6 +20,7 @@ import (
 //
 //	go test -run='^$' -fuzz=FuzzCodexParser -fuzztime=60s ./internal/runner
 //	go test -run='^$' -fuzz=FuzzClaudeParser -fuzztime=60s ./internal/runner
+//	go test -run='^$' -fuzz=FuzzGenericParser -fuzztime=60s ./internal/runner
 
 // seedStreams adds every recorded fixture (whole, and line by line) plus a
 // few hand-written edge cases.
@@ -144,6 +148,40 @@ func FuzzClaudeParser(f *testing.F) {
 		for _, e := range evs {
 			if e.Kind == event.LimitHit && !r.LimitHit {
 				t.Fatalf("limit event %q but Result.LimitHit is false", e.Text)
+			}
+		}
+	})
+}
+
+// FuzzGenericParser runs the generic JSON-rules parser with the Qwen Code
+// and Gemini CLI descriptions, and the text parser, over the same inputs.
+func FuzzGenericParser(f *testing.F) {
+	seedStreams(f, "qwen", `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"write_file","input":null}]}}`)
+	seedStreams(f, "gemini", `{"type":"message","role":"assistant","content":7,"delta":true}`, `{"type":"result","status":"error","error":null}`)
+	f.Add([]byte("\x1b[?25lhi\r\n\nprompt eval count: 99999999999999999999\n"))
+	var gs []*config.GenericCfg
+	for _, file := range []string{"generic_qwen.yaml", "generic_gemini.yaml"} {
+		data, err := os.ReadFile(filepath.Join("testdata", file))
+		if err != nil {
+			f.Fatal(err)
+		}
+		var pc config.ProviderCfg
+		if err := yaml.Unmarshal(data, &pc); err != nil {
+			f.Fatal(err)
+		}
+		gs = append(gs, pc.Generic)
+	}
+	text := config.Default().Providers["ollama-run"].Generic
+	limit := &config.GenericCfg{Output: config.OutputJSONL, JSON: []config.JSONRule{
+		{Match: map[string]string{"type": "*"}, Text: "text", Error: "error", Limit: true, InputTokens: "n"}}}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		for _, g := range append(gs, text, limit) {
+			evs, r := parseStream(t, newGenericParser(g), data)
+			checkResult(t, evs, r)
+			for _, e := range evs {
+				if e.Kind == event.LimitHit && !r.LimitHit {
+					t.Fatalf("limit event %q but Result.LimitHit is false", e.Text)
+				}
 			}
 		}
 	})

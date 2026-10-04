@@ -395,10 +395,31 @@ func (t *task) addTokens(provider string, u event.TokenUsage) {
 	t.perProv[provider] = t.perProv[provider].Add(u)
 }
 
+// allLimited reports whether every provider that could take the role is
+// at its limit: the one it ran on, and every enabled provider with a model
+// for the role that may stand in for another (not only_preferred, or on
+// standby for the role).
+func (o *Orchestrator) allLimited(d event.Decision) bool {
+	cfg := o.opts.Store.Get()
+	if d.Provider != "" && !o.opts.Tracker.Limited(d.Provider) {
+		return false
+	}
+	rc := cfg.Roles[d.Role]
+	for _, p := range cfg.Enabled() {
+		if !cfg.Providers[p].MayStandIn(d.Role) || rc.For(p).Model == "" {
+			continue
+		}
+		if !o.opts.Tracker.Limited(p) {
+			return false
+		}
+	}
+	return true
+}
+
 // quotaNow reads every provider's reported limit usage.
 func (o *Orchestrator) quotaNow() map[string]float64 {
 	m := map[string]float64{}
-	for _, p := range event.Providers {
+	for _, p := range o.opts.Store.Get().ProviderNames() {
 		if u, ok := o.opts.Tracker.Utilization(p); ok {
 			m[p] = u
 		}
@@ -934,8 +955,8 @@ func (o *Orchestrator) plan(ctx context.Context, t *task, advice string, prev *P
 // then sees the provider as limited and picks the other one.
 func (o *Orchestrator) runOnce(ctx context.Context, t *task, step router.Step, agentID, parent, prompt string) (event.Decision, runner.Result) {
 	d, res := o.runAgent(ctx, t, step, agentID, parent, o.opts.Dir, prompt, 1)
-	if res.LimitHit && !res.Killed && ctx.Err() == nil && !(o.opts.Tracker.Limited(event.Codex) && o.opts.Tracker.Limited(event.Claude)) {
-		o.logf("%s: %s unavailable, retrying on %s", agentID, d.Provider, event.Other(d.Provider))
+	if res.LimitHit && !res.Killed && ctx.Err() == nil && !o.allLimited(d) {
+		o.logf("%s: %s unavailable, retrying on another provider", agentID, d.Provider)
 		d, res = o.runAgent(ctx, t, step, agentID, parent, o.opts.Dir, prompt, 2)
 	}
 	return d, res
@@ -1477,8 +1498,8 @@ func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []
 		}
 		if res.LimitHit {
 			limitRetries++
-			if limitRetries > 2 || (o.opts.Tracker.Limited(event.Codex) && o.opts.Tracker.Limited(event.Claude)) {
-				r.err = "both providers are at their usage limit"
+			if limitRetries > 2 || o.allLimited(d) {
+				r.err = "every provider is at its usage limit"
 				return r
 			}
 			continue // rerouted by rule 1 on the next attempt
@@ -1534,7 +1555,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 		}
 	}
 	if o.opts.Tracker.Limited(d.Provider) {
-		err := fmt.Errorf("%s is at its usage limit and %s cannot take this role", d.Provider, event.Other(d.Provider))
+		err := fmt.Errorf("%s is at its usage limit and no other provider can take this role", d.Provider)
 		o.emit(event.Event{Kind: event.Error, AgentID: agentID, Text: err.Error()})
 		return d, runner.Result{Err: err, LimitHit: true}
 	}
@@ -1547,7 +1568,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	o.emit(event.Event{Kind: event.Route, AgentID: agentID, ParentID: parent, Provider: d.Provider, Model: d.Model, Role: d.Role, Decision: &dc})
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeDecision, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, Rule: d.Rule, Reason: d.Reason,
-		Confidence: d.Confidence, Fallback: d.Fallback, Judged: d.Judged})
+		Confidence: d.Confidence, Fallback: d.Fallback, From: d.From, Judged: d.Judged})
 	title := step.Title
 	if attempt > 1 {
 		title = fmt.Sprintf("%s (attempt %d)", step.Title, attempt)

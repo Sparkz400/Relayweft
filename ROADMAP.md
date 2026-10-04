@@ -40,7 +40,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - `sy tune` (rule tuning, judge cost vs gain, models from your config)
   - context hand-off
   - cost per task and per day
-- **Phase 4 (done except 4.3, more providers):**
+- **Phase 4 (done; 4.3 more providers is in beta):**
   - `sy web` and `sy app`
   - per-repo `.switchyard.yaml` with `sy trust`
   - hooks
@@ -206,7 +206,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 |---|---|
 | 4.1 | ✅ **`sy web`**: a local browser UI on the same engine. It has the agent tree, the activity log, the plan editor, hunk review, models and routes, settings, history, the queue and stats/tune. It listens on 127.0.0.1, with a per-run token and strict Host/Origin checks. |
 | 4.2 | ✅ **Desktop window**: `sy app` opens `sy web` in Edge or Chrome app mode instead of using Wails. That means no cgo and nothing to install, and it closes when the window does. |
-| 4.3 | **More providers**: a generic runner interface for other official CLIs (for example Gemini CLI) via config. |
+| 4.3 | 🟡 **More providers** (built, beta): a provider is a name plus the CLI protocol it speaks (`kind: codex | claude | gemini | qwen | generic`), set up in config with its own `command` and `env`. `kind: generic` describes any other CLI in config alone: its arguments, text or JSON-lines output (rules for the answer, session, tools and tokens), resume and limit detection; descriptions of Qwen Code and Gemini CLI in that format read their recordings exactly like the built-in kinds. Presets (disabled by default): Gemini CLI, Qwen Code on local Ollama, DeepSeek, any Ollama model through Claude Code, and a plain `ollama run` model (generic). `standby: [roles]` lets a free local model take cheap read-only work once Codex and Claude are at or near their limits (Qwen Code: explorer and researcher; plain Ollama: the judge). Routing walks `routing.provider_order` instead of "the other provider"; `only_preferred` keeps slow local models out of fallbacks. Qwen Code and Claude-on-Ollama are recorded and were run end to end; Gemini has only a signed-out recording (the stream format comes from its source); DeepSeek is unrun (needs a key). See [docs/providers.md](docs/providers.md). |
 | 4.4 | ✅ **Per-repo profiles**: a `.switchyard.yaml` in the repo is layered over your config. The parts that run commands need `sy trust`. Create one with `sy init --repo` or `/save repo`. |
 | 4.5 | ✅ **Hooks**: `before_task` (a failure stops the task), `after_merge` and `after_task`, with `SY_*` environment variables. |
 | 4.6 | ✅ **Hunk-level review**: in the TUI and in `sy web`. |
@@ -262,4 +262,4 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
    - After each release, render the manifests (`packaging/render-manifests.sh X.Y.Z`).
    - For signed binaries, buy a code-signing certificate (see `packaging/README.md`).
 5. **Open Phase 4 items:**
-   - 4.3: more providers. Started, then paused at your request.
+   - 4.3: record a Gemini run with an API key (`GEMINI_API_KEY`; personal Google sign-in is refused; the commands are in docs/providers.md) and a DeepSeek run, to turn them from beta into tested.

@@ -51,6 +51,7 @@ type Record struct {
 	Confidence float64           `json:"confidence,omitempty"`
 	Judged     bool              `json:"judged,omitempty"` // decision: the judge model picked or confirmed the role
 	Fallback   bool              `json:"fallback,omitempty"`
+	From       string            `json:"from,omitempty"` // decision: the provider a fallback moved away from
 	OK         *bool             `json:"ok,omitempty"`
 	LimitHit   bool              `json:"limit_hit,omitempty"`
 	Error      string            `json:"error,omitempty"`

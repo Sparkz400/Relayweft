@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
@@ -91,6 +92,31 @@ type provView struct {
 	calls    int
 	quota    *event.QuotaInfo
 	bar, vel float64
+}
+
+// prov returns a provider's view, creating it ("" has none).
+func (m *Model) prov(p string) *provView {
+	if p == "" {
+		return nil
+	}
+	pv := m.provs[p]
+	if pv == nil {
+		pv = &provView{}
+		m.provs[p] = pv
+	}
+	return pv
+}
+
+// shownProviders are the providers in the status bar: the enabled ones,
+// and any other that did something this session.
+func (m *Model) shownProviders() []string {
+	out := m.store.Enabled() // no config copy: this runs every frame
+	for _, p := range m.store.ProviderNames() {
+		if pv := m.provs[p]; pv != nil && !slices.Contains(out, p) && (pv.calls > 0 || !pv.until.IsZero()) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // pulse travels along the branch line (dispatch, outwards) or the join line
@@ -195,7 +221,7 @@ func New(o Options) *Model {
 	m := &Model{
 		opt: o, orc: o.Orc, store: o.Orc.Store(), th: o.Theme,
 		nodes: map[string]*node{}, input: in,
-		provs:  map[string]*provView{event.Codex: {}, event.Claude: {}},
+		provs:  map[string]*provView{},
 		spring: harmonica.NewSpring(harmonica.FPS(int(time.Second/tickEvery)), 6.0, 0.8),
 		phase:  "idle",
 	}
@@ -438,7 +464,7 @@ func (m *Model) handleEvent(e event.Event) {
 		m.addLog(logLine{ts: e.Timestamp, kind: e.Kind, text: e.Text})
 		return
 	case event.ProviderState:
-		pv := m.provs[e.Provider]
+		pv := m.prov(e.Provider)
 		if pv != nil {
 			if e.Until.After(time.Now()) && !e.Until.Equal(pv.until) {
 				m.alert(notify.EventLimit, "Switchyard: "+e.Provider+" hit its limit", e.Text)
@@ -479,7 +505,7 @@ func (m *Model) handleEvent(e event.Event) {
 		m.addLog(logLine{ts: e.Timestamp, agent: e.AgentID, kind: e.Kind, text: "merge " + mark + " " + e.Text})
 		return
 	case event.Quota:
-		if pv := m.provs[e.Provider]; pv != nil && e.Quota != nil {
+		if pv := m.prov(e.Provider); pv != nil && e.Quota != nil {
 			q := *e.Quota
 			pv.quota = &q
 		}
@@ -546,7 +572,7 @@ func (m *Model) nodeEvent(n *node, e event.Event) {
 		n.last = e.Text
 	case event.Usage:
 		n.tokens = n.tokens.Add(e.Tokens)
-		if pv := m.provs[e.Provider]; pv != nil {
+		if pv := m.prov(e.Provider); pv != nil {
 			pv.tokens = pv.tokens.Add(e.Tokens)
 			pv.calls++
 		}
@@ -609,7 +635,7 @@ func (m *Model) reviewerEvent(e event.Event) {
 		r.provider, r.model = e.Provider, e.Model
 	case event.Usage:
 		r.tokens = r.tokens.Add(e.Tokens)
-		if pv := m.provs[e.Provider]; pv != nil {
+		if pv := m.prov(e.Provider); pv != nil {
 			pv.tokens = pv.tokens.Add(e.Tokens)
 			pv.calls++
 		}
@@ -636,8 +662,8 @@ func (m *Model) animate() {
 		d.bar, d.vel = m.spring.Update(d.bar, d.vel, d.d.Confidence)
 	}
 	now := time.Now()
-	for _, p := range event.Providers {
-		pv := m.provs[p]
+	for _, p := range m.shownProviders() {
+		pv := m.prov(p)
 		target := 0.0
 		if pv.quota != nil {
 			target = pv.quota.Utilization
