@@ -97,13 +97,21 @@ func Difficulty(s Step, role string) (float64, []string) {
 		add(math.Min(0.05*float64(n-2), 0.15), fmt.Sprintf("%d files", n))
 	}
 	text := s.Title + " " + s.Prompt
+	// A routine word moves a step down only when the step is about it: in
+	// the title, or in a short prompt. Planners write long prompts that
+	// mention the readme or the docstrings in passing (the tiers bench).
+	routine := s.Title
 	switch w := len(strings.Fields(text)); {
 	case w < 25:
 		add(-0.1, "short")
+		routine = text
 	case w > 250:
 		add(0.1, fmt.Sprintf("long (%d words)", w))
 	}
-	if m := routineWords.FindString(text); m != "" {
+	if routine == "" {
+		routine = text
+	}
+	if m := routineWords.FindString(routine); m != "" {
 		add(-0.15, "routine: "+strings.ToLower(m))
 	}
 	if m := hardWords.FindString(text); m != "" {

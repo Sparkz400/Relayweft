@@ -53,6 +53,29 @@ func TestNextEffort(t *testing.T) {
 	}
 }
 
+// The confidence floor needs a clear majority from few runs and little
+// more than the floor from many (the counts in the thresholds' comment).
+func TestClearlyAbove(t *testing.T) {
+	for n, want := range map[int]int{5: 3, 10: 4, 20: 7, 50: 14} {
+		least := -1
+		for k := 0; k <= n; k++ {
+			if clearlyAbove(k, n, failFloor) {
+				least = k
+				break
+			}
+		}
+		if least != want {
+			t.Errorf("%d runs: %d failures cross the floor, want %d", n, least, want)
+		}
+	}
+	if clearlyAbove(4, 4, failFloor) {
+		t.Error("4 runs are below minRuns")
+	}
+	if got := wilsonLower(0, 10); got != 0 {
+		t.Errorf("wilsonLower(0, 10) = %v", got)
+	}
+}
+
 func TestFailingRoutes(t *testing.T) {
 	limit := runs("worker", "codex", "gpt", "medium", 5, 5)
 	for i := range limit {
@@ -63,8 +86,12 @@ func TestFailingRoutes(t *testing.T) {
 		recs []Record
 		want string // substring of titles, "" = no suggestion
 	}{
-		{"30% fails", runs("worker", "codex", "gpt", "medium", 10, 3), "medium: worker on codex:gpt fails often /route worker codex:gpt:high,/prefer worker claude"},
+		{"4 of 10", runs("worker", "codex", "gpt", "medium", 10, 4), "medium: worker on codex:gpt fails often /route worker codex:gpt:high,/prefer worker claude"},
 		{"50% is high", runs("worker", "claude", "sonnet", "max", 6, 3), "high: worker on claude:sonnet fails often /prefer worker codex"},
+		{"3 of 10 is not clear yet", runs("worker", "codex", "gpt", "medium", 10, 3), ""},
+		{"2 of 5: one bad afternoon", runs("worker", "codex", "gpt", "medium", 5, 2), ""},
+		{"35% of 20", runs("worker", "codex", "gpt", "medium", 20, 7), "medium: worker on codex:gpt fails often"},
+		{"30% of 20", runs("worker", "codex", "gpt", "medium", 20, 6), ""},
 		{"below rate", runs("worker", "codex", "gpt", "medium", 10, 2), ""},
 		{"too few runs", runs("worker", "codex", "gpt", "medium", 4, 4), ""},
 		{"limit hits ignored", limit, ""},
@@ -119,8 +146,10 @@ func TestFinalReviews(t *testing.T) {
 		recs []Record
 		want string
 	}{
-		{"2 of 5", append(reviews(5, 2), worker...), "medium: final reviews reject a lot of work /route worker claude:sonnet:high"},
+		{"8 of 20", append(reviews(20, 8), worker...), "medium: final reviews reject a lot of work /route worker claude:sonnet:high"},
 		{"3 of 5 is high", reviews(5, 3), "high: final reviews"},
+		{"2 of 5 is not clear yet", append(reviews(5, 2), worker...), ""},
+		{"7 of 20", reviews(20, 7), ""},
 		{"1 of 5", reviews(5, 1), ""},
 		{"too few", reviews(4, 4), ""},
 		{"plan reviews ignored", plan, ""},
@@ -132,6 +161,14 @@ func TestFinalReviews(t *testing.T) {
 	}
 }
 
+// nextDay moves the first n records a day later.
+func nextDay(recs []Record, n int) []Record {
+	for i := 0; i < n; i++ {
+		recs[i].TS = recs[i].TS.Add(24 * time.Hour)
+	}
+	return recs
+}
+
 func TestLimitPressure(t *testing.T) {
 	cheap := append(decisions(3, "read-only", "explorer", "claude", ""), decisions(2, "forced", "judge", "claude", "")...)
 	cheap = append(cheap, decisions(2, "read-only", "researcher", "codex", "")...)
@@ -140,11 +177,12 @@ func TestLimitPressure(t *testing.T) {
 		recs []Record
 		want string
 	}{
-		{"claude limited", append(append([]Record{}, cheap...), decisions(5, "limit-fallback", "worker", "codex", "")...),
+		{"claude limited", append(append([]Record{}, cheap...), nextDay(decisions(5, "limit-fallback", "worker", "codex", ""), 2)...),
 			"claude keeps running out of quota /prefer explorer codex,/prefer judge codex"},
-		{"quota-preempt counts", append(append([]Record{}, cheap...), decisions(5, "quota-preempt", "worker", "codex", "")...), "claude keeps running"},
-		{"too few", append(append([]Record{}, cheap...), decisions(4, "limit-fallback", "worker", "codex", "")...), ""},
-		{"cheap roles already elsewhere", decisions(5, "limit-fallback", "worker", "claude", ""), ""},
+		{"quota-preempt counts", append(append([]Record{}, cheap...), nextDay(decisions(5, "quota-preempt", "worker", "codex", ""), 1)...), "claude keeps running"},
+		{"one bad afternoon", append(append([]Record{}, cheap...), decisions(20, "limit-fallback", "worker", "codex", "")...), ""},
+		{"too few", append(append([]Record{}, cheap...), nextDay(decisions(4, "limit-fallback", "worker", "codex", ""), 2)...), ""},
+		{"cheap roles already elsewhere", nextDay(decisions(5, "limit-fallback", "worker", "claude", ""), 2), ""},
 	} {
 		got := titles(limitPressure(tc.recs))
 		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
@@ -217,8 +255,9 @@ func TestJudgeAdvice(t *testing.T) {
 		recs []Record
 		want string
 	}{
-		{"default fails, judge off", steps(10, 3, "default", false, "a"), "medium: turn on the judge for unclear worker steps /judge on"},
+		{"default fails, judge off", steps(10, 4, "default", false, "a"), "medium: turn on the judge for unclear worker steps /judge on"},
 		{"default ok", steps(10, 2, "default", false, "a"), ""},
+		{"3 of 10 is not clear yet", steps(10, 3, "default", false, "a"), ""},
 		{"judge already on", append(steps(10, 3, "default", false, "a"), steps(1, 0, "default", true, "b")...), ""},
 		{"judge no better", append(steps(10, 2, "default", false, "a"), steps(10, 2, "default", true, "b")...), "info: the judge does not improve routing /judge off"},
 		{"old logs: rule judge", append(steps(10, 2, "default", false, "a"), steps(10, 3, "judge", false, "b")...), "/judge off"},
@@ -254,8 +293,10 @@ func TestRoutedVsSingle(t *testing.T) {
 		recs []Record
 		want string
 	}{
-		{"routed worse", append(tasks("routed", 5, 3, false), tasks("single", 5, 4, false)...), "high: routed tasks succeed less often"},
-		{"mode from task_start", append(tasks("routed", 5, 3, true), tasks("single", 5, 4, true)...), "high: routed"},
+		{"routed worse", append(tasks("routed", 5, 3, false), tasks("single", 5, 5, false)...), "high: routed tasks succeed less often"},
+		{"mode from task_start", append(tasks("routed", 5, 3, true), tasks("single", 5, 5, true)...), "high: routed"},
+		{"one run apart is noise", append(tasks("routed", 5, 3, false), tasks("single", 5, 4, false)...), ""},
+		{"16 vs 18 of 20", append(tasks("routed", 20, 16, false), tasks("single", 20, 18, false)...), "high: routed"},
 		{"routed equal", append(tasks("routed", 5, 4, false), tasks("single", 5, 4, false)...), ""},
 		{"too few single", append(tasks("routed", 5, 0, false), tasks("single", 4, 4, false)...), ""},
 	} {
@@ -267,7 +308,7 @@ func TestRoutedVsSingle(t *testing.T) {
 }
 
 func TestSuggestFilterAndOrder(t *testing.T) {
-	recs := append(runs("explorer", "claude", "opus", "", 5, 0), runs("worker", "codex", "gpt", "medium", 10, 3)...)
+	recs := append(runs("explorer", "claude", "opus", "", 5, 0), runs("worker", "codex", "gpt", "medium", 10, 4)...)
 	recs = append(recs, tasks("routed", 5, 3, false)...)
 	recs = append(recs, tasks("single", 5, 5, false)...)
 	got := Suggest(recs, Filter{})

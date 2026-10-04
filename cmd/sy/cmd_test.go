@@ -2,11 +2,13 @@ package main
 
 import (
 	"archive/zip"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/diag"
@@ -88,6 +90,34 @@ tasks:
 	// The user's tree is untouched.
 	if out, _ := exec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=no").Output(); len(out) != 0 {
 		t.Errorf("bench changed the user's tree: %s", out)
+	}
+}
+
+// A bench that ends normally must not print the Ctrl+C notice (seen in a
+// real bench run: the end cancels the signal context too).
+func TestBenchQuietAtNormalEnd(t *testing.T) {
+	isolate(t)
+	chdir(t, gitInit(t))
+	benchRunners = func(*config.Config) runner.Set { return runner.NewFakeSet(0) }
+	defer func() { benchRunners = runner.New }()
+	os.WriteFile("bench.yaml", []byte("modes: [routed]\ntasks:\n  - {name: t, prompt: \"where is the readme\", check: \"git --version\"}\n"), 0o644)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	got := make(chan string)
+	go func() { b, _ := io.ReadAll(r); got <- string(b) }()
+	_, err = captureStdout(t, func() error { return cmdBench([]string{"--yes"}) })
+	time.Sleep(200 * time.Millisecond) // a stray notice would print by now
+	os.Stderr = old
+	w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := <-got; strings.Contains(s, "cancelling") {
+		t.Errorf("a normal end printed the Ctrl+C notice:\n%s", s)
 	}
 }
 
