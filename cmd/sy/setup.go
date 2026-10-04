@@ -510,7 +510,7 @@ func runSetup(o setupOpts) (setupResult, error) {
 		fmt.Fprintln(w, bold.Render("Switchyard setup"))
 	}
 	if o.interactive {
-		fmt.Fprintln(w, stMuted.Render("Enter takes the default at every question. Ctrl+C stops without writing anything."))
+		fmt.Fprintln(w, stMuted.Render("Enter takes the default at every question; Ctrl+C stops. Nothing is written before the providers question."))
 	}
 
 	// 1. An existing config is never replaced without asking, and never
@@ -594,11 +594,14 @@ func runSetup(o setupOpts) (setupResult, error) {
 
 	// 5. The first task.
 	var taskTook time.Duration
+	var taskErr error
 	if !o.auto && !o.noTask {
-		took, err := setupFirstTask(a, w, o.path, root)
-		taskTook = took
-		if err != nil {
-			fmt.Fprintf(w, "%s the first task did not finish: %v\n  run `sy doctor`, then try `sy run \"explain this repo\"` in a git repo\n", stErr.Render("FAIL"), err)
+		taskTook, taskErr = setupFirstTask(a, w, o.path, root)
+		if taskErr != nil {
+			fmt.Fprintf(w, "%s the first task did not finish: %v\n  run `sy doctor`, then try `sy run \"explain this repo\"` in a git repo\n", stErr.Render("FAIL"), taskErr)
+			if !errors.Is(taskErr, errTaskFailed) {
+				taskErr = fmt.Errorf("first task: %w", taskErr)
+			}
 		}
 	}
 	finish()
@@ -612,7 +615,7 @@ func runSetup(o setupOpts) (setupResult, error) {
 	if !o.auto {
 		fmt.Fprintln(w, "Next: `sy` in a git repo opens the TUI (`sy web` the browser UI); `sy run \"task\"` runs one task. `sy doctor` checks the setup again.")
 	}
-	return res, nil
+	return res, taskErr // a script sees a failed first task in the exit code
 }
 
 // readyMain returns the ready providers that can do every job: not only
