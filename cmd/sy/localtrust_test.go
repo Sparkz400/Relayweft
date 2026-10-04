@@ -26,9 +26,9 @@ func TestTrustLocalConfig(t *testing.T) {
 	if !strings.Contains(note.String(), "sets hooks, which run commands") || !strings.Contains(note.String(), "sy trust") {
 		t.Errorf("note: %q", note.String())
 	}
-	if err := runDoctor(&note, ""); err != nil {
-		t.Fatal(err)
-	}
+	// Without the agent CLIs installed (CI), doctor also reports problems;
+	// only its note matters here.
+	_ = runDoctor(&note, "")
 	if !strings.Contains(note.String(), "ignored (yours apply)") {
 		t.Errorf("sy doctor does not say the hooks are ignored:\n%s", note.String())
 	}
