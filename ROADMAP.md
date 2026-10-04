@@ -63,6 +63,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - issue tasks in GitHub Actions and GitLab CI, without the forge token in agents
   - team mode: several machines share one issue label
 - **Release v0.1.0** (3 Oct 2026): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
+- **Release v0.2.0** (4 Oct 2026): more providers, `sy health`, model tiers, CI and team mode, self-hosted forges, webhooks, `sy selftest` and the fixes from real use. `sy update` from v0.1.0 to v0.2.0 was run for real (checksum verified). Scoop manifest updated; winget manifests rendered.
   - The repository is public: release downloads, `sy update` and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
 
@@ -259,9 +260,8 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
    - `@ follow-up` after a task;
    - close the window mid-task, then `sy resume`;
    - `sy app`.
-2. **1.1 The rest of the Codex recordings.** In any git repo on your PC:
-   - an edit: `codex exec --json --skip-git-repo-check -m gpt-6-luna "create hello.txt containing hi" > codex-edit.jsonl`
-   - once you hit a Codex limit, run the same command again and keep the file (`codex-limit.jsonl`).
+2. **1.1 The rest of the Codex recordings** (an edit run is already recorded). In any git repo on your PC, with `codex exec --json --skip-git-repo-check -m gpt-6-luna "create hello.txt containing hi"`:
+   - once you hit a Codex limit, run it and keep the output (`codex-limit.jsonl`).
    - after `codex logout`, run it once more (`codex-logout.jsonl`), then `codex login`.
    Send the files; they become test fixtures.
 3. **Run `sy bench` on ~10 real, multi-file tasks from your own repos, with Codex.** This decides the Phase 3 exit criterion. In each repo, `sy bench --from-history` writes the tasks (it runs your tests on each candidate commit, which costs no quota). Read and reword the prompts, then run `sy bench --file bench-history.yaml`. After a week of use, run `sy tune`.

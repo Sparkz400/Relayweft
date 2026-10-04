@@ -1,17 +1,17 @@
 {
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Windows-first terminal app that routes coding work between the Codex CLI and Claude Code.",
     "homepage": "https://github.com/sparkz400/switchyard",
     "license": "MIT",
     "notes": "Run `sy doctor` to check the codex and claude CLIs. Update with `scoop update sy`.",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/sparkz400/switchyard/releases/download/v0.1.0/sy-windows-amd64.exe#/sy.exe",
-            "hash": "4cccae15ea7a0bda94b8360269265c2745b3d9ad55189ee4402d9fa9091ad5d5"
+            "url": "https://github.com/sparkz400/switchyard/releases/download/v0.2.0/sy-windows-amd64.exe#/sy.exe",
+            "hash": "4c30f8e44fa47bdd5f37a72fbcce2f8af66d0edcccf1e5b8f342725cff06b293"
         },
         "arm64": {
-            "url": "https://github.com/sparkz400/switchyard/releases/download/v0.1.0/sy-windows-arm64.exe#/sy.exe",
-            "hash": "c7a759dfcc642b2361ab8609d72e4f072dac50ec2626ae592c4974f181e4de70"
+            "url": "https://github.com/sparkz400/switchyard/releases/download/v0.2.0/sy-windows-arm64.exe#/sy.exe",
+            "hash": "5b6c1c24b4a8252310054bcb966da7f7ddef77f6bae297473884c5219e070221"
         }
     },
     "bin": "sy.exe",
