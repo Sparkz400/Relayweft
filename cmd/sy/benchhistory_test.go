@@ -165,6 +165,16 @@ func TestHistoryBenchFileHeader(t *testing.T) {
 	if got := historyRunCmd("bench-history.yaml", repo, false); got != "sy bench --file bench-history.yaml" {
 		t.Errorf("in the repo: %q", got)
 	}
+	// The project named through a symlink, the working directory by its
+	// real path (as on macOS, where /var is /private/var).
+	link := filepath.Join(elsewhere, "link")
+	if err := os.Symlink(repo, link); err == nil {
+		if got := historyRunCmd("bench-history.yaml", link, false); got != "sy bench --file bench-history.yaml" {
+			t.Errorf("in the repo, named through a symlink: %q", got)
+		}
+	} else {
+		t.Logf("no symlink test: %v", err)
+	}
 	if got := argQuote(`C:\My Repo`); got != `"C:\My Repo"` {
 		t.Errorf("argQuote = %s", got)
 	}

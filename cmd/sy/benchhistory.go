@@ -188,12 +188,22 @@ func historyRunCmd(out, dir string, dirFlag bool) string {
 	if err != nil {
 		abs = out
 	}
-	rel, err := filepath.Rel(dir, abs)
+	// Compare real paths: the working directory can be the same folder by
+	// another name (macOS: /var is /private/var).
+	rel, err := filepath.Rel(realPath(dir), filepath.Join(realPath(filepath.Dir(abs)), filepath.Base(abs)))
 	inside := err == nil && !filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 	if inside && !dirFlag {
 		return "sy bench --file " + argQuote(out)
 	}
 	return "sy bench --dir " + argQuote(dir) + " --file " + argQuote(abs)
+}
+
+// realPath is p with symlinks resolved, or p when that fails.
+func realPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
 }
 
 // argQuote quotes a path for a command line when it needs it.
