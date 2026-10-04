@@ -750,6 +750,9 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	if t.resumed && t.state.Plan != nil {
 		plan = *t.state.Plan
 		o.logf("%s", t.state.resumeSummary())
+		for _, s := range t.state.UnfinishedSaved() {
+			o.logf("%s; the step starts over from your tree", s.Hint())
+		}
 		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
 	} else if words := len(strings.Fields(t.text)); oc.SmallTaskWords > 0 && words < oc.SmallTaskWords && len(t.repos) == 0 {
 		small = true
@@ -1290,6 +1293,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			o.logf("worktree for %s failed (%v); running in the main tree", st.ID, err)
 			return inMainTree()
 		}
+		o.slotNotes(t, s)
 	}
 	defer s.release()
 	loc := stepLoc{dir: slotWorkDir(s.path, rp.root, mainDir), slot: s.path, base: base}
@@ -1298,6 +1302,15 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		return r
 	}
 	return o.landSlot(ctx, t, rp, st, deps, loc, r, true)
+}
+
+// slotNotes passes on what finding a pool worktree did (slot.notes): to
+// the log on screen and the session log.
+func (o *Orchestrator) slotNotes(t *task, s *slot) {
+	for _, n := range s.notes {
+		o.logf("%s", n)
+		o.opts.Log.Write(sessionlog.Record{Type: "pool", TaskID: t.id, Text: n})
+	}
 }
 
 // slotWorkDir is where an agent works in a pool worktree: the same relative
@@ -1465,8 +1478,13 @@ func (o *Orchestrator) slotWarnings(t, rp *task, stepID string, sc slotCommit, a
 // without counting it as a conflict. Branches are only ever created, never
 // moved: an existing name gets a numbered suffix.
 func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
-	g := git{t.root}
-	base := "sy/" + refPart(o.opts.Log.Session()) + "/" + refPart(t.id) + "/" + refPart(stepID)
+	return newBranch(git{t.root}, "sy/"+refPart(o.opts.Log.Session())+"/"+refPart(t.id)+"/"+refPart(stepID), commit)
+}
+
+// newBranch creates a branch at commit named base, or base-2, base-3 ...
+// when that exists, and returns its name (or the commit, kept under
+// refs/switchyard/kept/, when no branch could be created).
+func newBranch(g git, base, commit string) string {
 	for i := 1; i <= 20; i++ {
 		name := base
 		if i > 1 {

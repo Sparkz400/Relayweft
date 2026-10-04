@@ -313,6 +313,9 @@ func (m *Model) phase2Command(cmd string, args []string, rest string, say func(s
 				line += " · " + s.CostLine
 			}
 			say("%s", line)
+			for _, sv := range s.UnfinishedSaved() {
+				say("  %s", sv.Hint())
+			}
 		}
 		say("/resume <id> continues one (finished subtasks are skipped)")
 	default:

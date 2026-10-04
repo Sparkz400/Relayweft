@@ -63,6 +63,9 @@ type slot struct {
 	path    string
 	unlock  func()
 	untrack func()
+	// notes say what finding the slot did that the person should know:
+	// half-done edits of an expired hold saved on a branch (slotHeld).
+	notes []string
 }
 
 // release stops tracking the slot's processes, kills what the agents left
@@ -127,6 +130,7 @@ func acquireSlot(root, commit string) (*slot, error) {
 		return nil, err
 	}
 	var firstErr error
+	var notes []string
 	for i := 0; i < maxPoolSlots; i++ {
 		path := filepath.Join(dir, strconv.Itoa(i))
 		if held, _ := holdState(path); held {
@@ -138,7 +142,11 @@ func acquireSlot(root, commit string) (*slot, error) {
 		if !ok {
 			continue
 		}
-		if slotHeld(path) {
+		held, note := slotHeldNote(path)
+		if note != "" {
+			notes = append(notes, note)
+		}
+		if held {
 			unlock()
 			continue
 		}
@@ -151,12 +159,16 @@ func acquireSlot(root, commit string) (*slot, error) {
 			continue
 		}
 		touch(path)
-		return &slot{path: path, unlock: unlock, untrack: proc.TrackDir(path, pidFile(path))}, nil
+		return &slot{path: path, unlock: unlock, untrack: proc.TrackDir(path, pidFile(path)), notes: notes}, nil
+	}
+	also := ""
+	if len(notes) > 0 {
+		also = " (" + strings.Join(notes, "; ") + ")"
 	}
 	if firstErr != nil {
-		return nil, fmt.Errorf("no usable pool worktree: %w", firstErr)
+		return nil, fmt.Errorf("no usable pool worktree: %w%s", firstErr, also)
 	}
-	return nil, fmt.Errorf("all %d pool worktrees are in use", maxPoolSlots)
+	return nil, fmt.Errorf("all %d pool worktrees are in use%s", maxPoolSlots, also)
 }
 
 // prepareSlot makes path a clean worktree at commit, reusing it when it is
@@ -262,6 +274,7 @@ func claimSlot(root, path, commit string, keep *slotHold) (*slot, error) {
 		return nil, fmt.Errorf("%s is not a pool worktree of this repo", path)
 	}
 	var unlock func()
+	var notes []string
 	if keep != nil {
 		var err error
 		if unlock, err = lockSlotWait(path, claimWait); err != nil {
@@ -283,7 +296,11 @@ func claimSlot(root, path, commit string, keep *slotHold) (*slot, error) {
 		if unlock, ok = lockSlot(path); !ok {
 			return nil, fmt.Errorf("%s is in use (another sy, or an agent still running there)", path)
 		}
-		if slotHeld(path) {
+		held, note := slotHeldNote(path)
+		if note != "" {
+			notes = append(notes, note)
+		}
+		if held {
 			unlock()
 			return nil, fmt.Errorf("%s holds the half-done edits of an interrupted task (sy resume)", path)
 		}
@@ -297,7 +314,7 @@ func claimSlot(root, path, commit string, keep *slotHold) (*slot, error) {
 		}
 	}
 	touch(path)
-	return &slot{path: path, unlock: unlock, untrack: proc.TrackDir(path, pidFile(path))}, nil
+	return &slot{path: path, unlock: unlock, untrack: proc.TrackDir(path, pidFile(path)), notes: notes}, nil
 }
 
 // slotHolds reports (as an error) whether the slot at path is still the
@@ -508,21 +525,29 @@ func canonPath(p string) string { return canon.Path(p) }
 // not in use and returns how many were removed. Slots that could not be
 // deleted are not counted and are named in the error.
 func CleanPool(dir string) (int, error) {
+	n, _, err := CleanPoolSaved(dir)
+	return n, err
+}
+
+// CleanPoolSaved is CleanPool that also returns the half-done edits of
+// interrupted tasks it saved on branches before removing the worktrees
+// that held them. A held worktree whose edits cannot be saved is kept and
+// named in the error.
+func CleanPoolSaved(dir string) (n int, saved []SavedEdits, err error) {
 	root, err := repoRoot(dir)
 	if err != nil {
-		return 0, fmt.Errorf("not a git repository: %s", dir)
+		return 0, nil, fmt.Errorf("not a git repository: %s", dir)
 	}
 	pd := poolDir(root)
 	entries, err := os.ReadDir(pd)
 	if os.IsNotExist(err) {
-		return 0, nil
+		return 0, nil, nil
 	}
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	common := git{root}.commonDir()
-	n := 0
-	var failed []string
+	var failed, kept []string
 	for _, e := range entries {
 		if !e.IsDir() || isTrash(e.Name()) {
 			continue
@@ -531,6 +556,17 @@ func CleanPool(dir string) (int, error) {
 		unlock, ok := lockSlot(path)
 		if !ok {
 			continue // in use by a running sy
+		}
+		if i := checkHold(path); i.held || i.save {
+			s, err := saveHeldEdits(path, i, "sy clean removed its worktree")
+			if err != nil {
+				kept = append(kept, fmt.Sprintf("%s (%v)", path, err))
+				unlock()
+				continue
+			}
+			if s != nil {
+				saved = append(saved, *s)
+			}
 		}
 		if err := removeSlot(common, path); err != nil {
 			failed = append(failed, path)
@@ -566,10 +602,17 @@ func CleanPool(dir string) (int, error) {
 	}
 	os.Remove(pd)               // only succeeds when empty
 	os.Remove(filepath.Dir(pd)) // likewise
+	var msgs []string
 	if len(failed) > 0 {
-		return n, fmt.Errorf("removed %d pooled worktree(s); could not delete %s (a program may still have files open there)", n, strings.Join(failed, ", "))
+		msgs = append(msgs, fmt.Sprintf("could not delete %s (a program may still have files open there)", strings.Join(failed, ", ")))
 	}
-	return n, nil
+	if len(kept) > 0 {
+		msgs = append(msgs, fmt.Sprintf("kept %s: it holds half-done edits of an interrupted task that were not saved on a branch. If its task is running, run sy clean when it ends; otherwise `sy resume` continues the task there, or copy what you need and delete the folder", strings.Join(kept, ", ")))
+	}
+	if len(msgs) > 0 {
+		return n, saved, fmt.Errorf("removed %d pooled worktree(s); %s", n, strings.Join(msgs, "; "))
+	}
+	return n, saved, nil
 }
 
 // bigRepoFiles is where PerfTips starts suggesting git settings.
@@ -741,7 +784,7 @@ func PrunePools(maxIdle time.Duration) (removed int, freed uint64) {
 			if !ok {
 				continue // in use right now
 			}
-			if slotHeld(path) {
+			if slotHeld(path) { // what it saved is in the debug log
 				unlock()
 				continue
 			}

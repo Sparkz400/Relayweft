@@ -86,6 +86,9 @@ type TaskState struct {
 	// Running are the subtasks whose agent started and did not finish, by
 	// subtask id.
 	Running map[string]StepRun `json:"running,omitempty"`
+	// Saved are half-done edits of interrupted steps, saved on a branch
+	// when the pool worktree that held them was given up (holds.go).
+	Saved []SavedEdits `json:"saved,omitempty"`
 }
 
 // setRunning records that a subtask's agent starts.
@@ -317,6 +320,18 @@ func pruneStates() {
 		os.Remove(statePath(s.ID))
 		os.Remove(filepath.Join(stateDir(), s.ID+".lock"))
 	}
+}
+
+// UnfinishedSaved are the saved half-done edits of steps that have not
+// succeeded since (a resume runs them again).
+func (s TaskState) UnfinishedSaved() []SavedEdits {
+	var out []SavedEdits
+	for _, sv := range s.Saved {
+		if r, ok := s.Results[sv.Step]; !ok || !r.OK {
+			out = append(out, sv)
+		}
+	}
+	return out
 }
 
 // resumeSummary describes what a resume will skip.
