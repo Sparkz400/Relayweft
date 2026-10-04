@@ -202,6 +202,9 @@ func cmdRun(args []string) error {
 	} else {
 		return errors.New(`usage: sy run [flags] "task"   or   sy run --file tasks.txt`)
 	}
+	if err := firstRun(c.configPath, c.dir, false); err != nil {
+		return err
+	}
 	if *estimate {
 		if *file != "" || *single != "" || sf.set() || iss.active() || len(tasks) != 1 {
 			return errors.New(`--estimate takes one task: sy run --estimate "task"`)

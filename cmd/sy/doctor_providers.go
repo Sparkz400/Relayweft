@@ -94,6 +94,23 @@ func doctorProviders(w io.Writer, cfg *config.Config, ok func(bool) string, warn
 			} else {
 				fmt.Fprintf(w, "%s %-11s login: %s\n", ok(true), p, s)
 			}
+		case event.Claude:
+			if endpoint(pc) != "" {
+				break // another API (DeepSeek, Ollama) with its own key
+			}
+			login, detail := claudeLogin(func(args ...string) (string, string, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), setupTimeout)
+				defer cancel()
+				return setupExec(ctx, bin, args...)
+			})
+			switch login {
+			case loginOK:
+				fmt.Fprintf(w, "%s %-11s login: %s\n", ok(true), p, detail)
+			case loginNo:
+				fmt.Fprintf(w, "%s %-11s login: not logged in - run `claude auth login`\n", warn, p)
+			default:
+				fmt.Fprintf(w, "%s %-11s login: %s\n", warn, p, detail)
+			}
 		case event.Gemini:
 			if msg := geminiAuthProblem(pc); msg != "" {
 				problems++

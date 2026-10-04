@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,9 +47,16 @@ func TestSelftest(t *testing.T) {
 	if err != nil || strings.Contains(got, "FAIL") {
 		t.Fatalf("sy selftest: %v\n%s", err, got)
 	}
-	for _, want := range []string{"ok   kill", "ok   history", "ok   resume", "ok   undo", "ok   redo", "Still to do by hand"} {
+	for _, want := range []string{"ok   kill", "ok   history", "ok   resume", "ok   undo", "ok   redo", "Still to do by hand",
+		"ok   first run 1 sy setup --yes: 0 question(s)", "ok   first run 2 sy run", "ok   first run 3 sy setup outside a repo"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+	// The onboarding timings (Phase 2 exit criterion), shown with -v.
+	for _, l := range strings.Split(got, "\n") {
+		if strings.Contains(l, "first run") {
+			t.Log(strings.TrimSpace(l))
 		}
 	}
 	if runtime.GOOS == "windows" {
@@ -64,6 +72,47 @@ func TestSelftest(t *testing.T) {
 	// Passed: the work folder is removed.
 	if ms, _ := filepath.Glob(filepath.Join(dir, "sy selftest *")); len(ms) != 0 {
 		t.Errorf("work folder left behind: %v", ms)
+	}
+}
+
+// TestOnboarding times the guided first run from fresh profiles (Phase 2
+// exit criterion: from install to the first task in under 5 minutes):
+// `sy setup --yes`, `sy run "task"` with no config (Enter twice), and
+// `sy setup` outside a repo (the sample project), with scripted Claude and
+// Codex CLIs. CI runs it with -v to print the timings.
+func TestOnboarding(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds sy and runs whole tasks")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("needs git")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "sy")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	isolate(t)
+	cmd := exec.Command(bin, "selftest", "--first-run", "--in", dir)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	got := string(out)
+	if err != nil || strings.Contains(got, "FAIL") {
+		t.Fatalf("sy selftest --first-run: %v\n%s", err, got)
+	}
+	for i, c := range firstRunCases {
+		want := fmt.Sprintf("ok   first run %d %s: %d question(s)", i+1, c.typed, c.questions)
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+	for _, l := range strings.Split(got, "\n") {
+		if strings.Contains(l, "first run") {
+			t.Log(strings.TrimSpace(l))
+		}
 	}
 }
 

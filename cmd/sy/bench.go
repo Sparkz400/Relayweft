@@ -121,6 +121,9 @@ func cmdBench(args []string) error {
 	fs.Parse(args)
 
 	if *starter != "" {
+		if py := starterPython(); !onPath(py) {
+			fmt.Printf("note: %s is not on PATH; the starter checks need Python 3\n", py)
+		}
 		if err := writeStarter(*starter); err != nil {
 			return err
 		}

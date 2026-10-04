@@ -16,12 +16,12 @@ Out of the box Switchyard uses **subscriptions only**: it drives the official `c
 
 ## Quick start (Windows)
 
-1. **Install the CLIs and log in once** (PowerShell):
+1. **Install at least one agent CLI and log in** (PowerShell). One is enough; `sy setup` below tells you what is missing:
    ```powershell
+   npm install -g @anthropic-ai/claude-code   # or: irm https://claude.ai/install.ps1 | iex
+   claude auth login
    npm install -g @openai/codex
    codex login
-   npm install -g @anthropic-ai/claude-code   # or the native installer
-   claude            # log in once, then exit
    ```
 2. **Install Git 2.38+** from <https://git-scm.com/>.
 3. **Install Switchyard**, one of:
@@ -34,15 +34,17 @@ Out of the box Switchyard uses **subscriptions only**: it drives the official `c
      go build -o sy.exe ./cmd/sy
      ```
      Or `go install ./cmd/sy`, which puts `sy.exe` in `%USERPROFILE%\go\bin` (that folder must be on your PATH). CI also builds `sy.exe` as a downloadable artifact on every push.
-4. **Check the setup:**
+4. **Run the guided setup in your repo** (about a minute; Enter takes the default at every question):
    ```powershell
-   .\sy.exe doctor
-   ```
-5. **Try it:**
-   ```powershell
-   .\sy.exe --demo                      # the full animated pipeline, fake agents
    cd C:\path\to\your\repo
-   C:\path\to\switchyard\sy.exe         # the real thing
+   sy setup
+   ```
+   It finds Claude Code, Codex, Gemini CLI, Qwen Code and Ollama, checks their versions and logins without using quota, and says how to install or log in to a missing one. It writes your config with the ready ones turned on, saves your repo's test commands to `.switchyard.yaml`, and offers a first read-only task ("explain this repo", one short haiku call) so you see a whole run. `sy`, `sy run` and `sy web` start the same setup by themselves when there is no config yet. For scripts: `sy setup --yes` (no questions; it also runs the first task).
+5. **Use it:**
+   ```powershell
+   sy             # the TUI in this repo
+   sy --demo      # the full animated pipeline with fake agents (no CLIs, no quota)
+   sy doctor      # check the setup again later
    ```
 
 Use **Windows Terminal** for the full look. Legacy `conhost` is detected and gets an ASCII theme (force either with `--ascii` / `--unicode`).
