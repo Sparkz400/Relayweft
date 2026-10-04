@@ -253,6 +253,15 @@ routing:
   provider_order: []               # where work goes when a provider is at its limit, in order (empty = codex, claude, then by name)
   learn: suggest                   # learned routes per repo: auto (refresh daily at task start) | suggest (only `sy tune --apply`) | off
   learn_min_samples: 8             # runs (recent ones count more) a route needs before it is learned
+  # Cost-aware model tiers: pick each work step's model from how hard it
+  # looks (files, prompt size, routine or hard words) and the quota left
+  # (the provider's reported limit and your budgets), instead of always
+  # using the role's own route. fast = the explorer route, standard = the
+  # worker route, strong = the worker_high route. Planner, reviewer, judge
+  # and roles you set explicitly never move; large, sensitive and
+  # repeating-error steps never drop below worker_high's tier.
+  tiers: off                       # auto | off
+  tiers_save_below: 0.5            # with less quota left than this, steps move toward cheaper tiers
 
 orchestrator:
   max_threads: 3                   # parallel agents at once

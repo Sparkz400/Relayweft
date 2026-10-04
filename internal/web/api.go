@@ -482,6 +482,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		MaxThreads    *int      `json:"max_threads"`
 		Review        *bool     `json:"review"`
 		Judge         *bool     `json:"judge"`
+		Tiers         *bool     `json:"tiers"`
 		Notify        *bool     `json:"notify"`
 	}
 	if !readJSON(w, r, &req) {
@@ -526,6 +527,13 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if v := req.Judge; v != nil {
 			c.Routing.Judge = *v
 			changed = append(changed, fmt.Sprintf("judge %s", onOff(*v)))
+		}
+		if v := req.Tiers; v != nil {
+			c.Routing.Tiers = config.TiersOff
+			if *v {
+				c.Routing.Tiers = config.TiersAuto
+			}
+			changed = append(changed, fmt.Sprintf("model tiers %s", onOff(*v)))
 		}
 		if v := req.Notify; v != nil {
 			c.Notify.Enabled = *v

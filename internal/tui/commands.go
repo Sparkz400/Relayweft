@@ -32,6 +32,7 @@ var helpText = []string{
 	"/schedule <02:30|in 2h|reset claude> <task> · /schedule · /schedule rm <n>   run a task later, unattended",
 	"/resume [<id>] · /history            continue an interrupted task · list the last 10 tasks",
 	"/threads <n> · /parallel on|off · /review on|off (reviewer checkpoints) · /judge on|off",
+	"/tiers on|off                        pick each work step's model from its difficulty and the quota left",
 	"/pause · /unpause · /kill <agent> · /cancel · /clear · /usage",
 	"/undo [yes] · /redo [yes]          preview, then revert (or re-apply) the last task's changes",
 	"roles: " + strings.Join(event.Roles, ", "),
@@ -150,7 +151,7 @@ func (m *Model) command(line string) tea.Cmd {
 			return nil
 		}
 		m.setOrch(func(c *config.Config) { c.Orchestrator.MaxThreads = n }, fmt.Sprintf("max_threads = %d", n))
-	case "parallel", "review", "reviewer", "judge":
+	case "parallel", "review", "reviewer", "judge", "tiers":
 		on, ok := onOff(args)
 		if !ok {
 			say("usage: /%s on|off", cmd)
@@ -166,6 +167,11 @@ func (m *Model) command(line string) tea.Cmd {
 				c.Orchestrator.ReviewBeforeDone = on
 			case "judge":
 				c.Routing.Judge = on
+			case "tiers":
+				c.Routing.Tiers = config.TiersOff
+				if on {
+					c.Routing.Tiers = config.TiersAuto
+				}
 			}
 		}, fmt.Sprintf("%s = %v", cmd, on))
 	case "pause":

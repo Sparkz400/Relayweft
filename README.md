@@ -168,7 +168,7 @@ There are four ways to change any of this, at any time:
 - `/models`, `/route <role> <provider>:<model>[:effort]`, `/prefer <role|all> <codex|claude|other|auto>`, `/save`
 - `/single <provider>:<model>[:effort] <task>` runs a single-agent baseline
 - `/limit <codex|claude> [reset|set]` to correct the limit state by hand
-- `/threads <n>`, `/parallel on|off`, `/review on|off`, `/judge on|off`
+- `/threads <n>`, `/parallel on|off`, `/review on|off`, `/judge on|off`, `/tiers on|off`
 - `/approve on|off` (plan approval), `/review-changes on|off` (per-file change review), `/verify [<cmd>|clear]`
 - `@<agent> message` (or `@ message` for the newest agent; `tab` completes ids) sends a follow-up, `/agents` lists who can take one
 - `/queue`, `/queue rm <n>`, `/queue clear`; `/history`; `/resume [<id>]` continues an interrupted task
@@ -421,6 +421,13 @@ Switchyard should never be what tips a PC over.
   6. default → worker
 
   With `routing.judge: true`, low-confidence default decisions ask the judge model a closed A/B/C/D question.
+
+  **Cost-aware model tiers** (`routing.tiers: auto`, `/tiers on`, `--tiers`; off by default). The rules still pick the role, and the tiers pick the model for each work step:
+  - **Difficulty.** Each step gets a score from 0 to 1 before it runs. It starts from the role the rules picked (explorer 0.2, worker 0.5, worker_high 0.8). One file or a short prompt lowers it, and so do routine words (typo, rename, docs, format). Three or more files, a long prompt and hard words (race, concurrency, parser, algorithm, performance) raise it. Below 0.35 is `fast`, 0.65 and up is `strong`, and everything between is `standard`.
+  - **Quota left.** This is the tightest of the provider's reported limit and your task, day and team budgets. Once less than `routing.tiers_save_below` (0.5) is left, scores move down, by up to 0.3 (about one tier) when nothing is left.
+  - **Each tier uses a route you already have:** `fast` = the explorer route, `standard` = the worker route, `strong` = the worker_high route, on the provider the rules chose. A Codex step can therefore move between efforts of one model, and a Claude step between Haiku, Sonnet and Opus. The step keeps its role (and its MCP servers and write access).
+  - **What never moves:** planner, reviewer, judge, a role picked in plan approval, a role you set explicitly (repo file, flags, `/route`, the model picker), and a local model on [standby](docs/providers.md). Large, sensitive and repeating-error steps, and the judge's pick, never drop below their rule's tier. Read-only steps never go above `standard`.
+  - **Where to see it.** Every decision's reason shows the tier, the score with what moved it, and the quota left, for example `tier fast (difficulty 0.25: short, routine: typo), quota left 40% -> 0.03 lower, explorer route instead of worker`. The session log records the tier. Compare it on your own tasks with `sy bench` and `sy bench --tiers`.
 - **Killing.** Each agent runs in its own process group (Unix) or is killed with `taskkill /T` (Windows). On Windows, `sy` also puts itself in a kill-on-close job object, so no agent outlives `sy`, even after a crash.
 - **Session log.** Append-only JSONL in `%AppData%\switchyard\sessions` (`~/.config/switchyard/sessions` on Linux; `~/Library/Application Support/switchyard/sessions` on macOS). It records every decision, agent run (tokens, time, outcome), review, merge and limit hit. `sy stats` reads it; demo mode never writes it.
 

@@ -50,6 +50,7 @@ type Record struct {
 	Reason     string            `json:"reason,omitempty"`
 	Confidence float64           `json:"confidence,omitempty"`
 	Judged     bool              `json:"judged,omitempty"` // decision: the judge model picked or confirmed the role
+	Tier       string            `json:"tier,omitempty"`   // decision: the model tier routing.tiers picked
 	Fallback   bool              `json:"fallback,omitempty"`
 	From       string            `json:"from,omitempty"` // decision: the provider a fallback moved away from
 	OK         *bool             `json:"ok,omitempty"`

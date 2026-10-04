@@ -42,6 +42,9 @@ type Step struct {
 	MainProvider string // provider the planner used, for prefer: other
 	ForceRole    string // set by the judge
 	UserRole     string // chosen by the person in plan approval
+	// BudgetUsed is the largest share (0..1) of a task, day or team budget
+	// in use when the step starts; 0 = no budget or unknown. Tiers use it.
+	BudgetUsed float64
 }
 
 // State is what the router needs to know about providers.
@@ -74,6 +77,9 @@ type Router struct {
 	State State
 	// ForceProvider, when set, pins every role to one provider (sy --provider).
 	ForceProvider string
+	// Pinned reports roles set explicitly (repo file, flags, session
+	// edits); tiers never move them. nil = none.
+	Pinned func(role string) bool
 }
 
 var readOnlyWords = regexp.MustCompile(`(?i)\b(where is|find|search|explain|summari[sz]e|describe|list|what does|how does|look up|read|overview|document how)\b`)
@@ -104,10 +110,15 @@ func (r *Router) Route(s Step) event.Decision {
 	if d.Rule == RuleQuota || d.Rule == RuleStandby {
 		d.Reason = fmt.Sprintf("%s (%s: %s)", d.Reason, rule, reason)
 		d.Confidence = 1
-		return d
+		if d.Rule == RuleStandby {
+			// A free local model standing by keeps its route: no quota
+			// to save, and it is the route set up to stand by.
+			return d
+		}
+		return r.applyTier(cfg, s, d, rule)
 	}
 	d.Rule, d.Reason = rule, reason
-	return Finalize(learned(cfg, d))
+	return Finalize(r.applyTier(cfg, s, learned(cfg, d), rule))
 }
 
 // learned notes in the reason when the route came from the role's learned

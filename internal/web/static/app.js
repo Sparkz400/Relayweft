@@ -1663,7 +1663,7 @@ async function drawStats(body) {
     h('div', { class: 'muted small', style: 'margin-top:10px' }, 'logs: ', h('code', null, v.log_dir)));
   function kpi(val, label) { return h('div', { class: 'kpi' }, h('div', { class: 'v' }, String(val)), h('div', { class: 'l' }, label)); }
 }
-function applyable(c) { return /^\/(route|prefer) \S+ \S+$/.test(c) || /^\/(judge|review|parallel) (on|off)$/.test(c); }
+function applyable(c) { return /^\/(route|prefer) \S+ \S+$/.test(c) || /^\/(judge|tiers|review|parallel) (on|off)$/.test(c); }
 async function applyCmd(c) {
   const f = c.split(/\s+/);
   if (f[0] === '/route') {
@@ -1692,7 +1692,8 @@ function drawSettings(body) {
     toggle('parallel', 'Run in parallel', 'Independent subtasks run at the same time (in git worktrees when they write).'),
     h('div', { class: 'setting' }, h('div', { class: 'txt' }, h('b', null, 'Max parallel agents'), h('span', null, 'Upper bound; the load gate can hold agents on a busy machine.')),
       h('input', { class: 'in', type: 'number', min: '1', max: '64', value: String(st.max_threads), style: 'width:80px', onchange: (e) => act('POST', '/api/settings', { max_threads: Number(e.target.value) }) })),
-    toggle('judge', 'LLM judge', 'Ask a small model when the routing rules are unsure.'));
+    toggle('judge', 'LLM judge', 'Ask a small model when the routing rules are unsure.'),
+    toggle('tiers', 'Cost-aware model tiers', 'Pick each work step\'s model from how hard it looks and how much quota and budget is left.'));
   // Verify commands.
   const cmds = st.verify.slice();
   const vbox = h('div', { class: 'verify' });

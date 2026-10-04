@@ -219,3 +219,36 @@ func TestBudgetRequestText(t *testing.T) {
 		t.Errorf("%q %q %q", r.String(), r.Flag(), r.RaiseHint())
 	}
 }
+
+// With routing.tiers: auto, a filling budget moves later steps to the
+// cheaper tier: the first edit starts with 40% of the task budget used
+// (the plan's share; no saving yet), the second with 80% and runs on the
+// explorer's route.
+func TestTiersFollowBudget(t *testing.T) {
+	var ran sync.Map
+	edit := budgetCfg(func(b *config.BudgetCfg) { b.TaskTokens = 2500 })
+	o, rec := newOrc(t, "", budgetSet(&ran), func(c *config.Config) {
+		edit(c)
+		c.Routing.Tiers = config.TiersAuto
+	})
+	o.Run(context.Background(), longTask)
+	cfg := o.opts.Store.Get()
+	var edits []event.Decision
+	for _, e := range rec.all() {
+		if d := e.Decision; e.Kind == event.Route && d != nil && (d.StepID == "a" || d.StepID == "b") {
+			edits = append(edits, *d)
+		}
+	}
+	if len(edits) != 2 {
+		t.Fatalf("%d edit decisions: %+v", len(edits), edits)
+	}
+	first, second := edits[0], edits[1]
+	if first.Tier != "standard" || first.Model != cfg.Roles[event.RoleWorker].For(first.Provider).Model ||
+		!strings.Contains(first.Reason, "quota left 60%") {
+		t.Errorf("first edit: %+v", first)
+	}
+	if second.Tier != "fast" || second.Role != event.RoleWorker || second.Model != cfg.Roles[event.RoleExplorer].For(second.Provider).Model ||
+		!strings.Contains(second.Reason, "quota left 20%") {
+		t.Errorf("second edit: %+v", second)
+	}
+}
