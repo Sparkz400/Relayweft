@@ -392,6 +392,33 @@ func TestWatchFollowsUpOnFailedCheckAndReview(t *testing.T) {
 	}
 }
 
+// sy watch without --every asks on the terminal only at a budget limit:
+// the follow-up's plan goes ahead without a question (found on a real
+// Forgejo: the plan prompt came from the terminal approver's
+// ApprovePlanEstimate, so a pass with no answer ran nothing).
+func TestWatchAttendedDoesNotAskForThePlan(t *testing.T) {
+	_, api, _, wr := watchSetup(t)
+	cd, _ := os.UserConfigDir()
+	write(t, filepath.Join(cd, "switchyard"), config.FileName, "orchestrator: {review_before_done: false, approve_plan: true}\nwatch: {max_rounds: 2}\n")
+	head0 := api.head()
+	api.set(func() {
+		api.checks[head0] = `[{"id":500,"name":"test","head_sha":"` + head0 + `","status":"completed","conclusion":"failure"}]`
+	})
+	var out, term bytes.Buffer
+	w := newWatcher(false)
+	w.out = &out
+	w.ap = budgetAsker{newTermApprover(strings.NewReader(""), &term)} // nobody answers
+	if err := w.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if wr.steps() != 1 || api.head() == head0 {
+		t.Fatalf("attended pass did not run the follow-up (%d steps):\n%s\nterminal:\n%s", wr.steps(), out.String(), term.String())
+	}
+	if term.Len() != 0 {
+		t.Fatalf("sy watch asked on the terminal:\n%s", term.String())
+	}
+}
+
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)

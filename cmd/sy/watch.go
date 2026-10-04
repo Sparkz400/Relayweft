@@ -383,8 +383,11 @@ func watchMatches(e watchEntry, ref string) bool {
 }
 
 // budgetAsker asks on the terminal only at a budget limit, as sy run
-// does without --approve: plans and changes go ahead.
-type budgetAsker struct{ *termApprover }
+// does without --approve: plans and changes go ahead. The terminal
+// approver is a named field, not embedded: its other methods (like
+// ApprovePlanEstimate, which the orchestrator prefers) must not be
+// promoted, or they would ask after all.
+type budgetAsker struct{ term *termApprover }
 
 func (budgetAsker) ApprovePlan(_ context.Context, _ string, p orchestrator.Plan) (orchestrator.Plan, bool) {
 	return p, true
@@ -392,6 +395,15 @@ func (budgetAsker) ApprovePlan(_ context.Context, _ string, p orchestrator.Plan)
 
 func (budgetAsker) ReviewChanges(_ context.Context, cs orchestrator.ChangeSet) orchestrator.ChangeDecision {
 	return orchestrator.ChangeDecision{Apply: cs.AllPaths()}
+}
+
+func (a budgetAsker) ApproveBudget(ctx context.Context, r orchestrator.BudgetRequest) bool {
+	return a.term.ApproveBudget(ctx, r)
+}
+
+// ask reads one answer line on the terminal (sy review's "Post it?").
+func (a budgetAsker) ask(ctx context.Context, prompt string) (string, bool) {
+	return a.term.ask(ctx, prompt)
 }
 
 // watcher runs passes.

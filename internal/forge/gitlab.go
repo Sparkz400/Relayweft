@@ -338,13 +338,50 @@ func (g *gitlab) FailedChecks(r Repo, sha string, logTail int) ([]Check, error) 
 			if j.FailureReason != "" {
 				c.Conclusion += " (" + j.FailureReason + ")"
 			}
-			if log, err := g.tailOf(fmt.Sprintf("%s/jobs/%d/trace", glProject(r), j.ID), logTail); err == nil {
-				c.Log = log
+			// Read more than the tail: the trace's markup is dropped first.
+			if log, err := g.tailOf(fmt.Sprintf("%s/jobs/%d/trace", glProject(r), j.ID), 4*logTail); err == nil {
+				c.Log = lastBytes(cleanGLTrace(log), logTail)
 			}
 			out = append(out, c)
 		}
 	}
 	return out, nil
+}
+
+// GitLab job trace markup: GitLab Runner (with timestamps, the default in
+// Runner 19) starts every line with "<UTC time> <stream><O|E>[+] ", and
+// collapsible sections are framed by section_start:<time>:<name>[options]
+// and section_end:<time>:<name>, each followed by "\r\x1b[0K".
+var (
+	reGLTraceStamp = regexp.MustCompile(`(?m)^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z [0-9a-fA-F]{2}[OE]\+? ?`)
+	reGLSection    = regexp.MustCompile(`section_(?:start|end):\d+:[A-Za-z0-9_.-]+(?:\[[^\]\r\n]*\])?\r?(?:\x1b\[0K)*`)
+)
+
+// cleanGLTrace drops the timestamps and section markers from a job trace,
+// and the lines that held only a marker, so the log tail is the job's own
+// output.
+func cleanGLTrace(s string) string {
+	s = reGLTraceStamp.ReplaceAllString(s, "")
+	lines := strings.SplitAfter(s, "\n")
+	out := lines[:0]
+	for _, l := range lines {
+		if c := reGLSection.ReplaceAllString(l, ""); c != l {
+			if strings.TrimSpace(c) == "" {
+				continue
+			}
+			l = c
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "")
+}
+
+// lastBytes keeps the last n bytes of s.
+func lastBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 // reGLBot matches the users of project and group access tokens.

@@ -22,6 +22,7 @@ type fakeGitLab struct {
 	notes       []string // POSTed notes: "<issues|merge_requests>/<n>: body"
 	discussions []map[string]any
 	memberCalls int
+	trace       string // the job log of 501 (default: noise, then FAIL TestX)
 }
 
 func (f *fakeGitLab) handler(t *testing.T) http.Handler {
@@ -113,6 +114,10 @@ func (f *fakeGitLab) handler(t *testing.T) http.Handler {
 			t.Error("read the jobs of a pipeline that was re-run")
 			write(`[]`)
 		case r.Method == "GET" && p == "/jobs/501/trace":
+			if f.trace != "" {
+				write(f.trace)
+				break
+			}
 			write(strings.Repeat("noise\n", 1000) + "FAIL TestX\n")
 		case r.Method == "GET" && p == "/merge_requests/7/discussions":
 			write(`[{"notes":[{"id":30,"type":"DiffNote","body":"rename x","author":{"id":3,"username":"dev"},"resolvable":true,"position":{"new_path":"a.go","new_line":2}},
@@ -293,5 +298,43 @@ func TestGitLabWatchAndReview(t *testing.T) {
 	}
 	if _, err := c.CommentReview(glRepo, 7, "moved", "x", nil); err == nil || !strings.Contains(err.Error(), "new commits") {
 		t.Fatalf("head moved: %v", err)
+	}
+}
+
+// A real GitLab Runner 19 job log: every line starts with a timestamp and
+// a stream marker, and sections are framed by section_start/section_end
+// markers. Found on GitLab CE 19.4 with Runner 19.4: the prefixes took
+// about half of the log tail sy watch passes to the agents.
+func TestGitLabTraceTimestampsAndSections(t *testing.T) {
+	f, api := gitlabServer(t)
+	var b strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&b, "2026-10-04T18:01:47.%06dZ 01O fetching object %d\n", i, i)
+	}
+	b.WriteString("2026-10-04T18:01:47.651168Z 00O section_end:1791136907:get_sources\r\x1b[0K\n" +
+		"2026-10-04T18:01:47.651596Z 00O+section_start:1791136907:step_script[collapsed=true]\r\x1b[0K\x1b[0K\x1b[36;1mExecuting \"step_script\" stage of the job script\x1b[0;m\n" +
+		"2026-10-04T18:01:47.925374Z 01O \x1b[32;1m$ sh test.sh\x1b[0;m\n" +
+		"2026-10-04T18:01:47.927012Z 01E FAIL value.txt is 43, want 42\n" +
+		"2026-10-04T18:01:48.072851Z 00O section_end:1791136908:step_script\r\x1b[0K\n" +
+		"2026-10-04T18:01:48.495354Z 00O \x1b[31;1mERROR: Job failed: exit code 1\n")
+	f.trace = b.String()
+	c := New(GitLab, api, "good", nil)
+	checks, err := c.FailedChecks(glRepo, "abc", 400)
+	if err != nil || len(checks) != 1 {
+		t.Fatalf("%+v %v", checks, err)
+	}
+	log := checks[0].Log
+	for _, junk := range []string{"2026-10-04T", "01O", "00O", "01E", "section_start", "section_end"} {
+		if strings.Contains(log, junk) {
+			t.Errorf("log tail keeps %q:\n%s", junk, log)
+		}
+	}
+	for _, keep := range []string{"Executing \"step_script\" stage", "$ sh test.sh", "FAIL value.txt is 43, want 42\n", "ERROR: Job failed: exit code 1"} {
+		if !strings.Contains(log, keep) {
+			t.Errorf("log tail lacks %q:\n%s", keep, log)
+		}
+	}
+	if len(log) > 400 || !strings.Contains(log, "fetching object 199") {
+		t.Errorf("log tail is %d bytes (max 400) or lost the lines before the script:\n%s", len(log), log)
 	}
 }
