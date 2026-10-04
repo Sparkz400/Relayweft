@@ -564,6 +564,11 @@ wait:
 	}
 	wdKilled, wdResumed := fileText(filepath.Join(stateDir, "agent.wd")), fileText(filepath.Join(stateDir, "resume.wd"))
 	switch {
+	case !gone && runtime.GOOS != "windows" && runtime.GOOS != "linux" && fresh && !continued:
+		// Without /proc, sy cannot tell the killed sy's agent from a
+		// program that got its pid since, so it does not kill it, and
+		// it never resumes into a worktree an agent still works in.
+		t.check(markInfo, "resume", "the killed sy's agent still ran in its worktree on %s, so a fresh agent took the step over in another one", runtime.GOOS)
 	case !continued || fresh:
 		t.check(markFail, "resume", "the interrupted step did not continue its agent's session %s (calls: %s)", strings.TrimPrefix(want, "resume:"),
 			strings.Join(readCalls(stateDir)[before:], ", "))
@@ -571,8 +576,9 @@ wait:
 	case wdKilled == "" || !orchestrator.SamePath(wdKilled, wdResumed):
 		t.check(markFail, "resume", "the interrupted step's session was continued in %s, not where it ran (%s)", wdResumed, wdKilled)
 		return false
+	default:
+		t.check(markOK, "resume", "the interrupted step continued its agent's session in the folder it ran in")
 	}
-	t.check(markOK, "resume", "the interrupted step continued its agent's session in the folder it ran in")
 	if !gone && runtime.GOOS != "windows" {
 		if waitGone(agent, 5*time.Second) {
 			t.check(markOK, "orphans", "the next sy reaped the agent sy left behind")
