@@ -342,10 +342,17 @@ func TestBenchFromHistoryEndToEnd(t *testing.T) {
 	bf.Modes = []string{"single:claude:sonnet"}
 	data, _ = yaml.Marshal(bf)
 	os.WriteFile("bench-run.yaml", data, 0o644)
-	sawTests := false
+	sawTests, leaked := false, []string(nil)
 	agent := func(s runner.Spec) runner.Result {
 		if test, _ := os.ReadFile(filepath.Join(s.Dir, "calc_test.go")); strings.Contains(string(test), "TestMul") {
 			sawTests = true
+		}
+		// The solution cannot be found with git from the run's checkout.
+		if out, err := exec.Command("git", "-C", s.Dir, "log", "--all", "--format=%H").Output(); err != nil || strings.Contains(string(out), target) {
+			leaked = append(leaked, "git log --all: "+string(out))
+		}
+		if exec.Command("git", "-C", s.Dir, "cat-file", "-e", target).Run() == nil {
+			leaked = append(leaked, "git cat-file -e "+target)
 		}
 		if strings.Contains(s.Prompt, "HONEST") {
 			os.WriteFile(filepath.Join(s.Dir, "calc.go"), []byte("package calc\n\nfunc Add(a, b int) int { return a + b }\n\nfunc Mul(a, b int) int { return a * b }\n"), 0o644)
@@ -364,6 +371,9 @@ func TestBenchFromHistoryEndToEnd(t *testing.T) {
 	}
 	if !sawTests {
 		t.Error("the agents did not see the commit's tests")
+	}
+	if len(leaked) > 0 {
+		t.Errorf("the agents could reach the solution: %v", leaked)
 	}
 	matches, _ := filepath.Glob("bench-results-*.md")
 	if len(matches) != 1 {

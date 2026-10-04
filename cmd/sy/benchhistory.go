@@ -27,13 +27,16 @@ const historyHeader = `# sy bench tasks from this repo's history (written by sy 
 # Each task is a past commit. The run starts from the commit's parent, the
 # prompt is its commit message, and the check is the repo's tests with the
 # commit's own test files in place. The test files are restored before every
-# check, so an agent cannot pass by editing or deleting them.
+# check, so an agent cannot pass by editing or deleting them. In a check,
+# {tests} stands for the task's test files and {test_dirs} for their folders.
 # Validated tasks failed the check on the parent and passed it on the commit.
+#
+# Every run starts in a fresh repository that holds only the parent's files
+# as one commit: no later history, no remote and no objects shared with this
+# repo, so an agent cannot look the solution up with git.
 #
 # Read the prompts before running: commit messages are often terser than a
 # real request, and you can reword them. Delete the tasks you do not want.
-# The runs share this repo's git objects, so an agent that searches the
-# history could find the original commit; every mode has the same chance.
 #
 # learn: true feeds the results into this repo's learned routes when the
 # bench ends (like sy tune --apply), so the next tasks use what clearly
@@ -55,6 +58,7 @@ type historyCandidate struct {
 	code, tests []string
 	lines       int
 	prompt      string // the cleaned commit message
+	check       string // the task's check ("": historyOpts.check)
 }
 
 func (h historyCandidate) short() string { return h.SHA[:min(7, len(h.SHA))] }
@@ -70,6 +74,7 @@ type historyOpts struct {
 	count, scan        int
 	lim                historyLimits
 	hidden, noValidate bool
+	ownTests           bool
 	timeout            time.Duration
 	runCmd             string // how to run the written file
 }
@@ -96,6 +101,11 @@ func benchFromHistory(c common, o historyOpts) error {
 	}
 	if _, err := os.Stat(o.out); err == nil && !listOnly {
 		return fmt.Errorf("%s exists (choose another with --file)", o.out)
+	}
+	if o.ownTests && !listOnly && !usesTestsPlaceholder(o.check) {
+		if _, ok := narrowCheck(o.check, []string{"a_test.go", "test/a_test.dart", "test_a.py", "a.test.js"}); !ok {
+			return fmt.Errorf("--own-tests: no test runner it knows in %q (go test ./..., flutter/dart test, pytest, jest, vitest, npm/yarn/pnpm test): put %s or %s in --check instead", o.check, phTests, phTestDirs)
+		}
 	}
 	o.runCmd = historyRunCmd(o.out, dir, c.dir != "")
 	ws, err := orchestrator.NewBenchWorkspace(dir)
@@ -126,8 +136,13 @@ func benchFromHistory(c common, o historyOpts) error {
 	var picked []historyCandidate
 	if o.noValidate {
 		picked = cands[:min(o.count, len(cands))]
-		for _, h := range picked {
+		for i, h := range picked {
 			fmt.Printf("  %s %s (%d code files, %d lines; tests: %s)\n", h.short(), oneLine(h.subject(), 60), len(h.code), h.lines, oneLine(strings.Join(h.tests, ", "), 80))
+			if !listOnly {
+				if note := setHistoryCheck(ws, &picked[i], o); note != "" {
+					fmt.Println("    " + note)
+				}
+			}
 		}
 		if listOnly {
 			fmt.Println("no check command (verify.commands, the build files or --check): listed only, no file written")
@@ -139,7 +154,11 @@ func benchFromHistory(c common, o historyOpts) error {
 			return err
 		}
 		defer unlock()
-		fmt.Printf("validating with %q: the check must pass on the commit and fail on its parent (in %s)\n", o.check, ws.Path)
+		own := ""
+		if o.ownTests && !usesTestsPlaceholder(o.check) {
+			own = ", narrowed to each commit's own tests"
+		}
+		fmt.Printf("validating with %q%s: the check must pass on the commit and fail on its parent (in %s)\n", o.check, own, ws.Path)
 		skips := map[string]int{}
 		for _, h := range cands {
 			if len(picked) == o.count || ctx.Err() != nil {
@@ -147,6 +166,9 @@ func benchFromHistory(c common, o historyOpts) error {
 			}
 			waitForMemory(ctx, oc, "the next check")
 			fmt.Printf("  %s %s ... ", h.short(), oneLine(h.subject(), 60))
+			if note := setHistoryCheck(ws, &h, o); note != "" {
+				fmt.Print("(" + note + ") ")
+			}
 			why := validateHistory(ctx, ws, h, o)
 			if why != "" {
 				fmt.Println("skip:", why)
@@ -251,6 +273,24 @@ func waitForMemory(ctx context.Context, oc config.OrchestratorCfg, what string) 
 	}
 }
 
+// setHistoryCheck sets a candidate's check: with --own-tests narrowed to
+// its test files. It returns a note when that was not possible.
+func setHistoryCheck(ws *orchestrator.BenchWorkspace, h *historyCandidate, o historyOpts) string {
+	h.check = o.check
+	if !o.ownTests || usesTestsPlaceholder(o.check) {
+		return ""
+	}
+	files, err := ws.FilesAt(h.SHA, h.tests)
+	if err != nil {
+		return "the full check: " + err.Error()
+	}
+	if n, ok := narrowCheck(o.check, files); ok {
+		h.check = n
+		return ""
+	}
+	return "the full check: no test file of the commit fits its runner"
+}
+
 // Why validation skipped a commit.
 const (
 	skipFailsOnCommit = "the check fails on the commit itself"
@@ -263,10 +303,14 @@ const (
 func validateHistory(ctx context.Context, ws *orchestrator.BenchWorkspace, h historyCandidate, o historyOpts) string {
 	// run reports checked=false when the check did not get to run to the
 	// end (setup failed, cancelled, timed out).
+	check := h.check
+	if check == "" {
+		check = o.check
+	}
 	run := func(base string, tests *benchTests) (ok, checked bool, why string) {
 		rctx, cancel := context.WithTimeout(ctx, o.timeout)
 		defer cancel()
-		t := benchTask{Check: o.check, Base: base, Tests: tests}
+		t := benchTask{Check: check, Base: base, Tests: tests}
 		note := prepareBenchRun(rctx, ws, base, o.setup, t)
 		ok, out := false, ""
 		if note == "" {
@@ -282,7 +326,11 @@ func validateHistory(ctx context.Context, ws *orchestrator.BenchWorkspace, h his
 		}
 		return ok, true, lastLine(out)
 	}
-	switch ok, checked, why := run(h.SHA, nil); {
+	var own *benchTests
+	if usesTestsPlaceholder(check) {
+		own = &benchTests{From: h.SHA, Files: h.tests} // what the placeholders stand for
+	}
+	switch ok, checked, why := run(h.SHA, own); {
 	case !checked:
 		return "on the commit: " + why
 	case !ok:
@@ -351,10 +399,14 @@ func historyTask(h historyCandidate, o historyOpts) benchTask {
 		prompt += "\n\nThe tests for this change are already in place: " + strings.Join(h.tests, ", ") +
 			". Make them pass without changing them."
 	}
+	check := h.check
+	if check == "" {
+		check = o.check
+	}
 	return benchTask{
 		Name:   "h-" + h.short() + slug(h.subject(), 32),
 		Prompt: prompt + "\n",
-		Check:  o.check,
+		Check:  check,
 		Base:   h.Parent,
 		Tests:  &benchTests{From: h.SHA, Files: h.tests, Visible: !o.hidden},
 	}
@@ -473,18 +525,31 @@ func isTestPath(p string) bool {
 			return true
 		}
 	}
+	return isTestFile(p) || path.Base(l) == "conftest.py"
+}
+
+// isTestFile reports whether p is a file of tests a test runner can be
+// given (not test data or helpers), by its name or, for JS/TS, a
+// __tests__ folder.
+func isTestFile(p string) bool {
+	l := strings.ToLower(p)
 	base := path.Base(l)
 	ext := path.Ext(base)
 	name := strings.TrimSuffix(base, ext)
 	switch {
 	case strings.Contains(base, ".test.") || strings.Contains(base, ".spec."):
 		return true
-	case ext == ".py" && (strings.HasPrefix(name, "test_") || strings.HasSuffix(name, "_test") || name == "conftest"):
+	case ext == ".py" && (strings.HasPrefix(name, "test_") || strings.HasSuffix(name, "_test")):
 		return true
 	case (ext == ".go" || ext == ".rb" || ext == ".exs" || ext == ".dart") && (strings.HasSuffix(name, "_test") || strings.HasSuffix(name, "_spec")):
 		return true
 	case (ext == ".java" || ext == ".kt" || ext == ".cs" || ext == ".scala") && (strings.HasSuffix(name, "test") || strings.HasSuffix(name, "tests")):
 		return true
+	case strings.Contains("/"+l, "/__tests__/"):
+		switch ext {
+		case ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts":
+			return true
+		}
 	}
 	return false
 }

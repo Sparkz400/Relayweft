@@ -430,8 +430,16 @@ func TestReviewerRetriesOnOtherProvider(t *testing.T) {
 	}
 }
 
+// The worktrees of a repo share one pool. The bench workspace is not one
+// of them: it is its own repository, and its pool worktrees must not share
+// the repo's history.
 func TestWorktreesOfOneRepoShareAPool(t *testing.T) {
 	dir := gitRepo(t)
+	other := filepath.Join(t.TempDir(), "other")
+	tgit(t, dir, "worktree", "add", "-q", "--detach", other)
+	if poolDir(other) != poolDir(dir) {
+		t.Fatalf("a worktree has its own pool:\n%s\n%s", poolDir(other), poolDir(dir))
+	}
 	ws, err := NewBenchWorkspace(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -440,8 +448,8 @@ func TestWorktreesOfOneRepoShareAPool(t *testing.T) {
 	if err := ws.Reset(head); err != nil {
 		t.Fatal(err)
 	}
-	if poolDir(ws.Path) != poolDir(dir) {
-		t.Fatalf("bench workspace has its own pool:\n%s\n%s", poolDir(ws.Path), poolDir(dir))
+	if poolDir(ws.Path) == poolDir(dir) {
+		t.Fatal("the bench workspace uses the repo's pool")
 	}
 }
 

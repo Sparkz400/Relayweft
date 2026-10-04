@@ -183,7 +183,8 @@ Usage:
   sy bench --starter <dir>   create a ready-made 5-task benchmark repo (Python) to run sy bench on
   sy bench --from-history [--count 10] [--check "go test ./..."]   tasks from past multi-file commits:
                              start at the parent, commit message as prompt, the commit's tests as check;
-                             running that file updates this repo's learned routes (--no-learn skips it)
+                             running that file updates this repo's learned routes (--no-learn skips it);
+                             --own-tests: each check runs only the commit's test files
   sy bugreport               zip logs, config and diagnostics into one file to send
   sy selftest [--onedrive] [--keep]   automated Windows checks: paths with spaces, OneDrive, Defender,
                              a task killed mid-run, then resume and undo (scripted agent, no quota used)

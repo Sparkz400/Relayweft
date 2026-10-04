@@ -414,6 +414,11 @@ func CleanPool(dir string) (int, error) {
 	bench := filepath.Join(filepath.Dir(pd), "bench", "work")
 	if unlock, ok := proc.TryLock(bench + ".lock"); ok {
 		if _, err := os.Stat(bench); err == nil {
+			if st, err := os.Lstat(filepath.Join(bench, ".git")); err == nil && st.IsDir() {
+				CleanPool(bench) // the bench repository's own pool
+			}
+			os.RemoveAll(filepath.Join(filepath.Dir(bench), "packs"))
+			os.Remove(bench + ".index")
 			if removeSlot(common, bench) == nil {
 				n++
 			} else {
