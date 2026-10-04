@@ -246,7 +246,7 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 			Provider: s.Provider, Model: s.Model, Effort: s.Effort, Rule: d.Rule, Reason: d.Reason, Confidence: 1})
 		spec := runner.Spec{AgentID: s.AgentID, StepID: "followup", Attempt: 1, Role: s.Role, Provider: s.Provider,
 			Model: s.Model, Effort: s.Effort, Prompt: text, Dir: o.opts.Dir, Timeout: cfg.Orchestrator.AgentTimeout.D(),
-			AllowedCommands: cfg.Verify.Commands}
+			AllowedCommands: verifyAllowed(cfg.Verify, o.opts.Dir)}
 		resumable := s.SessionID != ""
 		// An agent that ran in a pool worktree is resumed there, whatever
 		// its CLI: its history names the worktree's paths, so resumed

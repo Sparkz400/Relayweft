@@ -868,7 +868,13 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 			var failing map[string]bool
 			if verifying {
 				o.emit(event.Event{Kind: event.Phase, Text: "verify"})
-				verified, report, failing = o.verifyRepos(ctx, t)
+				// After a fix round, first only the tests the changes
+				// affect; the full checks follow when those pass.
+				scope := verifyFull
+				if round > 0 {
+					scope = verifyAffected
+				}
+				verified, report, failing = o.verifyRepos(ctx, t, scope)
 				if ctx.Err() != nil {
 					return TaskResult{Summary: "cancelled during verify"}
 				}
@@ -1620,8 +1626,8 @@ func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []
 			if rp.lfs && rp.pool != "" && strings.HasPrefix(dir, rp.pool) {
 				p += lfsNote
 			}
-			if cmds := rp.cfg.Verify.Commands; len(cmds) > 0 && !st.Kind.ReadOnly() {
-				p += "\nBefore you finish, run the repo's checks (" + strings.Join(cmds, "; ") + ") and fix what your change broke.\n"
+			if len(rp.cfg.Verify.Commands) > 0 && !st.Kind.ReadOnly() {
+				p += verifyHint(rp.cfg.Verify, dir)
 			}
 		} else if advice != "" || prevErr != "" {
 			p += "\n\nPREVIOUS ATTEMPT FAILED WITH:\n" + clip(prevErr, 2000) + "\n\nREVIEWER ADVICE:\n" + advice
@@ -1798,7 +1804,7 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 		ReadOnly: step.Kind.ReadOnly(), Timeout: t.cfg.Orchestrator.AgentTimeout.D(),
 	}
 	if !spec.ReadOnly {
-		spec.AllowedCommands = t.repoAt(dir).cfg.Verify.Commands // that repo's checks
+		spec.AllowedCommands = verifyAllowed(t.repoAt(dir).cfg.Verify, dir) // that repo's checks
 	}
 	if resume != nil {
 		spec.Resume = resume.Session

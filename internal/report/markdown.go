@@ -98,13 +98,13 @@ func (d *Data) Markdown(w io.Writer) error {
 		p("\n")
 	}
 	if len(d.Checks) > 0 {
-		p("## Checks\n\n| Command | Kind | Result | Time |\n|---|---|---|---|\n")
+		p("## Checks\n\n| Command | Kind | Tests | Result | Time |\n|---|---|---|---|---|\n")
 		for _, c := range d.Checks {
 			res := "pass"
 			if !c.OK {
 				res = "**fail**"
 			}
-			p("| %s | %s | %s | %s |\n", mdCode(c.Command), c.Kind, res, humanDur(c.Duration))
+			p("| %s | %s | %s | %s | %s |\n", mdCode(c.Command), c.Kind, md(c.Tests()), res, humanDur(c.Duration))
 		}
 		p("\n")
 	}
