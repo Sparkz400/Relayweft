@@ -377,6 +377,7 @@ type settingsView struct {
 	MaxThreads    int      `json:"max_threads"`
 	Review        bool     `json:"review"`
 	Judge         bool     `json:"judge"`
+	Tiers         bool     `json:"tiers"`
 	Notify        bool     `json:"notify"`
 }
 
@@ -438,7 +439,7 @@ func (s *Server) snapshot() stateView {
 		Settings: settingsView{
 			ApprovePlan: oc.ApprovePlan, ReviewChanges: oc.ReviewChanges, Verify: append([]string{}, cfg.Verify.Commands...),
 			Parallel: oc.Parallel, MaxThreads: oc.MaxThreads, Review: oc.ReviewBeforePlan || oc.ReviewBeforeDone || oc.ReviewOnRepeatError,
-			Judge: cfg.Routing.Judge, Notify: cfg.Notify.Enabled,
+			Judge: cfg.Routing.Judge, Tiers: cfg.Routing.Tiers == config.TiersAuto, Notify: cfg.Notify.Enabled,
 		},
 	}
 	s.mu.Lock()

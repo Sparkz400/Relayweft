@@ -191,7 +191,7 @@ Flags (TUI and run):
   --route role=provider:model[:effort]   override a route (repeatable)
   --prefer role=codex|claude|other|auto  override a role's provider choice (repeatable; role "all" ok)
   --provider <name>          force every role onto one provider (codex, claude, gemini...)
-  --threads <n>  --no-parallel  --no-review  --judge
+  --threads <n>  --no-parallel  --no-review  --judge  --tiers
   --repo name=path           another git repo tasks may change too (repeatable; multi-repo tasks)
   --ascii | --unicode        force the ASCII or Unicode theme
   --demo  --speed <x>        demo mode (TUI only); speed multiplies animation pace
@@ -216,6 +216,7 @@ type common struct {
 	noParallel bool
 	noReview   bool
 	judge      bool
+	tiers      bool
 	ascii      bool
 	unicode    bool
 	repos      multiFlag           // --repo name=path (multi-repo tasks)
@@ -239,6 +240,7 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.BoolVar(&c.noParallel, "no-parallel", false, "run subtasks one at a time")
 	fs.BoolVar(&c.noReview, "no-review", false, "skip all review checkpoints")
 	fs.BoolVar(&c.judge, "judge", false, "enable the LLM judge for unclear routing")
+	fs.BoolVar(&c.tiers, "tiers", false, "pick each work step's model from its difficulty and the quota left (routing.tiers: auto)")
 	fs.BoolVar(&c.ascii, "ascii", false, "ASCII theme")
 	fs.BoolVar(&c.unicode, "unicode", false, "Unicode theme")
 	fs.Var(&c.repos, "repo", "name=path: another git repo the tasks may change (repeatable; multi-repo tasks)")
@@ -332,6 +334,9 @@ func (c *common) setup() (*config.Store, string, error) {
 		}
 		if c.judge {
 			cf.Routing.Judge = true
+		}
+		if c.tiers {
+			cf.Routing.Tiers = config.TiersAuto
 		}
 		if c.ascii {
 			cf.Theme = "ascii"

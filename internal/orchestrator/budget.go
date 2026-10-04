@@ -287,6 +287,56 @@ func (t *task) budgetStopped() string {
 	return t.budget.stopped
 }
 
+// budgetLim is one budget limit and the task's use against it.
+type budgetLim struct {
+	name      string
+	used, max float64
+}
+
+// budgetUse lists every budget limit with what the task (and today, and
+// the team's day) used against it; a max of 0 means the limit is off.
+func (o *Orchestrator) budgetUse(t *task, cfg config.BudgetCfg, warn bool) []budgetLim {
+	u := t.usage()
+	var day dayCache
+	if cfg.DayTokens > 0 || cfg.DayUSD > 0 || cfg.Team.Limited() {
+		day = o.dayTotals(time.Now(), dayMaxAge, warn)
+	}
+	// The team's day: the other machines' files plus this machine's day.
+	var team teamCache
+	teamTokens, teamUSD := float64(0), float64(0)
+	if cfg.Team.Limited() {
+		team = o.teamTotals(time.Now(), dayMaxAge, warn)
+		teamTokens, teamUSD = float64(cfg.Team.DayTokens), cfg.Team.DayUSD
+	}
+	return []budgetLim{
+		{LimitTaskTokens, float64(u.Total()), float64(cfg.TaskTokens)},
+		{LimitTaskUSD, u.CostUSD, cfg.TaskUSD},
+		{LimitDayTokens, float64(day.tokens + u.Total()), float64(cfg.DayTokens)},
+		{LimitDayUSD, day.usd + u.CostUSD, cfg.DayUSD},
+		{LimitTeamDayTokens, float64(team.tokens + day.tokens + u.Total()), teamTokens},
+		{LimitTeamDayUSD, team.usd + day.usd + u.CostUSD, teamUSD},
+	}
+}
+
+// budgetShare is the largest share of any budget limit in use (0 = no
+// limit set), so the model tiers can save as a budget fills up.
+func (o *Orchestrator) budgetShare(t *task) float64 {
+	if t.budget == nil {
+		return 0
+	}
+	cfg := o.budgetLimits(t)
+	if !cfg.Any() {
+		return 0
+	}
+	share := 0.0
+	for _, l := range o.budgetUse(t, cfg, false) {
+		if l.max > 0 {
+			share = max(share, l.used/l.max)
+		}
+	}
+	return min(share, 1)
+}
+
 // checkBudget compares the task's and today's use with the budget before
 // an agent starts (next says which). It warns once per limit at warn_at.
 // At a limit it asks the person, unless the task is unattended or nobody
@@ -318,31 +368,7 @@ func (o *Orchestrator) budgetCheck(ctx context.Context, t *task, what string, af
 	if b.stopped != "" {
 		return false
 	}
-	u := t.usage()
-	var day dayCache
-	if cfg.DayTokens > 0 || cfg.DayUSD > 0 || cfg.Team.Limited() {
-		day = o.dayTotals(time.Now(), dayMaxAge, true)
-	}
-	// The team's day: the other machines' files plus this machine's day.
-	var team teamCache
-	teamTokens, teamUSD := float64(0), float64(0)
-	if cfg.Team.Limited() {
-		team = o.teamTotals(time.Now(), dayMaxAge, true)
-		teamTokens, teamUSD = float64(cfg.Team.DayTokens), cfg.Team.DayUSD
-	}
-	type lim struct {
-		name      string
-		used, max float64
-	}
-	limits := []lim{
-		{LimitTaskTokens, float64(u.Total()), float64(cfg.TaskTokens)},
-		{LimitTaskUSD, u.CostUSD, cfg.TaskUSD},
-		{LimitDayTokens, float64(day.tokens + u.Total()), float64(cfg.DayTokens)},
-		{LimitDayUSD, day.usd + u.CostUSD, cfg.DayUSD},
-		{LimitTeamDayTokens, float64(team.tokens + day.tokens + u.Total()), teamTokens},
-		{LimitTeamDayUSD, team.usd + day.usd + u.CostUSD, teamUSD},
-	}
-	for _, l := range limits {
+	for _, l := range o.budgetUse(t, cfg, true) {
 		if l.max <= 0 || b.allowed[l.name] {
 			continue
 		}

@@ -117,7 +117,7 @@ func New(o Options) *Orchestrator {
 	}
 	orc := &Orchestrator{opts: o, cancels: map[string]map[int]context.CancelFunc{}, pauseCh: make(chan struct{})}
 	close(orc.pauseCh)
-	orc.router = &router.Router{Cfg: o.Store.Get, State: o.Tracker, ForceProvider: o.ForceProvider}
+	orc.router = &router.Router{Cfg: o.Store.Get, State: o.Tracker, ForceProvider: o.ForceProvider, Pinned: o.Store.Pinned}
 	if orc.opts.Load == nil {
 		s := sysload.NewSampler(2 * time.Second)
 		orc.opts.Load = s.Get
@@ -1544,6 +1544,9 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	if ctx.Err() != nil {
 		return event.Decision{}, runner.Result{Err: ctx.Err(), Killed: true}
 	}
+	if t.cfg.Routing.Tiers == config.TiersAuto {
+		step.BudgetUsed = o.budgetShare(t)
+	}
 	d := o.router.Route(step)
 	if o.router.NeedsJudge(d) && step.Kind != router.KindJudge {
 		jstep := router.Step{ID: step.ID + "-judge", Title: "judge " + step.Title, Kind: router.KindJudge}
@@ -1568,7 +1571,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	o.emit(event.Event{Kind: event.Route, AgentID: agentID, ParentID: parent, Provider: d.Provider, Model: d.Model, Role: d.Role, Decision: &dc})
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeDecision, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
 		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, Rule: d.Rule, Reason: d.Reason,
-		Confidence: d.Confidence, Fallback: d.Fallback, From: d.From, Judged: d.Judged})
+		Confidence: d.Confidence, Fallback: d.Fallback, From: d.From, Judged: d.Judged, Tier: d.Tier})
 	title := step.Title
 	if attempt > 1 {
 		title = fmt.Sprintf("%s (attempt %d)", step.Title, attempt)

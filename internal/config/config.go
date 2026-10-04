@@ -168,6 +168,29 @@ type RoutingCfg struct {
 	// Learn and LearnMinSamples control the learned routes (learned.go).
 	Learn           string `yaml:"learn"`             // auto | suggest | off ("" = suggest)
 	LearnMinSamples int    `yaml:"learn_min_samples"` // runs (after the age decay) a route needs; 0 = 8
+	// Tiers picks a work step's model from its difficulty and the quota
+	// left (router/tiers.go): auto | off ("" = off).
+	Tiers string `yaml:"tiers,omitempty"`
+	// TiersSaveAt is the quota left (0..1) below which tiers step down to
+	// save it; 0 = 0.5.
+	TiersSaveAt float64 `yaml:"tiers_save_below,omitempty"`
+}
+
+// Tier modes (routing.tiers).
+const (
+	TiersAuto = "auto"
+	TiersOff  = "off"
+)
+
+// DefaultTiersSaveBelow is routing.tiers_save_below when unset.
+const DefaultTiersSaveBelow = 0.5
+
+// TiersSaveBelow returns routing.tiers_save_below (default 0.5).
+func (r RoutingCfg) TiersSaveBelow() float64 {
+	if r.TiersSaveAt <= 0 {
+		return DefaultTiersSaveBelow
+	}
+	return r.TiersSaveAt
 }
 
 // OrchestratorCfg tunes the task lifecycle.
@@ -595,6 +618,14 @@ func (c *Config) Validate() error {
 	case "", LearnAuto, LearnSuggest, LearnOff:
 	default:
 		errs = append(errs, "routing.learn must be auto, suggest or off")
+	}
+	switch c.Routing.Tiers {
+	case "", TiersAuto, TiersOff:
+	default:
+		errs = append(errs, "routing.tiers must be auto or off")
+	}
+	if v := c.Routing.TiersSaveAt; v < 0 || v > 1 {
+		errs = append(errs, "routing.tiers_save_below must be between 0 and 1 (0 = 0.5)")
 	}
 	if c.Routing.LearnMinSamples < 0 {
 		errs = append(errs, "routing.learn_min_samples must be >= 0 (0 = 8)")

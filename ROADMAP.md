@@ -40,6 +40,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - `sy tune` (rule tuning, judge cost vs gain, models from your config)
   - context hand-off
   - cost per task and per day
+  - cost-aware model tiers (off by default; not yet measured)
 - **Phase 4 (done; 4.3 more providers is in beta):**
   - `sy web` and `sy app`
   - per-repo `.switchyard.yaml` with `sy trust`
@@ -180,6 +181,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 3.4 | ✅ **Judge model** (measurement): decisions record whether the judge ran, and `sy tune` compares judged with rule-routed steps to suggest `/judge on` or `/judge off`. | Spend quota only where it pays. |
 | 3.5 | ✅ **Context hand-off**: a repo map and notes from earlier tasks in the same repo go into planner and step prompts, and every writer gets what this task's read-only steps found. | Fewer tokens, faster workers. |
 | 3.6 | ✅ **Cost visibility**: fresh tokens per provider, Claude API-equivalent $, and limit before and after, in the TUI, `sy run` and `sy stats`, plus a per-day table in `sy stats`. | You can see what each task cost. |
+| 3.7 | ✅ **Cost-aware model tiers** (`routing.tiers: auto`, off by default): the rules still pick the role; a work step's model then comes from its estimated difficulty (role, files, prompt size, routine or hard words) and the quota left (the provider's reported limit, and the task, day and team budgets). The tiers reuse the explorer, worker and worker_high routes. Planner, reviewer, judge and explicitly set roles never move; risky steps keep their floor; a local model on standby keeps its route. Not yet measured: run `sy bench` with and without `--tiers`. | Easy steps stop paying for strong models, and a nearly spent quota stretches further. |
 
 **Gaps closed since:**
 - `sy tune` reads models, efforts and the fast tier from your config.

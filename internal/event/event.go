@@ -201,6 +201,7 @@ type Decision struct {
 	// From is the provider the route preferred before a fallback moved it.
 	From   string `json:"from,omitempty"`
 	Judged bool   `json:"judged,omitempty"`
+	Tier   string `json:"tier,omitempty"` // routing.tiers: auto picked this tier (fast|standard|strong)
 }
 
 // Label is a short "provider:model@effort" description.
