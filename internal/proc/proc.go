@@ -137,5 +137,6 @@ func Guard() error { return guard() }
 // for the user's own programs sy merely launches (a browser), never for
 // agents. On Windows, Start then fails if an outer job (one sy itself was
 // started in) forbids breakaway: start a fresh command without it then.
-// It is a no-op elsewhere.
+// Elsewhere it starts cmd in its own session, out of reach of the
+// terminal's Ctrl+C and hangup that end sy.
 func Breakaway(cmd *exec.Cmd) { breakaway(cmd) }

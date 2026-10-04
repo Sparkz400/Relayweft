@@ -66,7 +66,7 @@ func command(goos, title, body string, lookPath func(string) (string, error)) (s
 			return "", nil, ErrUnsupported
 		}
 		// "--" so a title starting with "-" is not read as an option.
-		return p, []string{"--app-name=Switchyard", "--", title, body}, nil
+		return p, []string{"--app-name=Switchyard", "--", argText(title), markupText(argText(body))}, nil
 	}
 	return "", nil, ErrUnsupported
 }
@@ -133,6 +133,26 @@ func psQuote(s string) string {
 	}
 	b.WriteByte('\'')
 	return b.String()
+}
+
+// argText makes s safe as a program argument: valid UTF-8 without control
+// characters other than newline and tab. A NUL byte in an argument makes
+// exec fail outright ("invalid argument"), so the notification was lost.
+func argText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, "�"))
+}
+
+// markupText escapes s for a notification body: notification servers
+// (GNOME Shell, KDE, dunst, mako) read the body as markup, so "Vec<T>"
+// lost its "<T>" and "&amp;" showed as "&" (seen with dunst). The title is
+// never markup.
+func markupText(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
 // appleScript builds a `display notification` statement. It is passed as

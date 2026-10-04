@@ -95,12 +95,20 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **The Windows stress limits:** four CI runs rose at most 12 handles above warm-up; the slack is now 40 (was 100). Fixed: on Windows the test counted other `go test` runs as leaked processes.
 - **Security fix:** a `./switchyard.yaml` that came with a cloned repo could run programs (e.g. from `sy doctor`) without `sy trust`. Its command settings now need trust like a repo's `.switchyard.yaml`.
 
+**Verified for real on 4 Oct 2026 (macOS and Linux, on GitHub Actions runners):** with `.github/workflows/macos-real.yml` (manual; no secrets, fake agents only), on macOS 26.6.2 and 14.8.9 (Apple silicon) and 15.7.9 (Apple silicon and Intel) with Chrome 151 and 152, and Ubuntu 24.04 under Xvfb with fluxbox, dunst 1.9.2 and Chrome 154.
+- **macOS notifications:** all seven test notifications (quotes, XML, non-ASCII, newlines, 2,000 characters, control characters) are in the Notification Center database with the right text, from Script Editor (`osascript`); on macOS 26 and 15 usernoted also logs each delivery. macOS stores a shortened body for very long ones.
+- **notify-send:** seven Notify calls on the session bus, all held by dunst, shown on screen with the right text. Fixed: a NUL byte made the notification fail (`exec` rejects it), and the body was read as markup, so `<toast/>` vanished and `&amp;` showed as `&`.
+- **`sy app` in Chrome:** opens a window titled Switchyard, exits 5-6s after that window is closed, and leaves the other Chrome windows open; on macOS `open -n` hands the window to the running Chrome. Fixed on Linux: Ctrl+C or closing the terminal killed Chrome with all its windows when `sy app` or `sy web` had started it (it was in sy's process group).
+- **Keep-awake on macOS:** a waiting `sy run --in` holds a `caffeinate -i -w <sy pid>` sleep assertion (seen in `pmset -g assertions`). It ends after Ctrl+C, and on its own when sy is killed. `--allow-sleep` takes none.
+- **`sy update` on macOS:** a 0.0.1 build updated itself to release 0.2.0, which starts.
+
 **Not verified yet:**
 - Codex: a usage-limit hit and a logged-out CLI.
 - Real daily use on your Windows PC.
 - Behaviour under heavy load: a big repo, three agents in parallel, hours of use.
 - A ~10-task comparison against a single agent on real, multi-file tasks (`plan.md` §9). The starter set is too small to show it: on its one-file tasks a single agent is faster.
-- Notifications on macOS and notify-send; `sy app` on macOS.
+- A macOS notification banner on screen: the runners' screenshots never show one (Notification Center logs it "as banner", but the runner's screen is shared, which may hide banners). Delivery itself is verified.
+- `sy app` in Edge on macOS and Linux (Chrome only), and on a real Linux desktop (GNOME/KDE) rather than Xvfb with fluxbox and dunst.
 - Webhooks to real Slack and Discord (payloads checked against their current docs only).
 
 **Open risk:** a full Windows freeze happened on 3 Oct while using `sy`.

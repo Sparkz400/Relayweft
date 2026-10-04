@@ -25,7 +25,15 @@ func guard() error { return nil }
 
 func background(cmd *exec.Cmd) {}
 
-func breakaway(*exec.Cmd) {}
+// breakaway starts cmd in a session of its own: a terminal's Ctrl+C, and
+// the SIGHUP when it closes, go to sy's whole process group, and a browser
+// sy started (Chrome quits on both) must not die with sy.
+func breakaway(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setsid = true
+}
 
 // lower renices a process (children forked later inherit it).
 func lower(pid int) { _ = syscall.Setpriority(syscall.PRIO_PROCESS, pid, 10) }

@@ -1,0 +1,79 @@
+name: macos-real
+
+# Real-desktop checks that normal CI cannot make: desktop notifications,
+# `sy app` (Chrome app window: opens, sy exits when it closes, other browser
+# windows survive), keep-awake (caffeinate) during a scheduled wait and
+# `sy update` on a real macOS VM with a logged-in user; and notify-send plus
+# `sy app` on Linux with a virtual display and a real notification daemon.
+# Manual only (Actions tab or `gh workflow run macos-real.yml`). It needs no
+# secrets and makes no AI calls (fake agents only). The results, logs and
+# screenshots are uploaded as artifacts; summary.txt says PASS/FAIL/INFO.
+on:
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: 'macOS runner labels (JSON list), e.g. ["macos-latest","macos-15","macos-15-intel","macos-14"]'
+        default: '["macos-latest","macos-15"]'
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.macos || '["macos-latest","macos-15"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: build sy
+        run: go build -o "$RUNNER_TEMP/bin/sy" ./cmd/sy
+      - name: real checks
+        env:
+          OUT: ${{ runner.temp }}/out
+          SY: ${{ runner.temp }}/bin/sy
+          # Only used if the unauthenticated release lookup in the `sy
+          # update` check is rate-limited: the run's own read-only token.
+          RUN_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/macos-real.sh
+      - name: summary
+        if: always()
+        run: cat "$RUNNER_TEMP/out/summary.txt" >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: macos-real-${{ matrix.os }}
+          path: ${{ runner.temp }}/out/
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: install a virtual desktop
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq xvfb fluxbox dunst libnotify-bin dbus-x11 wmctrl imagemagick
+      - name: build sy
+        run: go build -o "$RUNNER_TEMP/bin/sy" ./cmd/sy
+      - name: real checks
+        env:
+          OUT: ${{ runner.temp }}/out
+          SY: ${{ runner.temp }}/bin/sy
+        run: dbus-run-session -- bash .github/scripts/linux-desktop-real.sh
+      - name: summary
+        if: always()
+        run: cat "$RUNNER_TEMP/out/summary.txt" >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-desktop-real
+          path: ${{ runner.temp }}/out/
