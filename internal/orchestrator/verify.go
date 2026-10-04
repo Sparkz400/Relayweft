@@ -96,12 +96,12 @@ func (o *Orchestrator) verifyAt(ctx context.Context, t *task, vc config.VerifyCf
 	if scope == verifyFull {
 		return o.runChecks(ctx, t, vc, site, fullRuns(cmds, "the full checks before the final review"))
 	}
-	var plans []affected.Plan
 	files, why := o.changedFiles(site, vc)
 	if why != "" {
 		o.logf("verify: %sthe full checks run (%s)", site.label, why)
 		return o.runChecks(ctx, t, vc, site, fullRuns(cmds, why))
 	}
+	var plans []affected.Plan
 	in := affected.Input{Root: site.root, Dir: site.dir, Files: files}
 	for _, c := range cmds {
 		plans = append(plans, affected.Select(ctx, c, vc.AffectedCommands[c], in))
@@ -126,11 +126,11 @@ func (o *Orchestrator) verifyAt(ctx context.Context, t *task, vc config.VerifyCf
 		o.logf("verify: %sonly the tests affected by the changes first (%d changed files); the full checks run once they pass", site.label, len(files))
 	}
 	ok, rep := o.runChecks(ctx, t, vc, site, runs)
-	if !ok || narrowed == 0 || rep == "cancelled" {
-		if !ok && narrowed > 0 {
-			rep += "(Only the tests the changes affect ran; the full checks run once these pass.)\n"
-		}
+	if rep == "cancelled" || narrowed == 0 {
 		return ok, rep
+	}
+	if !ok {
+		return false, rep + "(Only the tests the changes affect ran; the full checks run once these pass.)\n"
 	}
 	// The final full run: a narrowed pass never stands in for it.
 	var again []string

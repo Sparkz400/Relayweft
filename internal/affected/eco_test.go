@@ -46,11 +46,11 @@ func TestSelectJest(t *testing.T) {
 
 func TestSelectVitest(t *testing.T) {
 	dir := tree(t, map[string]string{"package.json": `{"scripts":{"test":"vitest run --reporter=dot"}}`, "src/a.ts": "x"})
-	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.ts"), "npx vitest related --run --passWithNoTests --reporter=dot ./src/a.ts")
+	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.ts"), "npx --no vitest related --run --passWithNoTests --reporter=dot ./src/a.ts")
 	want(t, dir, "pnpm test", sel(t, dir, "pnpm test", "src/a.ts"), "pnpm exec vitest related --run --passWithNoTests --reporter=dot ./src/a.ts")
 	want(t, dir, "npx vitest run", sel(t, dir, "npx vitest run", "src/a.ts"), "npx vitest related --run --passWithNoTests ./src/a.ts")
 	pre, hint := Allowed(dir, "npm test", "")
-	if len(pre) != 1 || pre[0] != "npx vitest related --run --passWithNoTests --reporter=dot" || !strings.Contains(hint, "<files>") {
+	if len(pre) != 1 || pre[0] != "npx --no vitest related --run --passWithNoTests --reporter=dot" || !strings.Contains(hint, "<files>") {
 		t.Errorf("allowed %q hint %q", pre, hint)
 	}
 }

@@ -15,6 +15,7 @@ func goTree(t *testing.T) string {
 	return tree(t, map[string]string{
 		"go.mod":              "module example.com/m\n\ngo 1.22\n",
 		"a/a.go":              "package a\n\nfunc A() int { return 1 }\n",
+		"a/a_test.go":         "package a\n",
 		"b/b.go":              "package b\n\nimport \"example.com/m/a\"\n\nfunc B() int { return a.A() }\n",
 		"c/c.go":              "package c\n\nfunc C() {}\n",
 		"d/d.go":              "package d\n",
@@ -40,6 +41,7 @@ func TestSelectGo(t *testing.T) {
 		{[]string{"a/a.go"}, "go test ./a ./b ./d"},
 		{[]string{"c/c.go"}, "go test ./c"},
 		{[]string{"d/d_test.go"}, "go test ./d"},
+		{[]string{"a/a_test.go"}, "go test ./a"},                         // a test change stays in its package
 		{[]string{"e/e.txt"}, "go test ./e"},                             // embedded
 		{[]string{"fixture.json"}, "go test ./f"},                        // named by f's test
 		{[]string{"README.md"}, "-"},                                     // docs

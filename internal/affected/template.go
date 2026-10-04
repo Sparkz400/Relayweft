@@ -102,14 +102,52 @@ func (c *change) placeholder(ctx context.Context, ph string) ([]string, string) 
 				out = append(out, dotSlash(t))
 			}
 		default:
+			// The changed test files, and the test files named after a
+			// changed file (lib/a.rb: a_spec.rb, test_a.py, a.test.ts).
+			stems := map[string]bool{}
 			for _, f := range c.files {
-				if isTestFile(f) && c.exists(f) {
+				switch {
+				case isTestFile(f) && c.exists(f):
 					out = append(out, dotSlash(f))
+				case !isDoc(f):
+					stems[stem(f)] = true
+				}
+			}
+			if len(stems) > 0 {
+				tests, ok := walk(c.dir, maxBuildFiles, func(rel string, d os.DirEntry) bool { return isTestFile(rel) })
+				if !ok {
+					return nil, "too many files to look for tests in"
+				}
+				for _, t := range tests {
+					if stems[testStem(t)] {
+						out = append(out, dotSlash(t))
+					}
 				}
 			}
 		}
 	}
 	return sortedSet(out), ""
+}
+
+// stem is a file's name without folder and extension, lower case.
+func stem(p string) string {
+	base := strings.ToLower(path.Base(p))
+	if i := strings.IndexByte(base, '.'); i > 0 {
+		base = base[:i]
+	}
+	return base
+}
+
+// testStem is the name of the file a test file is named after:
+// a_spec.rb, a_test.go, test_a.py, a.test.ts, ATests.cs -> "a".
+func testStem(p string) string {
+	s := stem(p)
+	for _, suf := range []string{"_test", "_spec", "tests", "test"} {
+		if t := strings.TrimSuffix(s, suf); t != s && t != "" {
+			return t
+		}
+	}
+	return strings.TrimPrefix(s, "test_")
 }
 
 // goModule reports whether the check folder is in a Go module.

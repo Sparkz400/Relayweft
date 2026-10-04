@@ -189,3 +189,20 @@ func TestChangedSince(t *testing.T) {
 		t.Errorf("changed = %q, want %q", files, want)
 	}
 }
+
+// A cancel during a narrowed run reports "cancelled" as it is: the task
+// loop stops on exactly that text.
+func TestNarrowedVerifyCancelled(t *testing.T) {
+	dir := gitRepo(t)
+	base := headOf(t, dir)
+	os.WriteFile(filepath.Join(dir, "work.txt"), []byte("x\n"), 0o644)
+	o, _ := newOrc(t, dir, both(func(s runner.Spec) runner.Result { return runner.Result{Final: "done"} }), nil)
+	full := fileCheck("ok.txt")
+	vc := config.VerifyCfg{Commands: []string{full}, AffectedCommands: map[string]string{full: narrowedCheck("ok.txt")}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ok, rep := o.verifyAt(ctx, &task{id: "t"}, vc, checkSite{dir: dir, root: dir, base: base}, verifyAffected)
+	if ok || rep != "cancelled" {
+		t.Errorf("got %v %q", ok, rep)
+	}
+}

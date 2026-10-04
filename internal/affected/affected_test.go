@@ -102,6 +102,14 @@ func TestUnsafeNamesRunFull(t *testing.T) {
 	if p := sel(t, dir, "npm test", "src/a$(id).js"); !p.Full || len(p.Run) != 0 {
 		t.Errorf("$(...): %+v", p)
 	}
+	// git writes slashes, so a backslash is part of a name (on Unix).
+	if p := sel(t, dir, "npm test", `src\a.js`); !p.Full {
+		t.Errorf("backslash: %+v", p)
+	}
+	// A name with a newline does not break the log line.
+	if p := sel(t, dir, "npm test", "src/-rf.js", "docs/a\nb.md"); p.Full || strings.Contains(p.Why, "\n") {
+		t.Errorf("newline in reason: %q", p.Why)
+	}
 	// "-rf" never starts an argument: files are passed as ./path.
 	if p := sel(t, dir, "npm test", "src/-rf.js"); p.Full || len(p.Run) != 1 || !strings.HasSuffix(p.Run[0], " ./src/-rf.js") {
 		t.Errorf("leading dash: %+v", p)
@@ -184,11 +192,14 @@ func TestTemplate(t *testing.T) {
 		t.Errorf("files: %+v", p)
 	}
 	checkAllowed(t, dir, "bundle exec rspec", "bundle exec rspec {files}", p)
-	p = Select(context.Background(), "make test", "make test DIRS={packages}", in)
+	p = Select(context.Background(), "make check", "make test DIRS={packages}", in)
 	if p.Full || len(p.Run) != 1 || p.Run[0] != "make test DIRS=./lib ./spec" {
 		t.Errorf("packages: %+v", p)
 	}
-	checkAllowed(t, dir, "make test", "make test DIRS={packages}", p)
+	checkAllowed(t, dir, "make check", "make test DIRS={packages}", p)
+	if pre, _ := Allowed(dir, "make check", "make test DIRS={packages}"); len(pre) != 1 || pre[0] != "make test" {
+		t.Errorf("allowed %q: whole words before the placeholder", pre)
+	}
 	// A template that would start with a file name allows nothing extra.
 	if pre, _ := Allowed(dir, "x", "{files}"); len(pre) != 0 {
 		t.Errorf("template without a command allowed %q", pre)
@@ -196,10 +207,20 @@ func TestTemplate(t *testing.T) {
 	if p := Select(context.Background(), "make test", "make test", in); !p.Full {
 		t.Errorf("template without placeholders: %+v", p)
 	}
+	// Test files named after a changed file.
+	p = Select(context.Background(), "bundle exec rspec", "bundle exec rspec {test_files}", Input{Root: dir, Dir: dir, Files: []string{"lib/a.rb"}})
+	if p.Full || len(p.Run) != 1 || p.Run[0] != "bundle exec rspec ./spec/a_spec.rb" {
+		t.Errorf("test files by name: %+v", p)
+	}
 	// Nothing for the placeholder: nothing to run.
-	p = Select(context.Background(), "make test", "make test T={test_files}", Input{Root: dir, Dir: dir, Files: []string{"lib/a.rb"}})
+	p = Select(context.Background(), "make test", "make test T={test_files}", Input{Root: dir, Dir: dir, Files: []string{"lib/b.rb"}})
 	if p.Full || len(p.Run) != 0 {
 		t.Errorf("no test files: %+v", p)
+	}
+	for f, want := range map[string]string{"spec/a_spec.rb": "a", "x/a_test.go": "a", "tests/test_a.py": "a", "src/a.test.ts": "a", "T/ATests.cs": "a"} {
+		if got := testStem(f); got != want {
+			t.Errorf("testStem(%s) = %s", f, got)
+		}
 	}
 }
 
@@ -210,5 +231,22 @@ func TestOwnerAndClosure(t *testing.T) {
 	got := reverseClosure([]string{"a"}, map[string][]string{"b": {"a"}, "c": {"b"}, "d": {"x"}})
 	if !got["a"] || !got["b"] || !got["c"] || got["d"] {
 		t.Errorf("closure %v", got)
+	}
+}
+
+// Windows: the repo root from git and the folder the person gave may
+// differ in case and slashes; files still map into the check folder.
+func TestCheckFolderCaseOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("case-insensitive paths are a Windows matter")
+	}
+	root := tree(t, map[string]string{"Web/package.json": `{"scripts":{"test":"jest"}}`, "Web/src/a.js": "x"})
+	dir := strings.ToUpper(filepath.Join(root, "web"))
+	p := Select(context.Background(), "npm test", "", Input{Root: filepath.ToSlash(root), Dir: dir, Files: []string{"Web/src/a.js"}})
+	if p.Full || len(p.Run) != 1 || !strings.HasSuffix(p.Run[0], " ./src/a.js") {
+		t.Errorf("case: %+v", p)
+	}
+	if rel, ok := relDir(strings.ToLower(root), dir); !ok || !strings.EqualFold(rel, "web") {
+		t.Errorf("relDir = %q %v", rel, ok)
 	}
 }

@@ -40,7 +40,7 @@ type Record struct {
 	Mode       string            `json:"mode,omitempty"` // routed | single | demo
 	Agent      string            `json:"agent,omitempty"`
 	Step       string            `json:"step,omitempty"`
-	Kind       string            `json:"kind,omitempty"` // decision, agent_end: the step's kind (edit, explore, ...)
+	Kind       string            `json:"kind,omitempty"` // decision, agent_end: the step's kind (edit, explore, ...); verify: full | affected
 	Attempt    int               `json:"attempt,omitempty"`
 	Role       string            `json:"role,omitempty"`
 	Provider   string            `json:"provider,omitempty"`

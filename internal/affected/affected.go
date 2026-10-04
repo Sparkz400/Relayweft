@@ -94,7 +94,14 @@ func Allowed(dir, cmd, template string) (prefixes []string, hint string) {
 		if i < 0 {
 			return nil, ""
 		}
-		pre := strings.TrimSpace(template[:i])
+		// Whole words only: "make test PKGS={packages}" allows "make test".
+		pre := template[:i]
+		if j := strings.LastIndexAny(pre, " \t"); j >= 0 {
+			pre = pre[:j]
+		} else {
+			pre = ""
+		}
+		pre = strings.TrimSpace(pre)
 		if pre == "" || pre == cmd || strings.HasPrefix(cmd, pre+" ") {
 			// "" would allow any command; a prefix of cmd is allowed already.
 			if pre == "" {
@@ -148,7 +155,11 @@ func prepare(in Input) (*change, string) {
 	}
 	c := &change{root: in.Root, dir: in.Dir}
 	for _, f := range in.Files {
-		f = path.Clean(strings.ReplaceAll(f, `\`, "/"))
+		if strings.Contains(f, `\`) {
+			// git writes slashes; a backslash is part of a file name.
+			return nil, unsafeWhy(f)
+		}
+		f = path.Clean(f)
 		if f == "." || strings.HasPrefix(f, "../") || path.IsAbs(f) {
 			return nil, fmt.Sprintf("changed file %q is not inside the repo", f)
 		}
@@ -234,7 +245,7 @@ func isTestFile(p string) bool {
 		return true
 	case ext == ".py" && (strings.HasPrefix(name, "test_") || strings.HasSuffix(name, "_test")):
 		return true
-	case ext == ".go" && strings.HasSuffix(name, "_test"):
+	case (ext == ".go" || ext == ".rb" || ext == ".exs" || ext == ".dart") && (strings.HasSuffix(name, "_test") || strings.HasSuffix(name, "_spec")):
 		return true
 	case (ext == ".java" || ext == ".kt" || ext == ".cs" || ext == ".fs" || ext == ".scala") && (strings.HasSuffix(name, "test") || strings.HasSuffix(name, "tests")):
 		return true
@@ -336,7 +347,14 @@ func plural(n int, one, many string) string {
 
 // changedWhy names what the narrowed run is based on.
 func (c *change) changedWhy() string {
-	return plural(len(c.files), "changed file", "changed files") + ": " + list(c.files, 4)
+	names := make([]string, len(c.files))
+	for i, f := range c.files {
+		names[i] = f
+		if strings.ContainsFunc(f, unicode.IsControl) {
+			names[i] = fmt.Sprintf("%q", f) // keep log lines whole
+		}
+	}
+	return plural(len(c.files), "changed file", "changed files") + ": " + list(names, 4)
 }
 
 // onlyFlags reports whether args has only flags, letting a value follow

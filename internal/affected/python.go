@@ -78,6 +78,9 @@ func pyAffected(c *change) ([]string, string) {
 	}
 	for _, file := range changed {
 		if !present[file] {
+			if c.exists(file) {
+				return nil, file + " is in a folder sy does not read (build output, a virtualenv, ...)"
+			}
 			addNames(file) // deleted: who imported it?
 		}
 	}

@@ -178,7 +178,8 @@ func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 		ip, ok := byDir[foldKey(dir)]
 		return ip, ok
 	}
-	direct := map[string]bool{}
+	direct := map[string]bool{}   // packages whose code changed
+	testOnly := map[string]bool{} // packages whose tests changed (no other package can import a test)
 	var mentioned []string
 	sources := map[string][]byte{}
 	read := func(ip, name string) []byte {
@@ -197,7 +198,11 @@ func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 			if !ok {
 				return nil, fmt.Sprintf("%s is not in a package of ./...", file)
 			}
-			direct[ip] = true
+			if strings.HasSuffix(file, "_test.go") {
+				testOnly[ip] = true
+			} else {
+				direct[ip] = true
+			}
 			continue
 		}
 		// Embedded by a package?
@@ -217,8 +222,12 @@ func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 		for ip, p := range pkgs {
 			for _, g := range p.goFiles {
 				if bytes.Contains(read(ip, g), []byte(name)) {
-					direct[ip], placed = true, true
-					break
+					placed = true
+					if strings.HasSuffix(g, "_test.go") {
+						testOnly[ip] = true
+					} else {
+						direct[ip] = true
+					}
 				}
 			}
 		}
@@ -240,6 +249,9 @@ func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 	}
 	code := reverseClosure(start, deps) // packages whose code may behave differently
 	run := map[string]bool{}
+	for ip := range testOnly {
+		run[ip] = true
+	}
 	for ip := range code {
 		if _, ok := pkgs[ip]; ok {
 			run[ip] = true

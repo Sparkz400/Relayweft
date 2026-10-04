@@ -65,7 +65,7 @@ func jsShape(f []string, dir string) jsCmd {
 		bin := c.runner[len(c.runner)-1]
 		switch c.pm {
 		case "npm":
-			c.runner = []string{"npx", bin}
+			c.runner = []string{"npx", "--no", bin} // never download a runner the project does not have
 		case "pnpm":
 			c.runner = []string{"pnpm", "exec", bin}
 		case "yarn":
