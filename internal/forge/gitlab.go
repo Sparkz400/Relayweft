@@ -142,10 +142,15 @@ func (g *gitlab) Comments(r Repo, n int) ([]Comment, error) {
 	var out []Comment
 	for _, nt := range notes {
 		if !nt.System {
-			out = append(out, Comment{Author: nt.Author.Username, Body: nt.Body})
+			out = append(out, Comment{ID: nt.ID, Author: nt.Author.Username, Body: nt.Body, Created: nt.CreatedAt,
+				who: commentAuthor{id: nt.Author.ID, bot: nt.Author.Bot}})
 		}
 	}
 	return out, nil
+}
+
+func (g *gitlab) CommentTrusted(r Repo, c Comment) (bool, error) {
+	return g.trusted(r, glUser{ID: c.who.id, Username: c.Author, Bot: c.who.bot})
 }
 
 func (g *gitlab) OpenIssues(r Repo, label string, max int) ([]Issue, error) {
@@ -203,6 +208,10 @@ func (g *gitlab) CreatePull(r Repo, p NewPull) (*Pull, error) {
 
 func (g *gitlab) CommentIssue(r Repo, n int, body string) error {
 	return g.do(http.MethodPost, fmt.Sprintf("%s/issues/%d/notes", glProject(r), n), map[string]string{"body": body}, nil)
+}
+
+func (g *gitlab) EditComment(r Repo, n int, id int64, body string) error {
+	return g.do(http.MethodPut, fmt.Sprintf("%s/issues/%d/notes/%d", glProject(r), n, id), map[string]string{"body": body}, nil)
 }
 
 func (g *gitlab) CommentPull(r Repo, n int, body string) error {

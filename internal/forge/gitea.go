@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/gh"
 )
@@ -65,15 +66,24 @@ func (g *gitea) Issue(r Repo, n int) (*Issue, error) {
 }
 
 func (g *gitea) Comments(r Repo, n int) ([]Comment, error) {
-	var cs []gh.Comment
+	var cs []struct {
+		ID        int64     `json:"id"`
+		Body      string    `json:"body"`
+		User      gtUser    `json:"user"`
+		CreatedAt time.Time `json:"created_at"`
+	}
 	if err := g.do(http.MethodGet, fmt.Sprintf("%s/issues/%d/comments", gtRepo(r), n), nil, &cs); err != nil {
 		return nil, err
 	}
 	var out []Comment
 	for _, c := range cs {
-		out = append(out, Comment{Author: c.User.Login, Body: c.Body})
+		out = append(out, Comment{ID: c.ID, Author: c.User.Login, Body: c.Body, Created: c.CreatedAt, who: commentAuthor{id: c.User.ID}})
 	}
 	return out, nil
+}
+
+func (g *gitea) CommentTrusted(r Repo, c Comment) (bool, error) {
+	return g.trusted(r, gtUser{ID: c.who.id, Login: c.Author})
 }
 
 // OpenIssues reads up to the page cap and sorts oldest first: Gitea lists
@@ -136,6 +146,10 @@ func (g *gitea) CreatePull(r Repo, p NewPull) (*Pull, error) {
 
 func (g *gitea) CommentIssue(r Repo, n int, body string) error {
 	return g.do(http.MethodPost, fmt.Sprintf("%s/issues/%d/comments", gtRepo(r), n), map[string]string{"body": body}, nil)
+}
+
+func (g *gitea) EditComment(r Repo, _ int, id int64, body string) error {
+	return g.do(http.MethodPatch, fmt.Sprintf("%s/issues/comments/%d", gtRepo(r), id), map[string]string{"body": body}, nil)
 }
 
 func (g *gitea) CommentPull(r Repo, n int, body string) error { return g.CommentIssue(r, n, body) }

@@ -599,8 +599,21 @@ type Issue struct {
 
 // Comment is a comment on an issue.
 type Comment struct {
-	Author string
-	Body   string
+	ID      int64
+	Author  string
+	Body    string
+	Created time.Time
+	// who is the forge's view of the author, for Client.CommentTrusted.
+	who commentAuthor
+}
+
+// commentAuthor is what a forge needs to tell whether a comment's author
+// is trusted.
+type commentAuthor struct {
+	id    int64
+	assoc string // GitHub's author_association
+	typ   string // GitHub's user type (Bot)
+	bot   bool
 }
 
 // Pull is a pull request (a merge request on GitLab).
@@ -680,12 +693,18 @@ type Client interface {
 	Issue(r Repo, n int) (*Issue, error)
 	// Comments are an issue's comments, oldest first.
 	Comments(r Repo, n int) ([]Comment, error)
+	// CommentTrusted reports whether a comment's author may direct work on
+	// the repository, as Feedback.Trusted (GitLab and Gitea ask the forge,
+	// once per author).
+	CommentTrusted(r Repo, c Comment) (bool, error)
 	// OpenIssues are the open issues with the label, oldest first, without
 	// pull requests; at most max (0 = up to the page cap).
 	OpenIssues(r Repo, label string, max int) ([]Issue, error)
 	OpenPulls(r Repo) ([]Pull, error)
 	CreatePull(r Repo, p NewPull) (*Pull, error)
 	CommentIssue(r Repo, n int, body string) error
+	// EditComment replaces the text of comment id (Comment.ID) on issue n.
+	EditComment(r Repo, n int, id int64, body string) error
 
 	// Pull reads one pull request.
 	Pull(r Repo, n int) (*Pull, error)
