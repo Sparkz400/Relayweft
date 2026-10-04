@@ -111,7 +111,7 @@ Then, as on GitHub:
 - **Every night at 02:30 UTC:** the open issues labelled `sy` that no open pull request closes yet, at most 5 (`SY_LIMIT`).
 - **Actions > switchyard > Run workflow:** one issue by number, or the whole batch.
 
-The job's own token reads the issue, pushes the branch, opens the pull request and comments. sy finds the forge from the job's server, so no `FORGEJO_HOST` is needed. A secret `SWITCHYARD_TOKEN` (an access token with the scopes `write:repository` and `write:issue`) is used instead when set. You need it:
+The job's own token reads the issue, pushes the branch, opens the pull request and comments, and goes to the job's own server only (the workflow sets `GITEA_HOST` to it; sy after v0.2.0 finds it by itself). A secret `SWITCHYARD_TOKEN` (an access token with the scopes `write:repository` and `write:issue`) is used instead when set. You need it:
 
 - **on a private repository:** Forgejo 16 does not let the job's token open a pull request there (`404 Can't read pulls or can't read UnitTypeCode`; the branch is pushed);
 - **for your CI on the pull requests:** like GitHub, Forgejo starts no workflows for a pull request the job's token opened.

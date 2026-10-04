@@ -160,8 +160,10 @@ jobs:
 
       - name: sy run
         env:
-          # sy reads issues, pushes and opens pull requests with this token;
-          # it finds the forge from the job's server URL.
+          # sy reads issues, pushes and opens pull requests with this token,
+          # and sends it only to this server. (sy after v0.2.0 also finds
+          # the server without GITEA_HOST.)
+          GITEA_HOST: ${{ github.server_url }}
           FORGEJO_TOKEN: ${{ secrets.SWITCHYARD_TOKEN || secrets.GITHUB_TOKEN }}
           GITEA_TOKEN: ${{ secrets.SWITCHYARD_TOKEN || secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
