@@ -3,6 +3,7 @@ package proc
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -52,9 +53,41 @@ func TestTryLockDeleteWhileHeld(t *testing.T) {
 	unlock()
 }
 
+// A process instance's stamp: the same while it runs, "" once it ended,
+// also while it is a zombie its parent has not waited for yet.
+func TestProcStamp(t *testing.T) {
+	if !stamped {
+		t.Skip("no process stamps on " + runtime.GOOS)
+	}
+	self := procStamp(os.Getpid())
+	if self == "" || procStamp(os.Getpid()) != self {
+		t.Fatalf("own stamp %q is empty or changes", self)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Wait()
+	first := procStamp(cmd.Process.Pid)
+	if first == self {
+		t.Errorf("a child has the parent's stamp %q", self)
+	}
+	// Not waited for: on Unix it stays a zombie.
+	deadline := time.Now().Add(20 * time.Second)
+	for procStamp(cmd.Process.Pid) != "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("an ended child (a zombie on Unix) still has stamp %q", procStamp(cmd.Process.Pid))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if Alive(cmd.Process.Pid) {
+		t.Error("an ended child counts as alive")
+	}
+}
+
 func TestTrackDirAndReapOrphans(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("killing leftover agents is verified on Linux only")
+	if runtime.GOOS == "windows" || !stamped {
+		t.Skip("killing leftover agents needs process stamps (Linux, macOS)")
 	}
 	dir := t.TempDir()
 	pidFile := filepath.Join(t.TempDir(), "slot.pid")

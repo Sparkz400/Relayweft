@@ -46,16 +46,18 @@ func TestSelftest(t *testing.T) {
 	if err != nil || strings.Contains(got, "FAIL") {
 		t.Fatalf("sy selftest: %v\n%s", err, got)
 	}
-	for _, want := range []string{"ok   kill", "ok   history", "ok   resume", "ok   undo", "ok   redo", "Still to do by hand"} {
+	// Every OS: the killed sy's agent is stopped (Windows: with sy, by the
+	// job object; Linux and macOS: by the next sy, after checking it is
+	// the same process), and the step continues in its own worktree.
+	for _, want := range []string{"ok   kill", "ok   history", "ok   resume", "ok   undo", "ok   redo", "Still to do by hand",
+		"ok   orphans", "continued its agent's session in the folder it ran in"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output lacks %q:\n%s", want, got)
 		}
 	}
 	if runtime.GOOS == "windows" {
-		for _, want := range []string{"ok   orphans", "a repo inside OneDrive"} {
-			if !strings.Contains(got, want) {
-				t.Errorf("output lacks %q:\n%s", want, got)
-			}
+		if !strings.Contains(got, "a repo inside OneDrive") {
+			t.Errorf("output lacks %q:\n%s", "a repo inside OneDrive", got)
 		}
 		if es, _ := os.ReadDir(oneDrive); len(es) != 0 {
 			t.Errorf("the OneDrive test repo was not removed: %v", es)

@@ -8,6 +8,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// stamped: procStamp works here.
+const stamped = true
+
 // procStamp identifies a process instance beyond its pid (its creation
 // time), so a recorded pid that Windows reused for another program is not
 // mistaken for a leftover agent. "" when the process is gone.
