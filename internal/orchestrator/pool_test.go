@@ -111,7 +111,7 @@ func TestPoolRecreatesBrokenSlot(t *testing.T) {
 func TestPrewarmAndPerfTips(t *testing.T) {
 	dir := gitRepo(t)
 	snap, _ := (git{dir}).snapshot("s")
-	prewarmPool(dir, snap, 2)
+	prewarmPool(dir, snap, 2, nil)
 	for _, i := range []string{"0", "1"} {
 		if !isWorktreeOf(dir, filepath.Join(poolDir(dir), i)) {
 			t.Errorf("slot %s not prewarmed", i)

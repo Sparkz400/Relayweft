@@ -306,13 +306,18 @@ func touch(path string) {
 
 // prewarmPool creates the first n slots at commit if they are missing, so
 // the expensive first checkout overlaps with planning. Slots in use by
-// another sy are skipped.
-func prewarmPool(root, commit string, n int) {
+// another sy are skipped. Closing stop ends it before the next slot.
+func prewarmPool(root, commit string, n int, stop <-chan struct{}) {
 	dir := poolDir(root)
 	if os.MkdirAll(dir, 0o755) != nil {
 		return
 	}
 	for i := 0; i < n && i < maxPoolSlots; i++ {
+		select {
+		case <-stop:
+			return
+		default:
+		}
 		path := filepath.Join(dir, strconv.Itoa(i))
 		unlock, ok := lockSlot(path)
 		if !ok {
