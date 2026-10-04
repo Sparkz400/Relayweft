@@ -27,7 +27,7 @@ func (o *Orchestrator) runHooks(ctx context.Context, t *task, which string, cmds
 	for k, v := range env {
 		base[k] = v
 	}
-	vars := os.Environ()
+	vars := proc.WithoutSecrets(os.Environ())
 	for k, v := range base {
 		vars = append(vars, k+"="+v)
 	}

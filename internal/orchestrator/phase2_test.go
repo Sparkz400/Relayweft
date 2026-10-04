@@ -518,6 +518,26 @@ func TestHooks(t *testing.T) {
 	}
 }
 
+// Hooks run while agents' changes are in the tree: they never see sy's
+// forge tokens (the CI job's GITHUB_TOKEN can push).
+func TestHooksWithoutTokens(t *testing.T) {
+	dir := gitRepo(t)
+	out := filepath.Join(t.TempDir(), "env.log")
+	t.Setenv("GITHUB_TOKEN", "ghs_secret")
+	hook := "echo [$GITHUB_TOKEN] $SY_HOOK > '" + out + "'; exit 3"
+	if runtime.GOOS == "windows" {
+		hook = "echo [%GITHUB_TOKEN%] %SY_HOOK%> \"" + out + "\" & exit 3"
+	}
+	o, _ := newOrc(t, dir, both(func(s runner.Spec) runner.Result { return runner.Result{} }), func(c *config.Config) {
+		c.Hooks.BeforeTask = []string{hook}
+	})
+	o.Run(context.Background(), longTask)
+	log := read(t, out)
+	if strings.Contains(log, "ghs_secret") || !strings.Contains(log, "before_task") {
+		t.Fatalf("hook saw: %s", log)
+	}
+}
+
 // One-step plans skip the plan review by default (sy bench: never rejected).
 func TestSingleStepPlanSkipsPlanReview(t *testing.T) {
 	reviews := 0

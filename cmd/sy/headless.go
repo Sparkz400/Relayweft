@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -346,6 +347,7 @@ func cmdHistory(args []string) error {
 	all := fs.Bool("all", false, "tasks from every directory")
 	n := fs.Int("n", 20, "how many")
 	dirFlag := fs.String("dir", "", "project directory (default current directory)")
+	asJSON := fs.Bool("json", false, "print the tasks as JSON (newest first), for scripts and CI")
 	fs.Parse(args)
 	dir := ""
 	if !*all {
@@ -356,12 +358,42 @@ func cmdHistory(args []string) error {
 		dir = d
 	}
 	hist := orchestrator.History(dir, *n)
+	if *asJSON {
+		return printHistoryJSON(os.Stdout, hist)
+	}
 	if len(hist) == 0 {
 		fmt.Println("no tasks yet")
 		return nil
 	}
 	printHistory(os.Stdout, hist, *all)
 	return nil
+}
+
+// historyEntry is one task in sy history --json: what a script needs to
+// find a run's tasks (sy report <id>, sy pr <id>), not the whole state.
+type historyEntry struct {
+	ID      string    `json:"id"`
+	Created time.Time `json:"created"`
+	Updated time.Time `json:"updated"`
+	Status  string    `json:"status"` // running, interrupted, done, failed, cancelled
+	Task    string    `json:"task"`
+	Summary string    `json:"summary,omitempty"`
+	Cost    string    `json:"cost,omitempty"`
+	Dir     string    `json:"dir"`
+}
+
+func printHistoryJSON(w io.Writer, hist []orchestrator.TaskState) error {
+	out := make([]historyEntry, 0, len(hist))
+	for _, s := range hist {
+		status := s.Status
+		if s.Interrupted() {
+			status = "interrupted"
+		}
+		out = append(out, historyEntry{ID: s.ID, Created: s.Created, Updated: s.Updated, Status: status, Task: s.Task, Summary: s.Summary, Cost: s.CostLine, Dir: s.Dir})
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
 
 func printHistory(w io.Writer, hist []orchestrator.TaskState, withDir bool) {

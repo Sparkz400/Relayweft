@@ -165,17 +165,16 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	cmd := exec.CommandContext(ctx, path, argv...)
 	proc.Prepare(cmd)
 	cmd.Dir = s.Dir
-	var childEnv []string
+	// Without sy's forge and CI tokens (proc.WithoutSecrets); what the
+	// MCP servers and the provider name explicitly is added back below.
+	cmd.Env = proc.WithoutSecrets(os.Environ())
 	if s.MCP != nil {
 		// MCP secrets from ${VAR}: in the environment, not on the command
 		// line (codexMCPArgs names them).
-		childEnv = append(childEnv, s.MCP.ChildEnv...)
+		cmd.Env = append(cmd.Env, s.MCP.ChildEnv...)
 	}
 	// The provider's env (an API endpoint and key) comes last and wins.
-	childEnv = append(childEnv, provEnv...)
-	if len(childEnv) > 0 {
-		cmd.Env = append(os.Environ(), childEnv...)
-	}
+	cmd.Env = append(cmd.Env, provEnv...)
 	// The prompt goes in on stdin: multi-line prompts as arguments get
 	// mangled by cmd.exe when the CLI is an npm .cmd shim on Windows.
 	cmd.Stdin = strings.NewReader(s.Prompt)
