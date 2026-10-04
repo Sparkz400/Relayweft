@@ -298,6 +298,28 @@ It needs about 10 logged tasks before its suggestions mean anything.
 
 **Estimates.** Plan approval (TUI, `sy web`, `sy run --approve`) shows each step's expected tokens, time and $ (the median, with a 25–75% range) from earlier steps of the same role, kind and route, in this repo first, then all repos. It also warns when the total would likely go over what is left of your task or day budget. `sy run --estimate "task"` only plans and prints this. `sy stats` also has a per-day table (tasks, success, fresh tokens per provider, $).
 
+### Best of N: two agents, keep the better result
+
+`routing.best_of` runs a writing step on two (or up to four) routes at once, normally Claude and Codex. It is off by default.
+
+```yaml
+routing:
+  best_of:
+    when: hard       # off | hard | always
+    n: 2
+    routes: []       # e.g. [claude, "codex:gpt-6.1-sol:high"]; empty = the step's route plus the same role on the next provider
+```
+
+- `hard` uses the router's own signals: a large or sensitive step, a `worker_high` step, or a difficulty score in the strong tier (the same score as `routing.tiers`).
+- Each candidate works in its own pool worktree from the same files. Then `verify.commands` run in each worktree, one at a time.
+- A candidate whose checks pass beats one whose checks fail. If that does not decide, the reviewer compares the diffs. It sees them as untrusted text named A and B, not by provider. Without a usable answer a fixed order decides: fewer failing checks, a change over none, the smaller diff, the cheaper run.
+- The winner lands like any step. Change review shows only the winner. Each loser's work is kept on a branch (`sy/<session>/<task>/<step>--<provider>`). `sy undo` reverts the task as usual.
+- In the plan view, `b` turns it on or off for one step (in `sy web`, the step's best-of menu). The estimate counts every candidate.
+- It needs worktrees. A provider at or near its limit is left out. With fewer than two usable routes, or no worktree, the step runs once and the log says why. Candidates run at once only while `max_threads` has room and the machine is not busy.
+- If `sy` stops during a best-of step, `sy resume` runs that step again from the start. Nothing of it had reached your tree.
+- The agent tree shows each candidate (`work--claude`, `work--codex`). The log, `sy report` and `sy pr` say which one was kept and why.
+- Every candidate is logged. `sy tune` says when the step's own route nearly always wins (the extra runs buy nothing) and when another route keeps winning. A loss on checks or by the reviewer counts against the route in learned routes. `sy bench` has a `routed-bestof` mode to compare it with `routed` and `single`.
+
 ### Cost of every task
 
 When a task finishes, the TUI log, `sy run` and `sy stats` show what it used:

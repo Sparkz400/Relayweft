@@ -43,6 +43,35 @@ func onlyChange(t *testing.T, res LearnResult) RouteChange {
 	return res.Changes[0]
 }
 
+// A best-of candidate that lost on checks or by the reviewer counts as a
+// failed run of its route; a pick by the fixed order does not.
+func TestLearnBestOfLossCounts(t *testing.T) {
+	repo := t.TempDir()
+	cur := repoRuns(repo, t0, event.RoleWorker, sol, 10, 0, 50_000)
+	alt := repoRuns(repo, t0, event.RoleWorker, sonnet, 10, 0, 50_000)
+	recs := append(cur, alt...)
+	for i, r := range cur {
+		recs[i].Agent = "w--codex"
+		by := BestOfByReviewer
+		if i >= 6 {
+			by = BestOfByOrder
+		}
+		recs = append(recs, Record{Type: TypeBestOf, TS: t0, Session: r.Session, Cwd: repo, TaskID: r.TaskID, Step: r.Step,
+			Agent: "w--codex", Role: r.Role, Provider: r.Provider, Model: r.Model, Effort: r.Effort, OK: Bool(false), Reason: by})
+	}
+	st := learnStats(recs, repo, t0)
+	if a := st[event.RoleWorker][sol]; a == nil || a.n != 10 || int(a.okW+0.5) != 4 {
+		t.Fatalf("sol after 6 losses on merit: %+v", a)
+	}
+	if a := st[event.RoleWorker][sonnet]; a.okW < 9.9 {
+		t.Errorf("sonnet runs were touched: %+v", a)
+	}
+	res := Learn(recs, learnIn(repo, t0))
+	if ch := onlyChange(t, res); ch.To != sonnet {
+		t.Errorf("change %+v, want the route that kept winning", ch)
+	}
+}
+
 func TestLearnNeedsMinSamples(t *testing.T) {
 	repo := t.TempDir()
 	cur := repoRuns(repo, t0, event.RoleWorker, sol, 20, 10, 50_000) // 50% ok

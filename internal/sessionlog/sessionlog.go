@@ -27,6 +27,21 @@ const (
 	TypeMerge    = "merge"
 	TypeConfig   = "config_change"
 	TypeQuota    = "quota" // provider-reported quota (resets_at), logged when it changes
+	// TypeBestOf is one candidate of a best-of step: OK says whether it
+	// was kept, Reason how the winner was picked (BestOfBy*), Passed
+	// whether its checks passed (nil: none ran).
+	TypeBestOf = "best_of"
+)
+
+// How a best-of step's winner was picked (Record.Reason of TypeBestOf).
+// Only a pick by checks or by the reviewer says something about the
+// losers' routes.
+const (
+	BestOfByChecks   = "checks"   // its checks passed and the others' failed
+	BestOfByReviewer = "reviewer" // the reviewer compared the diffs
+	BestOfByOrder    = "order"    // the fixed order: fewer failing checks, a change, the smaller diff, the cheaper run
+	BestOfOnly       = "only"     // the only candidate whose agent finished
+	BestOfNone       = "none"     // every candidate failed
 )
 
 // Record is one JSONL line.

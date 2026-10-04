@@ -42,23 +42,32 @@ func (o *Orchestrator) verifyRepos(ctx context.Context, t *task) (bool, string, 
 
 // verifyIn runs repo r's checks in r (the project folder for the primary).
 func (o *Orchestrator) verifyIn(ctx context.Context, t, r *task) (bool, string) {
+	dir, label := o.opts.Dir, ""
+	if r != t {
+		dir, label = r.dir, r.repoName+": "
+	}
+	ok, report, _ := o.verifyAt(ctx, t, r, dir, label)
+	return ok, report
+}
+
+// verifyAt runs repo r's checks in dir (r's folder, or a pool worktree of
+// r for a best-of candidate) and also returns how many failed; label goes
+// before each command in the log and the report.
+func (o *Orchestrator) verifyAt(ctx context.Context, t, r *task, dir, label string) (bool, string, int) {
 	cmds := r.cfg.Verify.Commands
 	if len(cmds) == 0 {
-		return true, ""
+		return true, "", 0
 	}
 	timeout := r.cfg.Verify.Timeout.D()
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
-	dir, label := o.opts.Dir, ""
-	if r != t {
-		dir, label = r.dir, r.repoName+": "
-	}
+	failed := 0
 	allOK := true
 	var b strings.Builder
 	for _, c := range cmds {
 		if ctx.Err() != nil {
-			return false, "cancelled"
+			return false, "cancelled", failed
 		}
 		cctx, cancel := context.WithTimeout(ctx, timeout)
 		cmd := proc.Shell(cctx, c)
@@ -77,6 +86,7 @@ func (o *Orchestrator) verifyIn(ctx context.Context, t, r *task) (bool, string) 
 			continue
 		}
 		allOK = false
+		failed++
 		why := lastLines(string(out), 40)
 		if timedOut {
 			why = fmt.Sprintf("timed out after %s\n%s", timeout, why)
@@ -84,7 +94,7 @@ func (o *Orchestrator) verifyIn(ctx context.Context, t, r *task) (bool, string) 
 		o.emit(event.Event{Kind: event.Error, Text: fmt.Sprintf("verify ✗ %s%s (%s): %s", label, c, took, clip(lastLines(string(out), 1), 200))})
 		fmt.Fprintf(&b, "FAILED: %s%s\n%s\n", label, c, why)
 	}
-	return allOK, b.String()
+	return allOK, b.String(), failed
 }
 
 func lastLines(s string, n int) string {

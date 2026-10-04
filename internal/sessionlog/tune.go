@@ -154,7 +154,7 @@ func SuggestFor(recs []Record, f Filter, cat Catalog) []Suggestion {
 	}
 	var out []Suggestion
 	for _, h := range []func([]Record) []Suggestion{
-		routedVsSingle, cat.failingRoutes, cat.escalations, cat.finalReviews, cat.limitPressure, judgeAdvice, cat.cheaperReadOnly,
+		routedVsSingle, cat.failingRoutes, cat.escalations, cat.finalReviews, cat.limitPressure, judgeAdvice, cat.cheaperReadOnly, bestOfAdvice,
 	} {
 		out = append(out, h(kept)...)
 	}

@@ -53,6 +53,26 @@ func TestParseBenchMode(t *testing.T) {
 	}
 }
 
+// routed-bestof runs every writing step as best of N; the bench's own
+// config is unchanged.
+func TestBenchModeBestOf(t *testing.T) {
+	base := config.NewStore(config.Default(), "")
+	m, err := parseBenchMode("routed-bestof")
+	if err != nil || !m.bestOf || m.provider != "" {
+		t.Fatalf("parse: %+v, %v", m, err)
+	}
+	st, err := m.store(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Get().Routing.BestOf.When; got != config.BestOfAlways {
+		t.Errorf("best_of.when = %q", got)
+	}
+	if got := base.Get().Routing.BestOf.When; got != config.BestOfOff {
+		t.Errorf("the bench's config changed: %q", got)
+	}
+}
+
 // A variant run sets the role like --route does: that provider, that
 // route, and no learned route for it; the bench's own config is unchanged.
 func TestBenchModeStoreVariant(t *testing.T) {

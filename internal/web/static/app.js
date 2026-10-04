@@ -1090,7 +1090,7 @@ function planEditor(a, card) {
   function estChip(st) {
     const se = est && (est.steps || []).find((x) => x.step_id === st.id);
     if (!se) return ['', ''];
-    let text = `${human(se.tokens.mid)} · ${dur(se.seconds.mid * 1000)}`;
+    let text = (se.best_of ? `best of ${se.best_of} · ` : '') + `${human(se.tokens.mid)} · ${dur(se.seconds.mid * 1000)}`;
     if (se.usd.high > 0) text += ` · $${se.usd.mid.toFixed(2)}`;
     const src = se.samples ? `${se.source}, ${se.samples} runs` : se.source;
     return [text + (se.source === 'no history' ? ' ?' : ''),
@@ -1142,6 +1142,9 @@ function planEditor(a, card) {
       // Multi-repo task: the repo the step works in ('' = the project folder, plan.repos[0]).
       const repo = plan.repos && plan.repos.length ? h('select', { class: 'sel-in', title: 'Repo this subtask works in', onchange: (e) => { st.repo = e.target.value; } },
         plan.repos.map((r, j) => h('option', { value: j ? r : '', selected: (st.repo || '') === (j ? r : '') }, 'in ' + r))) : '';
+      // Best of N for a step that changes files: '' = routing.best_of decides.
+      const bestOf = st.kind === 'edit' ? h('select', { class: 'sel-in', title: 'Best of N: run this step on several routes at once and keep the best result (costs about N times as much)', onchange: (e) => { st.best_of = e.target.value; reestimate(); } },
+        [['', 'best-of: auto'], ['on', 'best of N'], ['off', 'one agent']].map(([v, l]) => h('option', { value: v, selected: (st.best_of || '') === v }, l))) : '';
       const ta = h('textarea', { class: 'ta', rows: '1', placeholder: 'What this agent should do', oninput: (e) => { st.prompt = e.target.value; grow(e.target); } });
       ta.value = st.prompt || '';
       const others = plan.subtasks.filter((o) => o !== st);
@@ -1163,7 +1166,7 @@ function planEditor(a, card) {
       const chip = h('span', { class: 'est-chip', hidden: true });
       chips.set(st.id, chip);
       const el = h('div', { class: 'step', style: `--rc:${color}` }, grip,
-        h('div', null, h('div', { class: 'step-row' }, h('span', { class: 'step-id' }, st.id), title, kind, role, repo, chip, tools), ta, deps));
+        h('div', null, h('div', { class: 'step-row' }, h('span', { class: 'step-id' }, st.id), title, kind, role, bestOf, repo, chip, tools), ta, deps));
       grip.addEventListener('mousedown', () => { el.draggable = true; });
       el.addEventListener('dragstart', (e) => { dragFrom = i; el.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); });
       el.addEventListener('dragend', () => { el.draggable = false; el.classList.remove('dragging'); $$('.step', list).forEach((s) => s.classList.remove('drop-before', 'drop-after')); });

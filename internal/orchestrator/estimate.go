@@ -26,7 +26,10 @@ type StepEstimate struct {
 	StepID string `json:"step_id"`
 	Title  string `json:"title"`
 	Role   string `json:"role"`
-	Route  string `json:"route"` // provider:model[:effort]
+	Route  string `json:"route"` // provider:model[:effort] ("a + b" for best of N)
+	// BestOf is the number of candidates when the step runs as best of N
+	// (bestof.go): the estimate covers all of them.
+	BestOf int `json:"best_of,omitempty"`
 	sessionlog.Estimate
 }
 
@@ -160,8 +163,20 @@ func (o *Orchestrator) estimatePlan(t *task, hist *sessionlog.History, p Plan) P
 		return se
 	}
 	for _, st := range p.Subtasks {
-		se := add(st.ID, st.Title, router.Step{ID: st.ID, Title: st.Title, Kind: st.Kind, Prompt: st.Prompt, Files: st.Files,
-			MainProvider: t.mainProv, UserRole: st.Role})
+		step := routerStep(t, st)
+		if on, _ := o.wantBestOf(t, st); on {
+			if routes, _ := o.bestOfRoutes(t, step); len(routes) >= 2 {
+				se := o.estimateBestOf(hist, st, step.Kind, routes, cfg.Orchestrator.Parallel && cfg.Orchestrator.MaxThreads > 1)
+				e.Steps = append(e.Steps, se)
+				e.Tokens, e.USD = e.Tokens.Add(se.Tokens), e.USD.Add(se.USD)
+				if se.Source == sessionlog.SourceNone {
+					e.NoHistory++
+				}
+				wall[st.ID] = se.Seconds
+				continue
+			}
+		}
+		se := add(st.ID, st.Title, step)
 		wall[st.ID] = se.Seconds
 	}
 	e.Seconds = planWall(p, wall, cfg.Orchestrator.Parallel && cfg.Orchestrator.MaxThreads > 1)
@@ -172,6 +187,33 @@ func (o *Orchestrator) estimatePlan(t *task, hist *sessionlog.History, p Plan) P
 	}
 	o.checkEstimate(t, &e)
 	return e
+}
+
+// estimateBestOf estimates a best-of step: every candidate's tokens and $
+// add up; the wall time is the longest candidate's when they run at once,
+// else the sum.
+func (o *Orchestrator) estimateBestOf(hist *sessionlog.History, st Subtask, kind router.Kind, routes []event.Decision, parallel bool) StepEstimate {
+	se := StepEstimate{StepID: st.ID, Title: st.Title, Role: routes[0].Role, BestOf: len(routes), Estimate: sessionlog.Estimate{Source: sessionlog.SourceRepo}}
+	var labels []string
+	for i, d := range routes {
+		ce := hist.Estimate(d.Role, string(kind), sessionlog.RouteKey{Provider: d.Provider, Model: d.Model, Effort: d.Effort}, kind.ReadOnly())
+		labels = append(labels, config.RouteSpec(d.Provider, config.Route{Model: d.Model, Effort: d.Effort}))
+		se.Tokens, se.USD = se.Tokens.Add(ce.Tokens), se.USD.Add(ce.USD)
+		if parallel {
+			se.Seconds = se.Seconds.Max(ce.Seconds)
+		} else {
+			se.Seconds = se.Seconds.Add(ce.Seconds)
+		}
+		// The least certain candidate says where the whole comes from.
+		if i == 0 || ce.Samples < se.Samples {
+			se.Samples = ce.Samples
+		}
+		if ce.Source == sessionlog.SourceNone || (ce.Source == sessionlog.SourceAll && se.Source == sessionlog.SourceRepo) {
+			se.Source = ce.Source
+		}
+	}
+	se.Route = strings.Join(labels, " + ")
+	return se
 }
 
 // planWall is the plan's wall time: the longest chain of dependent steps

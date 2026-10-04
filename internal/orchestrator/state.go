@@ -38,6 +38,8 @@ type StepState struct {
 	OK    bool   `json:"ok"`
 	Final string `json:"final,omitempty"`
 	Err   string `json:"err,omitempty"`
+	// BestOf says how a best-of step's winner was picked (bestof.go).
+	BestOf string `json:"best_of,omitempty"`
 }
 
 // StepRun is a subtask's agent that was started and has not finished: if
@@ -210,7 +212,7 @@ func (s *TaskState) setResult(id string, r stepResult, interrupted bool) {
 	if s.Results == nil {
 		s.Results = map[string]StepState{}
 	}
-	s.Results[id] = StepState{OK: r.ok, Final: clip(r.final, 4000), Err: clip(r.err, 1000)}
+	s.Results[id] = StepState{OK: r.ok, Final: clip(r.final, 4000), Err: clip(r.err, 1000), BestOf: clip(r.bestOf, 600)}
 	run, had := s.Running[id]
 	if !interrupted {
 		delete(s.Running, id)

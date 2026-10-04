@@ -38,6 +38,7 @@ const benchExample = `# sy bench: compare Switchyard (routed) with single agents
 modes:
   - routed                          # Switchyard with your switchyard.yaml routes
   # - routed-nohandoff              # the same without the context hand-off (repo map, notes), to measure it
+  # - routed-bestof                 # every writing step as best of N (routing.best_of), to measure it
   # - routed:worker=claude:sonnet:medium   # routed with a role on another route: evidence for learned routes
   - single:codex:gpt-6.1-sol:high   # one agent, no planning or review
   - single:claude:opus:high
