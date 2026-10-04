@@ -67,6 +67,7 @@ type issueFlags struct {
 	items     []issueItem
 	pulls     int
 	lastPR    *prResult // the last task's pull request (nil if none)
+	noPR      int       // tasks that finished ok but got no pull request with --pr
 }
 
 type issueItem struct {
@@ -325,12 +326,20 @@ func (f *issueFlags) afterTask(i int, res orchestrator.TaskResult) (stop bool) {
 			if s := slugify(it.issue.Title, 32); s != "" {
 				branch += "-" + s
 			}
+			// An earlier run's branch (its pull request closed, say) is
+			// never reused: the new work gets a branch of its own.
+			branch = freeBranch(st.Dir, branch)
 			pr, err = makePR(st, prOptions{base: f.base, branch: branch, draft: f.draft, draftSet: f.draftSet, yes: true, unattended: true, closes: it.closes, api: f.api})
 			if err != nil {
 				fmt.Printf("%s for #%d failed: %v\n", it.repo.Kind.PullNoun(), it.issue.Number, err)
 				pr = nil // a branch that was not pushed is no pull request
 			}
 		}
+	}
+	if f.pr && res.OK && (pr == nil || pr.URL == "") {
+		// --pr asked for a pull request: without one the run failed, so CI
+		// jobs and scripts see it in the exit status.
+		f.noPR++
 	}
 	if pr != nil && pr.URL != "" {
 		f.pulls++
@@ -362,6 +371,25 @@ func (f *issueFlags) afterTask(i int, res orchestrator.TaskResult) (stop bool) {
 		return true
 	}
 	return false
+}
+
+// freeBranch is name, or name-2, name-3, ... when name already exists
+// here or on origin.
+func freeBranch(dir, name string) string {
+	for i := 1; i < 100; i++ {
+		b := name
+		if i > 1 {
+			b = fmt.Sprintf("%s-%d", name, i)
+		}
+		if _, err := prGit(dir, nil, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+b); err == nil {
+			continue
+		}
+		if prRemoteHas(dir, b) {
+			continue
+		}
+		return b
+	}
+	return name
 }
 
 // cleanTree fails when dir has uncommitted changes, untracked files or

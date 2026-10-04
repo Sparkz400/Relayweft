@@ -53,6 +53,14 @@ var (
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
 		return cmd.Run()
 	}
+	// prRemoteHas reports whether origin has the branch (an error counts
+	// as no: the push then says what is wrong).
+	prRemoteHas = func(root, branch string) bool {
+		cmd := exec.Command("git", "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+branch)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		return cmd.Run() == nil
+	}
 )
 
 // prOptions are the knobs of the sy pr flow (also used by sy run --pr).
