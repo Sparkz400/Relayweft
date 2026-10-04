@@ -25,8 +25,13 @@ var childSecrets = []string{
 	"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN",
 	// Gitea / Forgejo
 	"GITEA_TOKEN", "FORGEJO_TOKEN",
-	// GitHub Actions runner tokens
+	// GitHub Actions runner tokens; Forgejo and Gitea runners set the same
+	// ones, plus GITHUB_TOKEN and FORGEJO_TOKEN (GITEA_TOKEN) to the job's
+	// token. A registration token lets anyone register a runner and take
+	// jobs with their secrets: Gitea's act_runner image reads it from the
+	// environment, which a host-executor job can inherit.
 	"ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL",
+	"GITEA_RUNNER_REGISTRATION_TOKEN",
 	// GitLab CI job credentials (CI_REPOSITORY_URL embeds the job token)
 	"CI_JOB_TOKEN", "CI_JOB_JWT", "CI_JOB_JWT_V1", "CI_JOB_JWT_V2", "CI_REPOSITORY_URL",
 	"CI_REGISTRY_PASSWORD", "CI_DEPLOY_PASSWORD", "CI_DEPENDENCY_PROXY_PASSWORD",

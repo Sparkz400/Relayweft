@@ -8,7 +8,8 @@ import (
 )
 
 func noEnvHosts(t *testing.T) {
-	for _, v := range []string{"GH_HOST", "GITLAB_HOST", "GITEA_HOST", "FORGEJO_HOST"} {
+	for _, v := range []string{"GH_HOST", "GITLAB_HOST", "GITEA_HOST", "FORGEJO_HOST",
+		"FORGEJO_ACTIONS", "GITEA_ACTIONS", "FORGEJO_SERVER_URL", "GITEA_SERVER_URL", "GITHUB_SERVER_URL"} {
 		t.Setenv(v, "")
 	}
 }
@@ -259,5 +260,71 @@ func TestSelfHostedRootURLs(t *testing.T) {
 	t.Setenv("GH_HOST", "https://ghe.corp:8443")
 	if ghe, err := ParseRemote("git@ghe.corp:o/r.git", EnvHosts()); err != nil || ghe.APIBase() != "https://ghe.corp:8443/api/v3" || ghe.CompareURL("main", "b") != "https://ghe.corp:8443/o/r/compare/main...b?expand=1" {
 		t.Errorf("enterprise: %+v %v %s", ghe, err, ghe.APIBase())
+	}
+}
+
+// In a Forgejo Actions job (what forgejo-runner v12 sets, seen in a real
+// job), the job's server is a Forgejo host without GITEA_HOST, its token
+// stays there, and GITHUB_TOKEN, which the runner sets to that same job
+// token, never goes to GitHub.
+func TestForgejoActionsJob(t *testing.T) {
+	noEnvHosts(t)
+	old := gh.GHCLIToken
+	defer func() { gh.GHCLIToken = old }()
+	gh.GHCLIToken = func(string) string { return "" }
+	t.Setenv("FORGEJO_ACTIONS", "true")
+	t.Setenv("GITEA_ACTIONS", "true")
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("FORGEJO_SERVER_URL", "http://forgejo:3000")
+	t.Setenv("GITHUB_SERVER_URL", "http://forgejo:3000")
+	t.Setenv("FORGEJO_TOKEN", "job")
+	t.Setenv("GITEA_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "job")
+	t.Setenv("GH_TOKEN", "")
+
+	r, err := ParseRemote("http://forgejo:3000/alice/demo.git", EnvHosts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Kind != Gitea || r.Web != "http://forgejo:3000" || r.String() != "alice/demo" {
+		t.Errorf("got %+v", r)
+	}
+	if got := r.APIBase(); got != "http://forgejo:3000/api/v1" {
+		t.Errorf("API %s", got)
+	}
+	if got := r.ForgeName(); got != "Forgejo" {
+		t.Errorf("forge name %s", got)
+	}
+	if tok, src := Token(Gitea, "forgejo"); tok != "job" || src != "FORGEJO_TOKEN" {
+		t.Errorf("the job's server: %q %q", tok, src)
+	}
+	if tok, _ := Token(Gitea, "codeberg.org"); tok != "" {
+		t.Errorf("the job token was sent to codeberg.org: %q", tok)
+	}
+	if tok, src := Token(GitHub, "github.com"); tok != "" {
+		t.Errorf("the job token was sent to GitHub from %s", src)
+	}
+	t.Setenv("GH_TOKEN", "ghp")
+	if tok, src := Token(GitHub, "github.com"); tok != "ghp" || src != "GH_TOKEN" {
+		t.Errorf("GH_TOKEN is for GitHub: %q %q", tok, src)
+	}
+
+	// Gitea's act_runner: GITEA_ACTIONS and GITHUB_SERVER_URL only.
+	t.Setenv("FORGEJO_ACTIONS", "")
+	t.Setenv("FORGEJO_SERVER_URL", "")
+	t.Setenv("GITHUB_SERVER_URL", "https://gitea.example.com")
+	r, err = ParseRemote("https://gitea.example.com/o/r.git", EnvHosts())
+	if err != nil || r.Kind != Gitea || r.ForgeName() != "Gitea" {
+		t.Errorf("Gitea Actions: %+v %v", r, err)
+	}
+
+	// GitHub Actions sets neither flag: nothing changes there.
+	t.Setenv("GITEA_ACTIONS", "")
+	t.Setenv("GITHUB_SERVER_URL", "https://github.com")
+	if h := EnvHosts(); len(h) != 0 {
+		t.Errorf("GitHub Actions: hosts %v", h)
+	}
+	if tok, src := Token(GitHub, "github.com"); tok != "job" || src != "GITHUB_TOKEN" {
+		t.Errorf("GitHub Actions: %q %q", tok, src)
 	}
 }

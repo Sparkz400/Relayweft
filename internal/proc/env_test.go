@@ -32,6 +32,27 @@ func TestWithoutSecrets(t *testing.T) {
 	}
 }
 
+// The environment of a real Forgejo Actions job step (forgejo-runner
+// v12.13.2 on Forgejo 16): the runner sets the job token as GITHUB_TOKEN
+// and FORGEJO_TOKEN, and the GitHub-style runtime tokens. The flags and
+// URLs stay: verify commands may look at them.
+func TestWithoutSecretsForgejoActions(t *testing.T) {
+	in := []string{
+		"GITHUB_TOKEN=job1", "FORGEJO_TOKEN=job2", "GITEA_TOKEN=job3",
+		"ACTIONS_RUNTIME_TOKEN=rt", "ACTIONS_ID_TOKEN_REQUEST_TOKEN=idt",
+		"ACTIONS_ID_TOKEN_REQUEST_URL=http://forgejo:3000/api/actions/_apis/idtoken?x=idu",
+		"GITEA_RUNNER_REGISTRATION_TOKEN=reg",
+		"FORGEJO_ACTIONS=true", "GITEA_ACTIONS=true", "GITHUB_ACTIONS=true", "CI=true",
+		"FORGEJO_SERVER_URL=http://forgejo:3000", "GITHUB_SERVER_URL=http://forgejo:3000",
+		"FORGEJO_REPOSITORY=alice/demo", "ACTIONS_RUNTIME_URL=http://forgejo:3000/api/actions_pipeline/",
+		"ANTHROPIC_API_KEY=keep",
+	}
+	got := WithoutSecrets(in)
+	if want := in[7:]; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("got  %v\nwant %v", got, want)
+	}
+}
+
 // Verify commands, hooks and bench checks run code the agents wrote: the
 // shell they run in must not see sy's tokens either.
 func TestShellWithoutSecrets(t *testing.T) {

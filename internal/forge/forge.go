@@ -75,6 +75,9 @@ func (r Repo) ForgeName() string {
 	if host == "codeberg.org" || slices.Contains(envHostList("FORGEJO_HOST"), host) {
 		return "Forgejo"
 	}
+	if server, forgejo := actionsServer(); forgejo && hostName(server) == host {
+		return "Forgejo"
+	}
 	return r.Kind.Name()
 }
 
@@ -222,7 +225,8 @@ type HostInfo struct {
 // EnvHosts reads GH_HOST (GitHub Enterprise), GITLAB_HOST and GITEA_HOST
 // (or FORGEJO_HOST). Each may be a host name or a URL (which also gives
 // the scheme, port and path prefix: http://localhost:3000); GITLAB_HOST
-// and GITEA_HOST may list several, separated by commas.
+// and GITEA_HOST may list several, separated by commas. In a Forgejo or
+// Gitea Actions job, the job's server counts as named in GITEA_HOST.
 func EnvHosts() Hosts {
 	h := Hosts{}
 	if e := gh.EnterpriseHost(); e != "" {
@@ -231,12 +235,37 @@ func EnvHosts() Hosts {
 	for _, x := range envHostValues("GITLAB_HOST") {
 		h.add(x, GitLab)
 	}
-	for _, v := range []string{"GITEA_HOST", "FORGEJO_HOST"} {
-		for _, x := range envHostValues(v) {
-			h.add(x, Gitea)
-		}
+	for _, x := range giteaHostValues() {
+		h.add(x, Gitea)
 	}
 	return h
+}
+
+// actionsServer is the root URL of the forge a Forgejo or Gitea Actions
+// job runs on, "" outside one. Their runners set GITEA_ACTIONS (Forgejo's
+// also FORGEJO_ACTIONS) and the server in GITHUB_SERVER_URL (Forgejo's
+// also FORGEJO_SERVER_URL); GitHub Actions sets neither flag.
+func actionsServer() (server string, forgejo bool) {
+	forgejo = os.Getenv("FORGEJO_ACTIONS") == "true"
+	if !forgejo && os.Getenv("GITEA_ACTIONS") != "true" {
+		return "", false
+	}
+	for _, v := range []string{"FORGEJO_SERVER_URL", "GITEA_SERVER_URL", "GITHUB_SERVER_URL"} {
+		if s := strings.TrimSpace(os.Getenv(v)); s != "" {
+			return s, forgejo
+		}
+	}
+	return "", false
+}
+
+// giteaHostValues are the Gitea and Forgejo hosts: GITEA_HOST,
+// FORGEJO_HOST and the server of a Forgejo or Gitea Actions job.
+func giteaHostValues() []string {
+	out := append(envHostValues("GITEA_HOST"), envHostValues("FORGEJO_HOST")...)
+	if s, _ := actionsServer(); s != "" {
+		out = append(out, s)
+	}
+	return out
 }
 
 // envHostValues are the entries of a host variable, as written.
