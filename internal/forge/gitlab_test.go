@@ -55,7 +55,12 @@ func (f *fakeGitLab) handler(t *testing.T) http.Handler {
 			if q.Get("sort") != "asc" {
 				t.Errorf("notes not oldest first: %s", r.URL.RawQuery)
 			}
-			write(`[{"id":1,"body":"changed the label","system":true,"author":{"username":"ann"}},{"id":2,"body":"me too","author":{"username":"bob"}}]`)
+			write(`[{"id":1,"body":"changed the label","system":true,"author":{"username":"ann"}},{"id":2,"body":"me too","author":{"id":3,"username":"bob"}}]`)
+		case r.Method == "PUT" && p == "/issues/4/notes/2":
+			var in struct{ Body string }
+			json.NewDecoder(r.Body).Decode(&in)
+			f.notes = append(f.notes, "edit issues/4/notes/2: "+in.Body)
+			write(`{}`)
 		case r.Method == "GET" && p == "/issues":
 			if q.Get("state") != "opened" || q.Get("labels") != "sy" || q.Get("sort") != "asc" {
 				t.Errorf("issue query %s", r.URL.RawQuery)
@@ -163,6 +168,25 @@ func gitlabServer(t *testing.T) (*fakeGitLab, string) {
 	srv := httptest.NewServer(f.handler(t))
 	t.Cleanup(srv.Close)
 	return f, srv.URL + "/api/v4"
+}
+
+// The team queue's comment calls: trust per comment author, and edits.
+func TestGitLabCommentTrustAndEdit(t *testing.T) {
+	f, api := gitlabServer(t)
+	c := New(GitLab, api, "good", nil)
+	cs, err := c.Comments(glRepo, 4)
+	if err != nil || len(cs) != 1 || cs[0].ID != 2 {
+		t.Fatalf("%+v %v", cs, err)
+	}
+	if ok, err := c.CommentTrusted(glRepo, cs[0]); err != nil || !ok {
+		t.Fatalf("a developer's comment: %v %v", ok, err)
+	}
+	if ok, err := c.CommentTrusted(glRepo, Comment{ID: 9, Author: "guest", who: commentAuthor{id: 4}}); err != nil || ok {
+		t.Fatalf("a guest's comment: %v %v", ok, err)
+	}
+	if err := c.EditComment(glRepo, 4, 2, "new text"); err != nil || f.notes[len(f.notes)-1] != "edit issues/4/notes/2: new text" {
+		t.Fatalf("%v %v", err, f.notes)
+	}
 }
 
 func TestGitLabIssuesAndMergeRequests(t *testing.T) {

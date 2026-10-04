@@ -149,6 +149,8 @@ Usage:
                              (needs --pr and a clean working tree; each task's changes go to its PR branch and
                              are undone here so the next issue starts from HEAD; the batch stops if that fails,
                              or if a PR would hold files no agent reported or commits not on origin)
+  sy run --issues label:<name> --pr --team [--every 10m]   team mode: several machines pull the same label;
+                             each issue is claimed with a comment first, so it runs on one machine only
   sy pr [task] [--base main] [--branch name] [--draft] [--title t] [--no-push] [--yes]
                              branch + commit + pull request from a finished task (index/worktree untouched)
                              on GitHub, GitLab (merge request) or Gitea/Forgejo; self-hosted: GH_HOST,

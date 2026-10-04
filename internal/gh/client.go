@@ -234,8 +234,11 @@ func (i Issue) LabelNames() []string {
 
 // Comment is an issue comment.
 type Comment struct {
-	Body string `json:"body"`
-	User User   `json:"user"`
+	ID          int64     `json:"id"`
+	Body        string    `json:"body"`
+	User        User      `json:"user"`
+	Association string    `json:"author_association"` // see Trusted
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Pull is a pull request.
@@ -355,6 +358,11 @@ func (c *Client) CreatePull(r Repo, p NewPull) (*Pull, error) {
 // AddComment comments on an issue or pull request.
 func (c *Client) AddComment(r Repo, n int, body string) error {
 	return c.do(http.MethodPost, fmt.Sprintf("%s/issues/%d/comments", repoPath(r), n), map[string]string{"body": body}, nil)
+}
+
+// EditComment replaces the text of an issue or pull request comment.
+func (c *Client) EditComment(r Repo, id int64, body string) error {
+	return c.do(http.MethodPatch, fmt.Sprintf("%s/issues/comments/%d", repoPath(r), id), map[string]string{"body": body}, nil)
 }
 
 // DefaultBranch is the repository's default branch.

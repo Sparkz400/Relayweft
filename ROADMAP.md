@@ -61,6 +61,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - a VS Code extension
   - GitLab and Gitea/Forgejo for `sy pr`, issues, `sy watch` and `sy review`
   - issue tasks in GitHub Actions and GitLab CI, without the forge token in agents
+  - team mode: several machines share one issue label
 - **Release v0.1.0** (3 Oct 2026): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
   - The repository is public: release downloads, `sy update` and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
@@ -235,6 +236,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.24 | ✅ **Webhook notifications** (`notify.webhooks`): Slack, Discord, ntfy or plain JSON, so overnight runs and `sy watch` reach your phone. Events `done`, `failed`, `limit`, `waiting` and `watch` (round results, merged or closed PRs), filterable per webhook; a task-file batch ends with a summary. `${VAR}` keeps the secret URL out of the file; a repo file's webhooks need `sy trust`; text is escaped against mentions and hidden links; errors and `sy bugreport` never show the URL path. `sy notify --test` checks each webhook. Tested against local servers and real ntfy.sh; not yet against real Slack or Discord. |
 | 4.25 | ✅ **Bench results feed learned routes**: a bench mode `routed:<role>=<provider:model[:effort]>` runs the routed pipeline with one role on another route, so the learner gets an alternative to compare with (single-agent runs never counted). `learn: true` in a bench file, or `--learn`, updates the repo's learned routes when the bench ends, with the same clear-evidence rules as `sy tune --apply`. `sy bench --from-history` writes `learn: true` and a worker variant on the other provider, so one bench of your own history can change the routing with no manual tuning. `--no-learn` and `routing.learn: off` keep the routes as they are; a cancelled bench learns nothing. |
 | 4.26 | ✅ **CI as an agent target** (`action.yml`, `ci/`, [docs/ci.md](docs/ci.md)): a GitHub Action and a GitLab job run `sy run --issue N --pr` or `--issues label:sy --pr` in CI (on a label, nightly or by hand), so tasks run without your PC. The action installs the release named by its ref (checksum-verified) or builds from source. Agents, verify commands, hooks and bench checks start without the forge and CI tokens; git pushes through a credential helper, not `.git/config`. Reports go to the job summary and an artifact; `sy history --json` lists a run's tasks. Tested locally (install against the real v0.1.0 release, the step scripts with a stub `sy`, token scrubbing); not yet run on real GitHub or GitLab runners. No Gitea/Forgejo template yet. |
+| 4.27 | ✅ **Team mode: a shared issue queue**: `sy run --issues label:sy --pr --team [--every 10m]` on several machines pulls from the same label. Each issue is claimed with one comment right before it runs; the earliest live claim by a trusted author wins, the lease is renewed while the task runs (`--lease`), and the comment ends as done (PR link), failed or released. Failed issues wait for `--retry-failed`. Works on GitHub, GitLab and Gitea. Tested against fake forges, not yet with two real machines. |
 
 ---
 
@@ -270,3 +272,4 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 5. **Open Phase 4 items:**
    - 4.3: record a Gemini run with an API key (`GEMINI_API_KEY`; personal Google sign-in is refused; the commands are in docs/providers.md) and a DeepSeek run, to turn them from beta into tested.
    - 4.26: run the GitHub Action and the GitLab job once on real runners (a test repository and a labelled issue).
+   - 4.27: run `--team` on two machines against one label.

@@ -238,6 +238,8 @@ func cmdRun(args []string) error {
 	}
 	what := "the task"
 	switch {
+	case iss.team:
+		what = "the team queue"
 	case iss.batch():
 		what = "the issue batch"
 	case iss.active():
@@ -250,6 +252,19 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer release()
+	runOne := func(task string) orchestrator.TaskResult {
+		var res orchestrator.TaskResult
+		if single0.prov != "" {
+			res = h.orc.RunSingle(h.ctx, task, single0.prov, single0.route)
+		} else {
+			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: unattended})
+		}
+		h.report(res)
+		return res
+	}
+	if iss.team {
+		return runTeamCmd(h, iss, c.allowSleep, runOne)
+	}
 	if iss.active() {
 		if tasks, err = iss.fetch(); errors.Is(err, errNoIssues) {
 			return nil
@@ -265,13 +280,7 @@ func cmdRun(args []string) error {
 		if len(tasks) > 1 {
 			fmt.Printf("\n=== task %d/%d: %s\n", i+1, len(tasks), oneLine(task, 100))
 		}
-		var res orchestrator.TaskResult
-		if single0.prov != "" {
-			res = h.orc.RunSingle(h.ctx, task, single0.prov, single0.route)
-		} else {
-			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: unattended})
-		}
-		h.report(res)
+		res := runOne(task)
 		if !res.OK {
 			failed++
 		}

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/forge"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
@@ -37,6 +38,9 @@ import (
 //     without a pull request, the batch stops.
 //   - With --at/--in/--when-reset the issues are read, and the working tree
 //     checked, when the run starts, not when it is scheduled.
+//   - --team shares the label with other machines: each issue is claimed
+//     on the issue tracker right before it runs (teamqueue.go), and
+//     --every keeps pulling.
 
 // issueFlags are sy run's issue flags and what they resolved to.
 type issueFlags struct {
@@ -50,6 +54,10 @@ type issueFlags struct {
 	draft        bool
 	draftSet     bool
 	api          string
+	team         bool
+	every        time.Duration
+	lease        time.Duration
+	retryFailed  bool
 
 	dir       string
 	origin    forge.Repo // the origin remote's repository (zero if none)
@@ -58,6 +66,7 @@ type issueFlags struct {
 	label     string    // --issues label
 	items     []issueItem
 	pulls     int
+	lastPR    *prResult // the last task's pull request (nil if none)
 }
 
 type issueItem struct {
@@ -79,6 +88,10 @@ func registerIssueFlags(fs *flag.FlagSet) *issueFlags {
 	fs.StringVar(&f.base, "base", "", "with --pr: branch to merge into (default: the remote's default branch)")
 	fs.BoolVar(&f.draft, "draft", false, "with --pr: open pull requests as drafts")
 	fs.StringVar(&f.api, "api", "", apiFlagHelp)
+	fs.BoolVar(&f.team, "team", false, "with --issues: share the label with other machines; each issue is claimed on the issue tracker before it runs")
+	fs.DurationVar(&f.every, "every", 0, "with --team: pull from the label again at this interval (e.g. 10m) until Ctrl+C, keeping the PC awake")
+	fs.DurationVar(&f.lease, "lease", queueDefaultLease, "with --team: a claim lapses this long after its machine stopped renewing it")
+	fs.BoolVar(&f.retryFailed, "retry-failed", false, "with --team: also take issues whose last claim failed")
 	return f
 }
 
@@ -106,6 +119,9 @@ func (f *issueFlags) prepare(fs *flag.FlagSet, dir string) error {
 	})
 	if f.issue != "" && f.issues != "" {
 		return errors.New("give either --issue or --issues, not both")
+	}
+	if f.issue != "" && (f.team || f.every != 0 || f.retryFailed) {
+		return errors.New("--team, --every and --retry-failed go with --issues label:<name>")
 	}
 	if fs.NArg() > 0 {
 		return errors.New("give either --issue/--issues or a task, not both")
@@ -144,6 +160,15 @@ func (f *issueFlags) prepare(fs *flag.FlagSet, dir string) error {
 	}
 	if !f.pr {
 		return errors.New("--issues needs --pr: each task's changes go to its pull request so the next issue starts from HEAD (for one issue without a pull request use --issue N)")
+	}
+	if !f.team && (f.every != 0 || f.retryFailed) {
+		return errors.New("--every and --retry-failed go with --team")
+	}
+	if f.every < 0 || (f.every > 0 && f.every < time.Minute) {
+		return errors.New("--every must be at least 1m")
+	}
+	if f.lease < 3*time.Minute {
+		return errors.New("--lease must be at least 3m")
 	}
 	f.label = label
 	return f.originErr
@@ -242,8 +267,14 @@ func (f *issueFlags) fetchOne(c forge.Client, repo forge.Repo, n int) (issueItem
 	}
 	var comments []forge.Comment
 	if f.withComments {
-		if comments, err = c.Comments(repo, n); err != nil {
+		all, err := c.Comments(repo, n)
+		if err != nil {
 			return issueItem{}, fmt.Errorf("read comments of %s#%d: %w", repo, n, err)
+		}
+		for _, cm := range all {
+			if !isQueueComment(cm.Body) { // team queue claims are no part of the task
+				comments = append(comments, cm)
+			}
 		}
 	}
 	closes := fmt.Sprintf("#%d", n)
@@ -277,6 +308,7 @@ func issueTask(repo forge.Repo, is forge.Issue, comments []forge.Comment) string
 func (f *issueFlags) afterTask(i int, res orchestrator.TaskResult) (stop bool) {
 	it := f.items[i]
 	var pr *prResult
+	defer func() { f.lastPR = pr }()
 	if f.pr {
 		switch {
 		case !res.OK:
@@ -302,7 +334,7 @@ func (f *issueFlags) afterTask(i int, res orchestrator.TaskResult) (stop bool) {
 	}
 	if pr != nil && pr.URL != "" {
 		f.pulls++
-		if f.comment {
+		if f.comment && !f.team { // with --team the claim comment carries the link
 			if !it.client.HasToken() {
 				fmt.Printf("not commenting on #%d: %s\n", it.issue.Number, noTokenText(it.repo.Kind))
 			} else if err := it.client.CommentIssue(it.repo, it.issue.Number, fmt.Sprintf("Switchyard opened a %s for this issue: %s", it.repo.Kind.PullNoun(), pr.URL)); err != nil {

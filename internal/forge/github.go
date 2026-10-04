@@ -48,9 +48,14 @@ func (g *githubClient) Comments(r Repo, n int) ([]Comment, error) {
 	}
 	var out []Comment
 	for _, c := range cs {
-		out = append(out, Comment{Author: c.User.Login, Body: c.Body})
+		out = append(out, Comment{ID: c.ID, Author: c.User.Login, Body: c.Body, Created: c.CreatedAt,
+			who: commentAuthor{assoc: c.Association, typ: c.User.Type}})
 	}
 	return out, nil
+}
+
+func (g *githubClient) CommentTrusted(_ Repo, c Comment) (bool, error) {
+	return gh.Trusted(gh.User{Login: c.Author, Type: c.who.typ}, c.who.assoc), nil
 }
 
 func (g *githubClient) OpenIssues(r Repo, label string, max int) ([]Issue, error) {
@@ -88,6 +93,10 @@ func (g *githubClient) CreatePull(r Repo, p NewPull) (*Pull, error) {
 
 func (g *githubClient) CommentIssue(r Repo, n int, body string) error {
 	return g.c.AddComment(r.gh(), n, body)
+}
+
+func (g *githubClient) EditComment(r Repo, _ int, id int64, body string) error {
+	return g.c.EditComment(r.gh(), id, body)
 }
 
 func (g *githubClient) CommentPull(r Repo, n int, body string) error {

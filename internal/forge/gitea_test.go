@@ -44,7 +44,12 @@ func (f *fakeGitea) handler(t *testing.T) http.Handler {
 		case r.Method == "GET" && p == "/repos/o/r/issues/7":
 			write(`{"number":7,"title":"PR","state":"open","pull_request":{"merged":false}}`)
 		case r.Method == "GET" && p == "/repos/o/r/issues/4/comments":
-			write(`[{"body":"me too","user":{"login":"bob"}}]`)
+			write(`[{"id":31,"body":"me too","user":{"id":4,"login":"bob"}},{"id":32,"body":"ok","user":{"id":3,"login":"dev"}}]`)
+		case r.Method == "PATCH" && p == "/repos/o/r/issues/comments/31":
+			var in struct{ Body string }
+			json.NewDecoder(r.Body).Decode(&in)
+			f.comments = append(f.comments, "edit 31: "+in.Body)
+			write(`{}`)
 		case r.Method == "GET" && p == "/repos/o/r/issues":
 			if q.Get("type") != "issues" || q.Get("labels") != "sy" || q.Get("limit") != "50" {
 				t.Errorf("issue query %s", r.URL.RawQuery)
@@ -135,9 +140,21 @@ func TestGiteaIssuesAndPulls(t *testing.T) {
 	if is, err := c.Issue(gtTestRepo, 7); err != nil || !is.IsPull {
 		t.Fatalf("a pull request read as an issue: %+v %v", is, err)
 	}
-	if cs, err := c.Comments(gtTestRepo, 4); err != nil || len(cs) != 1 || cs[0].Author != "bob" {
+	cs, err := c.Comments(gtTestRepo, 4)
+	if err != nil || len(cs) != 2 || cs[0].Author != "bob" || cs[0].ID != 31 {
 		t.Fatalf("%+v %v", cs, err)
 	}
+	// The team queue's calls: trust per comment author, and edits.
+	if ok, err := c.CommentTrusted(gtTestRepo, cs[0]); err != nil || ok {
+		t.Fatalf("a stranger's comment: %v %v", ok, err)
+	}
+	if ok, err := c.CommentTrusted(gtTestRepo, cs[1]); err != nil || !ok {
+		t.Fatalf("a collaborator's comment: %v %v", ok, err)
+	}
+	if err := c.EditComment(gtTestRepo, 4, 31, "new text"); err != nil || f.comments[len(f.comments)-1] != "edit 31: new text" {
+		t.Fatalf("%v %v", err, f.comments)
+	}
+	f.comments = nil
 	open, err := c.OpenIssues(gtTestRepo, "sy", 2)
 	if err != nil || len(open) != 2 || open[0].Number != 3 || open[1].Number != 5 {
 		t.Fatalf("oldest first, at most 2: %+v %v", open, err)
