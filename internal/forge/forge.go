@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,20 @@ func (k Kind) Name() string {
 		return "Gitea"
 	}
 	return "GitHub"
+}
+
+// ForgeName is the name of r's forge for people: Forgejo for a Gitea-API
+// forge that is one (codeberg.org, or a host in FORGEJO_HOST), else the
+// kind's name.
+func (r Repo) ForgeName() string {
+	if r.Kind != Gitea {
+		return r.Kind.Name()
+	}
+	host := hostName(r.Host)
+	if host == "codeberg.org" || slices.Contains(envHostList("FORGEJO_HOST"), host) {
+		return "Forgejo"
+	}
+	return r.Kind.Name()
 }
 
 // PullNoun is what the forge calls a pull request.

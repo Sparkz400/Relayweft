@@ -250,13 +250,13 @@ func (f *issueFlags) fetchOne(c forge.Client, repo forge.Repo, n int) (issueItem
 	if !f.origin.IsZero() && !repo.Same(f.origin) {
 		closes = fmt.Sprintf("%s#%d", repo, n)
 	}
-	return issueItem{repo: repo, client: c, issue: *is, task: issueTask(repo.Kind, *is, comments), closes: closes}, nil
+	return issueItem{repo: repo, client: c, issue: *is, task: issueTask(repo, *is, comments), closes: closes}, nil
 }
 
-// issueTask is the task text for an issue on a forge of kind k.
-func issueTask(k forge.Kind, is forge.Issue, comments []forge.Comment) string {
+// issueTask is the task text for an issue of repo.
+func issueTask(repo forge.Repo, is forge.Issue, comments []forge.Comment) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Fix %s issue #%d: %s\n\n", k.Name(), is.Number, strings.TrimSpace(is.Title))
+	fmt.Fprintf(&b, "Fix %s issue #%d: %s\n\n", repo.ForgeName(), is.Number, strings.TrimSpace(is.Title))
 	if body := strings.TrimSpace(strings.ReplaceAll(is.Body, "\r\n", "\n")); body != "" {
 		b.WriteString(clipText(body, 20000) + "\n")
 	}
