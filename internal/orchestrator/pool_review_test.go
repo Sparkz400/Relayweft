@@ -641,7 +641,7 @@ func TestSaveBranchNeverOverwrites(t *testing.T) {
 func TestCleanPoolCountsOnlyRemovedSlots(t *testing.T) {
 	dir := gitRepo(t)
 	snap, _ := git{dir}.snapshot("s")
-	prewarmPool(dir, snap, 2)
+	prewarmPool(dir, snap, 2, nil)
 	stuck := filepath.Join(poolDir(dir), "1")
 	chattr(t, true, stuck)
 	n, err := CleanPool(dir)

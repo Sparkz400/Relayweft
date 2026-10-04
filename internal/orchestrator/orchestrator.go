@@ -708,14 +708,20 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	} else {
 		if t.wtOK {
 			// Create missing pool worktrees while the planner thinks.
-			warm := make(chan struct{})
+			warm, stop := make(chan struct{}), make(chan struct{})
 			t.warm = warm
 			root, snap, n := t.root, t.snapshot, oc.MaxThreads
 			go func() {
 				defer close(warm)
 				defer diag.Recover("pool prewarm", nil)
-				prewarmPool(root, snap, n)
+				prewarmPool(root, snap, n, stop)
 				t.poolSize = PoolSize(root) // read after <-warm only
+			}()
+			// A task that ends early (planning failed or was cancelled)
+			// must not leave git creating slots behind it.
+			defer func() {
+				close(stop)
+				<-warm
 			}()
 		}
 		p, ok := o.plan(ctx, t, "", nil)

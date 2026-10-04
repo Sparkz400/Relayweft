@@ -33,7 +33,9 @@ hash_of() {
 }
 x64="$(hash_of sy-windows-amd64.exe)"
 arm64="$(hash_of sy-windows-arm64.exe)"
-today="$(date -u +%Y-%m-%d)"
+# The release's own date, not today's: rendering can happen days later.
+today="$(gh release view "v$version" --repo sparkz400/switchyard --json publishedAt -q .publishedAt 2>/dev/null | cut -c1-10 || true)"
+[ -n "$today" ] || today="$(date -u +%Y-%m-%d)"
 
 # Scoop: the manifest's layout is fixed, so line-based edits are safe.
 scoop="$here/scoop/sy.json"

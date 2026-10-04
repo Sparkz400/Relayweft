@@ -460,6 +460,49 @@ func TestResumeWithMissingRepoStaysInterrupted(t *testing.T) {
 }
 
 // A planner that keeps naming unknown repos is asked again at most twice.
+// A task that ends during planning must not return while the pool prewarm
+// is still adding worktrees: git kept writing into the repo after Run
+// returned (and the test's temp dir cleanup failed on macOS CI).
+func TestEarlyEndWaitsForPrewarm(t *testing.T) {
+	isolateUserConfig(t)
+	dir := gitRepo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	set := both(func(s runner.Spec) runner.Result {
+		if strings.Contains(s.Prompt, runner.MarkerPlan) {
+			cancel()
+			return runner.Result{Err: context.Canceled}
+		}
+		return runner.Result{Final: "done"}
+	})
+	o, _ := newOrc(t, dir, set, func(c *config.Config) { c.Orchestrator.MaxThreads = 6 })
+	res := o.Run(ctx, longTask)
+	if !strings.Contains(res.Summary, "planning cancelled") {
+		t.Fatalf("summary = %q, want planning cancelled", res.Summary)
+	}
+	worktrees := func() []string {
+		es, _ := os.ReadDir(filepath.Join(dir, ".git", "worktrees"))
+		var names []string
+		for _, e := range es {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+	before := worktrees()
+	pool := poolDir(dir)
+	for i := 0; i < 6; i++ {
+		unlock, ok := lockSlot(filepath.Join(pool, fmt.Sprint(i)))
+		if !ok {
+			t.Fatalf("slot %d still locked after Run returned", i)
+		}
+		unlock()
+	}
+	time.Sleep(500 * time.Millisecond)
+	if after := worktrees(); len(after) != len(before) {
+		t.Errorf("worktrees changed after Run returned: %v -> %v", before, after)
+	}
+}
+
 func TestPlannerUnknownRepoRetriesCapped(t *testing.T) {
 	isolateUserConfig(t)
 	api, web := gitRepo(t), gitRepo(t)
