@@ -87,6 +87,7 @@ func lockSlot(path string) (unlock func(), ok bool) {
 	}
 	if !proc.ReapOrphans(pidFile(path)) {
 		diag.Logf("pool: %s skipped, an agent of an earlier sy is still running in it", path)
+		diag.Health("leftover", "what", "orphan-agent", "path", path)
 		unlock()
 		return nil, false
 	}
@@ -202,6 +203,7 @@ func removeSlot(common, path string) error {
 				return fmt.Errorf("cannot delete or move %s: %v", path, err)
 			}
 			diag.Logf("pool: could not delete %s (%v); moved it aside", path, err)
+			diag.Health("leftover", "what", "undeletable-slot", "path", path)
 		}
 	}
 	for _, r := range recs {
@@ -634,3 +636,74 @@ func humanBytes(n uint64) string {
 
 // HumanBytes formats a byte count (exported for sy doctor).
 func HumanBytes(n uint64) string { return humanBytes(n) }
+
+// Leftover is something a sy that ended badly left behind.
+type Leftover struct {
+	Kind   string `json:"kind"` // orphan-agent, trash, temp
+	Path   string `json:"path"`
+	Detail string `json:"detail"`
+	Bytes  uint64 `json:"bytes,omitempty"`
+}
+
+// tempPrefixes are the temporary files sy removes when it ends normally.
+var tempPrefixes = []string{"sy-merge-", "sy-index-", "sy-pr-index-", "sy-pr-body-"}
+
+// Leftovers lists what ended sy processes left behind: agents still
+// running in a pool slot no sy holds, slot directories that could not be
+// deleted, and temporary files older than a day. It changes nothing.
+func Leftovers() []Leftover {
+	var out []Leftover
+	repos, _ := os.ReadDir(worktreesBase())
+	for _, r := range repos {
+		pd := filepath.Join(worktreesBase(), r.Name(), "pool")
+		ents, _ := os.ReadDir(pd)
+		for _, e := range ents {
+			p := filepath.Join(pd, e.Name())
+			switch {
+			case e.IsDir() && isTrash(e.Name()):
+				out = append(out, Leftover{Kind: "trash", Path: p, Bytes: dirSize(p),
+					Detail: "pool worktree that could not be deleted (a program had a file open); `sy clean` retries"})
+			case !e.IsDir() && strings.HasSuffix(e.Name(), ".pid"):
+				slot := strings.TrimSuffix(p, ".pid")
+				if _, err := os.Stat(slot + ".lock"); err == nil {
+					unlock, free := proc.TryLock(slot + ".lock")
+					if !free {
+						continue // a running sy uses the slot
+					}
+					unlock()
+				}
+				if pids := proc.LiveOrphans(p); len(pids) > 0 {
+					out = append(out, Leftover{Kind: "orphan-agent", Path: slot,
+						Detail: fmt.Sprintf("agent process %v of an ended sy still runs in this pool worktree", pids)})
+				}
+			}
+		}
+	}
+	tmp := os.TempDir()
+	ents, _ := os.ReadDir(tmp)
+	var n int
+	var bytes uint64
+	for _, e := range ents {
+		name := e.Name()
+		match := false
+		for _, pre := range tempPrefixes {
+			match = match || strings.HasPrefix(name, pre)
+		}
+		if !match {
+			continue
+		}
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > 24*time.Hour {
+			n++
+			if info.IsDir() {
+				bytes += dirSize(filepath.Join(tmp, name))
+			} else {
+				bytes += uint64(info.Size())
+			}
+		}
+	}
+	if n > 0 {
+		out = append(out, Leftover{Kind: "temp", Path: tmp, Bytes: bytes,
+			Detail: fmt.Sprintf("%d temporary sy-* file(s) older than a day", n)})
+	}
+	return out
+}

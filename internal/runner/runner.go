@@ -253,6 +253,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			res.Killed = false
 			res.Err = fmt.Errorf("timed out after %s", s.Timeout)
+			diag.Health("agent-timeout", "agent", s.AgentID, "after", s.Timeout)
 		} else {
 			res.Err = errors.New("killed")
 		}

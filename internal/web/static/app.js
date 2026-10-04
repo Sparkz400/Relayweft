@@ -1437,6 +1437,7 @@ const DRAWERS = {
   queue: { title: 'Queue', render: drawQueue, narrow: true },
   history: { title: 'History', render: drawHistory },
   stats: { title: 'Stats & tuning', render: drawStats },
+  health: { title: 'Reliability', render: drawHealth },
   settings: { title: 'Settings', render: drawSettings, narrow: true },
 };
 function openDrawer(name, refresh) {
@@ -1662,6 +1663,82 @@ async function drawStats(body) {
   body.append(h('details', null, h('summary', null, 'Full report (sy stats)'), h('pre', { class: 'raw' }, v.text)),
     h('div', { class: 'muted small', style: 'margin-top:10px' }, 'logs: ', h('code', null, v.log_dir)));
   function kpi(val, label) { return h('div', { class: 'kpi' }, h('div', { class: 'v' }, String(val)), h('div', { class: 'l' }, label)); }
+}
+async function drawHealth(body) {
+  let v;
+  try { v = await api('GET', '/api/health'); } catch (e) { body.textContent = e.message; return; }
+  body.textContent = '';
+  const c = v.criterion;
+  const set = (t) => t && !t.startsWith('0001');
+  const at = (t) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const n = (xs) => (xs || []).length;
+  $('#health-badge').hidden = !(n(v.crashes) || n(v.hangs));
+  // Verdict.
+  const state = c.met ? 'met' : set(c.clean_since) ? 'open' : 'none';
+  const bar = (val, need, label) => h('div', { class: 'hbar' },
+    h('div', { class: 'hbar-l small' }, h('span', null, label), h('span', { class: 'mono muted' }, `${Math.floor(val)} / ${need}`)),
+    h('div', { class: 'hbar-t' }, h('span', { style: `width:${Math.min(100, val / need * 100)}%` })));
+  body.append(h('div', { class: 'hverdict ' + state },
+    h('div', { class: 'hv-head' }, h('b', null, state === 'met' ? 'Exit criterion met' : state === 'none' ? 'No records yet' : 'Not yet'),
+      h('span', { class: 'muted small' }, `${c.need_days} days of daily use without a crash or hang`)),
+    h('div', { class: 'small' }, c.summary.replace(/^(met|not yet): /, '')),
+    state === 'none' ? '' : [bar(c.clean_days, c.need_days, 'days clean'), bar(c.use_days, c.need_use_days, 'days used')]));
+  // Day strip, oldest first.
+  const used = new Set(v.use_days || []), bad = new Map();
+  for (const x of [...(v.crashes || []), ...(v.hangs || [])]) {
+    const d = localDay(new Date(x.time));
+    bad.set(d, (bad.get(d) || 0) + 1);
+  }
+  const strip = h('div', { class: 'hstrip' });
+  for (let i = v.days - 1; i >= 0; i--) {
+    const d = new Date(v.now); d.setDate(d.getDate() - i);
+    const key = localDay(d);
+    const cls = bad.has(key) ? 'bad' : used.has(key) ? 'used' : '';
+    strip.append(h('span', { class: cls, title: `${key}: ${bad.has(key) ? bad.get(key) + ' crash or hang' : used.has(key) ? 'used, clean' : 'not used'}` }));
+  }
+  body.append(h('h3', null, `Last ${v.days} days`), strip,
+    h('div', { class: 'legend' }, h('span', null, h('i', { style: 'background:var(--ok)' }), 'used'),
+      h('span', null, h('i', { style: 'background:var(--fail)' }), 'crash or hang'), h('span', null, h('i', { style: 'background:var(--panel-3)' }), 'not used')));
+  // Counts.
+  const kpi = (val, label, cls) => h('div', { class: 'kpi ' + (val ? cls : '') }, h('div', { class: 'v' }, String(val)), h('div', { class: 'l' }, label));
+  body.append(h('div', { class: 'kpis', style: 'margin-top:14px' },
+    kpi(n(v.crashes), 'crashes', 'bad'), kpi(n(v.hangs), 'hangs', 'bad'), kpi(n(v.unclean), 'unclean exits', 'warn'), kpi(n(v.agent_timeouts), 'agent timeouts', '')));
+  // Load.
+  const l = v.load, rows = [];
+  const gb = (mb) => mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb + ' MB';
+  if (l.cpu >= 0) rows.push(['CPU peak', `${l.cpu}%`, at(l.cpu_at), l.samples ? `${l.hot_samples} of ${l.samples} five-minute readings at 95% or more` : '']);
+  if (l.mem_free_mb >= 0) rows.push(['RAM low point', `${gb(l.mem_free_mb)} free`, at(l.mem_at),
+    (l.mem_total_mb ? `of ${gb(l.mem_total_mb)}` : '') + (l.low_mem_samples ? ` · ${l.low_mem_samples} reading${l.low_mem_samples === 1 ? '' : 's'} under 10% free` : '')]);
+  if (l.sy_mem_mb > 0) rows.push(['sy memory', gb(l.sy_mem_mb), at(l.sy_mem_at), `peak of one process · ${l.goroutines} goroutines at most`]);
+  if (n(v.pauses)) rows.push(['Pauses', String(n(v.pauses)), at(v.pauses[n(v.pauses) - 1].time), 'sleep or a frozen machine while sy ran']);
+  body.append(h('h3', null, 'Load'));
+  if (!rows.length) body.append(h('div', { class: 'empty-list' }, 'No load readings yet: they start with this version of sy.'));
+  else body.append(h('table', { class: 'tbl' }, rows.map(([k, val, when, note]) => h('tr', null,
+    h('td', null, k), h('td', { class: 'num' }, h('b', null, val)), h('td', { class: 'muted small' }, when), h('td', { class: 'muted small' }, note)))));
+  // Leftovers and running processes.
+  body.append(h('h3', null, 'Left behind'));
+  if (!v.leftovers_checked) body.append(h('div', { class: 'muted small' }, 'Not checked.'));
+  else if (!n(v.leftovers)) body.append(h('div', { class: 'muted small' }, 'Nothing: no orphan agents, undeletable worktrees or old temp files.'));
+  else body.append(h('div', { class: 'list' }, v.leftovers.map((x) => h('div', { class: 'sug medium' },
+    h('div', { class: 't' }, x.detail + (x.bytes ? ` · ${human(x.bytes)}B` : '')), h('div', { class: 'd mono small' }, x.path)))));
+  if (n(v.running)) body.append(h('div', { class: 'muted small', style: 'margin-top:8px' },
+    'Running now: ' + v.running.map((s) => `sy ${s.cmd || '(TUI)'} (pid ${s.pid}, since ${at(s.start)})`).join(', ')));
+  // Incidents, newest first.
+  const all = [...(v.crashes || []), ...(v.hangs || []), ...(v.unclean || []), ...(v.agent_timeouts || []), ...(v.leftover_events || [])]
+    .sort((a, b) => new Date(b.time) - new Date(a.time));
+  body.append(h('h3', null, 'Incidents'));
+  if (!all.length) body.append(h('div', { class: 'empty-list' }, `Nothing went wrong in the last ${v.days} days.`));
+  else {
+    const sev = { crash: 'high', fatal: 'high', hang: 'high', unclean: 'medium', leftover: 'medium' };
+    body.append(h('div', { class: 'list' }, all.slice(0, 50).map((x) => h('div', { class: 'sug ' + (sev[x.kind] || 'info') },
+      h('div', { class: 't' }, h('span', { class: 'mono muted small' }, at(x.time) + '  '), x.kind,
+        x.pid ? h('span', { class: 'muted small' }, `  sy ${x.cmd || '(TUI)'} · pid ${x.pid}`) : ''),
+      x.detail ? h('div', { class: 'd' }, x.detail) : '', x.log ? h('div', { class: 'd mono small muted' }, x.log) : ''))));
+  }
+  const since = [v.debug_since, v.health_since].filter(set).sort()[0];
+  body.append(h('div', { class: 'muted small', style: 'margin-top:10px' }, since ? `records since ${at(since)} · ` : '',
+    'logs: ', h('code', null, v.dir), ' · the same report on the terminal: ', h('code', null, 'sy health')));
+  function localDay(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 }
 function applyable(c) { return /^\/(route|prefer) \S+ \S+$/.test(c) || /^\/(judge|tiers|review|parallel) (on|off)$/.test(c); }
 async function applyCmd(c) {

@@ -20,6 +20,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - load limits
   - disk guard
   - debug and crash logs with `sy bugreport`
+  - `sy health`: health log, hang watchdog and the clean streak toward the exit criterion
   - `sy undo`
 - **Phase 2 (done, needs real-world use):**
   - plan approval
@@ -123,9 +124,10 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 1.7 | ✅ **Long-run stress test** (done: `internal/orchestrator/stress_test.go`, `.github/workflows/stress.yml`, demo and real-git modes with cancels). CI runs the orchestrator in a loop for 30 minutes and checks that memory, goroutines, open handles and leftover processes stay flat. | Catches leaks before you find them as freezes. |
 | 1.8 | ✅ **Parser fuzzing** (done: 15 fuzz targets, nightly in `.github/workflows/fuzz.yml`; fixed a Codex error line counted as success, plan dependencies on reserved ids, reset-time overflow, `@` parsing and a change-list panic). Go fuzz tests for the Codex and Claude output parsers and for plan and verdict parsing. | Odd model output must never crash `sy` or leave it stuck. |
 | 1.9 | ✅ **Review the worktree pool** (done: 17 findings fixed, including a crash leaving a slot that disabled worktrees, agent commits being lost, non-atomic apply, the Windows command-line limit, submodules, symlinks, git hooks in slots and orphan agents). It got the same adversarial pass that found the earlier bugs. | It is the newest and most complex code and has had only one review pass. |
+| 1.10 | ✅ **Health log and `sy health`** (done): every `sy` writes start, end, load peaks, hangs, panics, agent timeouts and leftovers to a small `sy-health.log`; a watchdog dumps all stacks to `hang-*.log` when the TUI stops responding for a minute, and fatal runtime errors go to `fatal-*.log`. `sy health` (and **Health** in `sy web`) reads them and says whether the exit criterion below is met. | The exit criterion needs a record, not a memory. |
 
 **Exit criteria:**
-- 2 weeks of daily use with no crash, no hang and no lost work.
+- 2 weeks of daily use with no crash, no hang and no lost work. `sy health` (or **Health** in `sy web`) shows the clean streak and the days of use; lost work is not in the logs and still needs your word.
 - Every failure can be traced from `sy bugreport` alone.
 - No machine freezes during heavy runs on the same hardware.
 
@@ -249,7 +251,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 ## Suggested order for the next steps
 
-1. **Use it for real on Windows and send a `sy bugreport` after any problem.** Items 1.6 (the Windows test pass) and the exit criterion (2 weeks of daily use) need you at the keyboard. Start with `sy selftest` (add `--onedrive` if you use OneDrive); it prints the two checks left to do by hand. Then try each new feature once:
+1. **Use it for real on Windows and send a `sy bugreport` after any problem.** Items 1.6 (the Windows test pass) and the exit criterion (2 weeks of daily use) need you at the keyboard. Start with `sy selftest` (add `--onedrive` if you use OneDrive); it prints the two checks left to do by hand. `sy health` shows how far the 2-week streak has got. Then try each new feature once:
    - approve and edit a plan;
    - `/review-changes on` for one task;
    - `@ follow-up` after a task;

@@ -123,7 +123,7 @@ func TestBugreportZip(t *testing.T) {
 	for _, f := range zr.File {
 		names[f.Name] = true
 	}
-	for _, want := range []string{"environment.txt", "doctor.txt", "config.yaml", "logs/sy-debug.log"} {
+	for _, want := range []string{"environment.txt", "doctor.txt", "config.yaml", "logs/sy-debug.log", "logs/sy-health.log"} {
 		if !names[want] {
 			t.Errorf("zip misses %s (has %v)", want, names)
 		}

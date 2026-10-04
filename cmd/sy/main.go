@@ -71,6 +71,8 @@ func main() {
 		err = cmdClean(args)
 	case "bugreport":
 		err = cmdBugreport(args)
+	case "health":
+		err = cmdHealth(args)
 	case "undo":
 		err = cmdUndo(args)
 	case "pr":
@@ -112,6 +114,7 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+	diag.End(err)
 	if err != nil {
 		diag.Logf("exit with error: %v", err)
 		diag.Close()
@@ -182,6 +185,8 @@ Usage:
   sy bugreport               zip logs, config and diagnostics into one file to send
   sy selftest [--onedrive] [--keep]   automated Windows checks: paths with spaces, OneDrive, Defender,
                              a task killed mid-run, then resume and undo (scripted agent, no quota used)
+  sy health [--days 14] [--json] [--check]   crashes, hangs, unclean exits, load peaks and leftovers
+                             from the logs, and whether "2 weeks of daily use without a crash or hang" is met
   sy update [--check] [--yes]      update sy to the latest release
   sy version
 
@@ -444,6 +449,7 @@ func cmdTUI(args []string) error {
 	})
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()
+	diag.Unwatch("tui")
 	// Keep draining events so the orchestrator can finish shutting down.
 	go func() {
 		for range events {
