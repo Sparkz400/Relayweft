@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/forge"
 	"github.com/sparkz400/switchyard/internal/limits"
@@ -30,8 +31,9 @@ import (
 //     through GH_HOST, GITLAB_HOST, GITEA_HOST or --api, as for sy pr. A
 //     public repository needs no token to read.
 //   - The reviewer is the provider that did not write the change when sy
-//     opened the pull request (sy watch's list, else the task's state);
-//     otherwise the reviewer role is routed as configured. --provider
+//     opened the pull request (sy watch's list, else the task's state),
+//     or the one that did when the other is disabled; otherwise the
+//     reviewer role is routed as configured. --provider
 //     overrides both. The agent runs read-only (reviewer role) in the
 //     project folder, and the diff, title and description reach it fenced
 //     as untrusted data. Its cost counts into the day budget like a task's.
@@ -167,7 +169,7 @@ func runReview(ctx context.Context, c *common, ref string, o reviewOptions) erro
 	}
 	client := forgeClient(repo, api, out)
 	if o.post && !client.HasToken() {
-		return fmt.Errorf("--post needs a %s token (%s)", repo.Kind.Name(), repo.Kind.TokenHint())
+		return fmt.Errorf("--post needs a %s token (%s)", repo.ForgeName(), repo.Kind.TokenHint())
 	}
 	p, err := client.Pull(repo, n)
 	if err != nil {
@@ -199,11 +201,16 @@ func runReview(ctx context.Context, c *common, ref string, o reviewOptions) erro
 	if err != nil {
 		return err
 	}
-	if p := reviewerFor(store.Get(), writer); p != "" {
+	cfg := store.Get()
+	if p := reviewerFor(cfg, writer); p != "" {
 		c.provider = p
 		why = fmt.Sprintf("sy opened it and %s wrote the change", writer)
+	} else if canReview(cfg, writer) {
+		// No other provider is enabled: the writer reviews its own change
+		// rather than the routing naming a disabled one.
+		c.provider = writer
+		why = fmt.Sprintf("sy opened it and %s wrote the change; no other provider is enabled, so %s reviews it", writer, writer)
 	}
-	cfg := store.Get()
 	log, err := sessionlog.Open(cfg.SessionDir(), dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "warning: session log disabled:", err)
@@ -261,6 +268,12 @@ func runReview(ctx context.Context, c *common, ref string, o reviewOptions) erro
 	}
 	fmt.Fprintf(out, "posted a review with %d inline comment(s): %s\n", len(inline), posted)
 	return nil
+}
+
+// canReview reports whether p is an enabled provider with a reviewer model.
+func canReview(cfg *config.Config, p string) bool {
+	pc, ok := cfg.Providers[p]
+	return ok && !pc.Disabled && cfg.Roles[event.RoleReviewer].For(p).Model != ""
 }
 
 // reviewPrompt asks for JSON findings. Everything from the pull request is

@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -204,6 +206,25 @@ func reviewCommon(t *testing.T, args ...string) *common {
 		t.Fatal(err)
 	}
 	return &c
+}
+
+// The other provider reviews only when it is enabled: with Codex disabled,
+// Claude reviews its own change and says so (it printed "reviewer: codex").
+func TestReviewSkipsDisabledProvider(t *testing.T) {
+	dir, url, _, rr, out := reviewSetup(t)
+	cd, _ := os.UserConfigDir()
+	os.MkdirAll(filepath.Join(cd, "switchyard"), 0o755)
+	write(t, filepath.Join(cd, "switchyard"), config.FileName, "providers: {codex: {disabled: true}}\n")
+	recordWatch(watchEntry{Root: dir, Host: "127.0.0.1", Owner: "o", Name: "r", Number: 12, Branch: "sy/shout", Author: event.Claude})
+	if err := runReview(context.Background(), reviewCommon(t, "--dir", dir), "12", reviewOptions{api: url}); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if len(rr.specs) != 1 || rr.specs[0].Provider != event.Claude {
+		t.Fatalf("specs %+v", rr.specs)
+	}
+	if !strings.Contains(out.String(), "reviewer: claude (") || !strings.Contains(out.String(), "no other provider is enabled") || strings.Contains(out.String(), "reviewer: codex") {
+		t.Fatalf("output:\n%s", out.String())
+	}
 }
 
 func TestReviewPostsOneCommentReview(t *testing.T) {
