@@ -122,8 +122,8 @@ func (g *githubClient) FailedChecks(r Repo, sha string, logTail int) ([]Check, e
 			Output: strings.TrimSpace(cr.Output.Title + "\n" + cr.Output.Summary + "\n" + cr.Output.Text)}
 		if cr.Actions() {
 			// The log is a bonus: a check without one is still reported.
-			if log, err := g.c.JobLogTail(r.gh(), cr.ID, logTail); err == nil {
-				c.Log = log
+			if log, err := g.c.JobLogTail(r.gh(), cr.ID, logTail+1); err == nil {
+				c.Log = lineTail(log, logTail)
 			}
 		}
 		out = append(out, c)

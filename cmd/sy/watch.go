@@ -962,14 +962,11 @@ func watchCommitMessage(e watchEntry, items []watchItem, res orchestrator.TaskRe
 // reANSI matches terminal color and cursor codes in CI logs.
 var reANSI = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
-// cleanLog drops terminal codes and control characters from a log tail
-// and starts it at a line boundary.
+// cleanLog drops terminal codes and control characters from a log tail.
+// The forge already started a cut tail at a whole line, so the first line
+// is kept: when the whole log fit, it is the log's first line.
 func cleanLog(s string) string {
-	s = normText(reANSI.ReplaceAllString(s, ""))
-	if i := strings.IndexByte(s, '\n'); i >= 0 && i < len(s)-1 {
-		s = s[i+1:] // the first line is cut in the middle
-	}
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(normText(reANSI.ReplaceAllString(s, "")))
 }
 
 // normText makes text from the forge plain: \n line ends, no control

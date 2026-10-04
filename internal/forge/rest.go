@@ -100,18 +100,33 @@ func (c *rest) text(path string, max int64) (string, error) {
 // maxLogRead caps how much of a job log is read to find its tail.
 const maxLogRead = 64 << 20
 
-// tailOf GETs path and keeps the last max bytes.
+// tailOf GETs path and keeps the last max bytes (lineTail).
 func (c *rest) tailOf(path string, max int) (string, error) {
 	resp, err := c.send(http.MethodGet, path, "text/plain", nil)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	t := &tail{max: max}
+	t := &tail{max: max + 1} // one more: was the first line cut?
 	if _, err := io.Copy(t, io.LimitReader(resp.Body, maxLogRead)); err != nil {
 		return "", fmt.Errorf("%s GET %s: %w", c.name(), path, err)
 	}
-	return string(t.buf), nil
+	return lineTail(string(t.buf), max), nil
+}
+
+// lineTail keeps the last n bytes of s. When that cuts s, it starts at the
+// first whole line after the cut; a log that fits keeps its first line.
+func lineTail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	// From the byte before the kept part: a newline there means the kept
+	// part starts a line.
+	cut := s[len(s)-n-1:]
+	if i := strings.IndexByte(cut, '\n'); i >= 0 && i < len(cut)-1 {
+		return cut[i+1:]
+	}
+	return s[len(s)-n:] // one line longer than n: keep its end
 }
 
 // tail keeps the last max bytes written to it.
