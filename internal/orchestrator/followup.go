@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,10 +32,13 @@ type AgentSession struct {
 	Role      string
 	SessionID string // the CLI's own session/thread id
 	Dir       string // where it ran
-	Final     string // its last answer
-	Title     string // the step it worked on
-	Task      string // the task it was part of
-	Ended     time.Time
+	// Slot is the pool worktree Dir is in ("" = the main tree): a
+	// follow-up resumes a Claude session there (followUpSlot).
+	Slot  string `json:",omitempty"`
+	Final string // its last answer
+	Title string // the step it worked on
+	Task  string // the task it was part of
+	Ended time.Time
 }
 
 // maxSessions bounds the remembered agents (oldest are forgotten).
@@ -238,10 +242,22 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 		spec := runner.Spec{AgentID: s.AgentID, StepID: "followup", Attempt: 1, Role: s.Role, Provider: s.Provider,
 			Model: s.Model, Effort: s.Effort, Prompt: text, Dir: o.opts.Dir, Timeout: cfg.Orchestrator.AgentTimeout.D(),
 			AllowedCommands: cfg.Verify.Commands}
-		// Claude Code (and Gemini CLI, Qwen Code) key their sessions by
-		// working directory: one that ran in a pool worktree cannot be
-		// resumed from the main tree.
-		resumable := s.SessionID != "" && (!cfg.SessionPerDir(s.Provider) || canonPath(s.Dir) == canonPath(o.opts.Dir))
+		resumable := s.SessionID != ""
+		// Claude Code (and Gemini CLI, Qwen Code) keep their sessions per
+		// working directory: an agent that ran in a pool worktree is
+		// resumed there, and its result lands like a step's.
+		var sl *slot
+		var loc stepLoc
+		if resumable && cfg.SessionPerDir(s.Provider) && !samePath(s.Dir, o.opts.Dir) {
+			var why string
+			if sl, loc, why = o.followUpSlot(t, s); sl == nil {
+				o.logf("%s's session cannot be resumed in %s (%s); starting a fresh agent with its context", s.AgentID, s.Dir, why)
+				resumable = false
+			} else {
+				defer sl.release()
+				spec.Dir = loc.dir
+			}
+		}
 		run := func(title string) runner.Result {
 			if !o.checkBudget(bctx, t, "start "+title) {
 				return runner.Result{Err: errBudget, Killed: true}
@@ -261,13 +277,21 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 			if resumable {
 				o.logf("could not resume %s's session (%s); starting a fresh agent with its context", s.AgentID, clip(errText(res.Err), 120))
 			}
+			// In a pool worktree the fresh agent works there too: what the
+			// failed resume changed is kept, and lands with its work.
 			spec.Resume = ""
 			spec.Prompt = followUpContext(s, text)
 			res = run(label + " (fresh)")
 		}
+		if sl != nil && res.OK() {
+			r := o.landSlot(ctx, t, t, Subtask{ID: "followup", Title: label}, nil, loc, stepResult{ok: true, final: res.Final, files: res.Files}, false)
+			if !r.ok {
+				res.Err = errors.New(r.err)
+			}
+		}
 		if res.SessionID != "" {
 			o.rememberSession(s.AgentID, AgentSession{Provider: s.Provider, Model: s.Model, Effort: s.Effort, Role: s.Role,
-				SessionID: res.SessionID, Dir: o.opts.Dir, Final: res.Final, Title: label, Task: s.Task + "\n\nFollow-up: " + text})
+				SessionID: res.SessionID, Dir: spec.Dir, Slot: loc.slot, Final: res.Final, Title: label, Task: s.Task + "\n\nFollow-up: " + text})
 		}
 		tk := res.Tokens
 		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: s.AgentID, Step: "followup", Attempt: 1,
@@ -301,6 +325,40 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 	o.emit(event.Event{Kind: event.Phase, Text: "done"})
 	o.emit(event.Event{Kind: event.TaskDone, OK: out.OK, Text: out.Summary, Tokens: tk, Cost: &cost})
 	return out
+}
+
+// followUpSlot prepares the pool worktree an agent ran in for a follow-up
+// that resumes its session there. Claude Code keeps its sessions per
+// folder, and resuming from the main tree would leave the agent's earlier
+// absolute paths pointing into the pool worktree. The slot is locked and
+// moved to the main tree's current state (t.snapshot, taken by the
+// follow-up), so the agent sees what the person sees; its work is then
+// merged into the main tree like a step's (landSlot). With a nil slot, why
+// says why it cannot be used: no git, the agent ran in no pool worktree of
+// this repo, or the slot is in use.
+func (o *Orchestrator) followUpSlot(t *task, s AgentSession) (sl *slot, loc stepLoc, why string) {
+	if !t.useGit || t.snapshot == "" {
+		return nil, loc, "no git snapshot of this folder"
+	}
+	if !SupportsMergeTree() {
+		return nil, loc, "git < 2.38"
+	}
+	path := s.Slot
+	if path == "" {
+		path = slotOf(t.root, s.Dir) // remembered before sessions named their slot
+	}
+	if path == "" || !within(s.Dir, path) {
+		return nil, loc, "it ran in no pool worktree of this repo"
+	}
+	sl, err := claimSlot(t.root, path, t.snapshot, false)
+	if err != nil {
+		return nil, loc, err.Error()
+	}
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		sl.release()
+		return nil, loc, err.Error()
+	}
+	return sl, stepLoc{dir: s.Dir, slot: path, base: t.snapshot}, ""
 }
 
 // Tell queues a message for a running agent. It is delivered when the

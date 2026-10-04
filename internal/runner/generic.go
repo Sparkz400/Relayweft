@@ -408,3 +408,11 @@ func clipStr(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// sessionID reports a session only for a CLI sy can resume.
+func (p *jsonRuleParser) sessionID() string {
+	if len(p.g.ResumeArgs) > 0 && sessionID.MatchString(p.session) {
+		return p.session
+	}
+	return ""
+}

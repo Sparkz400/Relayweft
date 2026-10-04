@@ -304,6 +304,40 @@ type task struct {
 	budget   *taskBudget // nil outside RunWith (budget.go)
 	// repoRetries counts planner reruns for an unknown repo name.
 	repoRetries int
+
+	// planSteps are the plan's subtask ids (set by execute before any step
+	// starts): their agents are recorded in the task state while they run.
+	planSteps map[string]bool
+	// interrupted are, in a resumed task, the subtasks whose agent was
+	// running when sy stopped (resumeStep); guarded by resumeMu.
+	interrupted map[string]StepRun
+	resumeMu    sync.Mutex
+}
+
+// stepLoc is where a subtask's agent works.
+type stepLoc struct {
+	dir  string // its working directory
+	slot string // the pool worktree dir is in ("" = the repo's own tree)
+	base string // the commit the slot was prepared at
+}
+
+// interruptedRun returns the run of a subtask that sy stopped in the middle
+// of, if any.
+func (t *task) interruptedRun(id string) (StepRun, bool) {
+	t.resumeMu.Lock()
+	defer t.resumeMu.Unlock()
+	r, ok := t.interrupted[id]
+	return r, ok
+}
+
+// takeInterrupted returns and forgets the interrupted run of a subtask: only
+// its first agent continues it.
+func (t *task) takeInterrupted(id string) (StepRun, bool) {
+	t.resumeMu.Lock()
+	defer t.resumeMu.Unlock()
+	r, ok := t.interrupted[id]
+	delete(t.interrupted, id)
+	return r, ok
 }
 
 // maxRepoRetries caps the planner reruns of one task for a plan that names
@@ -1034,7 +1068,12 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 	var mu sync.Mutex
 	done := map[string]bool{}
 	started := map[string]bool{}
+	t.planSteps = map[string]bool{}
+	for _, st := range p.Subtasks {
+		t.planSteps[st.ID] = true
+	}
 	if t.resumed && t.state != nil {
+		t.interrupted = map[string]StepRun{}
 		// Subtasks that already succeeded before the interruption: their
 		// changes are in the working tree, their results feed dependents.
 		for i, st := range p.Subtasks {
@@ -1042,9 +1081,17 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				results[st.ID] = stepResult{ok: true, final: r.Final}
 				done[st.ID], started[st.ID] = true, true
 				o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, OK: true, Text: "done before the interruption"})
-			} else if !st.Kind.ReadOnly() {
+				continue
+			}
+			// Its agent was running when sy stopped: the step continues
+			// that agent's session where it ran (resumeStep).
+			if run, ok := t.state.runningStep(st.ID); ok {
+				t.interrupted[st.ID] = run
+			}
+			if !st.Kind.ReadOnly() {
 				// It may have been running when sy stopped: its agent may
-				// have left half-done edits in the tree.
+				// have left half-done edits in the tree. (A fresh agent
+				// gets this note, a continued session resumePrompt.)
 				p.Subtasks[i].Prompt += "\n\nNOTE: an earlier attempt at this subtask was interrupted (sy stopped). Files it was editing may be partly changed: check the current state of the files before you edit, and finish or redo the work."
 			}
 		}
@@ -1148,10 +1195,13 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 					rp = t.repoOf(st)
 					dir = rp.dir
 				}
+				// A step interrupted in a pool worktree continues there,
+				// where its half-done edits are.
+				prev, _ := t.interruptedRun(st.ID)
 				switch {
 				case st.Kind.ReadOnly():
-					r = o.runStep(ctx, t, st, deps, dir, "")
-				case rp.useWT:
+					r = o.runStep(ctx, t, st, deps, stepLoc{dir: dir}, "")
+				case rp.useWT || prev.Slot != "":
 					r = o.runInWorktree(ctx, t, st, deps, "")
 				default:
 					writeSem := writeSem
@@ -1166,7 +1216,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 					if r.err == "" {
 						func() {
 							defer func() { <-writeSem }() // released even if the step panics
-							r = o.runStep(ctx, t, st, deps, dir, "")
+							r = o.runStep(ctx, t, st, deps, stepLoc{dir: dir}, "")
 							if r.ok {
 								o.afterMerge(ctx, t, st.ID, r.files) // it wrote straight into the tree
 							}
@@ -1177,7 +1227,9 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				results[st.ID] = r
 				done[st.ID] = true
 				mu.Unlock()
-				t.state.setResult(st.ID, r)
+				// A step cancelled while its agent worked stays on record
+				// as running: sy resume --force continues it.
+				t.state.setResult(st.ID, r, !r.ok && ctx.Err() != nil)
 			}()
 		}
 		select {
@@ -1198,13 +1250,10 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		rp = t.repoOf(st)
 		mainDir = rp.dir
 	}
-	g := git{rp.root}
 	rp.mergeMu.Lock()
 	base := rp.snapshot
 	rp.mergeMu.Unlock()
-	s, err := acquireSlot(rp.root, base)
-	if err != nil {
-		o.logf("worktree for %s failed (%v); running in the main tree", st.ID, err)
+	inMainTree := func() stepResult {
 		if o.reviewing(t) {
 			o.emit(event.Event{Kind: event.Error, AgentID: st.ID, Text: "change review is not possible for " + st.ID + " (no worktree): its changes go straight into your tree; sy undo reverts the task"})
 		}
@@ -1214,19 +1263,58 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		case <-ctx.Done():
 			return stepResult{err: "cancelled"}
 		}
-		return o.runStep(ctx, t, st, deps, mainDir, prompt)
+		return o.runStep(ctx, t, st, deps, stepLoc{dir: mainDir}, prompt)
+	}
+	var s *slot
+	if prev, ok := t.interruptedRun(st.ID); ok && prev.Slot != "" {
+		// sy stopped while this step's agent worked in a pool worktree:
+		// its half-done edits are there, as changes against prev.Base.
+		// Continue in that worktree, as it is.
+		cs, err := claimSlot(rp.root, prev.Slot, prev.Base, true)
+		if err == nil {
+			s, base = cs, prev.Base
+			o.logf("%s: continuing in %s, which holds the edits its agent made before sy stopped", st.ID, prev.Slot)
+		} else {
+			// Its session must not be continued elsewhere: it would
+			// think its edits are there.
+			t.takeInterrupted(st.ID)
+			o.logf("%s: the edits its agent made before sy stopped cannot be used (%v); the step starts over", st.ID, err)
+			if !rp.useWT {
+				return inMainTree()
+			}
+		}
+	}
+	if s == nil {
+		var err error
+		if s, err = acquireSlot(rp.root, base); err != nil {
+			o.logf("worktree for %s failed (%v); running in the main tree", st.ID, err)
+			return inMainTree()
+		}
 	}
 	defer s.release()
-	path := s.path
-	// Agents should work in the same relative directory they would use in the main tree.
-	dir := path
-	if rel, err := filepath.Rel(rp.root, mainDir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-		dir = filepath.Join(path, rel)
-	}
-	r := o.runStep(ctx, t, st, deps, dir, prompt)
+	loc := stepLoc{dir: slotWorkDir(s.path, rp.root, mainDir), slot: s.path, base: base}
+	r := o.runStep(ctx, t, st, deps, loc, prompt)
 	if !r.ok {
 		return r
 	}
+	return o.landSlot(ctx, t, rp, st, deps, loc, r, true)
+}
+
+// slotWorkDir is where an agent works in a pool worktree: the same relative
+// directory it would use in the main tree.
+func slotWorkDir(slot, root, mainDir string) string {
+	if rel, err := filepath.Rel(root, mainDir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		return filepath.Join(slot, rel)
+	}
+	return slot
+}
+
+// landSlot commits what an agent left in its pool worktree (loc) and merges
+// it into rp's tree: with the person's review of the changes first when
+// review is set and change review is on. The changes are against loc.base.
+func (o *Orchestrator) landSlot(ctx context.Context, t, rp *task, st Subtask, deps []string, loc stepLoc, r stepResult, review bool) stepResult {
+	g := git{rp.root}
+	path, base := loc.slot, loc.base
 	wg := git{path}
 	var commit, agentHead string
 	for round := 1; ; round++ {
@@ -1242,7 +1330,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			return r
 		}
 		commit = sc.Commit
-		if !o.reviewing(t) {
+		if !review || !o.reviewing(t) {
 			break
 		}
 		// The person reviews the agent's changes before they land.
@@ -1274,7 +1362,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			o.logf("%s: you asked for changes: %s", st.ID, clip(dec.Feedback, 200))
 			again := stepPrompt(t.text, st, deps, "", "", false) + "\nYou already changed files in this directory for this subtask. The user reviewed your changes and asks:\n" +
 				dec.Feedback + "\nUpdate your changes accordingly, then reply with a short summary.\n"
-			r = o.runStep(ctx, t, st, deps, dir, again)
+			r = o.runStep(ctx, t, st, deps, loc, again)
 			if !r.ok {
 				// Keep the last reviewed version; the slot is reset for the
 				// next agent.
@@ -1307,7 +1395,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	}
 	rp.mergeMu.Lock()
 	defer rp.mergeMu.Unlock()
-	tree, clean, info, err := g.mergeTree(rp.snapshot, commit)
+	tree, clean, info, err := g.mergeTreeBase(base, rp.snapshot, commit)
 	if err != nil || !clean {
 		reason := info
 		if err != nil {
@@ -1469,12 +1557,25 @@ func errorSignature(s string) string {
 
 // runStep runs one subtask with retries, limit fallback and the
 // "error repeats" escalation. prompt overrides the generated step prompt.
-func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []string, dir, prompt string) stepResult {
+func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []string, loc stepLoc, prompt string) stepResult {
 	oc := t.cfg.Orchestrator
+	dir := loc.dir
 	step := router.Step{ID: st.ID, Title: st.Title, Kind: st.Kind, Prompt: st.Prompt, Files: st.Files, MainProvider: t.mainProv, UserRole: st.Role}
 	var prevErr, advice, lastSig string
 	failures, limitRetries := 0, 0
-	for attempt := 1; ; attempt++ {
+	first := 1
+	if prev, ok := t.takeInterrupted(st.ID); ok {
+		// sy stopped while this step's agent worked: continue its session.
+		first = max(1, prev.Attempt)
+		if r, ran := o.resumeStep(ctx, t, step, st, loc, prev); ran {
+			if r.ok || r.killed || ctx.Err() != nil {
+				return r.stepResult
+			}
+			o.logf("%s: its %s session could not be continued (%s); starting a fresh agent", st.ID, prev.Provider, clip(r.err, 160))
+			first++
+		}
+	}
+	for attempt := first; ; attempt++ {
 		p := prompt
 		if p == "" {
 			rp := t.repoOf(st) // t itself unless a multi-repo plan says otherwise
@@ -1488,7 +1589,7 @@ func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []
 		} else if advice != "" || prevErr != "" {
 			p += "\n\nPREVIOUS ATTEMPT FAILED WITH:\n" + clip(prevErr, 2000) + "\n\nREVIEWER ADVICE:\n" + advice
 		}
-		d, res := o.runAgent(ctx, t, step, st.ID, AgentMain, dir, p, attempt)
+		d, res := o.runAgentAt(ctx, t, step, st.ID, AgentMain, loc, p, attempt, nil)
 		r := stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: res.Tokens}
 		if res.Err != nil {
 			r.err = res.Err.Error()
@@ -1524,8 +1625,57 @@ func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []
 	}
 }
 
+// resumedRun is the outcome of resumeStep.
+type resumedRun struct {
+	stepResult
+	killed bool
+}
+
+// resumeStep continues the CLI session of a step's agent that was running
+// when sy stopped, in the folder it ran in, with a prompt that tells it so.
+// ran is false when the session cannot be continued (no session id was
+// saved, the step works in another folder now, or the provider is gone,
+// disabled, changed or at its limit): the caller starts a fresh agent, as
+// it does when the continued run fails.
+func (o *Orchestrator) resumeStep(ctx context.Context, t *task, step router.Step, st Subtask, loc stepLoc, prev StepRun) (resumedRun, bool) {
+	why := ""
+	pc, configured := t.cfg.Providers[prev.Provider]
+	switch {
+	case prev.Session == "":
+		why = "its CLI had not reported a session yet"
+	case !samePath(prev.Dir, loc.dir) || !samePath(prev.Slot, loc.slot) || prev.Base != loc.base:
+		why = "the step works in another folder now"
+	case !configured || pc.Disabled || t.runners[prev.Provider] == nil:
+		why = prev.Provider + " is not configured or is disabled now"
+	case prev.Kind != "" && t.cfg.Kind(prev.Provider) != prev.Kind:
+		why = prev.Provider + " is another kind of CLI now"
+	case o.opts.Tracker.Limited(prev.Provider):
+		why = prev.Provider + " is at its usage limit"
+	}
+	if why != "" {
+		o.logf("%s: was interrupted when sy stopped; %s, so a fresh agent takes it over", st.ID, why)
+		return resumedRun{}, false
+	}
+	o.logf("%s: continuing its agent's %s session, interrupted when sy stopped", st.ID, prev.Provider)
+	rp := t.repoOf(st)
+	d, res := o.runAgentAt(ctx, t, step, st.ID, AgentMain, loc, resumePrompt(st, rp.cfg.Verify.Commands), max(1, prev.Attempt), &prev)
+	r := resumedRun{stepResult: stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: res.Tokens}, killed: res.Killed}
+	if res.Err != nil {
+		r.err = res.Err.Error()
+	}
+	return r, true
+}
+
 // runAgent routes a step, runs one agent and records everything.
 func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, agentID, parent, dir, prompt string, attempt int) (event.Decision, runner.Result) {
+	return o.runAgentAt(ctx, t, step, agentID, parent, stepLoc{dir: dir}, prompt, attempt, nil)
+}
+
+// runAgentAt is runAgent for an agent working at loc. With resume, it
+// continues that interrupted run's session on its provider and model
+// instead of routing the step.
+func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step, agentID, parent string, loc stepLoc, prompt string, attempt int, resume *StepRun) (event.Decision, runner.Result) {
+	dir := loc.dir
 	if err := o.waitUnpaused(ctx); err != nil {
 		return event.Decision{}, runner.Result{Err: err, Killed: true}
 	}
@@ -1547,8 +1697,14 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	if t.cfg.Routing.Tiers == config.TiersAuto {
 		step.BudgetUsed = o.budgetShare(t)
 	}
-	d := o.router.Route(step)
-	if o.router.NeedsJudge(d) && step.Kind != router.KindJudge {
+	var d event.Decision
+	if resume != nil {
+		d = event.Decision{StepID: step.ID, StepTitle: step.Title, Role: resume.Role, Provider: resume.Provider, Model: resume.Model, Effort: resume.Effort,
+			Rule: router.RuleForced, Reason: "continues the session interrupted when sy stopped", Confidence: 1}
+	} else {
+		d = o.router.Route(step)
+	}
+	if resume == nil && o.router.NeedsJudge(d) && step.Kind != router.KindJudge {
 		jstep := router.Step{ID: step.ID + "-judge", Title: "judge " + step.Title, Kind: router.KindJudge}
 		_, jres := o.runAgent(ctx, t, jstep, AgentJudge, AgentMain, dir, router.JudgePrompt(step), 1)
 		if role, ok := router.ParseJudge(jres.Final); ok {
@@ -1605,11 +1761,21 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task, step router.Step, 
 	if !spec.ReadOnly {
 		spec.AllowedCommands = t.repoAt(dir).cfg.Verify.Commands // that repo's checks
 	}
+	if resume != nil {
+		spec.Resume = resume.Session
+	}
+	if t.state != nil && agentID == step.ID && t.planSteps[step.ID] {
+		// A plan step: record where its agent works, and its session as
+		// soon as the CLI reports it, so a resume can continue it.
+		t.state.setRunning(step.ID, StepRun{Provider: d.Provider, Kind: t.cfg.Kind(d.Provider), Model: d.Model, Effort: d.Effort, Role: d.Role,
+			Session: spec.Resume, Dir: loc.dir, Slot: loc.slot, Base: loc.base, Attempt: attempt, Started: time.Now()})
+		spec.OnSession = func(id string) { t.state.noteSession(step.ID, id) }
+	}
 	res := rn.Run(actx, spec, o.emit)
 	res = o.deliverTold(actx, rn, spec, agentID, res)
 	if res.SessionID != "" {
 		o.rememberSession(agentID, AgentSession{Provider: d.Provider, Model: d.Model, Effort: d.Effort, Role: d.Role,
-			SessionID: res.SessionID, Dir: dir, Final: res.Final, Title: step.Title, Task: t.text})
+			SessionID: res.SessionID, Dir: dir, Slot: loc.slot, Final: res.Final, Title: step.Title, Task: t.text})
 	}
 	o.opts.Tracker.AddUsage(d.Provider, res.Tokens)
 	t.addTokens(d.Provider, res.Tokens)

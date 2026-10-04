@@ -24,12 +24,37 @@ import (
 //   - Resuming skips the planner and every subtask that already succeeded
 //     (their changes are already in the working tree) and runs the rest,
 //     then verify and the final review as usual.
+//   - A subtask's agent is recorded in Running as it starts, with its CLI
+//     session id as soon as the CLI reports it (not only at the end): a
+//     resume continues that session in the same folder (the main tree, or
+//     the pool worktree that still holds its half-done edits), so the agent
+//     finishes its step instead of starting over (resumeStep).
 
 // StepState is a finished subtask.
 type StepState struct {
 	OK    bool   `json:"ok"`
 	Final string `json:"final,omitempty"`
 	Err   string `json:"err,omitempty"`
+}
+
+// StepRun is a subtask's agent that was started and has not finished: if
+// sy stops, a resume continues it (resumeStep).
+type StepRun struct {
+	Provider string `json:"provider"`
+	// Kind is the provider's CLI protocol then; a resume needs the same.
+	Kind    string `json:"kind,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Role    string `json:"role,omitempty"`
+	Session string `json:"session,omitempty"` // the CLI's session id ("" until reported)
+	Dir     string `json:"dir"`               // the agent's working directory
+	// Slot is the pool worktree Dir is in ("" = the repo's own tree), and
+	// Base the commit it was prepared at: the slot's half-done edits are
+	// changes against Base.
+	Slot    string    `json:"slot,omitempty"`
+	Base    string    `json:"base,omitempty"`
+	Attempt int       `json:"attempt"`
+	Started time.Time `json:"started"`
 }
 
 // TaskState is the persisted progress of one task.
@@ -53,6 +78,55 @@ type TaskState struct {
 	// Authors counts the writing agents that finished ok, per provider
 	// (sy review asks the other one).
 	Authors map[string]int `json:"authors,omitempty"`
+	// Running are the subtasks whose agent started and did not finish, by
+	// subtask id.
+	Running map[string]StepRun `json:"running,omitempty"`
+}
+
+// setRunning records that a subtask's agent starts.
+func (s *TaskState) setRunning(id string, r StepRun) {
+	if s == nil {
+		return
+	}
+	stateMu.Lock()
+	if s.Running == nil {
+		s.Running = map[string]StepRun{}
+	}
+	s.Running[id] = r
+	stateMu.Unlock()
+	s.save()
+	if r.Slot != "" {
+		// Keep its half-done edits there if sy dies (slotHeld).
+		holdSlot(r.Slot, s.ID, id)
+	}
+}
+
+// noteSession records the session id a running subtask's CLI reported.
+func (s *TaskState) noteSession(id, session string) {
+	if s == nil || session == "" {
+		return
+	}
+	stateMu.Lock()
+	r, ok := s.Running[id]
+	if ok && r.Session != session {
+		r.Session = session
+		s.Running[id] = r
+	}
+	stateMu.Unlock()
+	if ok {
+		s.save()
+	}
+}
+
+// runningStep returns the recorded run of a subtask.
+func (s *TaskState) runningStep(id string) (StepRun, bool) {
+	if s == nil {
+		return StepRun{}, false
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	r, ok := s.Running[id]
+	return r, ok
 }
 
 // noteAuthor counts a writing agent of provider that finished ok.
@@ -118,7 +192,10 @@ func (s *TaskState) save() {
 	}
 }
 
-func (s *TaskState) setResult(id string, r stepResult) {
+// setResult records a finished subtask. interrupted keeps its running
+// agent on record: the step was cancelled while its agent worked (the task
+// was cancelled), and a later sy resume --force can continue it.
+func (s *TaskState) setResult(id string, r stepResult, interrupted bool) {
 	if s == nil {
 		return
 	}
@@ -127,7 +204,14 @@ func (s *TaskState) setResult(id string, r stepResult) {
 		s.Results = map[string]StepState{}
 	}
 	s.Results[id] = StepState{OK: r.ok, Final: clip(r.final, 4000), Err: clip(r.err, 1000)}
+	run, had := s.Running[id]
+	if !interrupted {
+		delete(s.Running, id)
+	}
 	stateMu.Unlock()
+	if had && run.Slot != "" && !interrupted {
+		unholdSlot(run.Slot, s.ID, id)
+	}
 	s.save()
 }
 

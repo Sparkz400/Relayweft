@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -108,6 +109,10 @@ func acquireSlot(root, commit string) (*slot, error) {
 		if !ok {
 			continue
 		}
+		if slotHeld(path) {
+			unlock()
+			continue // it holds an interrupted step's edits
+		}
 		if err := prepareSlot(root, path, commit); err != nil {
 			unlock()
 			diag.Logf("pool: slot %s unusable: %v", path, err)
@@ -178,12 +183,153 @@ func clearSlotState(gd string) {
 			os.RemoveAll(f)
 		}
 	}
-	// The slot lock is ours and leftover agents are gone: an old index.lock
-	// was left by a git that was killed.
+	clearStaleIndexLock(gd)
+}
+
+// clearStaleIndexLock removes an old index.lock from a slot's git dir. The
+// slot lock is ours and leftover agents are gone: it was left by a git
+// that was killed.
+func clearStaleIndexLock(gd string) {
 	lock := filepath.Join(gd, "index.lock")
 	if st, err := os.Stat(lock); err == nil && time.Since(st.ModTime()) > staleLockAge {
 		os.Remove(lock)
 	}
+}
+
+// slotOf returns the pool worktree of root's repo that dir is in, or "".
+func slotOf(root, dir string) string {
+	if root == "" || dir == "" {
+		return ""
+	}
+	pd := poolDir(root)
+	rel, err := filepath.Rel(canonPath(pd), canonPath(dir))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return ""
+	}
+	first := strings.Split(rel, string(filepath.Separator))[0]
+	if _, err := strconv.Atoi(first); err != nil {
+		return "" // not a slot (a .trash- directory, a lock file)
+	}
+	return filepath.Join(pd, first)
+}
+
+// claimSlot locks one particular pool worktree of root's repo, the one an
+// agent used before, instead of any free one: Claude Code keeps its
+// sessions per folder, so an agent's session can only be resumed in the
+// folder it ran in (a follow-up), and a step that was interrupted left its
+// half-done edits there (a resumed task). The lock of an sy that died is
+// free again (the OS released it), and agents it left running in the slot
+// are dealt with as in acquireSlot.
+//
+// With keep, the slot must still hold the work of an agent that started at
+// commit: it is used as it is (nothing is reset or cleaned), and an error
+// says why it cannot be (in use, gone, or reused since). Without keep, the
+// slot is moved to commit like acquireSlot does, and recreated at the same
+// path if needed.
+func claimSlot(root, path, commit string, keep bool) (*slot, error) {
+	if s := slotOf(root, path); s == "" || !samePath(s, path) {
+		return nil, fmt.Errorf("%s is not a pool worktree of this repo", path)
+	}
+	unlock, ok := lockSlot(path)
+	if !ok {
+		return nil, fmt.Errorf("%s is in use (another sy, or an agent still running there)", path)
+	}
+	if keep {
+		if err := slotHolds(root, path, commit); err != nil {
+			unlock()
+			return nil, err
+		}
+		if gd := slotGitDir(path); gd != "" {
+			clearStaleIndexLock(gd)
+		}
+	} else {
+		if slotHeld(path) {
+			unlock()
+			return nil, fmt.Errorf("%s holds the half-done edits of an interrupted task (sy resume)", path)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			unlock()
+			return nil, err
+		}
+		if err := prepareSlot(root, path, commit); err != nil {
+			unlock()
+			return nil, err
+		}
+	}
+	touch(path)
+	return &slot{path: path, unlock: unlock, untrack: proc.TrackDir(path, pidFile(path))}, nil
+}
+
+// A pool worktree in which a step's agent works is marked as held
+// (<slot>.hold names the task and step) until the step ends. If sy dies,
+// the mark keeps the step's half-done edits there for sy resume: other
+// tasks do not take or prune the worktree while that task is interrupted
+// and the step is recorded in it, for at most holdMaxAge. sy clean still
+// removes it.
+const holdMaxAge = 7 * 24 * time.Hour
+
+type slotHold struct {
+	Task string `json:"task"`
+	Step string `json:"step"`
+}
+
+func holdPath(slot string) string { return slot + ".hold" }
+
+// holdSlot marks slot as holding the work of task's step (the slot lock is
+// held).
+func holdSlot(slot, task, step string) {
+	if data, err := json.Marshal(slotHold{task, step}); err == nil {
+		os.WriteFile(holdPath(slot), data, 0o644)
+	}
+}
+
+// unholdSlot removes the mark if it is task's step's.
+func unholdSlot(slot, task, step string) {
+	var h slotHold
+	if data, err := os.ReadFile(holdPath(slot)); err == nil && json.Unmarshal(data, &h) == nil && h == (slotHold{task, step}) {
+		os.Remove(holdPath(slot))
+	}
+}
+
+// slotHeld reports whether slot holds an interrupted step's edits; a mark
+// that no longer applies is removed. The caller holds the slot lock.
+func slotHeld(slot string) bool {
+	data, err := os.ReadFile(holdPath(slot))
+	if err != nil {
+		return false
+	}
+	var h slotHold
+	if json.Unmarshal(data, &h) == nil && h.Task != "" {
+		if st, err := LoadTask(h.Task); err == nil && st.Status == "running" {
+			if r, ok := st.Running[h.Step]; ok && samePath(r.Slot, slot) && time.Since(r.Started) < holdMaxAge {
+				return true
+			}
+		}
+	}
+	os.Remove(holdPath(slot))
+	return false
+}
+
+// slotHolds reports (as an error) whether the slot at path is still the
+// one an agent started at commit: a worktree of root's repo whose HEAD is
+// commit or a descendant (the agent may have committed). A slot another
+// task took since was moved to another commit.
+func slotHolds(root, path, commit string) error {
+	if commit == "" {
+		return fmt.Errorf("no base commit saved for %s", path)
+	}
+	if !isWorktreeOf(root, path) {
+		return fmt.Errorf("%s is no longer a worktree of this repo", path)
+	}
+	wg := git{path}
+	head, err := wg.out("rev-parse", "-q", "--verify", "HEAD")
+	if err != nil {
+		return fmt.Errorf("%s has no HEAD: %v", path, err)
+	}
+	if head != commit && !wg.isAncestor(commit, head) {
+		return fmt.Errorf("%s was reused since (it is at another commit)", path)
+	}
+	return nil
 }
 
 // removeSlot deletes a pool worktree and the repository's record of it, and
@@ -407,6 +553,7 @@ func CleanPool(dir string) (int, error) {
 		// that is no longer at its path, so no two sy can end up holding
 		// different files for one slot.
 		os.Remove(pidFile(path))
+		os.Remove(holdPath(path))
 		os.Remove(path + ".lock")
 		unlock()
 	}
@@ -600,6 +747,10 @@ func PrunePools(maxIdle time.Duration) (removed int, freed uint64) {
 			unlock, ok := lockSlot(path)
 			if !ok {
 				continue // in use right now
+			}
+			if slotHeld(path) {
+				unlock()
+				continue
 			}
 			size := dirSize(path)
 			common := ""

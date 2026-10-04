@@ -49,6 +49,9 @@ const (
 	MarkerJudge       = "[SY:JUDGE]"
 	MarkerStep        = "[SY:STEP]"
 	MarkerFix         = "[SY:FIX]"
+	// MarkerResume starts the message that continues a step's session
+	// after sy stopped in the middle of it.
+	MarkerResume = "[SY:RESUME]"
 )
 
 func (f *Fake) sleep(ctx context.Context, min, max time.Duration) bool {
@@ -105,6 +108,12 @@ func (f *Fake) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	send(event.Started, "started "+s.Model)
 	// A session id makes demo agents take follow-ups (@agent message).
 	res := Result{SessionID: fmt.Sprintf("demo-%s-%d", s.AgentID, call)}
+	if s.Resume != "" {
+		res.SessionID = s.Resume
+	}
+	if s.OnSession != nil {
+		s.OnSession(res.SessionID)
+	}
 	finish := func() Result {
 		res.Duration = time.Since(start)
 		if ctx.Err() != nil {

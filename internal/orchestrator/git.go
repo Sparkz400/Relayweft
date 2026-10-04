@@ -570,6 +570,35 @@ func (g git) mergeTree(ours, theirs string) (tree string, clean bool, info strin
 	return lines[0], true, "", nil
 }
 
+// mergeTreeBase is mergeTree with base as the merge base. Work that started
+// from base is merged into ours even when ours is not built on base: a step
+// continued after a resume started from the integration commit of the run
+// that was interrupted, and the resumed run's snapshot of the tree is a new
+// commit. Git would pick an older merge base and see every change made
+// since base on both sides; with base, a change already in ours (merged
+// before sy stopped) is not applied twice.
+func (g git) mergeTreeBase(base, ours, theirs string) (tree string, clean bool, info string, err error) {
+	if base == "" || base == ours || g.isAncestor(base, ours) {
+		return g.mergeTree(ours, theirs)
+	}
+	// ours' tree on top of base: base becomes the merge base of the two.
+	ot, err := g.out("rev-parse", ours+"^{tree}")
+	if err != nil {
+		return "", false, "", err
+	}
+	o2, err := g.commitTree("commit-tree", ot, "-p", base, "-m", "switchyard: tree on top of the step's base")
+	if err != nil {
+		return "", false, "", err
+	}
+	return g.mergeTree(o2, theirs)
+}
+
+// isAncestor reports whether commit a is an ancestor of commit b.
+func (g git) isAncestor(a, b string) bool {
+	_, err := g.out("merge-base", "--is-ancestor", a, b)
+	return err == nil
+}
+
 func asExit(err error) (int, bool) {
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {

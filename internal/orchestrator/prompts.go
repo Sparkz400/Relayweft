@@ -348,3 +348,21 @@ ISSUES:
 Make the requested changes now, run the relevant tests if you can, then reply with a short summary.
 `
 }
+
+// resumePrompt continues a step's own CLI session after sy stopped in the
+// middle of it. The session holds the step's prompt and what the agent did
+// so far; the files may hold half-done edits.
+func resumePrompt(st Subtask, verify []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s Switchyard (sy) stopped while you were working on your subtask %q (%s), so your last turn was cut off. This conversation shows what you did so far.\n", runner.MarkerResume, st.ID, st.Title)
+	if st.Kind.ReadOnly() {
+		b.WriteString("Finish the subtask (it is read-only: DO NOT modify any files), then reply with your complete findings, not only what is new.\n")
+		return b.String()
+	}
+	b.WriteString("NOTE: files you were editing may be partly changed. Check the current state of the files before you edit, do not redo edits that are already in place, and finish the subtask.\n")
+	if len(verify) > 0 {
+		b.WriteString("Before you finish, run the repo's checks (" + strings.Join(verify, "; ") + ") and fix what your change broke.\n")
+	}
+	b.WriteString("Then reply with a short summary of everything you changed for this subtask.\n")
+	return b.String()
+}

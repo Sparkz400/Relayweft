@@ -85,6 +85,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 **Verified for real on 4 Oct 2026 (Windows 11):**
 - **Follow-ups:** `claude --resume` (Claude Code 2.1.288) and `codex exec resume` (codex-cli 0.160.0) through `sy web`, with the same session and the agent remembering; the pool-worktree fallback to a fresh agent. Recorded as fixtures, with a real Codex edit run.
+- **Mid-step resume:** a Claude Code agent killed after the first of three edits in a git worktree, then resumed there with sy's prompt: it checked the first file and wrote the other two. Recorded as fixtures.
 - **Claude verify through `allowedTools`:** a failing check fed the fix round. Found and fixed: Claude's PowerShell tool on Windows was refused (only `Bash(...)` was allowed), and refused tool calls were invisible.
 - **`sy update`** against the real v0.1.0 release: asset, checksum, swap while running, `.old` cleanup. Fixed: a second update while the first update's `.old` still runs.
 - **Windows toasts** (delivered, read back from the notification history) and **ntfy.sh** (every event, escaping, non-ASCII). Fixed: a non-ASCII click URL in a header.
@@ -165,13 +166,15 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - Feedback in the last round rejects instead of applying.
 - Follow-ups survive restarts and reach running agents.
 - A resumed step is told that it was interrupted.
+- A step that was running when `sy` died continues its agent's own session, in the folder it ran in, with its half-done edits. The session id is saved as soon as the CLI reports it. Without a usable session, a fresh agent takes over.
+- A follow-up to a Claude agent that ran in a pool worktree resumes it in that worktree.
 - Codex resumes get an explicit sandbox.
 - The repo has an MIT license.
 
 **Remaining gaps:**
 - **2.3 Tests:** Codex runs commands in its own sandbox, not from an allowlist, so `verify.commands` can only restrict Claude. Codex offers no allowlist, so this is a limit of the CLI.
-- **2.4 Follow-ups:** a Claude agent that ran in a pool worktree can't be resumed from the main tree, because Claude ties its sessions to the folder. It gets a fresh agent with context instead.
-- **2.5 Resume:** a step that was running when `sy` died starts again. It is told about any half-done edits.
+- **2.4 Follow-ups:** a Codex agent that ran in a pool worktree is still resumed from the main tree (Codex finds its sessions anywhere). Its history names the worktree's paths.
+- **2.5 Resume:** other tasks leave a worktree with half-done edits alone for 7 days while its task is interrupted. After that, after `sy clean`, or for a cancelled task, the step starts over from the tree.
 - **2.8 Distribution:**
   - Code signing needs a certificate.
   - The Scoop and winget manifests must be rendered after each release.

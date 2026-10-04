@@ -395,3 +395,5 @@ func findKey(v any, key string, depth int) any {
 	}
 	return nil
 }
+
+func (p *codexParser) sessionID() string { return p.thread }

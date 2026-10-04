@@ -690,7 +690,7 @@ func (o *Orchestrator) runFix(ctx context.Context, t *task, round int, v Verdict
 		if o.reviewing(t) && r.wtOK {
 			res = o.runInWorktree(ctx, t, fix, nil, prompt)
 		} else {
-			res = o.runStep(ctx, t, fix, nil, r.dir, prompt)
+			res = o.runStep(ctx, t, fix, nil, stepLoc{dir: r.dir}, prompt)
 		}
 		results[fix.ID] = res
 		if !res.ok {

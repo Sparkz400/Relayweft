@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
@@ -42,6 +43,10 @@ func runFakeCLI() int {
 		os.Stderr.Write(data)
 	} else if s != "" {
 		os.Stderr.WriteString(s + "\n")
+	}
+	if ms, _ := strconv.Atoi(os.Getenv("SY_FAKE_SLEEP")); ms > 0 {
+		// An agent still working after its first lines (until killed).
+		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 	code, _ := strconv.Atoi(os.Getenv("SY_FAKE_CODE"))
 	return code

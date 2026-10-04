@@ -281,3 +281,5 @@ func (p *geminiParser) Finish(r *Result) {
 		r.Err = errors.New(p.lastErr)
 	}
 }
+
+func (p *geminiParser) sessionID() string { return p.session }
