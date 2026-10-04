@@ -1,0 +1,394 @@
+name: Switchyard
+description: Run issues as Switchyard tasks in CI (Codex and Claude Code agents) and open a pull request for each.
+author: Sparkz400
+branding:
+  icon: git-pull-request
+  color: blue
+
+# Usage and the security model: docs/ci.md. Every input reaches the shell
+# through env, never through an expression inside a script.
+
+inputs:
+  issue:
+    description: Issue number or URL to run (sy run --issue). Give this or issues-label.
+    default: ""
+  issues-label:
+    description: Run the open issues with this label one after another, oldest first (sy run --issues label:<name> --pr). Issues an open pull request already closes are skipped.
+    default: ""
+  limit:
+    description: With issues-label, at most this many issues per run.
+    default: "5"
+  pr:
+    description: Open a pull request ("Closes #N") for each task that finished ok. Always on with issues-label.
+    default: "true"
+  draft:
+    description: Open the pull requests as drafts.
+    default: "false"
+  comment:
+    description: Comment the pull request link on the issue.
+    default: "true"
+  with-comments:
+    description: Include the issue's comments in the task.
+    default: "false"
+  base:
+    description: Branch the pull requests merge into (default the repository's default branch). Check out this branch before the action.
+    default: ""
+  provider:
+    description: codex or claude to put every role on one provider. Default the provider whose credentials are given, both when both are.
+    default: ""
+  budget-task-usd:
+    description: Stop a task once it cost this much (API-equivalent $). 0 means no limit.
+    default: "10"
+  args:
+    description: More sy run flags, separated by spaces (for example "--no-parallel --route worker=claude:sonnet").
+    default: ""
+  config:
+    description: A sy config file in the repository (default sy's built-in defaults; .switchyard.yaml is layered on top either way).
+    default: ""
+  trust-repo-config:
+    description: Trust the repository's .switchyard.yaml, so its verify commands and hooks run. It comes from the same branch as this workflow.
+    default: "true"
+  anthropic-api-key:
+    description: Claude Code with an Anthropic API key.
+    default: ""
+  claude-code-oauth-token:
+    description: Claude Code with a Claude subscription (create the token with `claude setup-token`).
+    default: ""
+  openai-api-key:
+    description: Codex with an OpenAI API key.
+    default: ""
+  codex-auth-json:
+    description: Codex with a ChatGPT plan, the contents of ~/.codex/auth.json (see docs/ci.md before you use it).
+    default: ""
+  github-token:
+    description: Token sy uses to read the issue, push the branch, open the pull request and comment. The agents never get it.
+    default: ${{ github.token }}
+  version:
+    description: sy version to install (v0.2.0, latest or source). Default the release named by the action's ref (Sparkz400/switchyard@v0.2.0), else a build from the action's source.
+    default: ""
+  claude-code-version:
+    description: npm version of @anthropic-ai/claude-code.
+    default: latest
+  codex-version:
+    description: npm version of @openai/codex.
+    default: latest
+  upload-artifacts:
+    description: Upload the task reports and logs as a workflow artifact. On a public repository anyone can download them.
+    default: "true"
+  artifact-retention-days:
+    description: Days to keep the artifact.
+    default: "14"
+
+outputs:
+  pull-requests:
+    description: The URLs of the pull requests opened, one per line.
+    value: ${{ steps.collect.outputs.pull-requests }}
+  task-ids:
+    description: The ids of the tasks this run created, one per line (sy report <id>, sy undo <id>).
+    value: ${{ steps.collect.outputs.task-ids }}
+  report-dir:
+    description: Folder with each task's report (.html and .md), the run log and the session log.
+    value: ${{ steps.collect.outputs.report-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: resolve sy version
+      id: ver
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_REPO: ${{ github.action_repository }}
+      run: |
+        version="$INPUT_VERSION"
+        if [ -z "$version" ]; then
+          if printf '%s' "$ACTION_REF" | grep -Eq '^v[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$'; then
+            version="$ACTION_REF"
+          else
+            version=source
+          fi
+        fi
+        case "$version" in
+          source|latest) ;;
+          v*) ;;
+          [0-9]*) version="v$version" ;;
+          *) echo "::error::version '$version': want vX.Y.Z, latest or source"; exit 1 ;;
+        esac
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "repo=${ACTION_REPO:-Sparkz400/switchyard}" >> "$GITHUB_OUTPUT"
+        echo "sy $version"
+
+    - name: set up Go (sy from source)
+      if: steps.ver.outputs.version == 'source'
+      uses: actions/setup-go@v7
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache-dependency-path: ${{ github.action_path }}/go.sum
+
+    - name: install sy
+      shell: bash
+      env:
+        VERSION: ${{ steps.ver.outputs.version }}
+        REPO: ${{ steps.ver.outputs.repo }}
+        ACTION_PATH: ${{ github.action_path }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/switchyard-bin"
+        mkdir -p "$bin"
+        exe=sy
+        if [ "$RUNNER_OS" = Windows ]; then exe=sy.exe; fi
+        if [ "$VERSION" = source ]; then
+          (cd "$ACTION_PATH" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${ACTION_REF:-source}" -o "$bin/$exe" ./cmd/sy)
+        else
+          case "$RUNNER_OS" in
+            Linux) os=linux ;; macOS) os=darwin ;; Windows) os=windows ;;
+            *) echo "::error::no sy build for $RUNNER_OS"; exit 1 ;;
+          esac
+          case "$RUNNER_ARCH" in
+            X64) arch=amd64 ;; ARM64) arch=arm64 ;;
+            *) echo "::error::no sy build for $RUNNER_ARCH"; exit 1 ;;
+          esac
+          asset="sy-$os-$arch"
+          if [ "$os" = windows ]; then asset="$asset.exe"; fi
+          if [ "$VERSION" = latest ]; then
+            base="https://github.com/$REPO/releases/latest/download"
+          else
+            base="https://github.com/$REPO/releases/download/$VERSION"
+          fi
+          curl -fsSL --retry 3 -o "$bin/$asset" "$base/$asset"
+          curl -fsSL --retry 3 -o "$bin/checksums.txt" "$base/checksums.txt"
+          want=$(awk -v a="$asset" '$2 == a || $2 == "*"a {print $1}' "$bin/checksums.txt")
+          if command -v sha256sum >/dev/null; then
+            got=$(sha256sum "$bin/$asset" | awk '{print $1}')
+          else
+            got=$(shasum -a 256 "$bin/$asset" | awk '{print $1}')
+          fi
+          if [ -z "$want" ] || [ "$want" != "$got" ]; then
+            echo "::error::checksum of $asset does not match checksums.txt"
+            exit 1
+          fi
+          mv "$bin/$asset" "$bin/$exe"
+          chmod +x "$bin/$exe"
+        fi
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/$exe" version || true
+
+    - name: which agents
+      id: agents
+      shell: bash
+      env:
+        PROVIDER: ${{ inputs.provider }}
+        HAS_ANTHROPIC: ${{ inputs.anthropic-api-key != '' }}
+        HAS_CLAUDE_OAUTH: ${{ inputs.claude-code-oauth-token != '' }}
+        HAS_OPENAI: ${{ inputs.openai-api-key != '' }}
+        HAS_CODEX_AUTH: ${{ inputs.codex-auth-json != '' }}
+      run: |
+        claude=false codex=false
+        if [ "$HAS_ANTHROPIC" = true ] || [ "$HAS_CLAUDE_OAUTH" = true ]; then claude=true; fi
+        if [ "$HAS_OPENAI" = true ] || [ "$HAS_CODEX_AUTH" = true ]; then codex=true; fi
+        provider="$PROVIDER"
+        case "$provider" in
+          "") if [ "$claude" = true ] && [ "$codex" = false ]; then provider=claude; fi
+              if [ "$codex" = true ] && [ "$claude" = false ]; then provider=codex; fi ;;
+          claude) [ "$claude" = true ] || { echo "::error::provider claude needs anthropic-api-key or claude-code-oauth-token"; exit 1; } ;;
+          codex) [ "$codex" = true ] || { echo "::error::provider codex needs openai-api-key or codex-auth-json"; exit 1; } ;;
+          *) echo "::error::provider '$provider': want codex or claude"; exit 1 ;;
+        esac
+        if [ "$claude" = false ] && [ "$codex" = false ]; then
+          echo "::error::no agent credentials: give anthropic-api-key or claude-code-oauth-token (Claude Code), and/or openai-api-key or codex-auth-json (Codex)"
+          exit 1
+        fi
+        echo "claude=$claude" >> "$GITHUB_OUTPUT"
+        echo "codex=$codex" >> "$GITHUB_OUTPUT"
+        echo "provider=$provider" >> "$GITHUB_OUTPUT"
+        echo "Claude Code: $claude, Codex: $codex, provider: ${provider:-both}"
+
+    - name: set up Node (agent CLIs)
+      uses: actions/setup-node@v7
+      with:
+        node-version: lts/*
+
+    - name: install agent CLIs
+      shell: bash
+      env:
+        CLAUDE: ${{ steps.agents.outputs.claude }}
+        CODEX: ${{ steps.agents.outputs.codex }}
+        CLAUDE_VERSION: ${{ inputs.claude-code-version }}
+        CODEX_VERSION: ${{ inputs.codex-version }}
+      run: |
+        set -euo pipefail
+        pkgs=()
+        if [ "$CLAUDE" = true ]; then pkgs+=("@anthropic-ai/claude-code@$CLAUDE_VERSION"); fi
+        if [ "$CODEX" = true ]; then pkgs+=("@openai/codex@$CODEX_VERSION"); fi
+        npm install -g --no-fund --no-audit "${pkgs[@]}"
+        if [ "$CLAUDE" = true ]; then claude --version; fi
+        if [ "$CODEX" = true ]; then codex --version; fi
+
+    - name: sign in to Codex
+      if: steps.agents.outputs.codex == 'true'
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        CODEX_AUTH_JSON: ${{ inputs.codex-auth-json }}
+      run: |
+        set -euo pipefail
+        # A home of its own, removed at the end: a self-hosted runner keeps
+        # nothing.
+        home="$RUNNER_TEMP/switchyard-codex-home"
+        mkdir -p "$home"
+        chmod 700 "$home" || true
+        echo "CODEX_HOME=$home" >> "$GITHUB_ENV"
+        export CODEX_HOME="$home"
+        if [ -n "$CODEX_AUTH_JSON" ]; then
+          umask 077
+          printf '%s' "$CODEX_AUTH_JSON" > "$home/auth.json"
+        else
+          printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key
+        fi
+
+    - name: set up git
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+          echo "::error::no git repository here: run actions/checkout before Switchyard"
+          exit 1
+        fi
+        if [ -z "$(git config user.name || true)" ]; then
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        fi
+        # sy pushes the branch with plain git. The credential helper reads
+        # GITHUB_TOKEN from the environment at push time; agents and the
+        # commands sy runs for them get an environment without it, so a git
+        # push of theirs finds no credentials. (With actions/checkout's
+        # default persist-credentials the checkout token is in .git/config
+        # too: set persist-credentials: false, see docs/ci.md.)
+        server="${GITHUB_SERVER_URL:-https://github.com}"
+        git config --local "credential.$server.helper" ""
+        git config --local --add "credential.$server.helper" '!f() { test "$1" = get && test -n "$GITHUB_TOKEN" || exit 0; echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
+        if [ "$server" != https://github.com ]; then
+          echo "GH_HOST=${server#https://}" >> "$GITHUB_ENV"
+        fi
+
+    - name: trust .switchyard.yaml
+      if: inputs.trust-repo-config == 'true' && hashFiles('.switchyard.yaml') != ''
+      shell: bash
+      run: sy trust --yes
+
+    - name: sy run
+      id: run
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        # GitHub Enterprise Server: sy reads this one for hosts other than
+        # github.com.
+        GH_ENTERPRISE_TOKEN: ${{ inputs.github-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        INPUT_ISSUE: ${{ inputs.issue }}
+        INPUT_LABEL: ${{ inputs.issues-label }}
+        INPUT_LIMIT: ${{ inputs.limit }}
+        INPUT_PR: ${{ inputs.pr }}
+        INPUT_DRAFT: ${{ inputs.draft }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_WITH_COMMENTS: ${{ inputs.with-comments }}
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_BUDGET: ${{ inputs.budget-task-usd }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        PROVIDER: ${{ steps.agents.outputs.provider }}
+      run: |
+        set -uo pipefail
+        out="$RUNNER_TEMP/switchyard"
+        mkdir -p "$out"
+        echo "dir=$out" >> "$GITHUB_OUTPUT"
+        # The tasks that exist already (a self-hosted runner keeps history):
+        # the report step picks the new ones.
+        sy history --json -n 1000 > "$out/.before.json" 2>/dev/null || echo '[]' > "$out/.before.json"
+
+        [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
+        [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || unset CLAUDE_CODE_OAUTH_TOKEN
+        args=(run)
+        if [ -n "$INPUT_ISSUE" ] && [ -n "$INPUT_LABEL" ]; then
+          echo "::error::give issue or issues-label, not both"; exit 1
+        elif [ -n "$INPUT_ISSUE" ]; then
+          args+=(--issue "$INPUT_ISSUE")
+          if [ "$INPUT_PR" = true ]; then args+=(--pr); fi
+        elif [ -n "$INPUT_LABEL" ]; then
+          args+=(--issues "label:$INPUT_LABEL" --limit "$INPUT_LIMIT" --pr)
+        else
+          echo "::error::nothing to run: give issue (the issue number or URL) or issues-label"; exit 1
+        fi
+        if [ "$INPUT_DRAFT" = true ]; then args+=(--draft); fi
+        if [ "$INPUT_COMMENT" != true ]; then args+=(--comment=false); fi
+        if [ "$INPUT_WITH_COMMENTS" = true ]; then args+=(--with-comments); fi
+        if [ -n "$INPUT_BASE" ]; then args+=(--base "$INPUT_BASE"); fi
+        if [ -n "$PROVIDER" ]; then args+=(--provider "$PROVIDER"); fi
+        if [ -n "$INPUT_BUDGET" ]; then args+=(--budget-task-usd "$INPUT_BUDGET"); fi
+        if [ -n "$INPUT_CONFIG" ]; then args+=(--config "$INPUT_CONFIG"); fi
+        if [ -n "$INPUT_ARGS" ]; then
+          read -r -a extra <<< "$INPUT_ARGS"
+          args+=("${extra[@]}")
+        fi
+        echo "sy ${args[*]}"
+        sy "${args[@]}" 2>&1 | tee "$out/sy-run.log"
+        exit "${PIPESTATUS[0]}"
+
+    - name: reports
+      id: collect
+      if: always() && steps.run.outputs.dir != ''
+      shell: bash
+      env:
+        OUT: ${{ steps.run.outputs.dir }}
+      run: |
+        set -uo pipefail
+        echo "report-dir=$OUT" >> "$GITHUB_OUTPUT"
+        after=$(sy history --json -n 1000 2>/dev/null || echo '[]')
+        ids=$(printf '%s' "$after" | jq -r --slurpfile before "$OUT/.before.json" \
+          '[$before[0][]?.id] as $old | reverse | .[] | select(.id as $i | $old | index($i) | not) | .id' 2>/dev/null || true)
+        prs=$(grep -E '^opened (pull|merge) request [#!][0-9]+: ' "$OUT/sy-run.log" 2>/dev/null | sed 's/^[^:]*: //' || true)
+        {
+          echo "task-ids<<SY_EOF"; printf '%s\n' "$ids"; echo "SY_EOF"
+          echo "pull-requests<<SY_EOF"; printf '%s\n' "$prs"; echo "SY_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        log=$(sed -n 's/^session log: //p' "$OUT/sy-run.log" 2>/dev/null | tail -n 1)
+        if [ -n "$log" ] && [ -f "$log" ]; then cp "$log" "$OUT/"; fi
+
+        summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+        echo "## Switchyard" >> "$summary"
+        if [ -z "$ids" ]; then
+          echo "No task ran. See the job log." >> "$summary"
+        fi
+        if [ -n "$prs" ]; then
+          echo "" >> "$summary"
+          printf -- '- %s\n' $prs >> "$summary"
+        fi
+        for id in $ids; do
+          sy report "$id" --out "$OUT/$id.html" >/dev/null || true
+          if sy report "$id" --md --out "$OUT/$id.md" >/dev/null; then
+            # The step summary holds 1 MiB; a report with a big diff is cut.
+            { echo ""; head -c 200000 "$OUT/$id.md"; echo ""; } >> "$summary"
+          fi
+        done
+        rm -f "$OUT/.before.json"
+
+    - name: upload reports
+      if: always() && inputs.upload-artifacts == 'true' && steps.run.outputs.dir != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: switchyard-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+        path: ${{ steps.run.outputs.dir }}
+        retention-days: ${{ inputs.artifact-retention-days }}
+        if-no-files-found: ignore
+
+    - name: clean up
+      if: always()
+      shell: bash
+      run: |
+        rm -rf "$RUNNER_TEMP/switchyard-codex-home"
+        server="${GITHUB_SERVER_URL:-https://github.com}"
+        git config --local --unset-all "credential.$server.helper" 2>/dev/null || true

@@ -59,6 +59,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - the repo's own conventions as context
   - a VS Code extension
   - GitLab and Gitea/Forgejo for `sy pr`, issues, `sy watch` and `sy review`
+  - issue tasks in GitHub Actions and GitLab CI, without the forge token in agents
 - **Release v0.1.0** (3 Oct 2026): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
   - The repository is public: release downloads, `sy update` and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
@@ -231,6 +232,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.23 | ✅ **GitLab and Gitea/Forgejo** (`internal/forge`): `sy pr`, issues as tasks, `sy watch` and `sy review` work on gitlab.com and self-managed GitLab (merge requests, pipeline jobs and their logs, unresolved diff comments by Developers and above, one thread per inline finding) and on Gitea and Forgejo, Codeberg included (commit statuses, reviews requesting changes, inline reviews). The origin remote's host picks the forge; self-hosted ones are named in `GH_HOST` / `GITLAB_HOST` / `GITEA_HOST`, and each forge's token goes only to its own hosts. GitLab quick actions are defused like mentions, and `sy watch` never pushes CI config of any forge. Tested against fake APIs and, for real, against Gitea 28, Forgejo 16 and GitLab CE 19.4 with a GitLab Runner. |
 | 4.24 | ✅ **Webhook notifications** (`notify.webhooks`): Slack, Discord, ntfy or plain JSON, so overnight runs and `sy watch` reach your phone. Events `done`, `failed`, `limit`, `waiting` and `watch` (round results, merged or closed PRs), filterable per webhook; a task-file batch ends with a summary. `${VAR}` keeps the secret URL out of the file; a repo file's webhooks need `sy trust`; text is escaped against mentions and hidden links; errors and `sy bugreport` never show the URL path. `sy notify --test` checks each webhook. Tested against local servers and real ntfy.sh; not yet against real Slack or Discord. |
 | 4.25 | ✅ **Bench results feed learned routes**: a bench mode `routed:<role>=<provider:model[:effort]>` runs the routed pipeline with one role on another route, so the learner gets an alternative to compare with (single-agent runs never counted). `learn: true` in a bench file, or `--learn`, updates the repo's learned routes when the bench ends, with the same clear-evidence rules as `sy tune --apply`. `sy bench --from-history` writes `learn: true` and a worker variant on the other provider, so one bench of your own history can change the routing with no manual tuning. `--no-learn` and `routing.learn: off` keep the routes as they are; a cancelled bench learns nothing. |
+| 4.26 | ✅ **CI as an agent target** (`action.yml`, `ci/`, [docs/ci.md](docs/ci.md)): a GitHub Action and a GitLab job run `sy run --issue N --pr` or `--issues label:sy --pr` in CI (on a label, nightly or by hand), so tasks run without your PC. The action installs the release named by its ref (checksum-verified) or builds from source. Agents, verify commands, hooks and bench checks start without the forge and CI tokens; git pushes through a credential helper, not `.git/config`. Reports go to the job summary and an artifact; `sy history --json` lists a run's tasks. Tested locally (install against the real v0.1.0 release, the step scripts with a stub `sy`, token scrubbing); not yet run on real GitHub or GitLab runners. No Gitea/Forgejo template yet. |
 
 ---
 
@@ -265,3 +267,4 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
    - For signed binaries, buy a code-signing certificate (see `packaging/README.md`).
 5. **Open Phase 4 items:**
    - 4.3: record a Gemini run with an API key (`GEMINI_API_KEY`; personal Google sign-in is refused; the commands are in docs/providers.md) and a DeepSeek run, to turn them from beta into tested.
+   - 4.26: run the GitHub Action and the GitLab job once on real runners (a test repository and a labelled issue).

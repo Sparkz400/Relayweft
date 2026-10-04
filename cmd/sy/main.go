@@ -159,7 +159,7 @@ Usage:
                              start later, unattended (PC kept awake; --allow-sleep to opt out)
   sy schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)
   sy notify [--test]         show where notifications go; --test posts to every webhook (Slack, Discord, ntfy)
-  sy history [--all] [-n 20]       recent tasks in this directory, with status and cost
+  sy history [--all] [-n 20] [--json]   recent tasks in this directory, with status and cost
   sy resume [task id]        continue an interrupted task (default: the last one here)
   sy report [task id] [--out f.html] [--md] [--open]   one shareable page per task (default: the last one here)
   sy stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline

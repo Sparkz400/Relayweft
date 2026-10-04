@@ -247,6 +247,10 @@ Every task in a git repo records the working tree before and after it ran. The s
   - `sy watch --list` shows the watched PRs; `--forget <n>` stops watching one (`group/project!n` for GitLab). It needs a token (see above).
 - **`sy review <PR>`** (a number or URL) runs one read-only reviewer on a pull request's diff. If sy opened the PR, the reviewer is the provider that did *not* write it; otherwise the configured reviewer role (`--provider` overrides). It prints the findings; `--post` posts them as a single review (always a plain comment, never approve or request changes), inline where the line is in the diff, after a preview (`--yes` skips it). On GitLab that is one thread per inline finding plus one note with the rest; a finding GitLab cannot place on its line moves into the note. It counts into the day budget.
 
+### In CI: issues without your PC
+
+The same issue runs work in CI, so tasks don't need your PC on overnight. A GitHub Action (`uses: Sparkz400/switchyard@…`) or a GitLab job installs `sy` and the agent CLIs, runs an issue when you label it `sy` (or every open `sy` issue each night), and opens a pull request for each. Agents, verify commands and hooks never get the forge token; only sy's own push and API calls use it. Setup, inputs and the security model: [docs/ci.md](docs/ci.md).
+
 ### Bench: does Switchyard beat a single agent on *your* work?
 
 1. Run `sy bench --init` to create `bench.yaml`. Fill in a few real tasks, each with a check command (`go test ./...`, `npm test`, ...), then commit.

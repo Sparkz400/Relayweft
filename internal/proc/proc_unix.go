@@ -4,6 +4,7 @@ package proc
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -29,9 +30,10 @@ func breakaway(*exec.Cmd) {}
 // lower renices a process (children forked later inherit it).
 func lower(pid int) { _ = syscall.Setpriority(syscall.PRIO_PROCESS, pid, 10) }
 
-// Shell runs a command line through sh.
+// Shell runs a command line through sh, without sy's tokens (WithoutSecrets).
 func Shell(ctx context.Context, line string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "sh", "-c", line)
 	Prepare(cmd)
+	cmd.Env = WithoutSecrets(os.Environ())
 	return cmd
 }

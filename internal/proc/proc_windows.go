@@ -118,7 +118,8 @@ func guard() error {
 }
 
 // Shell runs a command line through cmd.exe exactly as typed (/s keeps
-// everything between the outer quotes verbatim).
+// everything between the outer quotes verbatim), without sy's tokens
+// (WithoutSecrets).
 func Shell(ctx context.Context, line string) *exec.Cmd {
 	comspec := os.Getenv("ComSpec")
 	if comspec == "" {
@@ -126,6 +127,7 @@ func Shell(ctx context.Context, line string) *exec.Cmd {
 	}
 	cmd := exec.CommandContext(ctx, comspec)
 	Prepare(cmd)
+	cmd.Env = WithoutSecrets(os.Environ())
 	cmd.SysProcAttr.CmdLine = syscall.EscapeArg(comspec) + ` /d /s /c "` + line + `"`
 	return cmd
 }
