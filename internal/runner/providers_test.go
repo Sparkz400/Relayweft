@@ -31,7 +31,8 @@ func runFakeCLI() int {
 				seen[k] = v
 			}
 		}
-		data, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(stdin), "env": seen})
+		cwd, _ := os.Getwd()
+		data, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(stdin), "env": seen, "cwd": cwd})
 		os.WriteFile(dump, data, 0o600)
 	}
 	if fx := os.Getenv("SY_FAKE_CLI"); fx != "-" {
@@ -56,6 +57,7 @@ type fakeDump struct {
 	Args  []string          `json:"args"`
 	Stdin string            `json:"stdin"`
 	Env   map[string]string `json:"env"`
+	Cwd   string            `json:"cwd"`
 }
 
 // fakeExe configures pc to run the test binary as a fake CLI printing

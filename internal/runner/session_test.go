@@ -3,13 +3,45 @@ package runner
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/sparkz400/switchyard/internal/canon"
 	"github.com/sparkz400/switchyard/internal/event"
 )
+
+// A Codex follow-up or interrupted step resumed in a pool worktree:
+// `codex exec resume` takes no -C, so the folder is the process's working
+// directory, and the sandbox comes through config. Both must be the
+// worktree's: workspace-write lets Codex write only below its folder.
+// This pins down runner behaviour the Codex follow-up fix relies on; it
+// passed before that fix too (the regression test is the orchestrator's
+// TestFollowUpResumesInPoolWorktree).
+func TestCodexResumeRunsInItsFolder(t *testing.T) {
+	pc, det := providerCfg(t, event.Codex)
+	dump := fakeExe(t, &pc, "codex_real_resume.jsonl", 0, "")
+	slot := filepath.Join(t.TempDir(), "pool", "0")
+	if err := os.MkdirAll(slot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const id = "01a1017b-c8e1-7400-a637-8305ef91e912"
+	res := NewCodex(pc, det).Run(context.Background(), Spec{AgentID: "a", Dir: slot, Resume: id, Prompt: "go on"}, func(event.Event) {})
+	if !res.OK() || res.SessionID != id {
+		t.Fatalf("result %+v", res)
+	}
+	d := readDump(t, dump)
+	if canon.Path(d.Cwd) != canon.Path(slot) {
+		t.Errorf("codex exec resume ran in %s, want the worktree %s", d.Cwd, slot)
+	}
+	args := strings.Join(d.Args, " ")
+	if !strings.HasPrefix(args, "exec resume ") || !strings.Contains(args, "-c sandbox_mode=workspace-write") ||
+		strings.Contains(args, "-C ") || !strings.HasSuffix(args, id+" -") {
+		t.Errorf("args %s", args)
+	}
+}
 
 // Recorded from a real Claude Code 2.1.288 on Windows (4 Oct 2026), haiku
 // at low effort, in a git worktree: the agent was asked to write a.txt,

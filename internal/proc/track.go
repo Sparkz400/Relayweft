@@ -66,7 +66,18 @@ func noteStart(cmd *exec.Cmd) {
 // false when something recorded is still running and could not be killed
 // or verified (always the case for a live process on Windows), so the
 // caller should not use the directory. On true the pid file is removed.
-func ReapOrphans(file string) bool {
+//
+// A recorded group whose leader is gone is not killed: it may be a later
+// program's that got the pid after the agent's group ended.
+func ReapOrphans(file string) bool { return reapFile(file, false) }
+
+// ReapOwn is ReapOrphans for a pid file this sy wrote since it took the
+// directory (its agents just ended): a group still running under a pid it
+// recorded is what its agent left behind (POSIX does not reuse a pid while
+// its group exists) and is killed too.
+func ReapOwn(file string) bool { return reapFile(file, true) }
+
+func reapFile(file string, own bool) bool {
 	data, err := os.ReadFile(file)
 	if os.IsNotExist(err) {
 		return true
@@ -87,7 +98,7 @@ func ReapOrphans(file string) bool {
 		if len(f) > 1 {
 			stamp = f[1]
 		}
-		if !reap(pid, stamp) {
+		if !reap(pid, stamp, own) {
 			return false
 		}
 	}
@@ -125,6 +136,10 @@ func LiveOrphans(file string) []int {
 				out = append(out, pid)
 			}
 		} else if stamp == "" && alive(pid) { // no stamps on this OS
+			out = append(out, pid)
+		} else if groupAlive(pid) {
+			// The leader is gone, its group is not: ReapOrphans leaves
+			// it alone, so it is listed for the person to check.
 			out = append(out, pid)
 		}
 	}
