@@ -25,7 +25,9 @@ dependencies besides the IDE.
 - A JetBrains IDE 2025.2 or newer (build 252+).
 
 If `sy` is not on your `PATH`, set it in **Settings | Tools | Switchyard**
-(`C:\Users\you\go\bin\sy.exe` on Windows). Without a setting the plugin
+as an absolute path (`C:\Users\you\go\bin\sy.exe` on Windows). Relative
+paths, also relative `PATH` entries such as `.` or `bin`, are never used:
+they would resolve against the project folder. Without a setting the plugin
 looks on `PATH`, then in `%GOBIN%`/`~/go/bin`, Scoop's shims and WinGet's
 links (Windows) or `/usr/local/bin`, `/opt/homebrew/bin` and
 `~/.local/bin`. On Windows the path must be an `.exe`: sy is started
@@ -42,7 +44,9 @@ Marketplace yet.
 
 1. Open a project and the **Switchyard** tool window (right side), then
    **Start Switchyard** (or **Tools | Switchyard | Start Switchyard**).
-   The project must be trusted: sy runs agents and commands in it.
+   The project must be trusted: sy runs git, agents and commands in it.
+   In a project opened in safe mode the plugin runs no sy at all (Start
+   and Undo say why).
 2. Type a task in the prompt box and press **Run** (or Ctrl+Enter). When sy
    is not running yet, Run starts it first. While a task runs, new tasks
    are queued and run unattended after it. `@agent message` follows up.
@@ -83,7 +87,8 @@ markers for the lines not shown.
   hunks are struck through. The bar above the diff says what applying
   sends and has **Accept file**, **Reject file**, **Apply selected
   changes** and **Send back with feedback…**.
-- **Apply Selected Changes** sends the decision; **Reject All Changes**
+- **Apply Selected Changes** saves your unsaved edits first (so sy sees
+  them), sends the decision, and the IDE shows sy's result right away; **Reject All Changes**
   keeps them on a branch only; **Send Back with Feedback…** reruns the
   agent with your message.
 
