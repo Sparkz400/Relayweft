@@ -207,27 +207,60 @@ class AgentsPanel(private val project: Project, private val svc: SyService) : Si
 
     // --- tree ------------------------------------------------------------------------------
 
-    private fun rebuild() {
+    /** The rows of the tree as sy's state and the model say now. */
+    private fun build(): DefaultMutableTreeNode {
+        val r = DefaultMutableTreeNode()
+        val st = svc.model.state
+        if (svc.running || svc.starting) {
+            r.add(DefaultMutableTreeNode(AgentsItem.Status))
+            if (st != null && st.approvals.isNotEmpty()) {
+                val n = DefaultMutableTreeNode(AgentsItem.Approvals)
+                st.approvals.forEach { n.add(DefaultMutableTreeNode(AgentsItem.Approval(it))) }
+                r.add(n)
+            }
+            if (st != null && st.queue.isNotEmpty()) {
+                val n = DefaultMutableTreeNode(AgentsItem.Queue)
+                st.queue.forEach { n.add(DefaultMutableTreeNode(AgentsItem.Job(it.id, it.label, it.at))) }
+                r.add(n)
+            }
+            val m = svc.model
+            if (m.taskText.isNotEmpty() || m.order.isNotEmpty()) r.add(agentNode(m, TaskModel.MAIN))
+        }
+        return r
+    }
+
+    private fun shape(n: DefaultMutableTreeNode, depth: Int = 0, out: MutableList<String> = ArrayList()): List<String> {
+        for (i in 0 until n.childCount) {
+            val c = n.getChildAt(i) as DefaultMutableTreeNode
+            out.add("$depth:" + ((c.userObject as? AgentsItem)?.key ?: ""))
+            shape(c, depth + 1, out)
+        }
+        return out
+    }
+
+    /** Same rows as before: refresh them in place (a reload would drop clicks, hovers and selection). */
+    private fun refreshInPlace(old: DefaultMutableTreeNode, new: DefaultMutableTreeNode) {
+        for (i in 0 until old.childCount) {
+            val o = old.getChildAt(i) as DefaultMutableTreeNode
+            val n = new.getChildAt(i) as DefaultMutableTreeNode
+            o.userObject = n.userObject
+            treeModel.nodeChanged(o)
+            refreshInPlace(o, n)
+        }
+    }
+
+    internal fun rebuild() {
         val selected = selectedItem()?.key
+        val fresh = build()
+        if (shape(fresh) == shape(root)) {
+            refreshInPlace(root, fresh)
+            updateHint()
+            return
+        }
         rebuilding = true
         try {
             root.removeAllChildren()
-            val st = svc.model.state
-            if (svc.running || svc.starting) {
-                root.add(DefaultMutableTreeNode(AgentsItem.Status))
-                if (st != null && st.approvals.isNotEmpty()) {
-                    val n = DefaultMutableTreeNode(AgentsItem.Approvals)
-                    st.approvals.forEach { n.add(DefaultMutableTreeNode(AgentsItem.Approval(it))) }
-                    root.add(n)
-                }
-                if (st != null && st.queue.isNotEmpty()) {
-                    val n = DefaultMutableTreeNode(AgentsItem.Queue)
-                    st.queue.forEach { n.add(DefaultMutableTreeNode(AgentsItem.Job(it.id, it.label, it.at))) }
-                    root.add(n)
-                }
-                val m = svc.model
-                if (m.taskText.isNotEmpty() || m.order.isNotEmpty()) root.add(agentNode(m, TaskModel.MAIN))
-            }
+            while (fresh.childCount > 0) root.add(fresh.getChildAt(0) as DefaultMutableTreeNode)
             treeModel.reload()
             expand(root)
             if (selected != null) {

@@ -102,10 +102,44 @@ class ReviewPanel(private val project: Project, private val svc: SyService) : Si
 
     fun selectedItem(): ReviewItem? = (tree.selectionPath?.lastPathComponent as? CheckedTreeNode)?.userObject as? ReviewItem
 
-    private fun rebuild() {
+    private fun build(): CheckedTreeNode {
+        val r0 = CheckedTreeNode(null)
+        for (r in svc.review.pending) {
+            val set = CheckedTreeNode(ReviewItem.Set(r.req.id))
+            set.isChecked = r.files.indices.any { fileOn(r.files, r.sel, it) }
+            r.files.forEachIndexed { i, f ->
+                val fn = CheckedTreeNode(ReviewItem.File(r.req.id, i))
+                fn.isChecked = fileOn(r.files, r.sel, i)
+                for (j in 0 until hunkCount(f)) {
+                    val hn = CheckedTreeNode(ReviewItem.Hunk(r.req.id, i, j))
+                    hn.isChecked = hunkOn(r.files, r.sel, i, j)
+                    fn.add(hn)
+                }
+                set.add(fn)
+            }
+            r0.add(set)
+        }
+        return r0
+    }
+
+    private fun shape(n: CheckedTreeNode): List<String> =
+        TreeUtil.treeNodeTraverser(n).toList().mapNotNull { ((it as? CheckedTreeNode)?.userObject as? ReviewItem)?.key }
+
+    internal fun rebuild() {
         val selected = selectedItem()?.key
+        val fresh = build()
         rebuilding = true
         try {
+            if (shape(fresh) == shape(root)) {
+                // Same rows: update the checkboxes in place (a reload would drop clicks and selection).
+                val olds = TreeUtil.treeNodeTraverser(root).toList().filterIsInstance<CheckedTreeNode>().filter { it.userObject is ReviewItem }
+                val news = TreeUtil.treeNodeTraverser(fresh).toList().filterIsInstance<CheckedTreeNode>().filter { it.userObject is ReviewItem }
+                olds.zip(news).forEach { (o, n) ->
+                    o.isChecked = n.isChecked
+                    (tree.model as DefaultTreeModel).nodeChanged(o)
+                }
+                return
+            }
             // Remember what the person collapsed.
             TreeUtil.treeNodeTraverser(root).forEach { n ->
                 val node = n as? CheckedTreeNode ?: return@forEach
@@ -115,22 +149,7 @@ class ReviewPanel(private val project: Project, private val svc: SyService) : Si
                 }
             }
             root.removeAllChildren()
-            val pending = svc.review.pending
-            for (r in pending) {
-                val set = CheckedTreeNode(ReviewItem.Set(r.req.id))
-                set.isChecked = r.files.indices.any { fileOn(r.files, r.sel, it) }
-                r.files.forEachIndexed { i, f ->
-                    val fn = CheckedTreeNode(ReviewItem.File(r.req.id, i))
-                    fn.isChecked = fileOn(r.files, r.sel, i)
-                    for (j in 0 until hunkCount(f)) {
-                        val hn = CheckedTreeNode(ReviewItem.Hunk(r.req.id, i, j))
-                        hn.isChecked = hunkOn(r.files, r.sel, i, j)
-                        fn.add(hn)
-                    }
-                    set.add(fn)
-                }
-                root.add(set)
-            }
+            while (fresh.childCount > 0) root.add(fresh.getChildAt(0) as CheckedTreeNode)
             (tree.model as DefaultTreeModel).reload()
             TreeUtil.treeNodeTraverser(root).forEach { n ->
                 val node = n as? CheckedTreeNode ?: return@forEach
@@ -140,9 +159,9 @@ class ReviewPanel(private val project: Project, private val svc: SyService) : Si
             if (selected != null) {
                 TreeUtil.findNode(root) { (it.userObject as? ReviewItem)?.key == selected }?.let { tree.selectionPath = TreePath(it.path) }
             }
-            onCount(pending.size)
         } finally {
             rebuilding = false
+            onCount(svc.review.pending.size)
         }
     }
 

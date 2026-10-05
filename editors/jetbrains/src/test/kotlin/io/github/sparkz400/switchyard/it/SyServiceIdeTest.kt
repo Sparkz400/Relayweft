@@ -19,7 +19,9 @@ import io.github.sparkz400.switchyard.ide.SySettings
 import io.github.sparkz400.switchyard.it.ItEnv.Companion.ORIG_NOTES
 import java.io.File
 import java.util.Collections
+import com.intellij.util.ui.tree.TreeUtil
 import javax.swing.tree.DefaultMutableTreeNode
+import javax.swing.tree.TreePath
 
 /**
  * The plugin inside a headless IDE (the IntelliJ Platform test framework,
@@ -107,6 +109,14 @@ class SyServiceIdeTest : HeavyPlatformTestCase() {
         svc.runTask(task)
         val plan = pumpUntil("a plan approval") { svc.approvals("plan").firstOrNull() }
         pumpUntil("the plan in the tree") { items(agents).any { it is AgentsItem.Approval && it.req.id == plan.id } }
+        // A refresh with the same rows keeps the rows (and so a double click
+        // in progress, hovers and the selection): found in a real IDE, where
+        // every event reloaded the tree and the double click on a row was lost.
+        val row = TreeUtil.findNode(agents.tree.model.root as DefaultMutableTreeNode) { (it.userObject as? AgentsItem.Approval)?.req?.id == plan.id }!!
+        agents.tree.selectionPath = TreePath(row.path)
+        agents.rebuild()
+        assertSame(row, agents.tree.selectionPath?.lastPathComponent)
+        assertTrue((row.userObject as AgentsItem.Approval).req.id == plan.id)
         pumpUntil("the plan notification") { notes.any { it.content.contains("Approve the plan (2 subtasks)") } }
 
         // Approve an edited plan (what the plan dialog sends).
