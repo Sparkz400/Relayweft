@@ -224,7 +224,6 @@ func TestBestOfResumeLandsKeptWork(t *testing.T) {
 	}
 }
 
-
 // What taking a candidate's worktree did (here: saving an expired hold's
 // edits on a branch) reaches the log on screen, not only the debug log.
 func TestBestOfCandidateSlotNotes(t *testing.T) {
