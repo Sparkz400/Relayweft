@@ -8,15 +8,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
-// Checkout is a detached worktree of a repository at one commit, in sy's
+// Checkout is a detached worktree of a repository at one commit, in rw's
 // cache next to the pool. Work that must not touch the user's working
-// tree, index or current branch runs there (sy watch: a follow-up task on
+// tree, index or current branch runs there (rw watch: a follow-up task on
 // a pull request's branch). An orchestrator whose Dir is the checkout runs
 // tasks in it as in any working tree; the undo records they leave are
 // dropped with the checkout.
@@ -81,7 +81,7 @@ type ReadResult struct {
 	Model    string
 }
 
-// RunRead runs one read-only agent as a task of its own (sy review): the
+// RunRead runs one read-only agent as a task of its own (rw review): the
 // router picks the route for kind (KindReview: the reviewer role, or the
 // forced provider), the budget applies as for any task and the cost counts
 // into the day. text names the task in the logs; the agent gets prompt.

@@ -6,15 +6,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/schedule"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/schedule"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // keepAwake is proc.KeepAwake; tests replace it.
 var keepAwake = proc.KeepAwake
 
-// resetTime looks up when a provider's limit resets: this sy's tracker,
+// resetTime looks up when a provider's limit resets: this rw's tracker,
 // then the session logs (not in demo mode).
 func (m *Model) resetTime(provider string) (time.Time, string) {
 	var recs []sessionlog.Record

@@ -3,16 +3,16 @@
 # logged-in GUI user). Run by .github/workflows/macos-real.yml; needs no
 # secrets and makes no AI calls (fake agents only).
 #
-#   OUT=dir SY=path/to/sy .github/scripts/macos-real.sh
+#   OUT=dir RW=path/to/rw .github/scripts/macos-real.sh
 #
 # Every check prints PASS, FAIL or INFO into $OUT/summary.txt. INFO is for
-# what the runner does not let us see; FAIL is a Switchyard problem. The
+# what the runner does not let us see; FAIL is a Relayweft problem. The
 # script exits 1 if anything failed.
 set -u
 OUT=${OUT:?}
-SY=${SY:?}
+RW=${RW:?}
 ROOT=$(pwd)
-T=${RUNNER_TEMP:-/tmp}/sy-real
+T=${RUNNER_TEMP:-/tmp}/rw-real
 rm -rf "$T"
 mkdir -p "$OUT" "$T"
 SUM="$OUT/summary.txt"
@@ -38,7 +38,7 @@ tmo() {
 # "${NEWPG[@]}" cmd...: run cmd as the leader of its own process group, like a job
 # a terminal starts (Ctrl+C there signals the whole group).
 # (an array, not a function: a backgrounded function runs in a subshell, so
-# $! would be the subshell, not sy).
+# $! would be the subshell, not rw).
 NEWPG=(perl -e 'setpgrp(0, 0); exec @ARGV or exit 127')
 # wait_file FILE PATTERN SECONDS
 wait_file() {
@@ -61,7 +61,7 @@ section "machine"
 info "bash $BASH_VERSION"
 info "$(sw_vers | tr '\n' ' ')"
 info "arch $(uname -m), user $(id -un), console user $(stat -f %Su /dev/console)"
-info "sy $("$SY" version)"
+info "rw $("$RW" version)"
 ls /Applications >"$OUT/applications.txt"
 info "browsers in /Applications: $(ls /Applications | grep -Ei 'chrome|edge|firefox|brave|chromium|safari' | tr '\n' ',')"
 
@@ -73,7 +73,7 @@ sleep 2
 info "notification processes: $(pgrep -l -f 'NotificationCenter|usernoted' | tr '\n' ',')"
 go test -c -o "$T/notify.test" ./internal/notify || fail "build notify test"
 since=$(date '+%Y-%m-%d %H:%M:%S')
-SY_REAL_DESKTOP=1 "$T/notify.test" -test.run 'TestRealDesktopToast$' -test.v >"$OUT/notify-test.txt" 2>&1
+RW_REAL_DESKTOP=1 "$T/notify.test" -test.run 'TestRealDesktopToast$' -test.v >"$OUT/notify-test.txt" 2>&1
 rc=$?
 shot notify-1
 sleep 1
@@ -155,12 +155,12 @@ for a in claude codex; do
 	printf '#!/bin/sh\necho "fake %s must not run in this check" >&2\nexit 1\n' "$a" >"$FB/$a"
 	chmod +x "$FB/$a"
 done
-# start_wait LOG [flags...]: sy run --in 10m in the background; sets wpid.
+# start_wait LOG [flags...]: rw run --in 10m in the background; sets wpid.
 start_wait() {
 	local log=$1
 	shift
 	pushd "$R" >/dev/null
-	PATH="$FB:$PATH" "${NEWPG[@]}" "$SY" run --in 10m "$@" "a task that must never start" >"$log" 2>&1 &
+	PATH="$FB:$PATH" "${NEWPG[@]}" "$RW" run --in 10m "$@" "a task that must never start" >"$log" 2>&1 &
 	wpid=$!
 	popd >/dev/null
 }
@@ -172,22 +172,22 @@ if wait_file "$OUT/run-in.log" "scheduled:" 30; then
 	pmset -g assertions >"$OUT/pmset-during.txt"
 	ps -o pid,ppid,command -p "$(pgrep -d, caffeinate || echo 1)" >"$OUT/caffeinate-ps.txt" 2>&1
 	if caff_for "$wpid" && grep -q 'caffeinate' "$OUT/pmset-during.txt" && grep -q 'PreventUserIdleSystemSleep' "$OUT/pmset-during.txt"; then
-		pass "while sy run --in waits: caffeinate -i -w <sy pid> runs and pmset lists its PreventUserIdleSystemSleep assertion"
+		pass "while rw run --in waits: caffeinate -i -w <rw pid> runs and pmset lists its PreventUserIdleSystemSleep assertion"
 		grep -i caffeinate "$OUT/pmset-during.txt" | head -3 >>"$SUM"
 	else
-		fail "no caffeinate assertion while sy run --in waits (see pmset-during.txt)"
+		fail "no caffeinate assertion while rw run --in waits (see pmset-during.txt)"
 	fi
 	kill -INT "$wpid"
-	if wait_gone "$wpid" 15; then pass "Ctrl+C (SIGINT) cancelled the scheduled wait"; else fail "sy run ignored SIGINT"; kill -9 "$wpid"; fi
+	if wait_gone "$wpid" 15; then pass "Ctrl+C (SIGINT) cancelled the scheduled wait"; else fail "rw run ignored SIGINT"; kill -9 "$wpid"; fi
 	sleep 1
 	pmset -g assertions >"$OUT/pmset-after.txt"
 	if caff_for "$wpid" || grep -q 'caffeinate' "$OUT/pmset-after.txt"; then
-		fail "caffeinate still holds the machine awake after sy run was cancelled"
+		fail "caffeinate still holds the machine awake after rw run was cancelled"
 	else
 		pass "after the cancel: no caffeinate process, no assertion"
 	fi
 else
-	fail "sy run --in never printed 'scheduled:' (see run-in.log)"
+	fail "rw run --in never printed 'scheduled:' (see run-in.log)"
 	kill -9 "$wpid" 2>/dev/null
 fi
 
@@ -195,7 +195,7 @@ start_wait "$OUT/run-in-kill9.log"
 if wait_file "$OUT/run-in-kill9.log" "scheduled:" 30 && sleep 1 && caff_for "$wpid"; then
 	kill -9 "$wpid"
 	sleep 3
-	if caff_for "$wpid"; then fail "caffeinate outlived a killed sy (-w did not work)"; else pass "sy killed hard (SIGKILL): caffeinate -w ended by itself"; fi
+	if caff_for "$wpid"; then fail "caffeinate outlived a killed rw (-w did not work)"; else pass "rw killed hard (SIGKILL): caffeinate -w ended by itself"; fi
 else
 	fail "second scheduled wait did not start caffeinate (see run-in-kill9.log)"
 	kill -9 "$wpid" 2>/dev/null
@@ -206,15 +206,15 @@ if wait_file "$OUT/run-in-allowsleep.log" "scheduled:" 30; then
 	sleep 1
 	if caff_for "$wpid"; then fail "--allow-sleep still started caffeinate"; else pass "--allow-sleep: no caffeinate"; fi
 else
-	fail "sy run --in --allow-sleep never printed 'scheduled:'"
+	fail "rw run --in --allow-sleep never printed 'scheduled:'"
 fi
 kill -9 "$wpid" 2>/dev/null
 
-# --- sy app -----------------------------------------------------------------
-section "sy app (Chrome app window)"
+# --- rw app -----------------------------------------------------------------
+section "rw app (Chrome app window)"
 CH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 if [ ! -x "$CH" ]; then
-	info "Google Chrome is not installed: sy app not checked"
+	info "Google Chrome is not installed: rw app not checked"
 else
 	info "$("$CH" --version)"
 	# The runner's Chrome comes from a Homebrew cask and still carries the
@@ -227,7 +227,7 @@ else
 	# Skip Chrome's first-run welcome page in the runner's fresh profile.
 	mkdir -p "$HOME/Library/Application Support/Google/Chrome"
 	touch "$HOME/Library/Application Support/Google/Chrome/First Run"
-	printf '<title>OtherWindow</title><h1>Another Chrome window: it must survive sy</h1>\n' >"$T/other.html"
+	printf '<title>OtherWindow</title><h1>Another Chrome window: it must survive rw</h1>\n' >"$T/other.html"
 	chrome_running() { pgrep -x "Google Chrome" >/dev/null; }
 	# Window titles: System Events (accessibility) first, then Chrome's own
 	# AppleScript (automation); either may be blocked by TCC.
@@ -242,53 +242,53 @@ else
 		pkill -x "Google Chrome"
 		sleep 2
 	}
-	# close_app: close the Switchyard window like a user would; prints how.
+	# close_app: close the Relayweft window like a user would; prints how.
 	close_app() {
-		if tmo 20 osascript -e 'tell application "System Events" to tell process "Google Chrome" to click (first button whose subrole is "AXCloseButton") of (first window whose name contains "Switchyard")' >>"$OUT/close.txt" 2>&1; then
+		if tmo 20 osascript -e 'tell application "System Events" to tell process "Google Chrome" to click (first button whose subrole is "AXCloseButton") of (first window whose name contains "Relayweft")' >>"$OUT/close.txt" 2>&1; then
 			echo "System Events (clicked the window's close button)"
 			return 0
 		fi
-		if tmo 20 osascript -e 'tell application "Google Chrome" to close (every window whose title contains "Switchyard")' >>"$OUT/close.txt" 2>&1; then
+		if tmo 20 osascript -e 'tell application "Google Chrome" to close (every window whose title contains "Relayweft")' >>"$OUT/close.txt" 2>&1; then
 			echo "AppleScript to Chrome (close window)"
 			return 0
 		fi
 		return 1
 	}
 
-	# A: another Chrome window is open; sy app's window is handed to that
-	# Chrome; closing sy's window makes sy exit and leaves the other window.
+	# A: another Chrome window is open; rw app's window is handed to that
+	# Chrome; closing rw's window makes rw exit and leaves the other window.
 	tmo 30 open -a "Google Chrome" "file://$T/other.html"
 	for _ in $(seq 30); do chrome_running && break; sleep 1; done
 	sleep 5
 	before=$(titles)
-	info "Chrome windows before sy app: $before"
+	info "Chrome windows before rw app: $before"
 	info "System Events sees: $(se_titles)"
 	pushd "$R" >/dev/null
-	"${NEWPG[@]}" "$SY" app --demo >"$OUT/app-a.log" 2>&1 &
+	"${NEWPG[@]}" "$RW" app --demo >"$OUT/app-a.log" 2>&1 &
 	apid=$!
 	popd >/dev/null
 	if ! wait_file "$OUT/app-a.log" "opened in" 30; then
-		fail "sy app did not open a window (see app-a.log)"
+		fail "rw app did not open a window (see app-a.log)"
 	else
-		info "sy app: $(grep 'opened in' "$OUT/app-a.log")"
+		info "rw app: $(grep 'opened in' "$OUT/app-a.log")"
 		sleep 8
-		info "Google Chrome main processes: $(pgrep -x 'Google Chrome' | wc -l | tr -d ' ') (sy's open -n instance hands the window over and exits)"
+		info "Google Chrome main processes: $(pgrep -x 'Google Chrome' | wc -l | tr -d ' ') (rw's open -n instance hands the window over and exits)"
 		shot app-a-open
 		t=$(titles)
-		info "Chrome windows with sy app open: $t"
-		if echo "$t" | grep -q Switchyard; then pass "sy app opened a Chrome window titled Switchyard"; else info "could not read the Switchyard window title (Apple Events blocked?): $t"; fi
+		info "Chrome windows with rw app open: $t"
+		if echo "$t" | grep -q Relayweft; then pass "rw app opened a Chrome window titled Relayweft"; else info "could not read the Relayweft window title (Apple Events blocked?): $t"; fi
 		if how=$(close_app); then
 			closed=$(date +%s)
-			info "closed the Switchyard window via $how"
+			info "closed the Relayweft window via $how"
 			if wait_gone "$apid" 60; then
 				took=$(($(date +%s) - closed))
 				if [ "$took" -le 15 ]; then
-					pass "sy app exited ${took}s after its window was closed (goodbye + 5s grace)"
+					pass "rw app exited ${took}s after its window was closed (goodbye + 5s grace)"
 				else
-					fail "sy app exited only ${took}s after its window closed (the 30s no-goodbye fallback, not the goodbye)"
+					fail "rw app exited only ${took}s after its window closed (the 30s no-goodbye fallback, not the goodbye)"
 				fi
 			else
-				fail "sy app still runs 60s after its window was closed"
+				fail "rw app still runs 60s after its window was closed"
 				kill -INT -- -"$apid"
 			fi
 		else
@@ -298,35 +298,35 @@ else
 		fi
 		sleep 2
 		shot app-a-after
-		if chrome_running; then pass "Chrome still runs after sy app exited"; else fail "Chrome died with sy app"; fi
+		if chrome_running; then pass "Chrome still runs after rw app exited"; else fail "Chrome died with rw app"; fi
 		t=$(titles)
 		info "Chrome windows after: $t"
-		# Every window that was open before sy app must still be there.
+		# Every window that was open before rw app must still be there.
 		missing=""
 		while IFS= read -r w; do
 			[ -n "$w" ] && ! echo "$t" | grep -qF "$w" && missing="$missing[$w]"
-		done <<<"$(echo "$before" | tr ',' '\n' | sed 's/^ *//' | grep -v Switchyard)"
+		done <<<"$(echo "$before" | tr ',' '\n' | sed 's/^ *//' | grep -v Relayweft)"
 		if echo "$t" | grep -qi 'error'; then
 			info "window titles not readable"
 		elif [ -z "$missing" ] && [ -n "$before" ]; then
 			pass "the other Chrome window(s) survived: $before"
 		else
-			fail "Chrome windows gone after sy app exited: $missing"
+			fail "Chrome windows gone after rw app exited: $missing"
 		fi
 	fi
 	kill -9 "$apid" 2>/dev/null
 
-	# B: Chrome is not running, so sy app starts it. Ctrl+C / closing the
-	# terminal signals sy's whole process group; Chrome must survive it
-	# (the Windows bug: closing sy killed every Edge window).
+	# B: Chrome is not running, so rw app starts it. Ctrl+C / closing the
+	# terminal signals rw's whole process group; Chrome must survive it
+	# (the Windows bug: closing rw killed every Edge window).
 	for sig in INT HUP; do
 		quit_chrome
 		pushd "$R" >/dev/null
-		"${NEWPG[@]}" "$SY" app --demo >"$OUT/app-b-$sig.log" 2>&1 &
+		"${NEWPG[@]}" "$RW" app --demo >"$OUT/app-b-$sig.log" 2>&1 &
 		bpid=$!
 		popd >/dev/null
 		if ! wait_file "$OUT/app-b-$sig.log" "opened in" 30; then
-			fail "sy app ($sig case) did not open a window"
+			fail "rw app ($sig case) did not open a window"
 			kill -9 "$bpid" 2>/dev/null
 			continue
 		fi
@@ -337,38 +337,38 @@ else
 		info "Chrome windows ($sig case, before): $(titles)"
 		shot "app-b-$sig-open"
 		kill -"$sig" -- -"$bpid"
-		if wait_gone "$bpid" 20; then pass "SIG$sig to sy app's process group stopped sy"; else fail "sy app ignored SIG$sig"; kill -9 "$bpid"; fi
+		if wait_gone "$bpid" 20; then pass "SIG$sig to rw app's process group stopped rw"; else fail "rw app ignored SIG$sig"; kill -9 "$bpid"; fi
 		sleep 3
 		shot "app-b-$sig-after"
 		if chrome_running; then
-			pass "Chrome (started by sy app) survived SIG$sig to sy's process group"
+			pass "Chrome (started by rw app) survived SIG$sig to rw's process group"
 			info "Chrome windows ($sig case, after): $(titles)"
 		else
-			fail "SIG$sig to sy app's process group killed Chrome, which sy had started"
+			fail "SIG$sig to rw app's process group killed Chrome, which rw had started"
 		fi
 	done
 	quit_chrome
 fi
 
-# --- sy update --------------------------------------------------------------
-section "sy update on macOS"
+# --- rw update --------------------------------------------------------------
+section "rw update on macOS"
 mkdir -p "$T/upd"
-go build -ldflags "-X main.version=0.0.1" -o "$T/upd/sy" ./cmd/sy
-"$T/upd/sy" update --yes >"$OUT/update.txt" 2>&1
+go build -ldflags "-X main.version=0.0.1" -o "$T/upd/rw" ./cmd/rw
+"$T/upd/rw" update --yes >"$OUT/update.txt" 2>&1
 rc=$?
 if [ $rc -ne 0 ] && grep -qi 'rate limit\|403' "$OUT/update.txt"; then
 	info "unauthenticated GitHub API rate-limited; retrying with the run's own read-only token"
-	GH_TOKEN=${RUN_TOKEN:-} "$T/upd/sy" update --yes >>"$OUT/update.txt" 2>&1
+	GH_TOKEN=${RUN_TOKEN:-} "$T/upd/rw" update --yes >>"$OUT/update.txt" 2>&1
 	rc=$?
 fi
 latest=$(awk '/^latest:/ {print $2}' "$OUT/update.txt" | head -1)
-now=$("$T/upd/sy" version 2>&1)
-codesign -dv "$T/upd/sy" >"$OUT/update-codesign.txt" 2>&1
-xattr -l "$T/upd/sy" >>"$OUT/update-codesign.txt" 2>&1
+now=$("$T/upd/rw" version 2>&1)
+codesign -dv "$T/upd/rw" >"$OUT/update-codesign.txt" 2>&1
+xattr -l "$T/upd/rw" >>"$OUT/update-codesign.txt" 2>&1
 if [ $rc -eq 0 ] && [ -n "$latest" ] && echo "$now" | grep -q "$latest"; then
-	pass "sy update replaced a 0.0.1 build with release $latest; the new binary starts ($now)"
+	pass "rw update replaced a 0.0.1 build with release $latest; the new binary starts ($now)"
 else
-	fail "sy update: exit $rc, latest '$latest', new binary says '$now' (see update.txt)"
+	fail "rw update: exit $rc, latest '$latest', new binary says '$now' (see update.txt)"
 fi
 
 section "result"

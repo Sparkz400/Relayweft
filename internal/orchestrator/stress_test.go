@@ -17,23 +17,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
-	"github.com/sparkz400/switchyard/internal/sysload"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/sysload"
 )
 
 // Long-run stress test (ROADMAP 1.7). It runs whole tasks in a loop and
 // checks that goroutines, heap, open files/handles, leftover processes and
-// pool worktrees stay flat. It only runs when SY_STRESS_DURATION is set:
+// pool worktrees stay flat. It only runs when RW_STRESS_DURATION is set:
 //
-//	SY_STRESS_DURATION=3m go test -run '^TestStress$' -v -timeout 0 ./internal/orchestrator
+//	RW_STRESS_DURATION=3m go test -run '^TestStress$' -v -timeout 0 ./internal/orchestrator
 //
 // The time is split between two modes:
 //   - demo: the demo scenario (runner.NewFakeSet) in a no-git folder, as
-//     `sy --demo` runs it; every 4th task is cancelled midway.
+//     `rw --demo` runs it; every 4th task is cancelled midway.
 //   - git: a real repository with worktrees and merges. The agents are real
 //     subprocesses (this test binary acting as a fake Claude CLI through
 //     the real runner), so process spawning, stream parsing and tree kills
@@ -41,9 +41,9 @@ import (
 //     grandchild it started) is running.
 
 const (
-	fakeCLIFlag  = "--sy-stress-fake-cli"
-	sleeperFlag  = "--sy-stress-sleeper"
-	stressDirArg = "--sy-stress-dir="
+	fakeCLIFlag  = "--rw-stress-fake-cli"
+	sleeperFlag  = "--rw-stress-sleeper"
+	stressDirArg = "--rw-stress-dir="
 )
 
 // init turns this test binary into the fake agent CLI when the stress test
@@ -272,7 +272,7 @@ func stressOrc(t *testing.T, dir, mode string, runners func(*config.Config) runn
 	}
 	t.Cleanup(func() { log.Close() })
 	o := New(Options{
-		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "sy.yaml")),
+		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "rw.yaml")),
 		Runners: runners, Tracker: limits.NewTracker(), Log: log, Events: ch,
 		NoGit: dir == "", Mode: mode,
 		Load: func() sysload.Sample { return sysload.Sample{} },
@@ -281,13 +281,13 @@ func stressOrc(t *testing.T, dir, mode string, runners func(*config.Config) runn
 }
 
 func stressDuration(t *testing.T) time.Duration {
-	s := os.Getenv("SY_STRESS_DURATION")
+	s := os.Getenv("RW_STRESS_DURATION")
 	if s == "" {
-		t.Skip("set SY_STRESS_DURATION (e.g. 3m) to run the long-run stress test")
+		t.Skip("set RW_STRESS_DURATION (e.g. 3m) to run the long-run stress test")
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
-		t.Fatalf("SY_STRESS_DURATION=%q: want a duration like 30m", s)
+		t.Fatalf("RW_STRESS_DURATION=%q: want a duration like 30m", s)
 	}
 	return d
 }

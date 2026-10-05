@@ -1,6 +1,6 @@
 package proc
 
-// GitGuard goes before the arguments of every git command sy runs in a
+// GitGuard goes before the arguments of every git command rw runs in a
 // folder an agent wrote to (a pool worktree, the project folder after a
 // step). An agent in a sandbox cannot write the repository's git folder,
 // but it can write a submodule's .git file in the work tree and point it

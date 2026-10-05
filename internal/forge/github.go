@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/gh"
+	"github.com/sparkz400/relayweft/internal/gh"
 )
 
 // githubClient is GitHub through package gh.

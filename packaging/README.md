@@ -1,24 +1,30 @@
 # Packaging and releases
 
-Everything needed to ship `sy`: the release workflow
+Everything needed to ship `rw`: the release workflow
 (`.github/workflows/release.yml`), the Linux packages (`nfpm.yaml`), a
 Scoop manifest, winget manifest templates, the Homebrew formula
-(`../Formula/switchyard.rb`, from `homebrew/`) and the AUR package
+(`../Formula/relayweft.rb`, from `homebrew/`) and the AUR package
 (`aur/`).
 
-Release assets are a contract. `sy update`, the manifests and the CI
+Release assets are a contract. `rw update`, the manifests and the CI
 install scripts all look them up by these exact names. Add new assets,
 never rename existing ones, and list every asset in `checksums.txt`.
 
 | Asset | Platform |
 | --- | --- |
-| `sy-windows-amd64.exe`, `sy-windows-arm64.exe` | Windows |
-| `sy-linux-amd64`, `sy-linux-arm64` | Linux |
-| `sy-darwin-amd64`, `sy-darwin-arm64` | macOS |
-| `switchyard-linux-amd64.deb`, `switchyard-linux-arm64.deb` | Debian, Ubuntu (from v0.3.0) |
-| `switchyard-linux-amd64.rpm`, `switchyard-linux-arm64.rpm` | Fedora, RHEL, openSUSE (from v0.3.0) |
-| `switchyard-linux-amd64.apk`, `switchyard-linux-arm64.apk` | Alpine (from v0.3.0) |
+| `rw-windows-amd64.exe`, `rw-windows-arm64.exe` | Windows |
+| `rw-linux-amd64`, `rw-linux-arm64` | Linux |
+| `rw-darwin-amd64`, `rw-darwin-arm64` | macOS |
+| `relayweft-linux-amd64.deb`, `relayweft-linux-arm64.deb` | Debian, Ubuntu (from v0.3.0) |
+| `relayweft-linux-amd64.rpm`, `relayweft-linux-arm64.rpm` | Fedora, RHEL, openSUSE (from v0.3.0) |
+| `relayweft-linux-amd64.apk`, `relayweft-linux-arm64.apk` | Alpine (from v0.3.0) |
 | `checksums.txt` | SHA-256 of every asset (`sha256sum` format) |
+
+The names above start with v0.3.0. v0.1.0 and v0.2.0 were released as
+Switchyard, and their binaries were `sy-<os>-<arch>[.exe]`. This is the
+one time the names changed. v0.3.0 has no `sy-*` copies, so `sy update`
+in v0.2.0 stops with "release v0.3.0 has no sy-… asset". Users of v0.2.0
+install `rw` once by hand (README, "Upgrading from sy").
 
 ## Cutting a release
 
@@ -31,7 +37,7 @@ The `release` workflow runs `go test ./...`, builds all six binaries with
 `-X main.version=1.2.3` (no leading `v`), builds the Linux packages,
 writes `checksums.txt` and creates the GitHub release with generated
 notes. A tag with a suffix (`v1.3.0-rc1`) becomes a pre-release, which
-`sy update` and Scoop ignore.
+`rw update` and Scoop ignore.
 
 You can also start it by hand: **Actions > release > Run workflow** and
 enter a version such as `1.2.3`; the tag `v1.2.3` is created on the
@@ -41,42 +47,53 @@ After the release is published, refresh the manifests:
 
 ```sh
 packaging/render-manifests.sh 1.2.3
-git add packaging/scoop/sy.json Formula/switchyard.rb packaging/aur/PKGBUILD packaging/aur/.SRCINFO
+git add packaging/scoop/rw.json Formula/relayweft.rb packaging/aur/PKGBUILD packaging/aur/.SRCINFO
 git commit -m "Manifests for v1.2.3"
 ```
 
 This downloads `checksums.txt` with the `gh` CLI and updates in place:
-`packaging/scoop/sy.json`, `Formula/switchyard.rb` (from
-`homebrew/switchyard.rb.tmpl`) and `aur/PKGBUILD` and `aur/.SRCINFO`
+`packaging/scoop/rw.json`, `Formula/relayweft.rb` (from
+`homebrew/relayweft.rb.tmpl`) and `aur/PKGBUILD` and `aur/.SRCINFO`
 (from their `.tmpl` files). It writes ready-to-submit winget manifests to
 `winget-out/1.2.3/` (do not commit those). Edit the templates, not the
 rendered files. The `packaging` workflow checks on every pull request
 that touches these files that the committed ones match their release.
+It runs `manifest-release.sh` first. If the manifests' release has none of
+the asset names above (the manifests on `main` between the rename and
+v0.3.0 still name v0.2.0, which only has `sy-*`), and no newer release has
+them either, the install and compare checks are skipped with a notice. If a
+newer release has them, the check fails until the manifests are rendered
+for it.
+
+Homebrew users who tapped the repo as Switchyard have a `switchyard`
+formula. `formula_renames.json` in the repo root maps it to `relayweft`,
+so `brew update && brew upgrade` moves them to `relayweft` once the
+formula names a Relayweft release.
 
 ## Linux packages
 
 `linux-packages.sh` builds the `.deb`, `.rpm` and `.apk` packages with
 [nfpm](https://nfpm.goreleaser.com/), pinned to one version and checked
-against its SHA-256 before it runs. Each package installs `/usr/bin/sy`,
+against its SHA-256 before it runs. Each package installs `/usr/bin/rw`,
 the README and the license, and depends on `git`. The packages are not
 signed, and there is no apt or dnf repository, so users download them from
 the release:
 
 ```sh
-sudo apt install ./switchyard-linux-amd64.deb
-sudo dnf install ./switchyard-linux-amd64.rpm
-sudo apk add --allow-untrusted ./switchyard-linux-amd64.apk
+sudo apt install ./relayweft-linux-amd64.deb
+sudo dnf install ./relayweft-linux-amd64.rpm
+sudo apk add --allow-untrusted ./relayweft-linux-amd64.apk
 ```
 
 To build and test them locally (Docker, one container at a time):
 
 ```sh
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.1" -o dist/sy-linux-amd64 ./cmd/sy
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.1" -o dist/rw-linux-amd64 ./cmd/rw
 docker run --rm -v "$PWD:/src" -w /src debian:stable-slim sh -c \
   'apt-get update -qq && apt-get install -y -qq curl ca-certificates && sh packaging/linux-packages.sh 0.0.1 dist amd64'
-docker run --rm -v "$PWD:/src:ro" -w /src ubuntu:24.04 sh packaging/test-install.sh deb dist/switchyard-linux-amd64.deb 0.0.1
-docker run --rm -v "$PWD:/src:ro" -w /src fedora:latest sh packaging/test-install.sh rpm dist/switchyard-linux-amd64.rpm 0.0.1
-docker run --rm -v "$PWD:/src:ro" -w /src alpine:latest sh packaging/test-install.sh apk dist/switchyard-linux-amd64.apk 0.0.1
+docker run --rm -v "$PWD:/src:ro" -w /src ubuntu:24.04 sh packaging/test-install.sh deb dist/relayweft-linux-amd64.deb 0.0.1
+docker run --rm -v "$PWD:/src:ro" -w /src fedora:latest sh packaging/test-install.sh rpm dist/relayweft-linux-amd64.rpm 0.0.1
+docker run --rm -v "$PWD:/src:ro" -w /src alpine:latest sh packaging/test-install.sh apk dist/relayweft-linux-amd64.apk 0.0.1
 docker run --rm -v "$PWD:/src:ro" -w /src archlinux:latest sh packaging/test-install.sh aur
 ```
 
@@ -86,16 +103,16 @@ release's `checksums.txt`).
 
 ## Homebrew
 
-This repo is its own tap; the formula is `Formula/switchyard.rb`
-(`switchyard`, which installs `sy`; homebrew-core has neither name). It
+This repo is its own tap; the formula is `Formula/relayweft.rb`
+(`relayweft`, which installs `rw`; homebrew-core has neither name). It
 downloads the release binary for the OS and CPU and checks its SHA-256,
 so it needs no bottles. It works on macOS and on Linux (Homebrew on
 Linux).
 
 ```sh
-brew tap sparkz400/switchyard https://github.com/Sparkz400/Switchyard
-brew install switchyard
-brew upgrade switchyard
+brew tap sparkz400/relayweft https://github.com/Sparkz400/Relayweft
+brew install relayweft
+brew upgrade relayweft
 ```
 
 `brew update` fetches the committed formula, so render and commit after
@@ -103,11 +120,13 @@ each release.
 
 ## AUR
 
-`aur/` holds `PKGBUILD` and `.SRCINFO` for `switchyard-cli-bin`, built
-from the release's linux binaries (x86_64 and aarch64). The name is not
-`switchyard-bin` because the AUR already has an unrelated `switchyard`
-(an SMTP-to-XMPP bridge), and `-bin` names the binary build of the package
-with the same base name. It provides and conflicts with `sy`.
+`aur/` holds `PKGBUILD` and `.SRCINFO` for `relayweft-bin`, built
+from the release's linux binaries (x86_64 and aarch64). It provides
+`relayweft` and conflicts with `relayweft` and with `rw`: the AUR's
+unrelated `rw` and `rw-git` packages (Sortix's blockwise I/O tool) also
+install `/usr/bin/rw`. (Before the rename the package was to be called
+`switchyard-cli-bin`, since the AUR has an unrelated `switchyard`; it was
+never published.)
 
 To publish it (once, then after each release):
 
@@ -121,12 +140,12 @@ To publish it (once, then after each release):
    ```
 3. The first time, clone the empty package (this creates it on push):
    ```sh
-   git clone ssh://aur@aur.archlinux.org/switchyard-cli-bin.git
+   git clone ssh://aur@aur.archlinux.org/relayweft-bin.git
    ```
 4. After `render-manifests.sh`, copy `packaging/aur/PKGBUILD` and
    `packaging/aur/.SRCINFO` into that clone, check it, commit and push:
    ```sh
-   cd switchyard-cli-bin
+   cd relayweft-bin
    makepkg -f && namcap PKGBUILD *.pkg.tar.zst   # on Arch, optional
    git add PKGBUILD .SRCINFO
    git commit -m "Update to 1.2.3"
@@ -142,7 +161,7 @@ committed PKGBUILD and checks that `.SRCINFO` matches it.
 Install straight from the manifest in this repo:
 
 ```powershell
-scoop install https://raw.githubusercontent.com/sparkz400/switchyard/main/packaging/scoop/sy.json
+scoop install https://raw.githubusercontent.com/sparkz400/relayweft/main/packaging/scoop/rw.json
 ```
 
 Scoop installs only what the committed manifest names, so run
@@ -150,24 +169,24 @@ Scoop installs only what the committed manifest names, so run
 `checkver` and `autoupdate`, so Scoop's own tooling works too:
 
 ```powershell
-& "$(scoop prefix scoop)\bin\checkver.ps1" -Dir packaging\scoop -App sy -Update
+& "$(scoop prefix scoop)\bin\checkver.ps1" -Dir packaging\scoop -App rw -Update
 ```
 
-To make `scoop update sy` follow new releases automatically, put the
+To make `scoop update rw` follow new releases automatically, put the
 manifest in a bucket repo (for example `sparkz400/scoop-bucket` with
-`bucket/sy.json`) and let the bucket's Excavator action run `checkver`:
+`bucket/rw.json`) and let the bucket's Excavator action run `checkver`:
 
 ```powershell
 scoop bucket add sparkz400 https://github.com/sparkz400/scoop-bucket
-scoop install sparkz400/sy
+scoop install sparkz400/rw
 ```
 
 ## Submitting to winget
 
 The templates in `winget/` use `{{VERSION}}`, `{{SHA256_X64}}`,
 `{{SHA256_ARM64}}` and `{{RELEASE_DATE}}`; `render-manifests.sh` fills them.
-The package is `Sparkz400.Switchyard`, a portable installer that exposes the
-command `sy`.
+The package is `Sparkz400.Relayweft`, a portable installer that exposes the
+command `rw`.
 
 Either submit the rendered files:
 
@@ -180,37 +199,37 @@ wingetcreate submit winget-out\1.2.3 --token <github-token>
 or let `wingetcreate` build the update from the release URLs:
 
 ```powershell
-wingetcreate update Sparkz400.Switchyard --version 1.2.3 --submit `
-  --urls https://github.com/sparkz400/switchyard/releases/download/v1.2.3/sy-windows-amd64.exe `
-         https://github.com/sparkz400/switchyard/releases/download/v1.2.3/sy-windows-arm64.exe
+wingetcreate update Sparkz400.Relayweft --version 1.2.3 --submit `
+  --urls https://github.com/sparkz400/relayweft/releases/download/v1.2.3/rw-windows-amd64.exe `
+         https://github.com/sparkz400/relayweft/releases/download/v1.2.3/rw-windows-arm64.exe
 ```
 
 Both open a pull request against
 [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) (put new
-manifests under `manifests/s/Sparkz400/Switchyard/<version>/`). The first
+manifests under `manifests/s/Sparkz400/Relayweft/<version>/`). The first
 submission must use `wingetcreate submit` or a manual PR, since `update`
 needs an existing package.
 
-## `sy update` and package managers
+## `rw update` and package managers
 
-`sy update` replaces only a binary that no package manager owns. It tells
+`rw update` replaces only a binary that no package manager owns. It tells
 them apart by the binary's real path (after symlinks): Homebrew's
-`Cellar/switchyard/<version>/bin/sy`, Scoop's `apps\sy\<version>\` (in a
+`Cellar/relayweft/<version>/bin/rw`, Scoop's `apps\rw\<version>\` (in a
 `scoop` folder, `$SCOOP` or `$SCOOP_GLOBAL`), winget's
-`WinGet\Packages\Sparkz400.Switchyard_<source>\`, and for a binary under
+`WinGet\Packages\Sparkz400.Relayweft_<source>\`, and for a binary under
 `/usr/` the package database (`dpkg-query -S`, `rpm -qf`, `pacman -Qo`,
-`apk info --who-owns`, run with `LC_ALL=C`). In those cases `sy update --check`
-names the package manager's command, and `sy update` prints it and
-changes nothing. `sy update --force` replaces the binary anyway.
+`apk info --who-owns`, run with `LC_ALL=C`). In those cases `rw update --check`
+names the package manager's command, and `rw update` prints it and
+changes nothing. `rw update --force` replaces the binary anyway.
 
 ## Private repository
 
 While the repository is private, release downloads need authentication:
 
-- `sy update` sends `GITHUB_TOKEN` or `GH_TOKEN` when set; without one the
+- `rw update` sends `GITHUB_TOKEN` or `GH_TOKEN` when set; without one the
   GitHub API answers 404. A fine-grained token with read access to
   *Contents* on this repo is enough.
 - Scoop and winget cannot authenticate, so they only work once the
   repository is public (winget-pkgs also rejects URLs it cannot fetch).
   Until then, download with
-  `gh release download v1.2.3 --repo sparkz400/switchyard`.
+  `gh release download v1.2.3 --repo sparkz400/relayweft`.

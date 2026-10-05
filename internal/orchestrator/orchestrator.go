@@ -14,15 +14,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
-	"github.com/sparkz400/switchyard/internal/sysload"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/sysload"
 )
 
 // Fixed agent ids shown in the tree.
@@ -40,7 +40,7 @@ type Options struct {
 	Tracker *limits.Tracker
 	Log     *sessionlog.Writer
 	Events  chan<- event.Event
-	// ForceProvider pins every role to one provider (sy --provider).
+	// ForceProvider pins every role to one provider (rw --provider).
 	ForceProvider string
 	// NoGit disables snapshots, worktrees and diffs (demo mode).
 	NoGit bool
@@ -48,7 +48,7 @@ type Options struct {
 	Mode string
 	// Load reports how busy the machine is (default: a live sampler).
 	Load func() sysload.Sample
-	// Bench labels task records with a `sy bench` task name.
+	// Bench labels task records with a `rw bench` task name.
 	Bench string
 	// Repos are the extra git repos of a multi-repo workspace (workspace.go);
 	// nil for a single-repo project.
@@ -57,12 +57,12 @@ type Options struct {
 	// (ResolveWorkspace); every task logs them so the UIs show why.
 	WorkspaceSkipped []string
 	// TaskIDPrefix makes task ids unique when several orchestrators share
-	// one session log (sy bench).
+	// one session log (rw bench).
 	TaskIDPrefix string
 	// Approver asks a person to approve plans and changes (nil = approve).
 	Approver Approver
 	// NoAutoLearn skips routing.learn: auto at task start: Dir is a
-	// temporary checkout (sy watch), whose few records must not replace
+	// temporary checkout (rw watch), whose few records must not replace
 	// the repository's learned routes.
 	NoAutoLearn bool
 }
@@ -218,7 +218,7 @@ func (o *Orchestrator) emit(e event.Event) {
 	switch e.Kind {
 	case event.Quota:
 		if e.Quota != nil {
-			// Logged when it changes: `sy run --when-reset` reads the
+			// Logged when it changes: `rw run --when-reset` reads the
 			// reset time back from the logs.
 			if sessionlog.QuotaChanged(o.opts.Tracker.Snapshot(e.Provider).Quota, *e.Quota) {
 				q := *e.Quota
@@ -253,7 +253,7 @@ type TaskResult struct {
 	Tokens   event.TokenUsage
 	Kept     []string // branches kept because of merge conflicts
 	Cost     event.TaskCost
-	UndoKey  string // for `sy undo` ("" when not in a git repo)
+	UndoKey  string // for `rw undo` ("" when not in a git repo)
 }
 
 // stepResult is the outcome of one subtask.
@@ -318,7 +318,7 @@ type task struct {
 	// starts): their agents are recorded in the task state while they run.
 	planSteps map[string]bool
 	// interrupted are, in a resumed task, the subtasks whose agent was
-	// running when sy stopped (resumeStep); guarded by resumeMu.
+	// running when rw stopped (resumeStep); guarded by resumeMu.
 	interrupted map[string]StepRun
 	resumeMu    sync.Mutex
 
@@ -339,7 +339,7 @@ type stepLoc struct {
 	owner bool
 }
 
-// interruptedRun returns the run of a subtask that sy stopped in the middle
+// interruptedRun returns the run of a subtask that rw stopped in the middle
 // of, if any.
 func (t *task) interruptedRun(id string) (StepRun, bool) {
 	t.resumeMu.Lock()
@@ -492,7 +492,7 @@ func (o *Orchestrator) cost(t *task) event.TaskCost {
 	return c
 }
 
-// snapshotBefore records the working tree before a task for `sy undo`.
+// snapshotBefore records the working tree before a task for `rw undo`.
 func (o *Orchestrator) snapshotBefore(t *task) {
 	if o.opts.NoGit || !isRepo(o.opts.Dir) {
 		return
@@ -546,7 +546,7 @@ func (o *Orchestrator) snapshotAfter(t *task) {
 }
 
 // Run executes a task end to end. A panic inside the task is written to a
-// crash log and ends the task as failed instead of taking sy down.
+// crash log and ends the task as failed instead of taking rw down.
 func (o *Orchestrator) Run(ctx context.Context, text string) TaskResult {
 	return o.RunWith(ctx, text, TaskOptions{})
 }
@@ -576,7 +576,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		}
 		if r != nil {
 			path := diag.Crash("task", r, debug.Stack())
-			result = TaskResult{Summary: "internal error, Switchyard bug: details in " + path + " (sy bugreport)"}
+			result = TaskResult{Summary: "internal error, Relayweft bug: details in " + path + " (rw bugreport)"}
 			if !finished {
 				o.emit(event.Event{Kind: event.Phase, Text: "done"})
 				o.emit(event.Event{Kind: event.TaskDone, Text: result.Summary})
@@ -603,22 +603,22 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		} else {
 			t.resumed = true
 		}
-		// The lock comes first: two sy processes must never run one task.
+		// The lock comes first: two rw processes must never run one task.
 		unlock, ok := t.state.lock()
 		if !ok {
-			refused = fmt.Sprintf("task %s is running in another sy", t.state.ID)
+			refused = fmt.Sprintf("task %s is running in another rw", t.state.ID)
 			t.state = nil
 		} else {
 			defer unlock()
 			if t.resumed {
-				// The state on disk is the truth: another sy may have
+				// The state on disk is the truth: another rw may have
 				// resumed and finished it since this one was loaded.
 				fresh, err := LoadTask(t.state.ID)
 				switch {
 				case err != nil:
 					refused = err.Error()
 				case fresh.Status != "running" && !opts.Force:
-					refused = fmt.Sprintf("task %s is %s now, not interrupted (sy resume --force runs its unfinished steps)", fresh.ID, fresh.Status)
+					refused = fmt.Sprintf("task %s is %s now, not interrupted (rw resume --force runs its unfinished steps)", fresh.ID, fresh.Status)
 				}
 				if refused != "" {
 					t.state = nil
@@ -658,9 +658,9 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 			if t.resumed && t.state != nil {
 				// A repo that is away for now (unplugged drive, network
 				// share) must not end the task: it stays interrupted, so
-				// a later sy resume works without --force.
+				// a later rw resume works without --force.
 				stayInterrupted = true
-				refused += "; the task stays interrupted (sy resume once the repo is back)"
+				refused += "; the task stays interrupted (rw resume once the repo is back)"
 			}
 		}
 	}
@@ -699,7 +699,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		status = "cancelled"
 	}
 	// after_task runs even after a cancel, so give it a context of its own.
-	o.runHooks(context.WithoutCancel(ctx), t, "after_task", cfg.Hooks.AfterTask, map[string]string{"SY_STATUS": status, "SY_SUMMARY": res.Summary})
+	o.runHooks(context.WithoutCancel(ctx), t, "after_task", cfg.Hooks.AfterTask, map[string]string{"RW_STATUS": status, "RW_SUMMARY": res.Summary})
 	if res.OK && t.useGit && o.opts.Bench == "" && t.cfg.Orchestrator.Handoff {
 		addRepoNote(t.root, text, res.Summary, t.changedFiles())
 		for _, r := range t.repos {
@@ -752,7 +752,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		if t.useGit {
 			why = "worktrees are off for this repo (git < 2.38 or more than worktree_max_files files)"
 		}
-		o.emit(event.Event{Kind: event.Error, Text: "change review is on, but " + why + ": agents write straight into your tree (sy undo still works in git repos)"})
+		o.emit(event.Event{Kind: event.Error, Text: "change review is on, but " + why + ": agents write straight into your tree (rw undo still works in git repos)"})
 	}
 	if t.useGit && cfg.Orchestrator.Handoff {
 		t.repoMap = repoMap(t.root)
@@ -1086,7 +1086,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 			select {
 			case <-t.warm:
 				if warn := uint64(oc.PoolWarnGB * (1 << 30)); warn > 0 && t.poolSize > warn {
-					o.logf("worktree pool for this repo uses %s (> pool_warn_gb %.0f GB): `sy clean` frees it; unused slots are pruned after pool_max_idle",
+					o.logf("worktree pool for this repo uses %s (> pool_warn_gb %.0f GB): `rw clean` frees it; unused slots are pruned after pool_max_idle",
 						humanBytes(t.poolSize), oc.PoolWarnGB)
 				}
 			case <-ctx.Done():
@@ -1127,16 +1127,16 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, OK: true, Text: "done before the interruption"})
 				continue
 			}
-			// Its agent was running when sy stopped: the step continues
+			// Its agent was running when rw stopped: the step continues
 			// that agent's session where it ran (resumeStep).
 			if run, ok := t.state.runningStep(st.ID); ok {
 				t.interrupted[st.ID] = run
 			}
 			if !st.Kind.ReadOnly() {
-				// It may have been running when sy stopped: its agent may
+				// It may have been running when rw stopped: its agent may
 				// have left half-done edits in the tree. (A fresh agent
 				// gets this note, a continued session resumePrompt.)
-				p.Subtasks[i].Prompt += "\n\nNOTE: an earlier attempt at this subtask was interrupted (sy stopped). Files it was editing may be partly changed: check the current state of the files before you edit, and finish or redo the work."
+				p.Subtasks[i].Prompt += "\n\nNOTE: an earlier attempt at this subtask was interrupted (rw stopped). Files it was editing may be partly changed: check the current state of the files before you edit, and finish or redo the work."
 			}
 		}
 	}
@@ -1145,7 +1145,8 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 	writeSem := t.writeSem
 	inflight := 0
 	var wg sync.WaitGroup
-	wake := make(chan struct{}, len(p.Subtasks)+1)
+	// Each subtask sends once, when it ends, so a send never blocks.
+	wake := make(chan struct{}, len(p.Subtasks))
 
 	for {
 		mu.Lock()
@@ -1277,7 +1278,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				done[st.ID] = true
 				mu.Unlock()
 				// A step cancelled while its agent worked stays on record
-				// as running: sy resume --force continues it.
+				// as running: rw resume --force continues it.
 				t.state.setResult(st.ID, r, !r.ok && ctx.Err() != nil)
 			}()
 		}
@@ -1304,7 +1305,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	rp.mergeMu.Unlock()
 	inMainTree := func() stepResult {
 		if o.reviewing(t) {
-			o.emit(event.Event{Kind: event.Error, AgentID: st.ID, Text: "change review is not possible for " + st.ID + " (no worktree): its changes go straight into your tree; sy undo reverts the task"})
+			o.emit(event.Event{Kind: event.Error, AgentID: st.ID, Text: "change review is not possible for " + st.ID + " (no worktree): its changes go straight into your tree; rw undo reverts the task"})
 		}
 		select { // one writer at a time in the main tree
 		case rp.writeSem <- struct{}{}:
@@ -1316,14 +1317,14 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	}
 	var s *slot
 	if prev, ok := t.interruptedRun(st.ID); ok && prev.Slot != "" {
-		// sy stopped while this step's agent worked in a pool worktree:
+		// rw stopped while this step's agent worked in a pool worktree:
 		// its half-done edits are there, as changes against prev.Base.
 		// Continue in that worktree, as it is.
 		cs, err := claimSlot(rp.root, prev.Slot, prev.Base, &slotHold{Task: t.state.ID, Step: st.ID, Token: prev.Token})
 		if err == nil {
 			s, base = cs, prev.Base
 			o.slotNotes(t, cs)
-			o.logf("%s: continuing in %s, which holds the edits its agent made before sy stopped", st.ID, prev.Slot)
+			o.logf("%s: continuing in %s, which holds the edits its agent made before rw stopped", st.ID, prev.Slot)
 		} else if prev.Kept != "" && rp.useWT {
 			// A best-of winner: its work is kept as a commit (bestof.go).
 			t.takeInterrupted(st.ID)
@@ -1334,7 +1335,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			// Its session must not be continued elsewhere: it would
 			// think its edits are there.
 			t.takeInterrupted(st.ID)
-			o.logf("%s: the edits its agent made before sy stopped cannot be used (%v); the step starts over", st.ID, err)
+			o.logf("%s: the edits its agent made before rw stopped cannot be used (%v); the step starts over", st.ID, err)
 			if !rp.useWT {
 				return inMainTree()
 			}
@@ -1361,7 +1362,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 }
 
 // dropCleanHold: a step cancelled while its agent worked stays on record as
-// running, and its worktree held, so sy resume --force can continue it
+// running, and its worktree held, so rw resume --force can continue it
 // there with its edits. When the agent changed nothing there, nothing is
 // worth a held full checkout: the step is forgotten as running and the
 // worktree is free again (a resume starts the step over). Every cancelled
@@ -1419,7 +1420,7 @@ func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask
 		var err error
 		if c != nil && round == 1 {
 			sc = slotCommit{Commit: c.commit, Changed: c.changed}
-		} else if sc, err = wg.commitWork(base, "switchyard: "+st.Title); err != nil {
+		} else if sc, err = wg.commitWork(base, "relayweft: "+st.Title); err != nil {
 			o.mergeEvent(t, st.ID, false, "commit failed: "+err.Error())
 			r.ok, r.err = false, "commit failed: "+err.Error()
 			return r
@@ -1490,7 +1491,7 @@ func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask
 		}
 		if len(dec.Apply) < len(files) || len(dec.Hunks) > 0 {
 			full := commit
-			pc, err := g.selectionCommit(base, commit, files, dec, "switchyard: "+st.Title+" (what you accepted)")
+			pc, err := g.selectionCommit(base, commit, files, dec, "relayweft: "+st.Title+" (what you accepted)")
 			if err != nil {
 				branch := o.saveBranchIn(rp, st.ID+"-full", full)
 				r.ok, r.err = false, "could not apply the selected files ("+err.Error()+"); the full change is on "+branch
@@ -1516,7 +1517,7 @@ func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask
 		r.ok, r.err = false, "merge conflict: "+reason
 		return r
 	}
-	merged, err := g.commitTree("commit-tree", tree, "-p", rp.snapshot, "-p", commit, "-m", "switchyard: merge "+st.ID)
+	merged, err := g.commitTree("commit-tree", tree, "-p", rp.snapshot, "-p", commit, "-m", "relayweft: merge "+st.ID)
 	if err != nil {
 		o.mergeEvent(t, st.ID, false, err.Error())
 		r.ok, r.err = false, err.Error()
@@ -1525,7 +1526,7 @@ func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask
 	skipped, err := g.applyDiffReport(rp.snapshot, merged)
 	if len(skipped) > 0 {
 		o.logf("%s: submodule changes are not applied to your tree: %s", st.ID, strings.Join(skipped, ", "))
-		t.addNote(fmt.Sprintf("%s changed submodule(s) %s; Switchyard does not apply submodule changes", st.ID, strings.Join(skipped, ", ")))
+		t.addNote(fmt.Sprintf("%s changed submodule(s) %s; Relayweft does not apply submodule changes", st.ID, strings.Join(skipped, ", ")))
 	}
 	if err != nil {
 		branch := o.keepBranchIn(t, rp, st.ID, commit)
@@ -1551,7 +1552,7 @@ func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask
 	return r
 }
 
-// slotWarnings reports what an agent did in its worktree that Switchyard
+// slotWarnings reports what an agent did in its worktree that Relayweft
 // cannot carry over as is. agentHead remembers the HEAD already saved.
 func (o *Orchestrator) slotWarnings(t, rp *task, stepID string, sc slotCommit, agentHead *string) {
 	if sc.Head != "" && sc.Head != *agentHead {
@@ -1574,7 +1575,7 @@ func (o *Orchestrator) slotWarnings(t, rp *task, stepID string, sc slotCommit, a
 // without counting it as a conflict. Branches are only ever created, never
 // moved: an existing name gets a numbered suffix.
 func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
-	name, err := newBranch(git{t.root}, "sy/"+refPart(o.opts.Log.Session())+"/"+refPart(t.id)+"/"+refPart(stepID), commit)
+	name, err := newBranch(git{t.root}, "rw/"+refPart(o.opts.Log.Session())+"/"+refPart(t.id)+"/"+refPart(stepID), commit)
 	if err != nil {
 		// Nothing references the commit now: say so loudly, with the
 		// full id, so the person can keep it before git gc deletes it.
@@ -1589,8 +1590,8 @@ func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
 
 // newBranch creates a branch at commit named base, or base-2, base-3 ...
 // when that exists, and returns its name. When no branch can be created
-// (a branch named like a prefix of base, such as "sy", blocks them all),
-// the commit is kept under refs/switchyard/kept/<commit> and that ref is
+// (a branch named like a prefix of base, such as "rw", blocks them all),
+// the commit is kept under refs/relayweft/kept/<commit> and that ref is
 // returned. The error says that nothing references the commit.
 func newBranch(g git, base, commit string) (string, error) {
 	for i := 1; i <= 20; i++ {
@@ -1605,11 +1606,11 @@ func newBranch(g git, base, commit string) (string, error) {
 		}
 	}
 	// Last resort; the commit must stay referenced either way.
-	name := "sy/kept-" + commit[:min(12, len(commit))]
+	name := "rw/kept-" + commit[:min(12, len(commit))]
 	if created, _ := createBranch(g, name, commit); created {
 		return name, nil
 	}
-	ref := "refs/switchyard/kept/" + commit
+	ref := "refs/relayweft/kept/" + commit
 	_, err := g.out("update-ref", ref, commit)
 	if got, verr := g.out("rev-parse", "-q", "--verify", ref+"^{commit}"); verr == nil && got == commit {
 		return ref, nil
@@ -1712,7 +1713,7 @@ func (o *Orchestrator) runStepAs(ctx context.Context, t *task, st Subtask, deps 
 	failures, limitRetries := 0, 0
 	first := 1
 	if prev, ok := t.interruptedRun(st.ID); ok && c == nil {
-		// sy stopped while this step's agent worked: continue its session.
+		// rw stopped while this step's agent worked: continue its session.
 		t.takeInterrupted(st.ID)
 		first = max(1, prev.Attempt)
 		if r, ran := o.resumeStep(ctx, t, step, st, loc, prev); ran {
@@ -1789,7 +1790,7 @@ type resumedRun struct {
 }
 
 // resumeStep continues the CLI session of a step's agent that was running
-// when sy stopped, in the folder it ran in, with a prompt that tells it so.
+// when rw stopped, in the folder it ran in, with a prompt that tells it so.
 // ran is false when the session cannot be continued (no session id was
 // saved, the step works in another folder now, or the provider is gone,
 // disabled, changed or at its limit): the caller starts a fresh agent, as
@@ -1812,10 +1813,10 @@ func (o *Orchestrator) resumeStep(ctx context.Context, t *task, step router.Step
 		why = prev.Provider + " is at its usage limit"
 	}
 	if why != "" {
-		o.logf("%s: was interrupted when sy stopped; %s, so a fresh agent takes it over", st.ID, why)
+		o.logf("%s: was interrupted when rw stopped; %s, so a fresh agent takes it over", st.ID, why)
 		return resumedRun{}, false
 	}
-	o.logf("%s: continuing its agent's %s session, interrupted when sy stopped", st.ID, prev.Provider)
+	o.logf("%s: continuing its agent's %s session, interrupted when rw stopped", st.ID, prev.Provider)
 	rp := t.repoOf(st)
 	d, res := o.runAgentAt(ctx, t, step, st.ID, AgentMain, loc, resumePrompt(st, rp.cfg.Verify.Commands), max(1, prev.Attempt), &prev)
 	r := resumedRun{stepResult: stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: res.Tokens}, killed: res.Killed}
@@ -1859,7 +1860,7 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	var d event.Decision
 	if resume != nil {
 		d = event.Decision{StepID: step.ID, StepTitle: step.Title, Role: resume.Role, Provider: resume.Provider, Model: resume.Model, Effort: resume.Effort,
-			Rule: router.RuleForced, Reason: "continues the session interrupted when sy stopped", Confidence: 1}
+			Rule: router.RuleForced, Reason: "continues the session interrupted when rw stopped", Confidence: 1}
 	} else {
 		d = o.router.Route(step)
 	}
@@ -1965,7 +1966,7 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 		// limit: route around it for the rest of the session.
 		res.LimitHit = true
 		res.ResetAt = time.Now().Add(12 * time.Hour)
-		why = "unavailable (" + clip(res.Err.Error(), 120) + "; run `sy doctor`)"
+		why = "unavailable (" + clip(res.Err.Error(), 120) + "; run `rw doctor`)"
 	}
 	if res.LimitHit {
 		until := res.ResetAt
@@ -2002,7 +2003,7 @@ func (o *Orchestrator) busy(oc config.OrchestratorCfg) (bool, string) {
 // waitForRoom holds a new agent while the machine is maxed out, then
 // reserves a slot for it (released with releaseRoom). The first agent always
 // starts (a task must make progress), and after busy_max_wait the agent
-// starts anyway, so a machine that is busy for other reasons only slows sy
+// starts anyway, so a machine that is busy for other reasons only slows rw
 // down, never stops it. Checking and reserving happen under one lock, so
 // agents starting at the same moment cannot all slip through.
 func (o *Orchestrator) waitForRoom(ctx context.Context, t *task, agentID string) {
@@ -2054,7 +2055,7 @@ func errText(err error) string {
 }
 
 // RunSingle runs the whole task with one agent on a fixed route, without
-// planning or review: the single-agent baseline for `sy stats`.
+// planning or review: the single-agent baseline for `rw stats`.
 func (o *Orchestrator) RunSingle(ctx context.Context, text, provider string, route config.Route) TaskResult {
 	o.mu.Lock()
 	o.taskSeq++

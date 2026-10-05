@@ -9,14 +9,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Diff is the task's change: its before -> after snapshots.
 type Diff struct {
 	Before, After string
-	Undone        bool // the task was undone since (sy undo --redo puts it back)
+	Undone        bool // the task was undone since (rw undo --redo puts it back)
 	Files         []FileDiff
 	Add, Del      int
 	Truncated     bool // lines were left out (limits)

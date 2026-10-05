@@ -220,7 +220,7 @@ func (g git) partialCommit(base, commit string, paths []string, msg string) (str
 // partialCommitHunks is partialCommit plus patches (base -> commit, with
 // only some hunks) applied to the base version of other files.
 func (g git) partialCommitHunks(base, commit string, paths []string, patches map[string]string, msg string) (string, error) {
-	f, err := os.CreateTemp("", "sy-index-*")
+	f, err := os.CreateTemp("", "rw-index-*")
 	if err != nil {
 		return "", err
 	}

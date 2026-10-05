@@ -1,12 +1,12 @@
 # nfpm config for the .deb, .rpm and .apk packages (release.yml builds
 # them). Run it from the repo root with VERSION and ARCH (amd64 or arm64)
-# set and the linux binary for ARCH copied to build/sy (nfpm does not
+# set and the linux binary for ARCH copied to build/rw (nfpm does not
 # expand variables in file paths):
 #
-#   cp dist/sy-linux-amd64 build/sy
+#   cp dist/rw-linux-amd64 build/rw
 #   VERSION=1.2.3 ARCH=amd64 nfpm package -f packaging/nfpm.yaml -p deb \
-#     -t dist/switchyard-linux-amd64.deb
-name: switchyard
+#     -t dist/relayweft-linux-amd64.deb
+name: relayweft
 arch: ${ARCH}
 platform: linux
 version: ${VERSION}
@@ -15,37 +15,37 @@ section: devel
 priority: optional
 maintainer: Sparkz400 <62327601+Sparkz400@users.noreply.github.com>
 vendor: Sparkz400
-homepage: https://github.com/sparkz400/switchyard
+homepage: https://github.com/sparkz400/relayweft
 license: MIT
 description: |-
   Terminal app that routes coding work between the Codex CLI and Claude Code.
-  Switchyard (sy) drives the official codex and claude CLIs with their
+  Relayweft (rw) drives the official codex and claude CLIs with their
   normal login and never uses API keys.
 depends:
   - git
 contents:
-  - src: build/sy
-    dst: /usr/bin/sy
+  - src: build/rw
+    dst: /usr/bin/rw
     file_info:
       mode: 0755
   - src: README.md
-    dst: /usr/share/doc/switchyard/README.md
+    dst: /usr/share/doc/relayweft/README.md
     file_info:
       mode: 0644
   # Debian keeps the license as the package's copyright file.
   - src: LICENSE
-    dst: /usr/share/doc/switchyard/copyright
+    dst: /usr/share/doc/relayweft/copyright
     packager: deb
     file_info:
       mode: 0644
   - src: LICENSE
-    dst: /usr/share/licenses/switchyard/LICENSE
+    dst: /usr/share/licenses/relayweft/LICENSE
     packager: rpm
     type: license
     file_info:
       mode: 0644
   - src: LICENSE
-    dst: /usr/share/licenses/switchyard/LICENSE
+    dst: /usr/share/licenses/relayweft/LICENSE
     packager: apk
     file_info:
       mode: 0644

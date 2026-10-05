@@ -54,10 +54,10 @@ func TestWithoutSecretsForgejoActions(t *testing.T) {
 }
 
 // Verify commands, hooks and bench checks run code the agents wrote: the
-// shell they run in must not see sy's tokens either.
+// shell they run in must not see rw's tokens either.
 func TestShellWithoutSecrets(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "ghs_secret")
-	t.Setenv("SY_TEST_KEEP", "kept")
+	t.Setenv("RW_TEST_KEEP", "kept")
 	line := "env"
 	if runtime.GOOS == "windows" {
 		line = "set"
@@ -69,7 +69,7 @@ func TestShellWithoutSecrets(t *testing.T) {
 	if strings.Contains(string(out), "ghs_secret") {
 		t.Errorf("the shell saw GITHUB_TOKEN:\n%s", out)
 	}
-	if !strings.Contains(string(out), "SY_TEST_KEEP=kept") {
+	if !strings.Contains(string(out), "RW_TEST_KEEP=kept") {
 		t.Errorf("the rest of the environment is missing:\n%s", out)
 	}
 }

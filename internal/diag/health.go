@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/sysload"
+	"github.com/sparkz400/relayweft/internal/sysload"
 )
 
-// Health log: a small record of how every sy process went, kept next to the
-// debug log as sy-health.log. The debug log rotates within days of heavy
+// Health log: a small record of how every rw process went, kept next to the
+// debug log as rw-health.log. The debug log rotates within days of heavy
 // use; this one holds a few lines per process (start, load peaks every few
-// minutes, hangs, panics, end) so `sy health` can look back weeks.
+// minutes, hangs, panics, end) so `rw health` can look back weeks.
 //
 // A line is "<time> <kind> pid=<pid> key=value ...", values quoted when
 // they contain spaces. A process that ends without an "end" line was
@@ -27,7 +27,7 @@ import (
 // leaves its output in fatal-<pid>-<time>.log (debug.SetCrashOutput).
 
 const (
-	healthFile    = "sy-health.log"
+	healthFile    = "rw-health.log"
 	healthMaxSize = 4 << 20
 
 	watchEvery = 10 * time.Second
@@ -60,7 +60,7 @@ func openHealth(d string) {
 	}
 	path := filepath.Join(d, healthFile)
 	if st, err := os.Stat(path); err == nil && st.Size() > healthMaxSize {
-		os.Rename(path, path+".1") // fails on Windows while another sy has it open: keep appending
+		os.Rename(path, path+".1") // fails on Windows while another rw has it open: keep appending
 	}
 	if file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 		hf = file
@@ -171,18 +171,18 @@ type Peaks struct {
 	MemFree    uint64 // lowest free RAM
 	MemTotal   uint64
 	MemOK      bool
-	SyMem      uint64 // highest memory sy itself got from the OS
+	RwMem      uint64 // highest memory rw itself got from the OS
 	Goroutines int
 }
 
-func (p *Peaks) add(s sysload.Sample, syMem uint64, goroutines int) {
+func (p *Peaks) add(s sysload.Sample, rwMem uint64, goroutines int) {
 	if s.CPUOK && (!p.CPUOK || s.CPU > p.CPU) {
 		p.CPU, p.CPUOK = s.CPU, true
 	}
 	if s.MemOK && (!p.MemOK || s.MemFree < p.MemFree) {
 		p.MemFree, p.MemTotal, p.MemOK = s.MemFree, s.MemTotal, true
 	}
-	p.SyMem = max(p.SyMem, syMem)
+	p.RwMem = max(p.RwMem, rwMem)
 	p.Goroutines = max(p.Goroutines, goroutines)
 }
 
@@ -193,7 +193,7 @@ func (p *Peaks) merge(o Peaks) {
 	if o.MemOK {
 		p.add(sysload.Sample{MemFree: o.MemFree, MemTotal: o.MemTotal, MemOK: true}, 0, 0)
 	}
-	p.SyMem = max(p.SyMem, o.SyMem)
+	p.RwMem = max(p.RwMem, o.RwMem)
 	p.Goroutines = max(p.Goroutines, o.Goroutines)
 }
 
@@ -205,8 +205,8 @@ func (p Peaks) kv() []any {
 	if p.MemOK {
 		kv = append(kv, "memfree_mb", p.MemFree>>20, "memtotal_mb", p.MemTotal>>20)
 	}
-	if p.SyMem > 0 {
-		kv = append(kv, "symem_mb", p.SyMem>>20, "goroutines", p.Goroutines)
+	if p.RwMem > 0 {
+		kv = append(kv, "symem_mb", p.RwMem>>20, "goroutines", p.Goroutines)
 	}
 	return kv
 }
@@ -318,7 +318,7 @@ func dumpHang(name string, stuck time.Duration) string {
 	buf := make([]byte, 1<<20)
 	buf = buf[:runtime.Stack(buf, true)]
 	var b strings.Builder
-	fmt.Fprintf(&b, "Switchyard %s: %s made no progress for %s (pid %d, %s)\n", Version, name, stuck.Round(time.Second), os.Getpid(), time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "Relayweft %s: %s made no progress for %s (pid %d, %s)\n", Version, name, stuck.Round(time.Second), os.Getpid(), time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&b, "os %s/%s, go %s\n\n--- goroutines ---\n%s\n", runtime.GOOS, runtime.GOARCH, runtime.Version(), buf)
 	b.WriteString("\n--- recent debug log ---\n")
 	for _, l := range Recent() {

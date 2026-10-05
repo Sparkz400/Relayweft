@@ -175,7 +175,7 @@ func TestCommand(t *testing.T) {
 		t.Errorf("darwin: %s %q %v", name, args, err)
 	}
 	name, args, err = command("linux", "-t", "b", found)
-	if err != nil || name != "/usr/bin/notify-send" || strings.Join(args, "|") != "--app-name=Switchyard|--|-t|b" {
+	if err != nil || name != "/usr/bin/notify-send" || strings.Join(args, "|") != "--app-name=Relayweft|--|-t|b" {
 		t.Errorf("linux: %s %q %v", name, args, err)
 	}
 	if _, _, err := command("linux", "t", "b", missing); !errors.Is(err, ErrUnsupported) {

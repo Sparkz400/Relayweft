@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/notify"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/schedule"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/notify"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/schedule"
 )
 
 // job is something the TUI runs as a task: a new task, a resumed one or a
@@ -209,7 +209,7 @@ func (m *Model) alert(ev, title, body string) {
 	if hooks := cfg.Notify.Webhooks; notify.Wanted(hooks, ev) {
 		msg := notify.Message{Event: ev, Title: title, Body: body, Source: filepath.Base(m.opt.Dir)}
 		post := sendWebhooks
-		// A failure has nowhere to show in a running TUI; sy notify --test
+		// A failure has nowhere to show in a running TUI; rw notify --test
 		// reports it.
 		go post(context.Background(), hooks, msg)
 	}
@@ -231,9 +231,9 @@ func (m *Model) notifyDone(ok bool, summary string, took time.Duration) {
 	if took < m.store.Get().Notify.MinTask.D() {
 		return
 	}
-	title, ev := "Switchyard: done", notify.EventDone
+	title, ev := "Relayweft: done", notify.EventDone
 	if !ok {
-		title, ev = "Switchyard: failed", notify.EventFailed
+		title, ev = "Relayweft: failed", notify.EventFailed
 	}
 	m.alert(ev, title, oneLine(summary, 600)+"\n"+took.Round(time.Second).String())
 }
@@ -246,9 +246,11 @@ func (m *Model) checkInterrupted() {
 	if r := m.store.Repo(); r.Path != "" {
 		msg := "using this repo's settings from " + r.Path
 		if len(r.Ignored) > 0 {
-			msg += " (its " + strings.Join(r.Ignored, ", ") + " run commands and are ignored until you run `sy trust`)"
+			msg += " (its " + strings.Join(r.Ignored, ", ") + " run commands and are ignored until you run `rw trust`)"
 		}
 		m.addLog(logLine{kind: event.Log, text: msg})
+	} else if r.Legacy != "" {
+		m.addLog(logLine{kind: event.Log, text: r.Legacy + " is not read: rw's repo file is " + config.RepoFileName + ". Rename it (and run `rw trust` if it runs commands)."})
 	}
 	s := orchestrator.LastInterrupted(m.opt.Dir)
 	if s == nil {
@@ -326,7 +328,7 @@ func (m *Model) phase2Command(cmd string, args []string, rest string, say func(s
 
 // agentsCommand lists the running agents (a message reaches them when
 // their turn ends) and the finished ones that take a follow-up, also from
-// earlier sy sessions in this folder.
+// earlier rw sessions in this folder.
 func (m *Model) agentsCommand(say func(string, ...any)) {
 	running := m.orc.RunningAgents()
 	sort.Strings(running)
@@ -453,14 +455,14 @@ func (m *Model) resumeCommand(args []string, say func(string, ...any)) {
 			return
 		}
 		if s.Status == "running" && !s.Interrupted() {
-			say("task %s is still running in another sy", s.ID)
+			say("task %s is still running in another rw", s.ID)
 			return
 		}
 		if s.Status == "done" {
 			say("task %s already finished; resuming runs the steps that did not succeed", s.ID)
 		}
 		if s.Dir != "" && !sameDir(s.Dir, m.opt.Dir) {
-			say("note: task %s ran in %s, this sy works in %s", s.ID, s.Dir, m.opt.Dir)
+			say("note: task %s ran in %s, this rw works in %s", s.ID, s.Dir, m.opt.Dir)
 		}
 	} else {
 		s = m.interrupted

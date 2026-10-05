@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // writeLog writes records as one session file, the way Writer does.
@@ -91,7 +91,7 @@ func TestBuildDashboard(t *testing.T) {
 	}
 
 	// Researcher runs 7x24h ago but before the first calendar day: in the
-	// window of `sy tune --since 7d`, so they count for the suggestions.
+	// window of `rw tune --since 7d`, so they count for the suggestions.
 	for i := 0; i < 6; i++ {
 		add(Record{Type: TypeAgentEnd, TS: now.Add(-7*24*time.Hour + time.Hour + time.Duration(i)*time.Minute), TaskID: fmt.Sprintf("r%d", i), Step: "x", Attempt: 1,
 			Role: "researcher", Provider: "claude", Model: "sonnet", OK: Bool(false)})
@@ -148,7 +148,7 @@ func TestBuildDashboard(t *testing.T) {
 	}
 	tune := SuggestFor(read, Filter{Since: now.Add(-7 * 24 * time.Hour), Cwd: repo}, DefaultCatalog)
 	if !reflect.DeepEqual(d.Suggestions, tune) {
-		t.Errorf("suggestions differ from sy tune --since 7d:\n%+v\n%+v", d.Suggestions, tune)
+		t.Errorf("suggestions differ from rw tune --since 7d:\n%+v\n%+v", d.Suggestions, tune)
 	}
 	if !strings.Contains(fmt.Sprint(d.Suggestions), "researcher on claude:sonnet fails often") {
 		t.Errorf("runs 7x24h ago are not in the suggestions: %+v", d.Suggestions)

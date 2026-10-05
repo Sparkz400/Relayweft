@@ -1,4 +1,4 @@
-// Package forge is what sy pr, issues as tasks, sy watch and sy review
+// Package forge is what rw pr, issues as tasks, rw watch and rw review
 // need from a code host, for GitHub (and GitHub Enterprise), GitLab
 // (gitlab.com and self-managed) and Gitea or Forgejo (Codeberg and
 // self-hosted): read issues, open a pull request (a merge request on
@@ -29,7 +29,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/gh"
+	"github.com/sparkz400/relayweft/internal/gh"
 )
 
 // Kind is a forge's API family.

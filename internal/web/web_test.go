@@ -16,13 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/notify"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sysload"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/notify"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sysload"
 )
 
 type testEnv struct {
@@ -52,7 +52,7 @@ func newEnv(t *testing.T, mutate func(c *config.Config)) *testEnv {
 	if mutate != nil {
 		mutate(cfg)
 	}
-	store := config.NewStore(cfg, filepath.Join(t.TempDir(), "switchyard.yaml"))
+	store := config.NewStore(cfg, filepath.Join(t.TempDir(), "relayweft.yaml"))
 	fake := runner.Set{event.Codex: &runner.Fake{Provider: event.Codex}, event.Claude: &runner.Fake{Provider: event.Claude}}
 	events := make(chan event.Event, 4096)
 	tap := make(chan event.Event, 4096)
@@ -265,7 +265,7 @@ func TestSecurityChecks(t *testing.T) {
 		for name, hdr := range map[string]map[string]string{
 			"none":   {SessionHeader: ""},
 			"wrong":  {SessionHeader: strings.Repeat("0", 64)},
-			"cookie": {SessionHeader: "", "Cookie": "sy_" + portOf(env.srv.Addr()) + "=" + env.sess},
+			"cookie": {SessionHeader: "", "Cookie": "rw_" + portOf(env.srv.Addr()) + "=" + env.sess},
 		} {
 			if res, _ := env.do(rt[0], rt[1], body, hdr); res.StatusCode != http.StatusUnauthorized {
 				t.Errorf("%s %s with %s session: %d, want 401", rt[0], rt[1], name, res.StatusCode)
@@ -340,7 +340,7 @@ func TestBootstrapSingleUseAndExpiry(t *testing.T) {
 	if code != 200 || s1 == "" || s1 == b {
 		t.Fatalf("first use: %d %q", code, s1)
 	}
-	// A stolen bootstrap used after the page did: refused, and sy warns.
+	// A stolen bootstrap used after the page did: refused, and rw warns.
 	if code, s := env.trade(b); code != http.StatusUnauthorized || s != "" {
 		t.Fatalf("second use: %d %q", code, s)
 	}
@@ -987,8 +987,8 @@ func TestWebhookAlertsWithPageOpen(t *testing.T) {
 	})
 	c, _, _ := env.srv.hub.subscribe()
 	defer env.srv.hub.unsubscribe(c)
-	env.srv.alert(notify.EventWaiting, "Switchyard needs you", "approve the plan")
-	env.srv.alert(notify.EventDone, "Switchyard: done", "not in the events")
+	env.srv.alert(notify.EventWaiting, "Relayweft needs you", "approve the plan")
+	env.srv.alert(notify.EventDone, "Relayweft: done", "not in the events")
 	limit := event.Event{Kind: event.ProviderState, Provider: event.Claude, Until: time.Now().Add(time.Hour), Text: "claude limit"}.Stamp()
 	env.srv.observe(limit)
 	env.srv.observe(limit) // the same limit again: posted once
@@ -1118,7 +1118,7 @@ func TestStaticAssetsEmbedded(t *testing.T) {
 	}
 }
 
-// sy app exits a few seconds after its page says goodbye (the window was
+// rw app exits a few seconds after its page says goodbye (the window was
 // closed), not after the 30s idle wait; a reload, which says goodbye and
 // reconnects, and a goodbye from one of two pages do not end it.
 func TestAppGoneAfterGoodbye(t *testing.T) {
@@ -1162,6 +1162,6 @@ func TestAppGoneAfterGoodbye(t *testing.T) {
 	h.unsubscribe(a)
 	h.unsubscribe(b)
 	if h.gone(time.Now().Add(grace+time.Second), idle, grace) {
-		t.Fatal("one page's goodbye ended sy app while another page was open")
+		t.Fatal("one page's goodbye ended rw app while another page was open")
 	}
 }

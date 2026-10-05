@@ -7,16 +7,16 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
-// MCP servers: Switchyard hands the configured Model Context Protocol
+// MCP servers: Relayweft hands the configured Model Context Protocol
 // servers to every agent run of the listed roles, on both CLIs (Claude Code
 // through a temporary --mcp-config file, Codex through -c mcp_servers.*
 // overrides). See README "MCP servers".
 //
-// The section runs commands on your machine, so in a repo's .switchyard.yaml
-// it applies only after `sy trust` (it is one of the commandKeys).
+// The section runs commands on your machine, so in a repo's .relayweft.yaml
+// it applies only after `rw trust` (it is one of the commandKeys).
 // String values may use ${ENV_VAR}: it is filled in from your environment
 // when the agent starts, so secrets need not be written into a file.
 
@@ -202,7 +202,7 @@ func (m MCPCfg) validate() []string {
 	return errs
 }
 
-// Redacted returns a copy for display (sy bugreport): env and header
+// Redacted returns a copy for display (rw bugreport): env and header
 // values are hidden unless they only reference ${VAR}s, and URL queries
 // are dropped.
 func (m MCPCfg) Redacted() MCPCfg {

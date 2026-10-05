@@ -7,11 +7,11 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
-// The browser sy web / sy app opens must leave sy's kill-on-close job, or
-// closing sy kills the user's whole browser (found on a real desktop).
+// The browser rw web / rw app opens must leave rw's kill-on-close job, or
+// closing rw kills the user's whole browser (found on a real desktop).
 func TestStartDetachedBreaksAwayFromJob(t *testing.T) {
 	if err := proc.Guard(); err != nil {
 		t.Fatal(err)
@@ -21,6 +21,6 @@ func TestStartDetachedBreaksAwayFromJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CreationFlags&windows.CREATE_BREAKAWAY_FROM_JOB == 0 {
-		t.Error("the browser was started inside sy's job: it would be killed when sy exits")
+		t.Error("the browser was started inside rw's job: it would be killed when rw exits")
 	}
 }

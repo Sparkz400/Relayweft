@@ -1,5 +1,5 @@
-name: Switchyard
-description: Run issues as Switchyard tasks in CI (Codex and Claude Code agents) and open a pull request for each.
+name: Relayweft
+description: Run issues as Relayweft tasks in CI (Codex and Claude Code agents) and open a pull request for each.
 author: Sparkz400
 branding:
   icon: git-pull-request
@@ -10,10 +10,10 @@ branding:
 
 inputs:
   issue:
-    description: Issue number or URL to run (sy run --issue). Give this or issues-label.
+    description: Issue number or URL to run (rw run --issue). Give this or issues-label.
     default: ""
   issues-label:
-    description: Run the open issues with this label one after another, oldest first (sy run --issues label:<name> --pr). Issues an open pull request already closes are skipped.
+    description: Run the open issues with this label one after another, oldest first (rw run --issues label:<name> --pr). Issues an open pull request already closes are skipped.
     default: ""
   limit:
     description: With issues-label, at most this many issues per run.
@@ -40,13 +40,13 @@ inputs:
     description: Stop a task once it cost this much (API-equivalent $). 0 means no limit.
     default: "10"
   args:
-    description: More sy run flags, separated by spaces (for example "--no-parallel --route worker=claude:sonnet").
+    description: More rw run flags, separated by spaces (for example "--no-parallel --route worker=claude:sonnet").
     default: ""
   config:
-    description: A sy config file in the repository (default sy's built-in defaults; .switchyard.yaml is layered on top either way).
+    description: A rw config file in the repository (default rw's built-in defaults; .relayweft.yaml is layered on top either way).
     default: ""
   trust-repo-config:
-    description: Trust the repository's .switchyard.yaml, so its verify commands and hooks run. It comes from the same branch as this workflow.
+    description: Trust the repository's .relayweft.yaml, so its verify commands and hooks run. It comes from the same branch as this workflow.
     default: "true"
   anthropic-api-key:
     description: Claude Code with an Anthropic API key.
@@ -61,10 +61,10 @@ inputs:
     description: Codex with a ChatGPT plan, the contents of ~/.codex/auth.json (see docs/ci.md before you use it).
     default: ""
   github-token:
-    description: Token sy uses to read the issue, push the branch, open the pull request and comment. The agents never get it.
+    description: Token rw uses to read the issue, push the branch, open the pull request and comment. The agents never get it.
     default: ${{ github.token }}
   version:
-    description: sy version to install (v0.2.0, latest or source). Default the release named by the action's ref (Sparkz400/switchyard@v0.2.0), else a build from the action's source.
+    description: rw version to install (v0.3.0, latest or source). Default the release named by the action's ref (Sparkz400/relayweft@v0.3.0), else a build from the action's source.
     default: ""
   claude-code-version:
     description: npm version of @anthropic-ai/claude-code.
@@ -84,7 +84,7 @@ outputs:
     description: The URLs of the pull requests opened, one per line.
     value: ${{ steps.collect.outputs.pull-requests }}
   task-ids:
-    description: The ids of the tasks this run created, one per line (sy report <id>, sy undo <id>).
+    description: The ids of the tasks this run created, one per line (rw report <id>, rw undo <id>).
     value: ${{ steps.collect.outputs.task-ids }}
   report-dir:
     description: Folder with each task's report (.html and .md), the run log and the session log.
@@ -93,7 +93,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: resolve sy version
+    - name: resolve rw version
       id: ver
       shell: bash
       env:
@@ -116,17 +116,17 @@ runs:
           *) echo "::error::version '$version': want vX.Y.Z, latest or source"; exit 1 ;;
         esac
         echo "version=$version" >> "$GITHUB_OUTPUT"
-        echo "repo=${ACTION_REPO:-Sparkz400/switchyard}" >> "$GITHUB_OUTPUT"
-        echo "sy $version"
+        echo "repo=${ACTION_REPO:-Sparkz400/relayweft}" >> "$GITHUB_OUTPUT"
+        echo "rw $version"
 
-    - name: set up Go (sy from source)
+    - name: set up Go (rw from source)
       if: steps.ver.outputs.version == 'source'
       uses: actions/setup-go@v7
       with:
         go-version-file: ${{ github.action_path }}/go.mod
         cache-dependency-path: ${{ github.action_path }}/go.sum
 
-    - name: install sy
+    - name: install rw
       shell: bash
       env:
         VERSION: ${{ steps.ver.outputs.version }}
@@ -135,22 +135,22 @@ runs:
         ACTION_REF: ${{ github.action_ref }}
       run: |
         set -euo pipefail
-        bin="$RUNNER_TEMP/switchyard-bin"
+        bin="$RUNNER_TEMP/relayweft-bin"
         mkdir -p "$bin"
-        exe=sy
-        if [ "$RUNNER_OS" = Windows ]; then exe=sy.exe; fi
+        exe=rw
+        if [ "$RUNNER_OS" = Windows ]; then exe=rw.exe; fi
         if [ "$VERSION" = source ]; then
-          (cd "$ACTION_PATH" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${ACTION_REF:-source}" -o "$bin/$exe" ./cmd/sy)
+          (cd "$ACTION_PATH" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${ACTION_REF:-source}" -o "$bin/$exe" ./cmd/rw)
         else
           case "$RUNNER_OS" in
             Linux) os=linux ;; macOS) os=darwin ;; Windows) os=windows ;;
-            *) echo "::error::no sy build for $RUNNER_OS"; exit 1 ;;
+            *) echo "::error::no rw build for $RUNNER_OS"; exit 1 ;;
           esac
           case "$RUNNER_ARCH" in
             X64) arch=amd64 ;; ARM64) arch=arm64 ;;
-            *) echo "::error::no sy build for $RUNNER_ARCH"; exit 1 ;;
+            *) echo "::error::no rw build for $RUNNER_ARCH"; exit 1 ;;
           esac
-          asset="sy-$os-$arch"
+          asset="rw-$os-$arch"
           if [ "$os" = windows ]; then asset="$asset.exe"; fi
           if [ "$VERSION" = latest ]; then
             base="https://github.com/$REPO/releases/latest/download"
@@ -236,7 +236,7 @@ runs:
         set -euo pipefail
         # A home of its own, removed at the end: a self-hosted runner keeps
         # nothing.
-        home="$RUNNER_TEMP/switchyard-codex-home"
+        home="$RUNNER_TEMP/relayweft-codex-home"
         mkdir -p "$home"
         chmod 700 "$home" || true
         echo "CODEX_HOME=$home" >> "$GITHUB_ENV"
@@ -253,16 +253,16 @@ runs:
       run: |
         set -euo pipefail
         if ! git rev-parse --git-dir >/dev/null 2>&1; then
-          echo "::error::no git repository here: run actions/checkout before Switchyard"
+          echo "::error::no git repository here: run actions/checkout before Relayweft"
           exit 1
         fi
         if [ -z "$(git config user.name || true)" ]; then
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
         fi
-        # sy pushes the branch with plain git. The credential helper reads
+        # rw pushes the branch with plain git. The credential helper reads
         # GITHUB_TOKEN from the environment at push time; agents and the
-        # commands sy runs for them get an environment without it, so a git
+        # commands rw runs for them get an environment without it, so a git
         # push of theirs finds no credentials. (With actions/checkout's
         # default persist-credentials the checkout token is in .git/config
         # too: set persist-credentials: false, see docs/ci.md.)
@@ -273,17 +273,17 @@ runs:
           echo "GH_HOST=${server#https://}" >> "$GITHUB_ENV"
         fi
 
-    - name: trust .switchyard.yaml
-      if: inputs.trust-repo-config == 'true' && hashFiles('.switchyard.yaml') != ''
+    - name: trust .relayweft.yaml
+      if: inputs.trust-repo-config == 'true' && hashFiles('.relayweft.yaml') != ''
       shell: bash
-      run: sy trust --yes
+      run: rw trust --yes
 
-    - name: sy run
+    - name: rw run
       id: run
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
-        # GitHub Enterprise Server: sy reads this one for hosts other than
+        # GitHub Enterprise Server: rw reads this one for hosts other than
         # github.com.
         GH_ENTERPRISE_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
@@ -302,12 +302,12 @@ runs:
         PROVIDER: ${{ steps.agents.outputs.provider }}
       run: |
         set -uo pipefail
-        out="$RUNNER_TEMP/switchyard"
+        out="$RUNNER_TEMP/relayweft"
         mkdir -p "$out"
         echo "dir=$out" >> "$GITHUB_OUTPUT"
         # The tasks that exist already (a self-hosted runner keeps history):
         # the report step picks the new ones.
-        sy history --json -n 1000 > "$out/.before.json" 2>/dev/null || echo '[]' > "$out/.before.json"
+        rw history --json -n 1000 > "$out/.before.json" 2>/dev/null || echo '[]' > "$out/.before.json"
 
         [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
         [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || unset CLAUDE_CODE_OAUTH_TOKEN
@@ -333,8 +333,8 @@ runs:
           read -r -a extra <<< "$INPUT_ARGS"
           args+=("${extra[@]}")
         fi
-        echo "sy ${args[*]}"
-        sy "${args[@]}" 2>&1 | tee "$out/sy-run.log"
+        echo "rw ${args[*]}"
+        rw "${args[@]}" 2>&1 | tee "$out/rw-run.log"
         exit "${PIPESTATUS[0]}"
 
     - name: reports
@@ -346,20 +346,20 @@ runs:
       run: |
         set -uo pipefail
         echo "report-dir=$OUT" >> "$GITHUB_OUTPUT"
-        after=$(sy history --json -n 1000 2>/dev/null || echo '[]')
+        after=$(rw history --json -n 1000 2>/dev/null || echo '[]')
         ids=$(printf '%s' "$after" | jq -r --slurpfile before "$OUT/.before.json" \
           '[$before[0][]?.id] as $old | reverse | .[] | select(.id as $i | $old | index($i) | not) | .id' 2>/dev/null || true)
-        prs=$(grep -E '^opened (pull|merge) request [#!][0-9]+: ' "$OUT/sy-run.log" 2>/dev/null | sed 's/^[^:]*: //' || true)
+        prs=$(grep -E '^opened (pull|merge) request [#!][0-9]+: ' "$OUT/rw-run.log" 2>/dev/null | sed 's/^[^:]*: //' || true)
         {
-          echo "task-ids<<SY_EOF"; printf '%s\n' "$ids"; echo "SY_EOF"
-          echo "pull-requests<<SY_EOF"; printf '%s\n' "$prs"; echo "SY_EOF"
+          echo "task-ids<<RW_EOF"; printf '%s\n' "$ids"; echo "RW_EOF"
+          echo "pull-requests<<RW_EOF"; printf '%s\n' "$prs"; echo "RW_EOF"
         } >> "$GITHUB_OUTPUT"
 
-        log=$(sed -n 's/^session log: //p' "$OUT/sy-run.log" 2>/dev/null | tail -n 1)
+        log=$(sed -n 's/^session log: //p' "$OUT/rw-run.log" 2>/dev/null | tail -n 1)
         if [ -n "$log" ] && [ -f "$log" ]; then cp "$log" "$OUT/"; fi
 
         summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
-        echo "## Switchyard" >> "$summary"
+        echo "## Relayweft" >> "$summary"
         if [ -z "$ids" ]; then
           echo "No task ran. See the job log." >> "$summary"
         fi
@@ -368,8 +368,8 @@ runs:
           printf -- '- %s\n' $prs >> "$summary"
         fi
         for id in $ids; do
-          sy report "$id" --out "$OUT/$id.html" >/dev/null || true
-          if sy report "$id" --md --out "$OUT/$id.md" >/dev/null; then
+          rw report "$id" --out "$OUT/$id.html" >/dev/null || true
+          if rw report "$id" --md --out "$OUT/$id.md" >/dev/null; then
             # The step summary holds 1 MiB; a report with a big diff is cut.
             { echo ""; head -c 200000 "$OUT/$id.md"; echo ""; } >> "$summary"
           fi
@@ -380,7 +380,7 @@ runs:
       if: always() && inputs.upload-artifacts == 'true' && steps.run.outputs.dir != ''
       uses: actions/upload-artifact@v7
       with:
-        name: switchyard-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+        name: relayweft-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         path: ${{ steps.run.outputs.dir }}
         retention-days: ${{ inputs.artifact-retention-days }}
         if-no-files-found: ignore
@@ -389,6 +389,6 @@ runs:
       if: always()
       shell: bash
       run: |
-        rm -rf "$RUNNER_TEMP/switchyard-codex-home"
+        rm -rf "$RUNNER_TEMP/relayweft-codex-home"
         server="${GITHUB_SERVER_URL:-https://github.com}"
         git config --local --unset-all "credential.$server.helper" 2>/dev/null || true

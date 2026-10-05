@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // Detector matches usage-limit text.

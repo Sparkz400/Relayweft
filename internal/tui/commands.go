@@ -7,10 +7,10 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 var helpText = []string{
@@ -23,7 +23,7 @@ var helpText = []string{
 	"/prefer <role|all> <codex|claude|other|auto>",
 	"/save                                write the current settings to " + config.FileName,
 	"/save repo                           write routes, verify, hooks and approvals to this repo's " + config.RepoFileName,
-	"/single <provider>:<model>[:effort] <task>  run one agent only (baseline for sy stats)",
+	"/single <provider>:<model>[:effort] <task>  run one agent only (baseline for rw stats)",
 	"/limit <codex|claude> [reset|set]    clear or set a provider's usage-limit state",
 	"/approve on|off                      show the plan for editing before anything runs",
 	"/review-changes on|off               show each agent's changes (per file or hunk) before they land",
@@ -282,7 +282,7 @@ func undoCmd(dir string, redo, apply bool) tea.Cmd {
 			say("you edited %d of these after the task; your edits are kept (3-way merge, nothing is written on a conflict)", len(plan.Edited))
 		}
 		if len(plan.Unreported) > 0 {
-			say("no agent reported changing %s - possibly your own edits during the task; `sy undo --agent-files-only` leaves them alone",
+			say("no agent reported changing %s - possibly your own edits during the task; `rw undo --agent-files-only` leaves them alone",
 				strings.Join(plan.Unreported, ", "))
 		}
 		say("type /%s yes to apply", verb)

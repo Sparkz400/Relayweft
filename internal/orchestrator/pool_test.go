@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/diag"
+	"github.com/sparkz400/relayweft/internal/diag"
 )
 
 // Pools go to a temporary cache dir, not the real user cache, and crash
 // logs from the panic tests to a temporary log dir, not the user's.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "sy-cache-*")
+	dir, err := os.MkdirTemp("", "rw-cache-*")
 	if err != nil {
 		panic(err)
 	}

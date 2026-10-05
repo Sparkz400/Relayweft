@@ -1,6 +1,6 @@
 import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
 
-rootProject.name = "switchyard-jetbrains"
+rootProject.name = "relayweft-jetbrains"
 
 pluginManagement {
     plugins {

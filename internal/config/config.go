@@ -1,4 +1,4 @@
-// Package config loads, validates, edits and saves switchyard.yaml.
+// Package config loads, validates, edits and saves relayweft.yaml.
 package config
 
 import (
@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/notify"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/notify"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,7 +25,7 @@ var defaultYAML []byte
 func DefaultYAML() []byte { return append([]byte(nil), defaultYAML...) }
 
 // FileName is the config file name looked up in the working directory.
-const FileName = "switchyard.yaml"
+const FileName = "relayweft.yaml"
 
 // Prefer values. A role may also prefer any configured provider by name.
 const (
@@ -144,7 +144,7 @@ type ProviderCfg struct {
 	// Sandbox is added to the top-level sandbox section for this
 	// provider's agents (sandbox.go).
 	Sandbox *SandboxCfg `yaml:"sandbox,omitempty"`
-	// InstallHint is what `sy doctor` suggests when the command is missing.
+	// InstallHint is what `rw doctor` suggests when the command is missing.
 	InstallHint         string      `yaml:"install_hint,omitempty"`
 	Command             string      `yaml:"command"`
 	TestedVersion       string      `yaml:"tested_version,omitempty"`
@@ -259,7 +259,7 @@ type OrchestratorCfg struct {
 }
 
 // VerifyCfg lists the repo's own checks (tests, build, lint). Agents may
-// run them without asking, and Switchyard runs them before the final review.
+// run them without asking, and Relayweft runs them before the final review.
 type VerifyCfg struct {
 	Commands []string `yaml:"commands"`
 	Timeout  Duration `yaml:"timeout"`
@@ -273,7 +273,7 @@ type VerifyCfg struct {
 }
 
 // HooksCfg runs your own commands around tasks. Each list runs in order in
-// the project folder through the system shell, with SY_* environment
+// the project folder through the system shell, with RW_* environment
 // variables describing the task (see README). A failing before_task hook
 // stops the task; failures of the others are reported and ignored.
 type HooksCfg struct {
@@ -286,14 +286,14 @@ type HooksCfg struct {
 // WorkspaceCfg makes every task of the project a multi-repo task: Repos
 // maps a short name to another git repository (a path relative to the
 // project folder), e.g. {frontend: ../web}. Agents write to these folders,
-// so a repo file's workspace applies only after `sy trust`.
+// so a repo file's workspace applies only after `rw trust`.
 type WorkspaceCfg struct {
 	Repos map[string]string `yaml:"repos,omitempty"`
 }
 
 // NotifyCfg controls notifications: Enabled turns desktop notifications
 // on; Webhooks (Slack, Discord, ntfy) are sent whenever listed. A repo
-// file's webhooks apply only after `sy trust`: they say where sy sends
+// file's webhooks apply only after `rw trust`: they say where rw sends
 // what your tasks did.
 type NotifyCfg struct {
 	Enabled  bool             `yaml:"enabled"`
@@ -301,7 +301,7 @@ type NotifyCfg struct {
 	Webhooks []notify.Webhook `yaml:"webhooks,omitempty"`
 }
 
-// Redacted returns a copy for display (sy bugreport): webhook URLs and
+// Redacted returns a copy for display (rw bugreport): webhook URLs and
 // tokens are secrets.
 func (n NotifyCfg) Redacted() NotifyCfg {
 	if n.Webhooks != nil {
@@ -334,10 +334,10 @@ func (b BudgetCfg) Any() bool {
 }
 
 // TeamBudgetCfg is a day budget shared by several machines: each one
-// writes its own usage export (the `sy stats --json` format) to a shared
+// writes its own usage export (the `rw stats --json` format) to a shared
 // folder (OneDrive, a network share) after every task, and checks the
 // combined day total of every machine there before an agent starts. Dir
-// is where sy writes, so a repo file's dir applies only after `sy trust`.
+// is where rw writes, so a repo file's dir applies only after `rw trust`.
 type TeamBudgetCfg struct {
 	Dir       string  `yaml:"dir" json:"dir"` // "" = off; ~ and environment variables ($X, %X%) are expanded
 	DayTokens int64   `yaml:"day_tokens" json:"day_tokens"`
@@ -352,7 +352,7 @@ func (t TeamBudgetCfg) Limited() bool {
 var reWinEnv = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_()]*)%`)
 
 // Folder is Dir with ~ and environment variables expanded ("" when off).
-// It must be absolute: a relative folder would depend on where sy started.
+// It must be absolute: a relative folder would depend on where rw started.
 func (t TeamBudgetCfg) Folder() (string, error) {
 	d := strings.TrimSpace(t.Dir)
 	if d == "" {
@@ -385,10 +385,10 @@ type ContextCfg struct {
 	RepoDocsMaxKB int  `yaml:"repo_docs_max_kb"` // total size of the summary (0 = 8)
 }
 
-// WatchCfg controls sy watch: the pull requests sy opened get follow-up
+// WatchCfg controls rw watch: the pull requests rw opened get follow-up
 // tasks for failed checks and review comments.
 type WatchCfg struct {
-	// MaxRounds caps the follow-up tasks per pull request (0 = none: sy
+	// MaxRounds caps the follow-up tasks per pull request (0 = none: rw
 	// watch only reports).
 	MaxRounds int `yaml:"max_rounds"`
 }
@@ -436,12 +436,12 @@ func Parse(data []byte) (*Config, error) {
 }
 
 // Load finds and reads the config. path may be empty, in which case
-// ./switchyard.yaml and then <user config dir>/switchyard/switchyard.yaml are
-// tried. The returned path is where Save writes; it is ./switchyard.yaml when
+// ./relayweft.yaml and then <user config dir>/relayweft/relayweft.yaml are
+// tried. The returned path is where Save writes; it is ./relayweft.yaml when
 // no file was found.
 //
-// A ./switchyard.yaml found this way may have come with a cloned
-// repository, so like a repo's .switchyard.yaml its settings that run
+// A ./relayweft.yaml found this way may have come with a cloned
+// repository, so like a repo's .relayweft.yaml its settings that run
 // commands apply only once trusted (see LoadInfo).
 func Load(path string) (*Config, string, error) {
 	c, p, _, err := LoadInfo(path)
@@ -449,9 +449,9 @@ func Load(path string) (*Config, string, error) {
 }
 
 // LoadInfo is Load, and also returns the settings of an untrusted
-// ./switchyard.yaml that were ignored (verify, hooks, providers, ...: see
+// ./relayweft.yaml that were ignored (verify, hooks, providers, ...: see
 // commandKeys). Those come from the user config, or the defaults, instead,
-// until `sy trust` (or sy itself saving the file) trusts what the file
+// until `rw trust` (or rw itself saving the file) trusts what the file
 // sets for them. An explicit path and the user config are yours and always
 // apply in full.
 func LoadInfo(path string) (*Config, string, []string, error) {
@@ -461,7 +461,7 @@ func LoadInfo(path string) (*Config, string, []string, error) {
 	} else {
 		candidates = append(candidates, FileName)
 		if dir, err := os.UserConfigDir(); err == nil {
-			candidates = append(candidates, filepath.Join(dir, "switchyard", FileName))
+			candidates = append(candidates, filepath.Join(dir, "relayweft", FileName))
 		}
 	}
 	for i, p := range candidates {
@@ -511,7 +511,7 @@ func parseFile(p string, data []byte) (*Config, error) {
 }
 
 // guardLocal puts back the settings that run commands in c, read from an
-// untrusted ./switchyard.yaml (data), from the first of the user's own
+// untrusted ./relayweft.yaml (data), from the first of the user's own
 // config files that loads, or the defaults; it returns those the file set
 // to something else.
 func guardLocal(c *Config, data []byte, own []string) []string {
@@ -732,7 +732,7 @@ func (c *Config) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	header := "# Switchyard configuration (saved by sy). See `sy init --print` for the commented default.\n"
+	header := "# Relayweft configuration (saved by rw). See `rw init --print` for the commented default.\n"
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -747,9 +747,9 @@ func (c *Config) SessionDir() string {
 		return c.LogDir
 	}
 	if dir, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(dir, "switchyard", "sessions")
+		return filepath.Join(dir, "relayweft", "sessions")
 	}
-	return filepath.Join(".switchyard", "sessions")
+	return filepath.Join(".relayweft", "sessions")
 }
 
 // ParseRouteSpec parses "provider:model[:effort]" (effort may be empty).
@@ -822,7 +822,7 @@ type Store struct {
 	pinned  map[string]bool
 }
 
-// ApplyRepo layers the project's .switchyard.yaml (if any) over the live
+// ApplyRepo layers the project's .relayweft.yaml (if any) over the live
 // config. Save keeps writing the user's file without it.
 func (s *Store) ApplyRepo(dir string) (RepoInfo, error) {
 	s.mu.Lock()
@@ -853,7 +853,7 @@ func (s *Store) Repo() RepoInfo {
 }
 
 // SaveRepo writes the shareable settings to the repo file (creating
-// <dir>/.switchyard.yaml when there is none yet) and returns its path.
+// <dir>/.relayweft.yaml when there is none yet) and returns its path.
 func (s *Store) SaveRepo(dir string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -916,7 +916,7 @@ func (s *Store) Update(fn func(c *Config) error) error {
 	return nil
 }
 
-// Save persists the live config. You saved it, so a ./switchyard.yaml
+// Save persists the live config. You saved it, so a ./relayweft.yaml
 // written here is trusted as it now is.
 func (s *Store) Save() error {
 	s.mu.RLock()

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/gh"
+	"github.com/sparkz400/relayweft/internal/gh"
 )
 
 func noEnvHosts(t *testing.T) {
@@ -58,12 +58,12 @@ func TestRepoURLs(t *testing.T) {
 	if gl.APIBase() != "https://gitlab.example.com/api/v4" || gl.Ref(5) != "g/sub/p!5" {
 		t.Errorf("%s %s", gl.APIBase(), gl.Ref(5))
 	}
-	if got := gl.CompareURL("main", "sy/fix it"); got != "https://gitlab.example.com/g/sub/p/-/merge_requests/new?merge_request%5Bsource_branch%5D=sy%2Ffix+it&merge_request%5Btarget_branch%5D=main" {
+	if got := gl.CompareURL("main", "rw/fix it"); got != "https://gitlab.example.com/g/sub/p/-/merge_requests/new?merge_request%5Bsource_branch%5D=rw%2Ffix+it&merge_request%5Btarget_branch%5D=main" {
 		t.Errorf("compare %s", got)
 	}
 	gt := Repo{Kind: Gitea, Host: "codeberg.org", Owner: "o", Name: "r"}
-	if gt.APIBase() != "https://codeberg.org/api/v1" || gt.Ref(5) != "o/r#5" || gt.CompareURL("main", "sy/x") != "https://codeberg.org/o/r/compare/main...sy/x" {
-		t.Errorf("%s %s %s", gt.APIBase(), gt.Ref(5), gt.CompareURL("main", "sy/x"))
+	if gt.APIBase() != "https://codeberg.org/api/v1" || gt.Ref(5) != "o/r#5" || gt.CompareURL("main", "rw/x") != "https://codeberg.org/o/r/compare/main...rw/x" {
+		t.Errorf("%s %s %s", gt.APIBase(), gt.Ref(5), gt.CompareURL("main", "rw/x"))
 	}
 	hub := Repo{Kind: GitHub, Host: "github.com", Owner: "o", Name: "r"}
 	if hub.APIBase() != "https://api.github.com" || hub.CompareURL("main", "b") != "https://github.com/o/r/compare/main...b?expand=1" {
@@ -237,7 +237,7 @@ func TestSelfHostedRootURLs(t *testing.T) {
 		}
 	}
 	r, _ := ParseRemote("http://localhost:3300/syadmin/demo.git", hosts)
-	if got := r.CompareURL("main", "sy/x"); got != "http://localhost:3300/syadmin/demo/compare/main...sy/x" {
+	if got := r.CompareURL("main", "rw/x"); got != "http://localhost:3300/syadmin/demo/compare/main...rw/x" {
 		t.Errorf("compare %s", got)
 	}
 	if gl, _ := ParseRemote("https://example.com/gitlab/g/sub/p.git", hosts); gl.Owner != "g/sub" || gl.Name != "p" {

@@ -1,7 +1,7 @@
 // What the scripted agent (fakeClaude.ts) and the suite agree on.
 
 /** Tasks with this word make the worker hang until it is killed. */
-export const HANG = 'SYTEST-HANG';
+export const HANG = 'RWTEST-HANG';
 /** The file the worker edits (two hunks far apart) and the lines it changes. */
 export const NOTES = 'notes.txt';
 export const NOTES_LINES = 40;

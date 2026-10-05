@@ -3,8 +3,8 @@ package orchestrator
 import (
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/repodocs"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/repodocs"
 )
 
 // The repo's own conventions (context.repo_docs): CONTRIBUTING, the PR

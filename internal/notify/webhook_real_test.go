@@ -16,11 +16,11 @@ import (
 // the messages back, checking that title, body, priority, tags and the
 // click link arrive exactly as meant, with non-ASCII text intact. Opt-in:
 //
-//	SY_REAL_NTFY_URL=https://ntfy.sh/<long random topic> go test ./internal/notify -run RealNtfy
+//	RW_REAL_NTFY_URL=https://ntfy.sh/<long random topic> go test ./internal/notify -run RealNtfy
 func TestRealNtfyPayload(t *testing.T) {
-	topic := os.Getenv("SY_REAL_NTFY_URL")
+	topic := os.Getenv("RW_REAL_NTFY_URL")
 	if topic == "" {
-		t.Skip("set SY_REAL_NTFY_URL to a ntfy topic URL to post real notifications")
+		t.Skip("set RW_REAL_NTFY_URL to a ntfy topic URL to post real notifications")
 	}
 	marker := fmt.Sprintf("m%d", time.Now().UnixNano())
 	since := time.Now().Add(-2 * time.Second).Unix()
@@ -34,18 +34,18 @@ func TestRealNtfyPayload(t *testing.T) {
 		m Message
 		w want
 	}{
-		{Message{Event: EventDone, Title: "Switchyard: done", Body: "ok " + marker + "\n" + hostile, Source: "projekt-ä"},
-			want{"Switchyard: done · projekt-ä", "ok " + marker + "\n" + hostile, "white_check_mark", "", 0}},
-		{Message{Event: EventFailed, Title: "Switchyard: failed " + hostile, Body: "fail " + marker, Source: "日本"},
-			want{"Switchyard: failed " + hostile + " · 日本", "fail " + marker, "x", "", 4}},
-		{Message{Event: EventWaiting, Title: "Switchyard: waiting", Body: "wait " + marker},
-			want{"Switchyard: waiting", "wait " + marker, "bell", "", 4}},
-		{Message{Event: EventWatch, Title: "Switchyard: watch", Body: "watch " + marker, Link: "https://github.com/sparkz400/switchyard/pull/1?a=b&c=ä"},
-			want{"Switchyard: watch", "watch " + marker, "eyes", "https://github.com/sparkz400/switchyard/pull/1?a=b&c=%C3%A4", 0}},
-		{Message{Event: EventTest, Title: "Switchyard: test", Body: "test " + marker, Link: "javascript:alert(1)"},
-			want{"Switchyard: test", "test " + marker, "wave", "", 0}},
-		{Message{Event: EventLimit, Title: "Switchyard: codex hit its limit", Body: "limit " + marker + " " + strings.Repeat("ü", 2000)},
-			want{"Switchyard: codex hit its limit", "limit " + marker + " " + strings.Repeat("ü", maxBody-len([]rune("limit "+marker+" "))-1) + "…", "hourglass", "", 0}},
+		{Message{Event: EventDone, Title: "Relayweft: done", Body: "ok " + marker + "\n" + hostile, Source: "projekt-ä"},
+			want{"Relayweft: done · projekt-ä", "ok " + marker + "\n" + hostile, "white_check_mark", "", 0}},
+		{Message{Event: EventFailed, Title: "Relayweft: failed " + hostile, Body: "fail " + marker, Source: "日本"},
+			want{"Relayweft: failed " + hostile + " · 日本", "fail " + marker, "x", "", 4}},
+		{Message{Event: EventWaiting, Title: "Relayweft: waiting", Body: "wait " + marker},
+			want{"Relayweft: waiting", "wait " + marker, "bell", "", 4}},
+		{Message{Event: EventWatch, Title: "Relayweft: watch", Body: "watch " + marker, Link: "https://github.com/sparkz400/relayweft/pull/1?a=b&c=ä"},
+			want{"Relayweft: watch", "watch " + marker, "eyes", "https://github.com/sparkz400/relayweft/pull/1?a=b&c=%C3%A4", 0}},
+		{Message{Event: EventTest, Title: "Relayweft: test", Body: "test " + marker, Link: "javascript:alert(1)"},
+			want{"Relayweft: test", "test " + marker, "wave", "", 0}},
+		{Message{Event: EventLimit, Title: "Relayweft: codex hit its limit", Body: "limit " + marker + " " + strings.Repeat("ü", 2000)},
+			want{"Relayweft: codex hit its limit", "limit " + marker + " " + strings.Repeat("ü", maxBody-len([]rune("limit "+marker+" "))-1) + "…", "hourglass", "", 0}},
 	}
 	for _, c := range cases {
 		if err := Post(context.Background(), w, c.m); err != nil {

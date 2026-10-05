@@ -1,14 +1,14 @@
-// sy web's API, spoken like a browser tab speaks it: a single-use
+// rw web's API, spoken like a browser tab speaks it: a single-use
 // bootstrap is traded for a session (POST /api/session), and every /api
-// request carries the session in X-Switchyard-Session. The client sends
-// no Origin (it is not a web page) and no cookies; sy checks the Host
+// request carries the session in X-Relayweft-Session. The client sends
+// no Origin (it is not a web page) and no cookies; rw checks the Host
 // header and the session on every request. Only 127.0.0.1 is ever
 // contacted, with node's http module (no proxy, no fetch).
 
 import * as http from 'http';
 import { SseParser, type SseMessage } from './sse';
 
-export const SESSION_HEADER = 'X-Switchyard-Session';
+export const SESSION_HEADER = 'X-Relayweft-Session';
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) {
@@ -21,19 +21,19 @@ interface Raw {
   body: string;
 }
 
-export class SyApi {
+export class RwApi {
   private session = '';
   private readonly host: string;
   private readonly port: number;
 
   /**
-   * base is http://127.0.0.1:PORT. reauth returns a fresh bootstrap (sy
+   * base is http://127.0.0.1:PORT. reauth returns a fresh bootstrap (rw
    * mints one on request), used when the session was dropped.
    */
   constructor(base: string, private readonly reauth: () => Promise<string>) {
     const u = new URL(base);
     if (u.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) {
-      throw new Error('refusing a non-loopback sy address: ' + base);
+      throw new Error('refusing a non-loopback rw address: ' + base);
     }
     this.host = u.hostname.replace(/^\[(.*)\]$/, '$1');
     this.port = Number(u.port);
@@ -51,7 +51,7 @@ export class SyApi {
     }
     const v = JSON.parse(r.body) as { session?: string };
     if (!v.session) {
-      throw new Error('sy returned no session');
+      throw new Error('rw returned no session');
     }
     this.session = v.session;
   }
@@ -106,7 +106,7 @@ export class SyApi {
           res.on('error', reject);
         },
       );
-      req.on('timeout', () => req.destroy(new Error('sy did not answer in time')));
+      req.on('timeout', () => req.destroy(new Error('rw did not answer in time')));
       req.on('error', reject);
       if (body !== undefined) {
         req.write(body);
@@ -117,7 +117,7 @@ export class SyApi {
 
   /**
    * Follows the event stream until the returned function is called. It
-   * reconnects after a dropped connection (sy then sends a reset and the
+   * reconnects after a dropped connection (rw then sends a reset and the
    * replay again) and logs in again when the session was dropped.
    */
   stream(onMessage: (m: SseMessage) => void, onStatus: (connected: boolean, err?: string) => void): () => void {

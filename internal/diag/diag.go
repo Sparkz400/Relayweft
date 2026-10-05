@@ -1,6 +1,6 @@
-// Package diag is Switchyard's flight recorder: a rotating debug log of every
+// Package diag is Relayweft's flight recorder: a rotating debug log of every
 // command, phase and error, crash logs for panics, and the files that
-// `sy bugreport` bundles. It never fails the caller: if the log cannot be
+// `rw bugreport` bundles. It never fails the caller: if the log cannot be
 // written, diagnostics are silently kept in memory only.
 package diag
 
@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	debugFile = "sy-debug.log"
-	maxSize   = 10 << 20 // rotate to sy-debug.log.1 above this
+	debugFile = "rw-debug.log"
+	maxSize   = 10 << 20 // rotate to rw-debug.log.1 above this
 	ringSize  = 400      // recent lines kept in memory for crash logs
 )
 
@@ -32,12 +32,12 @@ var (
 	Version = "dev"
 )
 
-// DefaultDir is <user config dir>/switchyard/logs (%AppData% on Windows).
+// DefaultDir is <user config dir>/relayweft/logs (%AppData% on Windows).
 func DefaultDir() string {
 	if d, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(d, "switchyard", "logs")
+		return filepath.Join(d, "relayweft", "logs")
 	}
-	return filepath.Join(os.TempDir(), "switchyard-logs")
+	return filepath.Join(os.TempDir(), "relayweft-logs")
 }
 
 // Init opens the debug log in d (created if needed). Safe to call again.
@@ -113,7 +113,7 @@ func Logf(format string, args ...any) {
 	if written > maxSize {
 		path := filepath.Join(dir, debugFile)
 		f.Close()
-		// The rename fails on Windows while another sy has the log open;
+		// The rename fails on Windows while another rw has the log open;
 		// then keep appending rather than truncate both instances' history.
 		flag := os.O_CREATE | os.O_APPEND | os.O_WRONLY
 		if os.Rename(path, path+".1") == nil {
@@ -158,7 +158,7 @@ func Crash(where string, value any, stack []byte) string {
 	Logf("PANIC in %s: %v", where, value)
 	Sync()
 	var b strings.Builder
-	fmt.Fprintf(&b, "Switchyard %s crashed in %s at %s\n", Version, where, time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "Relayweft %s crashed in %s at %s\n", Version, where, time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&b, "os %s/%s, go %s\n\npanic: %v\n\n%s\n", runtime.GOOS, runtime.GOARCH, runtime.Version(), value, stack)
 	b.WriteString("\n--- recent debug log ---\n")
 	for _, l := range Recent() {
@@ -169,8 +169,8 @@ func Crash(where string, value any, stack []byte) string {
 		d = DefaultDir()
 		if testing.Testing() {
 			// A test that panics on purpose must not leave crash logs
-			// among the user's real ones (sy health counts those).
-			d = filepath.Join(os.TempDir(), "switchyard-test-logs")
+			// among the user's real ones (rw health counts those).
+			d = filepath.Join(os.TempDir(), "relayweft-test-logs")
 		}
 		os.MkdirAll(d, 0o755)
 	}
@@ -184,7 +184,7 @@ func Crash(where string, value any, stack []byte) string {
 }
 
 // Recover is deferred at the top of goroutines: a panic is written to a
-// crash log and reported through onPanic instead of killing sy (which would
+// crash log and reported through onPanic instead of killing rw (which would
 // leave the terminal in raw mode and agents running). onPanic may be nil.
 func Recover(where string, onPanic func(crashLog string)) {
 	if r := recover(); r != nil {

@@ -67,7 +67,7 @@ func TestEnterpriseHostIsOptIn(t *testing.T) {
 	if r.Host != "ghe.example.com" || r.APIBase() != "https://ghe.example.com/api/v3" {
 		t.Fatalf("%+v %s", r, r.APIBase())
 	}
-	if got := r.CompareURL("main", "sy/fix-it"); got != "https://ghe.example.com/team/app/compare/main...sy/fix-it?expand=1" {
+	if got := r.CompareURL("main", "rw/fix-it"); got != "https://ghe.example.com/team/app/compare/main...rw/fix-it?expand=1" {
 		t.Fatal(got)
 	}
 	t.Setenv("GH_HOST", "github.com")
@@ -138,7 +138,7 @@ func (f *fakeGitHub) handler(t *testing.T) http.Handler {
 			io.WriteString(w, `[{"body":"also on Windows","user":{"login":"bob"}}]`)
 		case r.Method == "GET" && r.URL.Path == "/repos/o/r/issues":
 			q := r.URL.Query()
-			if q.Get("labels") != "sy" || q.Get("state") != "open" || q.Get("sort") != "created" || q.Get("direction") != "asc" {
+			if q.Get("labels") != "rw" || q.Get("state") != "open" || q.Get("sort") != "created" || q.Get("direction") != "asc" {
 				t.Errorf("list query = %s", r.URL.RawQuery)
 			}
 			io.WriteString(w, `[{"number":3,"title":"old"},{"number":4,"title":"a PR","pull_request":{}},{"number":5,"title":"taken"},{"number":9,"title":"new"}]`)
@@ -226,7 +226,7 @@ func TestListIssuesAndPulls(t *testing.T) {
 	srv := httptest.NewServer(f.handler(t))
 	defer srv.Close()
 	c := NewClient(srv.URL, "")
-	is, err := c.OpenIssues(repo, "sy", 0)
+	is, err := c.OpenIssues(repo, "rw", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestListIssuesAndPulls(t *testing.T) {
 	if len(nums) != 3 || nums[0] != 3 || nums[1] != 5 || nums[2] != 9 {
 		t.Fatalf("issues = %v (pull requests must be skipped, order kept)", nums)
 	}
-	if is, _ := c.OpenIssues(repo, "sy", 2); len(is) != 2 {
+	if is, _ := c.OpenIssues(repo, "rw", 2); len(is) != 2 {
 		t.Fatalf("max not applied: %d", len(is))
 	}
 	if ps, err := c.OpenPulls(repo); err != nil || len(ps) == 0 {
@@ -253,11 +253,11 @@ func TestCreatePullAndComment(t *testing.T) {
 	srv := httptest.NewServer(f.handler(t))
 	defer srv.Close()
 	c := NewClient(srv.URL+"/", "good")
-	p, err := c.CreatePull(repo, NewPull{Title: "Fix it", Head: "sy/fix", Base: "main", Body: "Closes #12", Draft: true})
+	p, err := c.CreatePull(repo, NewPull{Title: "Fix it", Head: "rw/fix", Base: "main", Body: "Closes #12", Draft: true})
 	if err != nil || p.Number != 77 || p.HTMLURL != "https://github.com/o/r/pull/77" {
 		t.Fatalf("%+v %v", p, err)
 	}
-	if len(f.created) != 1 || !f.created[0].Draft || f.created[0].Head != "sy/fix" || f.created[0].Body != "Closes #12" {
+	if len(f.created) != 1 || !f.created[0].Draft || f.created[0].Head != "rw/fix" || f.created[0].Body != "Closes #12" {
 		t.Fatalf("sent %+v", f.created)
 	}
 	if err := c.AddComment(repo, 12, "see #77"); err != nil || len(f.comments) != 1 {

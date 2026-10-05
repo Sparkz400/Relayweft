@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sandbox"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sandbox"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // bestOfTask is short: one worker step, no planner.
@@ -140,7 +140,7 @@ func TestBestOfChecksPickTheWinner(t *testing.T) {
 		t.Error("the reviewer was asked although the checks decided")
 	}
 	// The loser's work is on a branch.
-	branches := tgit(t, dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/sy/")
+	branches := tgit(t, dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/rw/")
 	var kept string
 	for _, b := range strings.Fields(branches) {
 		if strings.HasSuffix(b, "/work--codex") {
@@ -203,7 +203,7 @@ func TestBestOfChecksPickTheWinner(t *testing.T) {
 			t.Errorf("slot %s is held", slot)
 		}
 	}
-	// sy undo reverts the whole best-of task.
+	// rw undo reverts the whole best-of task.
 	if _, err := Undo(dir, res.UndoKey, false, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestBestOfCancelKeepsFinishedWork(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "greet.txt")); !os.IsNotExist(err) {
 		t.Error("a cancelled best-of step changed the tree")
 	}
-	branches := tgit(t, dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/sy/")
+	branches := tgit(t, dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/rw/")
 	if !strings.Contains(branches, "/work--claude") || strings.Contains(branches, "/work--codex") {
 		t.Errorf("branches = %q, want the finished candidate's only", branches)
 	}

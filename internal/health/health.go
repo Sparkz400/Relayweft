@@ -1,7 +1,7 @@
-// Package health turns Switchyard's logs into a reliability report: crashes,
+// Package health turns Relayweft's logs into a reliability report: crashes,
 // hangs, unclean exits, load peaks and leftovers over a window of days, and
 // whether the Phase 1 exit criterion ("2 weeks of daily use with no crash
-// and no hang") is met. `sy health` prints it; `sy web` shows it as a panel.
+// and no hang") is met. `rw health` prints it; `rw web` shows it as a panel.
 package health
 
 import (
@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Options selects the window and the criterion.
@@ -34,7 +34,7 @@ type Incident struct {
 	Time   time.Time `json:"time"`
 	Kind   string    `json:"kind"` // crash, fatal, hang, unclean, agent-timeout, pause, leftover
 	PID    int       `json:"pid,omitempty"`
-	Cmd    string    `json:"cmd,omitempty"` // the sy command of that process
+	Cmd    string    `json:"cmd,omitempty"` // the rw command of that process
 	Detail string    `json:"detail,omitempty"`
 	Log    string    `json:"log,omitempty"` // file with the details
 }
@@ -46,15 +46,15 @@ type Load struct {
 	MemFreeMB   int64     `json:"mem_free_mb"` // lowest free RAM, -1 unknown
 	MemTotalMB  int64     `json:"mem_total_mb"`
 	MemAt       time.Time `json:"mem_at"`
-	SyMemMB     int64     `json:"sy_mem_mb"` // most memory one sy process used
-	SyMemAt     time.Time `json:"sy_mem_at"`
+	RwMemMB     int64     `json:"rw_mem_mb"` // most memory one rw process used
+	RwMemAt     time.Time `json:"rw_mem_at"`
 	Goroutines  int       `json:"goroutines"`
 	Samples     int       `json:"samples"`         // 5-minute load readings
 	HotSamples  int       `json:"hot_samples"`     // with CPU >= 95%
 	LowMemFrees int       `json:"low_mem_samples"` // with under 10% RAM free
 }
 
-// Session is one sy process.
+// Session is one rw process.
 type Session struct {
 	PID     int       `json:"pid"`
 	Cmd     string    `json:"cmd"`
@@ -102,7 +102,7 @@ type Report struct {
 	Criterion        Criterion               `json:"criterion"`
 }
 
-// notUse are commands that only look at sy; they do not count as a day of use.
+// notUse are commands that only look at rw; they do not count as a day of use.
 var notUse = map[string]bool{
 	"health": true, "doctor": true, "bugreport": true, "stats": true, "history": true,
 	"report": true, "models": true, "update": true, "version": true, "help": true,
@@ -349,7 +349,7 @@ func criterion(r *Report, o Options, lastIncident time.Time) Criterion {
 	c.Met = clean && used
 	switch {
 	case c.CleanSince.IsZero():
-		c.Summary = "no records yet: use sy for a while, then look again"
+		c.Summary = "no records yet: use rw for a while, then look again"
 	case c.Met:
 		c.Summary = "met: " + days(c.CleanDays) + " without a crash or hang, used on " + strconv.Itoa(c.UseDays) + " of the last " + strconv.Itoa(o.Days) + " days"
 	default:
@@ -408,8 +408,8 @@ func (l *Load) addRecord(rec diag.Record) {
 			l.LowMemFrees++
 		}
 	}
-	if v, err := strconv.ParseInt(f["symem_mb"], 10, 64); err == nil && v > l.SyMemMB {
-		l.SyMemMB, l.SyMemAt = v, rec.Time
+	if v, err := strconv.ParseInt(f["symem_mb"], 10, 64); err == nil && v > l.RwMemMB {
+		l.RwMemMB, l.RwMemAt = v, rec.Time
 	}
 	if v, err := strconv.Atoi(f["goroutines"]); err == nil && v > l.Goroutines {
 		l.Goroutines = v
@@ -464,7 +464,7 @@ func (fs fatalSet) match(s *Session) (*fatalFile, bool) {
 // for the time before the health log started.
 func readDebug(dir string, before time.Time) (sessions []Session, crashes, timeouts []Incident, since time.Time) {
 	const layout = "2006-01-02 15:04:05.000"
-	for _, name := range []string{"sy-debug.log.1", "sy-debug.log"} {
+	for _, name := range []string{"rw-debug.log.1", "rw-debug.log"} {
 		f, err := os.Open(filepath.Join(dir, name))
 		if err != nil {
 			continue
@@ -485,7 +485,9 @@ func readDebug(dir string, before time.Time) (sessions []Session, crashes, timeo
 			}
 			msg := line[len(layout)+1:]
 			switch {
-			case strings.HasPrefix(msg, "=== sy "):
+			// "=== sy ": a debug log of sy (Switchyard, v0.2.0 and
+			// older) that rw copied over on its first start.
+			case strings.HasPrefix(msg, "=== rw "), strings.HasPrefix(msg, "=== sy "):
 				fs := strings.Fields(msg)
 				s := Session{Start: t, Last: t}
 				if len(fs) > 2 {

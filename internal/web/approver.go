@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
 )
 
 // Approver bridges the orchestrator's approval calls (made on a task

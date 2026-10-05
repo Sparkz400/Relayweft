@@ -1,5 +1,5 @@
 // Package schedule turns "02:30", "in 3h" and "when claude's limit resets"
-// into start times, and waits for them. `sy run --at/--in/--when-reset`,
+// into start times, and waits for them. `rw run --at/--in/--when-reset`,
 // the TUI's /schedule and the web UI's schedule share it.
 package schedule
 
@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // ParseAt reads a start time in local time: a clock time "02:30" (today,
@@ -85,7 +85,7 @@ func ValidReset(p string, providers []string) bool {
 }
 
 // ResetTime is when a provider's usage limit resets, from what is known:
-// this sy's limit tracker first, then the newest quota or limit record in
+// this rw's limit tracker first, then the newest quota or limit record in
 // the session logs. "any" is the earlier of the two providers (and now when
 // either has no known future reset: that one is usable). A zero time means
 // unknown or already past: start now. note says where the time came from.

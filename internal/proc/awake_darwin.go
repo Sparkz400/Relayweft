@@ -8,8 +8,8 @@ import (
 	"strconv"
 )
 
-// startAwake runs `caffeinate -i -w <sy's pid>`: it prevents idle sleep
-// and ends by itself if sy dies without releasing it.
+// startAwake runs `caffeinate -i -w <rw's pid>`: it prevents idle sleep
+// and ends by itself if rw dies without releasing it.
 func startAwake() func() {
 	cmd := exec.Command("caffeinate", "-i", "-w", strconv.Itoa(os.Getpid()))
 	if cmd.Start() != nil {

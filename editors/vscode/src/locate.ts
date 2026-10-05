@@ -1,4 +1,4 @@
-// Finding the sy executable and reading the `sy web --client` hello line.
+// Finding the rw executable and reading the `rw web --client` hello line.
 // Pure (no vscode import) so it can be unit tested.
 
 import * as path from 'path';
@@ -18,12 +18,12 @@ export interface Located {
 }
 
 /**
- * Resolves the sy executable: the configured path (a bare name is looked
- * up on PATH), else "sy" on PATH, else Go's and Scoop's install folders.
- * On Windows only .exe files count: sy is started without a shell, and a
+ * Resolves the rw executable: the configured path (a bare name is looked
+ * up on PATH), else "rw" on PATH, else Go's and Scoop's install folders.
+ * On Windows only .exe files count: rw is started without a shell, and a
  * .cmd/.bat shim cannot be started that way.
  */
-export function locateSy(configured: string, le: LocateEnv): Located {
+export function locateRw(configured: string, le: LocateEnv): Located {
   const win = le.platform === 'win32';
   const p = win ? path.win32 : path.posix;
   const tried: string[] = [];
@@ -43,7 +43,7 @@ export function locateSy(configured: string, le: LocateEnv): Located {
     }
     return { tried };
   }
-  const base = want || 'sy';
+  const base = want || 'rw';
   const pathVar = le.env.PATH ?? le.env.Path ?? le.env.path ?? '';
   for (const dir of pathVar.split(win ? ';' : ':')) {
     const d = dir.trim().replace(/^"(.*)"$/, '$1');
@@ -71,7 +71,7 @@ export function locateSy(configured: string, le: LocateEnv): Located {
       extra.push('/usr/local/bin', p.join(le.home, '.local', 'bin'));
     }
     for (const d of extra) {
-      for (const n of names('sy')) {
+      for (const n of names('rw')) {
         if (check(p.join(d, n))) {
           return { path: p.join(d, n), tried };
         }
@@ -91,7 +91,7 @@ export interface Inspected<T> {
 
 /**
  * A setting's user (global) value, else its default. Workspace and folder
- * values are ignored on purpose: switchyard.path and switchyard.args choose
+ * values are ignored on purpose: relayweft.path and relayweft.args choose
  * what program runs, and a cloned repository's .vscode/settings.json must
  * not be able to choose that.
  */
@@ -99,7 +99,7 @@ export function userSetting<T>(i: Inspected<T> | undefined, fallback: T): T {
   return i?.globalValue ?? i?.defaultValue ?? fallback;
 }
 
-/** The arguments for `sy web --client` in dir, then the user's extra ones. */
+/** The arguments for `rw web --client` in dir, then the user's extra ones. */
 export function clientArgs(dir: string, extra: readonly string[]): string[] {
   return ['web', '--client', '--dir', dir, ...extra.filter((a) => typeof a === 'string' && a !== '')];
 }
@@ -112,20 +112,20 @@ export function parseHello(line: string): ClientHello {
   try {
     v = JSON.parse(line);
   } catch {
-    throw new Error(`sy printed something that is not the client hello: ${line.slice(0, 200)} (is this sy older than \`sy web --client\`?)`);
+    throw new Error(`rw printed something that is not the client hello: ${line.slice(0, 200)} (is this rw older than \`rw web --client\`?)`);
   }
   const h = v as Partial<ClientHello>;
-  if (!h || h.switchyard !== 'web-client') {
-    throw new Error('sy printed an unexpected first line (not a web-client hello)');
+  if (!h || h.relayweft !== 'web-client') {
+    throw new Error('rw printed an unexpected first line (not a web-client hello)');
   }
   if (h.protocol !== PROTOCOL) {
-    throw new Error(`sy speaks client protocol ${String(h.protocol)}, this extension speaks ${PROTOCOL}: update one of them`);
+    throw new Error(`rw speaks client protocol ${String(h.protocol)}, this extension speaks ${PROTOCOL}: update one of them`);
   }
   if (typeof h.url !== 'string' || !/^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(h.url)) {
-    throw new Error('sy announced a non-loopback address: ' + String(h.url));
+    throw new Error('rw announced a non-loopback address: ' + String(h.url));
   }
   if (typeof h.bootstrap !== 'string' || !/^[0-9a-f]{64}$/.test(h.bootstrap)) {
-    throw new Error('sy announced no valid bootstrap');
+    throw new Error('rw announced no valid bootstrap');
   }
   return h as ClientHello;
 }

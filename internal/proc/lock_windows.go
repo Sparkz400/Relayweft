@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// openLock opens (creating) a lock file with FILE_SHARE_DELETE, so sy clean
+// openLock opens (creating) a lock file with FILE_SHARE_DELETE, so rw clean
 // can delete a lock file while it holds the lock; os.OpenFile does not
 // allow that.
 func openLock(path string) (*os.File, error) {

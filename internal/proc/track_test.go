@@ -35,7 +35,7 @@ func TestTryLockRejectsDeletedLockFile(t *testing.T) {
 	unlock()
 }
 
-// The holder can delete its lock file (sy clean); the next TryLock gets a
+// The holder can delete its lock file (rw clean); the next TryLock gets a
 // fresh file.
 func TestTryLockDeleteWhileHeld(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "slot.lock")
@@ -66,7 +66,7 @@ func TestProcStamp(t *testing.T) {
 	}
 	// The child runs until its stdin is closed.
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperWaitForStdin$")
-	cmd.Env = append(os.Environ(), "SY_PROC_HELPER=stdin")
+	cmd.Env = append(os.Environ(), "RW_PROC_HELPER=stdin")
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestProcStamp(t *testing.T) {
 // TestHelperWaitForStdin is a child process for other tests: it runs until
 // its stdin is closed.
 func TestHelperWaitForStdin(t *testing.T) {
-	if os.Getenv("SY_PROC_HELPER") != "stdin" {
+	if os.Getenv("RW_PROC_HELPER") != "stdin" {
 		t.Skip("helper process")
 	}
 	io.Copy(io.Discard, os.Stdin)
@@ -111,9 +111,9 @@ func TestHelperWaitForStdin(t *testing.T) {
 }
 
 // A recorded agent that ended and left a process running in its group: a
-// later sy cannot prove the group is still the agent's (the pid may have
+// later rw cannot prove the group is still the agent's (the pid may have
 // been reused for another group meanwhile), so it does not kill it and
-// lists it; the sy that recorded it kills it when it releases the folder.
+// lists it; the rw that recorded it kills it when it releases the folder.
 func TestReapLeavesUnverifiedGroup(t *testing.T) {
 	if runtime.GOOS == "windows" || !stamped {
 		t.Skip("process groups with stamps: Linux, macOS")
@@ -145,7 +145,7 @@ func TestReapLeavesUnverifiedGroup(t *testing.T) {
 		t.Fatal("the group ended with its leader")
 	}
 	if ReapOrphans(pidFile) {
-		t.Fatal("a later sy killed a group whose leader it cannot verify")
+		t.Fatal("a later rw killed a group whose leader it cannot verify")
 	}
 	if !groupAlive(pid) {
 		t.Fatal("the unverified group was killed")
@@ -154,7 +154,7 @@ func TestReapLeavesUnverifiedGroup(t *testing.T) {
 		t.Errorf("LiveOrphans = %v, want the group %d listed", got, pid)
 	}
 	if !ReapOwn(pidFile) {
-		t.Fatal("the sy that recorded the agent could not stop what it left")
+		t.Fatal("the rw that recorded the agent could not stop what it left")
 	}
 	if groupAlive(pid) {
 		t.Error("ReapOwn left the group running")

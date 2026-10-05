@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
 )
 
 // NewCodex returns a runner for `codex exec --json` (tested with codex-cli 0.160.0).
@@ -34,7 +34,7 @@ func CodexArgs(cfg config.ProviderCfg, s Spec) []string {
 		sandbox = "read-only"
 	}
 	if s.Sandboxed {
-		// In sy's sandbox the container is the sandbox: Codex's own needs
+		// In rw's sandbox the container is the sandbox: Codex's own needs
 		// kernel features containers block, and a read-only agent's folder
 		// is mounted read-only there.
 		sandbox = "danger-full-access"
@@ -328,7 +328,7 @@ func (p *codexParser) Finish(r *Result) {
 // findRateLimits looks for Codex's rate_limits object anywhere in a JSON
 // line: {"rate_limits":{"primary":{"used_percent":42.0,"window_minutes":300,
 // "resets_at":1791003600},"secondary":{...}}}. Codex tracks these
-// internally; when a version reports them in its JSON output, Switchyard uses
+// internally; when a version reports them in its JSON output, Relayweft uses
 // them like Claude's quota events.
 func findRateLimits(line []byte) *event.QuotaInfo {
 	if !bytes.Contains(line, []byte(`"rate_limits"`)) {

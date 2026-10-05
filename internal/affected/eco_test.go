@@ -39,7 +39,7 @@ func TestSelectJest(t *testing.T) {
 		want(t, dir, "npm test", sel(t, dir, "npm test", f), "")
 	}
 	want(t, dir, "npm test", sel(t, dir, "npm test", "docs/x.md"), "-")
-	// A script sy cannot read is not narrowed.
+	// A script rw cannot read is not narrowed.
 	for _, script := range []string{"jest && eslint .", "mocha", "cross-env CI=1 jest", "vitest"} {
 		d := tree(t, map[string]string{"package.json": `{"scripts":{"test":"` + script + `"}}`, "a.js": "x"})
 		want(t, d, "npm test", sel(t, d, "npm test", "a.js"), "")

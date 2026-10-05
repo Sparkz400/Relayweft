@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 // Review fixes of the pool size (#40).
@@ -32,10 +32,10 @@ func resumeC(t *testing.T, dir string, st *TaskState) (TaskResult, []runner.Spec
 	return res, specs, rec
 }
 
-// Another sy that gives up a full pool's held worktree keeps it locked
+// Another rw that gives up a full pool's held worktree keeps it locked
 // while it saves the edits, which can take longer than a resume's usual
 // wait. The resume of that task keeps waiting while the worktree is still
-// its own (the other sy lets go once it sees the task running), and
+// its own (the other rw lets go once it sees the task running), and
 // continues there instead of starting the step over.
 func TestResumeWaitsForAnEvictorThatLetsGo(t *testing.T) {
 	dir := gitRepo(t)
@@ -133,7 +133,7 @@ func TestFreeSlotAboveAGapBeforeEviction(t *testing.T) {
 	}
 }
 
-// The pool size and disk minimum apply to a follow-up in a sy that has not
+// The pool size and disk minimum apply to a follow-up in a rw that has not
 // run a task yet.
 func TestFollowUpSetsPoolLimits(t *testing.T) {
 	dir := gitRepo(t)

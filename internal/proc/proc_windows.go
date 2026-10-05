@@ -17,7 +17,7 @@ import (
 
 func prepare(cmd *exec.Cmd) {
 	attr := &syscall.SysProcAttr{
-		// CREATE_NO_WINDOW: agents never share sy's console, so they cannot
+		// CREATE_NO_WINDOW: agents never share rw's console, so they cannot
 		// retitle the tab or change the console mode under the TUI. All
 		// stdio is piped, so nothing is lost.
 		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW | priorityFlag(),
@@ -70,10 +70,10 @@ func background(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW | priorityFlag()}
 }
 
-// breakaway starts cmd outside sy's kill-on-close job (guard allows that
-// with BREAKAWAY_OK). Without it a browser sy opened would join the job:
+// breakaway starts cmd outside rw's kill-on-close job (guard allows that
+// with BREAKAWAY_OK). Without it a browser rw opened would join the job:
 // when the browser was not running yet, that process becomes the user's
-// browser, and every window they open later was killed when sy exited.
+// browser, and every window they open later was killed when rw exited.
 func breakaway(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -86,8 +86,8 @@ func lower(int) {}
 
 var job windows.Handle
 
-// guard puts sy itself into a job object with KILL_ON_JOB_CLOSE. Children
-// inherit the job, so when sy exits or crashes Windows kills every agent
+// guard puts rw itself into a job object with KILL_ON_JOB_CLOSE. Children
+// inherit the job, so when rw exits or crashes Windows kills every agent
 // instead of leaving orphans that keep burning quota. BREAKAWAY_OK lets a
 // child that asks for it (Breakaway: the browser) leave the job; children
 // that do not ask stay in it.
@@ -118,7 +118,7 @@ func guard() error {
 }
 
 // Shell runs a command line through cmd.exe exactly as typed (/s keeps
-// everything between the outer quotes verbatim), without sy's tokens
+// everything between the outer quotes verbatim), without rw's tokens
 // (WithoutSecrets).
 func Shell(ctx context.Context, line string) *exec.Cmd {
 	comspec := os.Getenv("ComSpec")

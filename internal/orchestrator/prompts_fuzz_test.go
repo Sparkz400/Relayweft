@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 // Fuzz targets for plan, verdict and diff parsing (ROADMAP 1.8).

@@ -16,7 +16,7 @@ import (
 //   - Every task in a git repo records two snapshot commits of the working
 //     tree: before it started and after it ended (also when cancelled or
 //     failed). They are kept under
-//     refs/switchyard/tasks/<worktree>/<key>/{before,after} so git gc never
+//     refs/relayweft/tasks/<worktree>/<key>/{before,after} so git gc never
 //     deletes them; the user's branches are not touched. <worktree> keeps
 //     the history of each working tree (main tree, other worktrees) apart.
 //   - The after snapshot's message lists the files the agents reported or
@@ -33,7 +33,7 @@ import (
 //     repo still has its record (undo from the primary needs every part).
 
 const (
-	undoRefs       = "refs/switchyard/tasks/"
+	undoRefs       = "refs/relayweft/tasks/"
 	undoKeep       = 30
 	subjectMax     = 72
 	agentFilesMark = "agent-files:"
@@ -132,7 +132,7 @@ func UndoList(dir string) ([]UndoTask, error) {
 		case "before":
 			t.Before = f[1]
 			t.When = time.Unix(sec, 0)
-			t.Task = strings.TrimPrefix(f[3], "switchyard before: ")
+			t.Task = strings.TrimPrefix(f[3], "relayweft before: ")
 		case "after":
 			t.After = f[1]
 		case "undone":
@@ -168,7 +168,7 @@ func findTask(dir, key string, undone bool) (UndoTask, string, error) {
 			case undone && !t.Undone:
 				return UndoTask{}, "", fmt.Errorf("task %s is not undone, nothing to redo", key)
 			case !undone && t.Undone:
-				return UndoTask{}, "", fmt.Errorf("task %s is already undone (sy undo --redo %s puts it back)", key, key)
+				return UndoTask{}, "", fmt.Errorf("task %s is already undone (rw undo --redo %s puts it back)", key, key)
 			}
 			return t, root, nil
 		}
@@ -177,12 +177,12 @@ func findTask(dir, key string, undone bool) (UndoTask, string, error) {
 		}
 	}
 	if key != "" {
-		return UndoTask{}, "", fmt.Errorf("no recorded task %q in this working tree (sy undo --list)", key)
+		return UndoTask{}, "", fmt.Errorf("no recorded task %q in this working tree (rw undo --list)", key)
 	}
 	if undone {
 		return UndoTask{}, "", fmt.Errorf("no undone task to redo")
 	}
-	return UndoTask{}, "", fmt.Errorf("no task to undo in this repo (tasks are recorded when sy runs in a git repo)")
+	return UndoTask{}, "", fmt.Errorf("no task to undo in this repo (tasks are recorded when rw runs in a git repo)")
 }
 
 // agentFiles reads the agent-reported files from an after snapshot; ok is
@@ -209,7 +209,7 @@ func (g git) agentFiles(after string) (map[string]bool, bool) {
 // records paths through canon.Path, which lower-cases them on Windows
 // (whose file names ignore case), so there the comparison ignores case too.
 // Without it every file with an upper-case letter looked unreported on
-// Windows, and unattended pull requests and sy watch pushes were refused.
+// Windows, and unattended pull requests and rw watch pushes were refused.
 func agentKey(p string) string {
 	if runtime.GOOS == "windows" {
 		return strings.ToLower(p)
@@ -376,7 +376,7 @@ func undoOne(dir string, t UndoTask, redo bool, only []string) error {
 		return nil
 	}
 	// Keep the exact pre-undo state so nothing is ever lost.
-	if snap, err := g.snapshot("switchyard before undo of " + t.Key); err == nil {
+	if snap, err := g.snapshot("relayweft before undo of " + t.Key); err == nil {
 		g.recordSnapshot(t.Key, "undone", snap)
 	}
 	if err := g.applyDiff(t.After, t.Before, only...); err != nil {
@@ -422,5 +422,5 @@ func afterMessage(task string, files map[string]bool) string {
 		list = append(list, f)
 	}
 	sort.Strings(list)
-	return subject("switchyard after: ", task) + "\n\n" + agentFilesMark + "\n" + strings.Join(list, "\n") + "\n"
+	return subject("relayweft after: ", task) + "\n\n" + agentFilesMark + "\n" + strings.Join(list, "\n") + "\n"
 }

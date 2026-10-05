@@ -46,8 +46,8 @@ func TestWebhookValidate(t *testing.T) {
 	ok := []Webhook{
 		{URL: "https://ntfy.sh/t"},
 		{URL: "https://example.org/x", Kind: "json"},
-		{URL: "http://192.168.1.5:8080/sy", Kind: "ntfy"},
-		{URL: "${SY_HOOK}"}, // checked when sent
+		{URL: "http://192.168.1.5:8080/rw", Kind: "ntfy"},
+		{URL: "${RW_HOOK}"}, // checked when sent
 		{URL: "https://ntfy.sh/t", Events: []string{"done", "Failed", "watch"}},
 	}
 	for _, w := range ok {
@@ -102,7 +102,7 @@ func capture(t *testing.T, w Webhook, m Message) (*http.Request, string) {
 
 var hostile = Message{
 	Event:  EventFailed,
-	Title:  "Switchyard: failed",
+	Title:  "Relayweft: failed",
 	Body:   "<!channel> @everyone [click](https://evil.example) *bold* & more\r\nline\x00two",
 	Source: "my repo",
 	Link:   "https://github.com/o/r/pull/7",
@@ -120,7 +120,7 @@ func TestSlackPayload(t *testing.T) {
 	if strings.Contains(p.Text, "<!channel>") || !strings.Contains(p.Text, "&lt;!channel&gt;") {
 		t.Errorf("mention not escaped: %q", p.Text)
 	}
-	if !strings.HasPrefix(p.Text, "*Switchyard: failed · my repo*\n") || !strings.Contains(p.Text, "& more"[:0]+"&amp; more") {
+	if !strings.HasPrefix(p.Text, "*Relayweft: failed · my repo*\n") || !strings.Contains(p.Text, "& more"[:0]+"&amp; more") {
 		t.Errorf("text = %q", p.Text)
 	}
 	if strings.Contains(p.Text, "\x00") || strings.Contains(p.Text, "\r") || !strings.Contains(p.Text, "linetwo") {
@@ -152,7 +152,7 @@ func TestDiscordPayload(t *testing.T) {
 	}
 	_, body = capture(t, Webhook{URL: "https://discord.com/api/webhooks/1/abc"}, hostile)
 	json.Unmarshal([]byte(body), &p)
-	for _, want := range []string{`**Switchyard\: failed · my repo**`, `\[click\]\(https\:`, `\@everyone`, `\*bold\*`} {
+	for _, want := range []string{`**Relayweft\: failed · my repo**`, `\[click\]\(https\:`, `\@everyone`, `\*bold\*`} {
 		if !strings.Contains(p.Content, want) {
 			t.Errorf("content missing %q: %q", want, p.Content)
 		}
@@ -162,13 +162,13 @@ func TestDiscordPayload(t *testing.T) {
 func TestNtfyPayload(t *testing.T) {
 	setEnv(t, map[string]string{"NTFY_TOKEN": "tk_secret"})
 	m := hostile
-	m.Title = "Switchyard: failed – Grüße"
-	req, body := capture(t, Webhook{URL: "https://ntfy.sh/sy-topic", Token: "${NTFY_TOKEN}"}, m)
+	m.Title = "Relayweft: failed – Grüße"
+	req, body := capture(t, Webhook{URL: "https://ntfy.sh/rw-topic", Token: "${NTFY_TOKEN}"}, m)
 	if !strings.HasPrefix(body, "<!channel> @everyone") || !strings.Contains(body, "linetwo") {
 		t.Errorf("body = %q", body)
 	}
 	title, err := new(mime.WordDecoder).DecodeHeader(req.Header.Get("Title"))
-	if err != nil || title != "Switchyard: failed – Grüße · my repo" {
+	if err != nil || title != "Relayweft: failed – Grüße · my repo" {
 		t.Errorf("title %q (%v), raw %q", title, err, req.Header.Get("Title"))
 	}
 	for k, want := range map[string]string{
@@ -179,7 +179,7 @@ func TestNtfyPayload(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, got, want)
 		}
 	}
-	req, _ = capture(t, Webhook{URL: "https://ntfy.sh/sy-topic"}, Message{Event: EventDone, Title: "t", Link: "javascript:alert(1)"})
+	req, _ = capture(t, Webhook{URL: "https://ntfy.sh/rw-topic"}, Message{Event: EventDone, Title: "t", Link: "javascript:alert(1)"})
 	if req.Header.Get("Priority") != "" || req.Header.Get("Click") != "" || req.Header.Get("Authorization") != "" {
 		t.Errorf("headers = %v", req.Header)
 	}
@@ -189,7 +189,7 @@ func TestNtfyPayload(t *testing.T) {
 // Click header (found against the real server); headers must be ASCII.
 func TestNtfyClickIsASCII(t *testing.T) {
 	m := Message{Event: EventWatch, Title: "t", Link: "https://github.com/o/r/pull/1?a=b&c=ä x"}
-	req, _ := capture(t, Webhook{URL: "https://ntfy.sh/sy-topic"}, m)
+	req, _ := capture(t, Webhook{URL: "https://ntfy.sh/rw-topic"}, m)
 	if got, want := req.Header.Get("Click"), "https://github.com/o/r/pull/1?a=b&c=%C3%A4%20x"; got != want {
 		t.Errorf("Click = %q, want %q", got, want)
 	}

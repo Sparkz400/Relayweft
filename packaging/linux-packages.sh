@@ -5,7 +5,7 @@
 #   packaging/linux-packages.sh 1.2.3 [dist] [arch...]
 #
 # Run it from the repo root on linux/amd64 (the runner of release.yml).
-# It reads dist/sy-linux-<arch> and writes dist/switchyard-linux-<arch>.deb,
+# It reads dist/rw-linux-<arch> and writes dist/relayweft-linux-<arch>.deb,
 # .rpm and .apk; the arches default to amd64 and arm64. These names are
 # part of the release asset contract (see packaging/README.md).
 set -eu
@@ -37,17 +37,17 @@ nfpm="$tmp/nfpm"
 
 mkdir -p build
 for arch in $arches; do
-  bin="$dist/sy-linux-$arch"
+  bin="$dist/rw-linux-$arch"
   if [ ! -f "$bin" ]; then
     echo "missing $bin" >&2
     exit 1
   fi
-  cp "$bin" build/sy
-  chmod 755 build/sy
+  cp "$bin" build/rw
+  chmod 755 build/rw
   for format in deb rpm apk; do
-    out="$dist/switchyard-linux-$arch.$format"
+    out="$dist/relayweft-linux-$arch.$format"
     VERSION="$version" ARCH="$arch" "$nfpm" package \
       -f packaging/nfpm.yaml -p "$format" -t "$out"
   done
 done
-rm -f build/sy
+rm -f build/rw

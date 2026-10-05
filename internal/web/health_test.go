@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/health"
+	"github.com/sparkz400/relayweft/internal/health"
 )
 
 func TestHealthEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	at := time.Now().Add(-time.Hour).Format("2006-01-02 15:04:05.000")
-	os.WriteFile(filepath.Join(dir, "sy-health.log"), []byte(fmt.Sprintf(
+	os.WriteFile(filepath.Join(dir, "rw-health.log"), []byte(fmt.Sprintf(
 		"%s start pid=999999001 ver=dev cmd=run\n%s panic pid=999999001 in=task log=crash-x.log\n", at, at)), 0o644)
 	healthOptions = health.Options{Dir: dir, NoLeftovers: true}
 	defer func() { healthOptions = health.Options{} }()

@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
 )
 
 // projectLabel is the header's project name: the folder, plus the extra

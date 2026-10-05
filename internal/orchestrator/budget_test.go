@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // budgetSet plans two edit steps (a, b) and makes every agent run cost
@@ -110,7 +110,7 @@ func TestBudgetApproverContinueAndStop(t *testing.T) {
 	}
 }
 
-// Without anyone to ask (sy run without --approve) the task stops and the
+// Without anyone to ask (rw run without --approve) the task stops and the
 // error says how to raise the limit.
 func TestBudgetWithoutApproverStops(t *testing.T) {
 	var ran sync.Map
@@ -144,7 +144,7 @@ func TestBudgetDayTotalFromSessionLog(t *testing.T) {
 		return set[event.Codex].(scripted).fn(s)
 	})
 	o, _ := newOrc(t, "", counting, budgetCfg(func(b *config.BudgetCfg) { b.DayUSD = 1 }))
-	// An earlier sy (another log file in the same directory) spent $0.95
+	// An earlier rw (another log file in the same directory) spent $0.95
 	// today, and $50 yesterday.
 	other, err := sessionlog.Open(filepath.Dir(o.opts.Log.Path()), "/elsewhere")
 	if err != nil {
@@ -189,7 +189,7 @@ func TestBudgetOffByDefault(t *testing.T) {
 	}
 }
 
-// Quota readings are logged when they change, so `sy run --when-reset`
+// Quota readings are logged when they change, so `rw run --when-reset`
 // can find the reset time later.
 func TestQuotaChangesAreLogged(t *testing.T) {
 	o, _ := newOrc(t, "", both(func(runner.Spec) runner.Result { return runner.Result{} }), nil)

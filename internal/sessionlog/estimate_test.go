@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // timedRuns makes agent_end records of a role/kind on a route in cwd, one

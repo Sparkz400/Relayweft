@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
 )
 
 func TestPlanRepoCycle(t *testing.T) {

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // errBudget ends an agent that the budget did not let start.
@@ -135,7 +135,7 @@ type dayCache struct {
 }
 
 // dayMaxAge is how old the day totals may get before a budget check reads
-// the session logs again (tasks of other sy windows finish meanwhile).
+// the session logs again (tasks of other rw windows finish meanwhile).
 var dayMaxAge = time.Minute
 
 // logDir is the session log directory ("" without a log).
@@ -147,7 +147,7 @@ func (o *Orchestrator) logDir() string {
 }
 
 // refreshDay re-reads today's finished tasks from the session logs (all
-// sy processes write there, so tasks of other windows count too). A log
+// rw processes write there, so tasks of other windows count too). A log
 // file that cannot be read is left out with a warning, and the total never
 // drops below what was known for today: a read error must not turn the
 // day limit off.
@@ -393,7 +393,7 @@ func (o *Orchestrator) budgetCheck(ctx context.Context, t *task, what string, af
 		case t.unattended:
 			o.logf("budget: %s; unattended tasks stop at a budget", req)
 		case o.opts.Approver == nil:
-			o.logf("budget: %s; nobody to ask (sy run --approve asks on the terminal)", req)
+			o.logf("budget: %s; nobody to ask (rw run --approve asks on the terminal)", req)
 		default:
 			o.logf("budget: %s - waiting for you to decide whether the task goes on", req)
 			ok = o.opts.Approver.ApproveBudget(ctx, req)

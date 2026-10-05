@@ -1,4 +1,4 @@
-// Package gh is the small part of the GitHub REST API Switchyard uses
+// Package gh is the small part of the GitHub REST API Relayweft uses
 // (through package forge, next to GitLab and Gitea):
 // read issues, list open pull requests, open a pull request and comment,
 // and watch and review pull requests (pulls.go).

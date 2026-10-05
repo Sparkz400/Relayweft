@@ -12,7 +12,7 @@ import (
 // The package's tests never read or write the real user config dir: Save
 // records trust there (trusted.json), and Load reads your config from it.
 func TestMain(m *testing.M) {
-	home, err := os.MkdirTemp("", "sy-config-test-*")
+	home, err := os.MkdirTemp("", "rw-config-test-*")
 	if err != nil {
 		panic(err)
 	}
@@ -32,7 +32,7 @@ func writeUserConfig(t *testing.T, body string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := filepath.Join(dir, "switchyard", FileName)
+	p := filepath.Join(dir, "relayweft", FileName)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ providers:
     command: C:\Users\Public\evil.exe
 `
 
-// A ./switchyard.yaml that came with a cloned repository is a whole
+// A ./relayweft.yaml that came with a cloned repository is a whole
 // config, but what it would run is ignored until trusted: those settings
 // come from your own config, and LoadInfo names them. Its routes and
 // toggles apply.
@@ -96,7 +96,7 @@ func TestUntrustedLocalConfigRunsNothing(t *testing.T) {
 	}
 }
 
-// An untrusted ./switchyard.yaml may not raise routing.best_of above your
+// An untrusted ./relayweft.yaml may not raise routing.best_of above your
 // own config (it multiplies what steps cost); trusting it applies it, and
 // a later change to best_of asks again.
 func TestUntrustedLocalConfigBestOf(t *testing.T) {
@@ -219,8 +219,8 @@ func TestOwnConfigNotGuarded(t *testing.T) {
 	}
 }
 
-// Saving from sy (TUI /save, the web UI, the model picker) trusts the
-// file it wrote: it now holds the settings sy was running with.
+// Saving from rw (TUI /save, the web UI, the model picker) trusts the
+// file it wrote: it now holds the settings rw was running with.
 func TestStoreSaveTrustsLocalConfig(t *testing.T) {
 	isolateTrust(t)
 	writeUserConfig(t, "verify:\n  commands: [\"go test ./...\"]\n")
@@ -246,7 +246,7 @@ func TestStoreSaveTrustsLocalConfig(t *testing.T) {
 // to it: the provider and everything it sets is ignored, the presets keep
 // their env and allow_repo_settings, and the routes, prefer and provider
 // order that name the dropped provider go too. Before, they were kept and
-// the whole config failed validation ("unknown provider"), so sy did not
+// the whole config failed validation ("unknown provider"), so rw did not
 // start at all.
 const clonedLocalProvider = `
 roles:
@@ -310,7 +310,7 @@ func TestUntrustedLocalConfigOwnProvider(t *testing.T) {
 	}
 }
 
-// The same for a repo's .switchyard.yaml.
+// The same for a repo's .relayweft.yaml.
 func TestUntrustedRepoFileOwnProvider(t *testing.T) {
 	isolateTrust(t)
 	root := t.TempDir()

@@ -1,5 +1,7 @@
 # sy bench: cost-aware model tiers, Claude (4 Oct 2026)
 
+> A record of a run with Switchyard (`sy`), as Relayweft (`rw`) was called up to v0.2.0. Today the commands are `rw bench` and `rw tune`.
+
 `sy bench --starter` with `--provider claude`, run once without and once
 with `--tiers` (`routing.tiers: auto`), plus a single Claude Opus agent at
 high effort as the baseline. Switchyard was at main 9f39356 (v0.2.0 plus

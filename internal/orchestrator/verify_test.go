@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 // narrowedCheck is an affected_commands template that passes when name
@@ -211,7 +211,7 @@ func TestWorkersMayRunNarrowedChecks(t *testing.T) {
 		mu.Unlock()
 		return runner.Result{Final: "done"}
 	})
-	// A repo without go.mod: sy's own verify run of these commands fails
+	// A repo without go.mod: rw's own verify run of these commands fails
 	// at once instead of running this package's tests (dir "" is the
 	// test's working folder).
 	o, _ := newOrc(t, gitRepo(t), set, func(c *config.Config) {

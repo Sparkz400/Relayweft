@@ -103,7 +103,7 @@ func notesPath(root string) string {
 }
 
 // noteEntry separates entries in the notes file.
-const noteSep = "\n<!-- sy-note -->\n"
+const noteSep = "\n<!-- rw-note -->\n"
 
 // repoNotes returns the newest notes for a repo ("" if none).
 func repoNotes(root string) string {
@@ -196,7 +196,7 @@ func (t *task) handoff() string {
 		b.WriteString("\nREPOSITORY MAP (tracked files):\n" + t.repoMap)
 	}
 	if t.repoNotes != "" {
-		b.WriteString("\nEARLIER SWITCHYARD TASKS IN THIS REPO (newest last; the code may have changed since):\n" + t.repoNotes + "\n")
+		b.WriteString("\nEARLIER RELAYWEFT TASKS IN THIS REPO (newest last; the code may have changed since):\n" + t.repoNotes + "\n")
 	}
 	return b.String()
 }

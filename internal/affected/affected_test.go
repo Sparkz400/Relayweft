@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // tree writes files (slash paths) under a new temp folder.
@@ -45,7 +45,7 @@ func allowedBy(cmd string, prefixes []string) bool {
 }
 
 // checkAllowed fails when a narrowed command is not in the allowlist an
-// agent gets for cmd: sy and the agents must be able to run the same.
+// agent gets for cmd: rw and the agents must be able to run the same.
 func checkAllowed(t *testing.T, dir, cmd, template string, p Plan) {
 	t.Helper()
 	pre, _ := Allowed(dir, cmd, template)
@@ -134,10 +134,10 @@ func TestQuote(t *testing.T) {
 	}
 }
 
-// The quoting must hold in the real shell sy runs checks in (cmd.exe on
+// The quoting must hold in the real shell rw runs checks in (cmd.exe on
 // Windows, sh elsewhere): each name arrives as one argument, unchanged.
 func TestQuotedArgsSurviveTheShell(t *testing.T) {
-	if os.Getenv("SY_AFFECTED_ECHO") == "1" {
+	if os.Getenv("RW_AFFECTED_ECHO") == "1" {
 		return
 	}
 	exe, err := os.Executable()
@@ -161,7 +161,7 @@ func TestQuotedArgsSurviveTheShell(t *testing.T) {
 	}
 	line := exeQ + " -test.run=TestEchoArgs -- " + q
 	cmd := proc.Shell(context.Background(), line)
-	cmd.Env = append(cmd.Env, "SY_AFFECTED_ECHO=1")
+	cmd.Env = append(cmd.Env, "RW_AFFECTED_ECHO=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v: %s", err, out)
@@ -179,7 +179,7 @@ func TestQuotedArgsSurviveTheShell(t *testing.T) {
 
 // TestEchoArgs is the helper process of TestQuotedArgsSurviveTheShell.
 func TestEchoArgs(t *testing.T) {
-	if os.Getenv("SY_AFFECTED_ECHO") != "1" {
+	if os.Getenv("RW_AFFECTED_ECHO") != "1" {
 		return
 	}
 	for i, a := range os.Args {

@@ -13,19 +13,19 @@ import (
 	"sort"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/canon"
+	"github.com/sparkz400/relayweft/internal/canon"
 )
 
-// Learned routes: `sy tune --apply` (and, with routing.learn: auto, the
+// Learned routes: `rw tune --apply` (and, with routing.learn: auto, the
 // first task of a day) works out per-role routes from this repo's session
 // logs and bench runs (sessionlog/learn.go) and stores them in your state
 // dir, keyed by the canonical repo root: never in the repo, so they need
-// no `sy trust` and are never shared.
+// no `rw trust` and are never shared.
 //
 // The layers, lowest first:
 //
-//	built-in defaults < user config (switchyard.yaml) < learned routes
-//	  < repo file (.switchyard.yaml) < flags and session edits
+//	built-in defaults < user config (relayweft.yaml) < learned routes
+//	  < repo file (.relayweft.yaml) < flags and session edits
 //
 // Explicit settings always win: a role the repo file changes, or that a
 // flag or a session edit sets (--route, --prefer, /route, /prefer, the
@@ -40,7 +40,7 @@ import (
 // Learn modes (routing.learn).
 const (
 	LearnAuto    = "auto"    // apply learned routes and refresh them at most once a day at task start
-	LearnSuggest = "suggest" // only `sy tune` suggestions; learned routes apply once `sy tune --apply` stored them
+	LearnSuggest = "suggest" // only `rw tune` suggestions; learned routes apply once `rw tune --apply` stored them
 	LearnOff     = "off"     // ignore learned routes
 )
 
@@ -111,7 +111,7 @@ func learnedDir() string {
 	if err != nil {
 		d = os.TempDir()
 	}
-	return filepath.Join(d, "switchyard", "learned")
+	return filepath.Join(d, "relayweft", "learned")
 }
 
 // LearnedPath is the learned-routes file of the repo at root (any path to
@@ -149,7 +149,7 @@ func SaveLearned(l *Learned) error {
 	if err != nil {
 		return err
 	}
-	// A temporary file of its own (two sy writing at once must not share
+	// A temporary file of its own (two rw writing at once must not share
 	// one), in the same folder so the rename is atomic.
 	f, err := os.CreateTemp(filepath.Dir(p), filepath.Base(p)+".tmp-*")
 	if err != nil {
@@ -371,7 +371,7 @@ func (s *Store) pinEdited(next *Config) {
 }
 
 // pinRepoRoles pins the roles a repo file changed (an entry that only
-// repeats your config does not count: `sy init --repo` writes every role).
+// repeats your config does not count: `rw init --repo` writes every role).
 // Called with s.mu held.
 func (s *Store) pinRepoRoles(before, after *Config) {
 	for role, rc := range after.Roles {

@@ -4,13 +4,13 @@
 # a D-Bus session bus. Run by .github/workflows/macos-real.yml inside
 # dbus-run-session; needs no secrets and makes no AI calls.
 #
-#   OUT=dir SY=path/to/sy dbus-run-session -- .github/scripts/linux-desktop-real.sh
+#   OUT=dir RW=path/to/rw dbus-run-session -- .github/scripts/linux-desktop-real.sh
 #
 # Output as in macos-real.sh: PASS/FAIL/INFO lines in $OUT/summary.txt.
 set -u
 OUT=${OUT:?}
-SY=${SY:?}
-T=${RUNNER_TEMP:-/tmp}/sy-real
+RW=${RW:?}
+T=${RUNNER_TEMP:-/tmp}/rw-real
 rm -rf "$T"
 mkdir -p "$OUT" "$T"
 SUM="$OUT/summary.txt"
@@ -48,13 +48,13 @@ sleep 1
 
 section "machine"
 info "$(. /etc/os-release && echo "$PRETTY_NAME"), $(uname -r)"
-info "sy $("$SY" version)"
+info "rw $("$RW" version)"
 info "notify-send: $(notify-send --version 2>&1), dunst: $(dunst --version 2>&1 | head -1)"
 
 # --- notifications ----------------------------------------------------------
 section "desktop notifications (internal/notify via notify-send)"
 go test -c -o "$T/notify.test" ./internal/notify || fail "build notify test"
-SY_REAL_DESKTOP=1 "$T/notify.test" -test.run 'TestRealDesktopToast$' -test.v >"$OUT/notify-test.txt" 2>&1
+RW_REAL_DESKTOP=1 "$T/notify.test" -test.run 'TestRealDesktopToast$' -test.v >"$OUT/notify-test.txt" 2>&1
 rc=$?
 sleep 1
 shot linux-notify
@@ -77,17 +77,17 @@ fi
 dunstctl history >"$OUT/dunst-history.json" 2>&1
 n=$(($(dunstctl count displayed) + $(dunstctl count waiting) + $(dunstctl count history)))
 if [ "$n" -ge 7 ]; then pass "dunst holds $n notifications (displayed + waiting + history)"; else fail "dunst holds only $n notifications"; fi
-info "app name on the bus: $(grep -A2 'member=Notify' "$OUT/dbus-notify.txt" | grep -m1 -o '"Switchyard"')"
+info "app name on the bus: $(grep -A2 'member=Notify' "$OUT/dbus-notify.txt" | grep -m1 -o '"Relayweft"')"
 
-# --- sy app -----------------------------------------------------------------
-section "sy app (Chrome app window)"
+# --- rw app -----------------------------------------------------------------
+section "rw app (Chrome app window)"
 if ! command -v google-chrome >/dev/null; then
-	info "google-chrome is not installed: sy app not checked"
+	info "google-chrome is not installed: rw app not checked"
 else
 	info "$(google-chrome --version)"
 	mkdir -p "$HOME/.config/google-chrome"
 	touch "$HOME/.config/google-chrome/First Run"
-	printf '<title>OtherWindow</title><h1>Another Chrome window: it must survive sy</h1>\n' >"$T/other.html"
+	printf '<title>OtherWindow</title><h1>Another Chrome window: it must survive rw</h1>\n' >"$T/other.html"
 	R="$T/repo"
 	mkdir -p "$R"
 	chrome_running() { pgrep -x chrome >/dev/null; }
@@ -99,49 +99,49 @@ else
 		sleep 1
 	}
 
-	# A: another Chrome window is open; closing sy's window makes sy exit
+	# A: another Chrome window is open; closing rw's window makes rw exit
 	# and leaves the other window.
 	setsid google-chrome --new-window "file://$T/other.html" >"$OUT/chrome-other.log" 2>&1 &
 	for _ in $(seq 30); do chrome_running && break; sleep 1; done
 	sleep 5
-	info "windows before sy app: $(titles)"
-	(cd "$R" && exec setsid "$SY" app --demo) >"$OUT/app-a.log" 2>&1 &
+	info "windows before rw app: $(titles)"
+	(cd "$R" && exec setsid "$RW" app --demo) >"$OUT/app-a.log" 2>&1 &
 	apid=$!
 	if ! wait_file "$OUT/app-a.log" "opened in" 30; then
-		fail "sy app did not open a window (see app-a.log)"
+		fail "rw app did not open a window (see app-a.log)"
 	else
-		info "sy app: $(grep 'opened in' "$OUT/app-a.log")"
+		info "rw app: $(grep 'opened in' "$OUT/app-a.log")"
 		sleep 8
 		shot linux-app-a-open
 		t=$(titles)
-		info "windows with sy app open: $t"
-		if echo "$t" | grep -q Switchyard; then pass "sy app opened a window titled Switchyard"; else fail "no Switchyard window"; fi
-		wmctrl -c Switchyard
+		info "windows with rw app open: $t"
+		if echo "$t" | grep -q Relayweft; then pass "rw app opened a window titled Relayweft"; else fail "no Relayweft window"; fi
+		wmctrl -c Relayweft
 		closed=$(date +%s)
 		if wait_gone "$apid" 60; then
 			took=$(($(date +%s) - closed))
-			if [ "$took" -le 15 ]; then pass "sy app exited ${took}s after its window was closed"; else fail "sy app exited only ${took}s after its window closed"; fi
+			if [ "$took" -le 15 ]; then pass "rw app exited ${took}s after its window was closed"; else fail "rw app exited only ${took}s after its window closed"; fi
 		else
-			fail "sy app still runs 60s after its window was closed"
+			fail "rw app still runs 60s after its window was closed"
 			kill -INT -- -"$apid"
 		fi
 		sleep 2
 		shot linux-app-a-after
-		if chrome_running; then pass "Chrome still runs after sy app exited"; else fail "Chrome died with sy app"; fi
+		if chrome_running; then pass "Chrome still runs after rw app exited"; else fail "Chrome died with rw app"; fi
 		t=$(titles)
 		info "windows after: $t"
 		if echo "$t" | grep -q OtherWindow; then pass "the other Chrome window survived"; else fail "the other Chrome window is gone"; fi
 	fi
 	kill -9 "$apid" 2>/dev/null
 
-	# B: Chrome is not running, so sy app starts it. Ctrl+C or closing the
-	# terminal signals sy's whole process group; Chrome must survive.
+	# B: Chrome is not running, so rw app starts it. Ctrl+C or closing the
+	# terminal signals rw's whole process group; Chrome must survive.
 	for sig in INT HUP; do
 		quit_chrome
-		(cd "$R" && exec setsid "$SY" app --demo) >"$OUT/app-b-$sig.log" 2>&1 &
+		(cd "$R" && exec setsid "$RW" app --demo) >"$OUT/app-b-$sig.log" 2>&1 &
 		bpid=$!
 		if ! wait_file "$OUT/app-b-$sig.log" "opened in" 30; then
-			fail "sy app ($sig case) did not open a window"
+			fail "rw app ($sig case) did not open a window"
 			kill -9 "$bpid" 2>/dev/null
 			continue
 		fi
@@ -152,13 +152,13 @@ else
 		info "windows ($sig case, before): $(titles)"
 		shot "linux-app-b-$sig-open"
 		kill -"$sig" -- -"$bpid"
-		if wait_gone "$bpid" 20; then pass "SIG$sig to sy app's process group stopped sy"; else fail "sy app ignored SIG$sig"; kill -9 "$bpid"; fi
+		if wait_gone "$bpid" 20; then pass "SIG$sig to rw app's process group stopped rw"; else fail "rw app ignored SIG$sig"; kill -9 "$bpid"; fi
 		sleep 3
 		shot "linux-app-b-$sig-after"
 		if chrome_running && titles | grep -q OtherWindow; then
-			pass "Chrome (started by sy app) and its other window survived SIG$sig to sy's process group"
+			pass "Chrome (started by rw app) and its other window survived SIG$sig to rw's process group"
 		else
-			fail "SIG$sig to sy app's process group killed Chrome, which sy had started (windows now: $(titles))"
+			fail "SIG$sig to rw app's process group killed Chrome, which rw had started (windows now: $(titles))"
 		fi
 	done
 	quit_chrome

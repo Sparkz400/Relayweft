@@ -1,11 +1,11 @@
 // A scripted stand-in for the Claude Code CLI (`claude -p --output-format
-// stream-json`), so the integration test drives a real, non-demo sy (git,
-// worktrees, change review) without spending any quota. sy starts it
+// stream-json`), so the integration test drives a real, non-demo rw (git,
+// worktrees, change review) without spending any quota. rw starts it
 // through a .cmd shim (fake-claude.cmd, written by runTest.ts) as
 //
 //   node fakeClaude.js <state dir> <claude args...>
 //
-// with the prompt on stdin. It recognises sy's prompt markers like
+// with the prompt on stdin. It recognises rw's prompt markers like
 // internal/runner/fake.go does and writes one line per call to
 // <state dir>/calls.log.
 
@@ -49,16 +49,16 @@ out({ type: 'assistant', message: { content: [{ type: 'text', text: 'Reading the
 
 const has = (m: string) => prompt.includes(m);
 if (resumed) {
-  // A follow-up (@agent message): sy resumes the agent's session.
+  // A follow-up (@agent message): rw resumes the agent's session.
   note('followup');
   result('followed up');
-} else if (has('[SY:PLAN-REVIEW]') || has('[SY:FINAL-REVIEW]') || has('[SY:ERROR-REVIEW]')) {
+} else if (has('[RW:PLAN-REVIEW]') || has('[RW:FINAL-REVIEW]') || has('[RW:ERROR-REVIEW]')) {
   note('review');
   result('{"approve": true, "advice": "ok", "issues": []}');
-} else if (has('[SY:JUDGE]')) {
+} else if (has('[RW:JUDGE]')) {
   note('judge');
   result('A');
-} else if (has('[SY:PLAN]')) {
+} else if (has('[RW:PLAN]')) {
   note('plan');
   const plan = {
     summary: 'Look around, then edit the notes and add a file.',
@@ -75,7 +75,7 @@ if (resumed) {
 } else if (has(HANG)) {
   note('hang');
   fs.writeFileSync(path.join(stateDir, 'hang.pid'), String(process.pid));
-  // Wait to be killed (sy cancels the task or stops).
+  // Wait to be killed (rw cancels the task or stops).
   setInterval(() => undefined, 60_000);
 } else {
   const m = /write <<([^>]+)>> containing <<([^>]+)>>/.exec(prompt);

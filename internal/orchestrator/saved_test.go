@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 // slotPaths lists the pool worktrees of the repo at dir.
@@ -54,7 +54,7 @@ func TestTaskLockProbesDoNotCollide(t *testing.T) {
 	}
 	wg.Wait()
 	if n := seen.Load(); n > 0 {
-		t.Fatalf("a task no sy runs looked locked %d times while others probed it", n)
+		t.Fatalf("a task no rw runs looked locked %d times while others probed it", n)
 	}
 	unlock, ok := st.lock()
 	if !ok {
@@ -80,8 +80,8 @@ func logText(rec *recorder) string {
 	return b.String()
 }
 
-// personsGit is what sy must never change in the person's repo: HEAD, the
-// current branch, the index and the list of branches (sy may only add its
+// personsGit is what rw must never change in the person's repo: HEAD, the
+// current branch, the index and the list of branches (rw may only add its
 // own).
 func personsGit(t *testing.T, dir string) (head, branch, index string, branches []string) {
 	t.Helper()
@@ -119,7 +119,7 @@ func checkSaved(t *testing.T, dir string, st *TaskState, base string) SavedEdits
 		t.Fatalf("the task's state records %d saved edits, want 1: %+v", len(after.Saved), after.Saved)
 	}
 	sv := after.Saved[0]
-	if sv.Step != "c" || sv.Task != st.ID || sv.Base != base || !(strings.HasPrefix(sv.Branch, "sy/") || strings.HasPrefix(sv.Branch, "refs/switchyard/kept/")) {
+	if sv.Step != "c" || sv.Task != st.ID || sv.Base != base || !(strings.HasPrefix(sv.Branch, "rw/") || strings.HasPrefix(sv.Branch, "refs/relayweft/kept/")) {
 		t.Errorf("saved edits: %+v (base %s)", sv, base)
 	}
 	if _, ok := after.Running["c"]; ok {
@@ -141,7 +141,7 @@ func checkSaved(t *testing.T, dir string, st *TaskState, base string) SavedEdits
 	return sv
 }
 
-// The person's repo is unchanged apart from sy's new branch.
+// The person's repo is unchanged apart from rw's new branch.
 func checkUntouched(t *testing.T, dir, head, branch, index string, branches []string, saved string) {
 	t.Helper()
 	h, b, i, bs := personsGit(t, dir)
@@ -220,8 +220,8 @@ func TestExpiredHoldSavesEdits(t *testing.T) {
 	}
 }
 
-// sy clean saves a held worktree's half-done edits on a branch before it
-// removes the worktree. A worktree whose task a sy is running is kept.
+// rw clean saves a held worktree's half-done edits on a branch before it
+// removes the worktree. A worktree whose task a rw is running is kept.
 func TestCleanSavesHeldEdits(t *testing.T) {
 	dir := gitRepo(t)
 	st := interruptC(t, dir)
@@ -233,14 +233,14 @@ func TestCleanSavesHeldEdits(t *testing.T) {
 	}
 	sv := checkSaved(t, dir, st, run.Base)
 	if saved[0].Branch != sv.Branch {
-		t.Errorf("sy clean reported %s, the state records %s", saved[0].Branch, sv.Branch)
+		t.Errorf("rw clean reported %s, the state records %s", saved[0].Branch, sv.Branch)
 	}
 	if _, err := os.Stat(run.Slot); err == nil {
 		t.Error("the worktree was not removed")
 	}
 	checkUntouched(t, dir, head, branch, index, branches, sv.Branch)
 
-	// A sy runs the next interrupted task right now: its worktree is
+	// A rw runs the next interrupted task right now: its worktree is
 	// neither saved nor removed.
 	dir2 := gitRepo(t)
 	st2 := interruptC(t, dir2)

@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
-// isolateUserConfig keeps `sy trust` records of a test out of the real
+// isolateUserConfig keeps `rw trust` records of a test out of the real
 // user config dir.
 func isolateUserConfig(t *testing.T) {
 	d := t.TempDir()
@@ -25,7 +25,7 @@ func isolateUserConfig(t *testing.T) {
 	}
 }
 
-// trustedVerify writes a trusted .switchyard.yaml with verify commands.
+// trustedVerify writes a trusted .relayweft.yaml with verify commands.
 func trustedVerify(t *testing.T, dir string, cmds ...string) {
 	t.Helper()
 	b, _ := json.Marshal(map[string]any{"verify": map[string]any{"commands": cmds}})
@@ -229,7 +229,7 @@ func TestMultiRepoResume(t *testing.T) {
 	var ran []string
 	var bDir string
 	set := both(func(s runner.Spec) runner.Result {
-		if strings.Contains(s.Prompt, "[SY:") && !strings.Contains(s.Prompt, runner.MarkerStep) {
+		if strings.Contains(s.Prompt, "[RW:") && !strings.Contains(s.Prompt, runner.MarkerStep) {
 			return approve()
 		}
 		mu.Lock()
@@ -241,7 +241,7 @@ func TestMultiRepoResume(t *testing.T) {
 		os.WriteFile(filepath.Join(s.Dir, "web.txt"), []byte("b\n"), 0o644)
 		return runner.Result{Final: "done " + s.StepID}
 	})
-	o, _ := newOrc(t, api, set, nil) // this sy has no --repo: the state's repos count
+	o, _ := newOrc(t, api, set, nil) // this rw has no --repo: the state's repos count
 	st := &TaskState{ID: "multi-resume", Task: longTask, Dir: api, Status: "running", Created: time.Now(),
 		Repos: []Repo{{Name: "web", Dir: web}},
 		Plan: &Plan{Summary: "p", Repos: []string{PrimaryRepo, "web"}, Subtasks: []Subtask{
@@ -296,7 +296,7 @@ func TestMultiRepoPlanRejectsUnknownRepo(t *testing.T) {
 				return runner.Result{Final: twoRepoPlan("frontend")}
 			}
 			return runner.Result{Final: twoRepoPlan("web")}
-		case strings.Contains(s.Prompt, "[SY:") && !strings.Contains(s.Prompt, runner.MarkerStep):
+		case strings.Contains(s.Prompt, "[RW:") && !strings.Contains(s.Prompt, runner.MarkerStep):
 			return approve()
 		}
 		return runner.Result{Final: "ok"}
@@ -370,14 +370,14 @@ func TestResolveWorkspace(t *testing.T) {
 
 // A committed workspace that does not fit this machine (the teammate has
 // no ../web, or it is not a repo, or the name is bad) is skipped with a
-// reason instead of stopping sy; the good entries are kept. --repo flags
+// reason instead of stopping rw; the good entries are kept. --repo flags
 // still fail hard.
 func TestResolveWorkspaceSkipsBadConfigRepos(t *testing.T) {
 	api, web := gitRepo(t), gitRepo(t)
 	plain := t.TempDir()
 	repos, skipped, err := ResolveWorkspace(api, []WorkspaceEntry{
 		{Name: "web", Path: web},
-		{Name: "gone", Path: filepath.Join(plain, "missing"), Origin: "/p/.switchyard.yaml: workspace.repos.gone"},
+		{Name: "gone", Path: filepath.Join(plain, "missing"), Origin: "/p/.relayweft.yaml: workspace.repos.gone"},
 		{Name: "plain", Path: plain},
 		{Name: "Bad", Path: web},
 		{Name: "self", Path: api},
@@ -389,7 +389,7 @@ func TestResolveWorkspaceSkipsBadConfigRepos(t *testing.T) {
 		t.Errorf("repos = %+v", repos)
 	}
 	joined := strings.Join(skipped, "\n")
-	for _, want := range []string{"/p/.switchyard.yaml: workspace.repos.gone", "is not a directory", "workspace.repos.plain", "not a git repository", "lowercase", "same git repository", "skipped"} {
+	for _, want := range []string{"/p/.relayweft.yaml: workspace.repos.gone", "is not a directory", "workspace.repos.plain", "not a git repository", "lowercase", "same git repository", "skipped"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("skipped lacks %q:\n%s", want, joined)
 		}
@@ -409,7 +409,7 @@ func TestResolveWorkspaceSkipsBadConfigRepos(t *testing.T) {
 }
 
 // A relative config path is taken from the entry's Base (the folder of the
-// .switchyard.yaml that set it), not from the project folder sy runs in.
+// .relayweft.yaml that set it), not from the project folder rw runs in.
 func TestResolveWorkspaceRelativeToConfigFile(t *testing.T) {
 	root := t.TempDir()
 	api := filepath.Join(root, "api")
@@ -420,7 +420,7 @@ func TestResolveWorkspaceRelativeToConfigFile(t *testing.T) {
 		gitIn(t, d, "init", "-q")
 	}
 	os.MkdirAll(sub, 0o755)
-	// sy runs in api/sub; the repo file in api says ../web.
+	// rw runs in api/sub; the repo file in api says ../web.
 	repos, skipped, err := ResolveWorkspace(sub, []WorkspaceEntry{{Name: "web", Path: "../web", Base: api}}, nil)
 	if err != nil || len(skipped) != 0 || len(repos) != 1 || !samePath(repos[0].Dir, web) {
 		t.Fatalf("relative to the file's folder: %+v %v %v", repos, skipped, err)

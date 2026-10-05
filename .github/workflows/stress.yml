@@ -43,5 +43,5 @@ jobs:
       - name: stress
         shell: bash
         env:
-          SY_STRESS_DURATION: ${{ inputs.duration || '30m' }}
+          RW_STRESS_DURATION: ${{ inputs.duration || '30m' }}
         run: go test -run '^TestStress$' -v -count=1 -timeout 42m ./internal/orchestrator

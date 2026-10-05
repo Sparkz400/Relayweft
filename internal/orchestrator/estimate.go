@@ -7,17 +7,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // Dry-run cost estimate: before a plan is approved, every step gets an
 // estimate of its tokens, wall time and API-equivalent $ from earlier runs
 // of the same role, kind and route (sessionlog/estimate.go), and the total
 // is compared with what is left of the task and day budgets. Approvers that
-// implement EstimateApprover show it; `sy run --estimate` prints it and
+// implement EstimateApprover show it; `rw run --estimate` prints it and
 // stops before anything runs.
 
 // StepEstimate is one planned step's estimate on the route the router
@@ -331,7 +331,7 @@ func (o *Orchestrator) approvePlan(ctx context.Context, t *task, plan Plan) (Pla
 // errRunning refuses a second task in one orchestrator.
 var errRunning = errors.New("a task is already running")
 
-// Estimate plans a task and estimates it without running it (`sy run
+// Estimate plans a task and estimates it without running it (`rw run
 // --estimate`). Only the planner runs, read-only, in the project folder;
 // there is no snapshot, task state or undo entry, and nothing in the
 // working tree changes. The planner's use is logged like any agent's and

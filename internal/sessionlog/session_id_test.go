@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Two sy started in the same second get different session ids (kept
+// Two rw started in the same second get different session ids (kept
 // branches and undo refs are named after them) and different log files.
 func TestSessionIDsAreUnique(t *testing.T) {
 	dir := t.TempDir()

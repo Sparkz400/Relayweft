@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // MCPRun is the MCP setup of one agent run. Exec fills Spec.MCP from its
@@ -59,7 +59,7 @@ func PrepareMCP(provider, role string, m config.MCPCfg, lookup func(string) (str
 }
 
 // prepareMCP is PrepareMCP for a provider of any kind. Gemini CLI takes
-// MCP servers only from its own settings, so it gets none from sy; Qwen
+// MCP servers only from its own settings, so it gets none from rw; Qwen
 // Code reads Claude's config file format.
 func prepareMCP(provider, kind, role string, m config.MCPCfg, lookup func(string) (string, bool)) (run *MCPRun, cleanup func(), err error) {
 	cleanup = func() {}
@@ -110,24 +110,24 @@ func prepareMCP(provider, kind, role string, m config.MCPCfg, lookup func(string
 	return run, cleanup, nil
 }
 
-// mcpRoot is sy's own directory for Claude's MCP config files: the user's
+// mcpRoot is rw's own directory for Claude's MCP config files: the user's
 // cache dir (not a shared /tmp another user could prepare), falling back
 // to the temp dir.
 var mcpRoot = func() string {
 	if d, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(d, "switchyard", "mcp")
+		return filepath.Join(d, "relayweft", "mcp")
 	}
-	return filepath.Join(os.TempDir(), "switchyard-mcp")
+	return filepath.Join(os.TempDir(), "relayweft-mcp")
 }
 
 var sweepOnce sync.Once
 
-// mcpStale is how old a left-over sy-mcp-* dir must be to be removed.
+// mcpStale is how old a left-over rw-mcp-* dir must be to be removed.
 const mcpStale = 24 * time.Hour
 
-// mcpTempDir makes a fresh sy-mcp-* dir under mcpRoot. The first call of a
-// process removes sy-mcp-* dirs older than a day: a hard kill (power loss,
-// taskkill of sy) skips the cleanup and would leave secrets on disk.
+// mcpTempDir makes a fresh rw-mcp-* dir under mcpRoot. The first call of a
+// process removes rw-mcp-* dirs older than a day: a hard kill (power loss,
+// taskkill of rw) skips the cleanup and would leave secrets on disk.
 func mcpTempDir() (string, error) {
 	root := mcpRoot()
 	if err := os.MkdirAll(root, 0o700); err != nil {
@@ -137,17 +137,17 @@ func mcpTempDir() (string, error) {
 		sweepMCP(root, time.Now())
 		sweepMCP(os.TempDir(), time.Now()) // where older versions put them
 	})
-	return os.MkdirTemp(root, "sy-mcp-")
+	return os.MkdirTemp(root, "rw-mcp-")
 }
 
-// sweepMCP removes sy-mcp-* entries of dir last changed before now-mcpStale.
+// sweepMCP removes rw-mcp-* entries of dir last changed before now-mcpStale.
 func sweepMCP(dir string, now time.Time) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, e := range ents {
-		if !strings.HasPrefix(e.Name(), "sy-mcp-") {
+		if !strings.HasPrefix(e.Name(), "rw-mcp-") {
 			continue
 		}
 		if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) > mcpStale {
@@ -200,7 +200,7 @@ func (run *MCPRun) moveSecrets(name string, raw, s config.MCPServer, lookup func
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		prefix := "SY_MCP_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_")) + "_"
+		prefix := "RW_MCP_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_")) + "_"
 		for i, k := range keys {
 			v := s.Headers[k]
 			if !strings.Contains(raw.Headers[k], "${") {

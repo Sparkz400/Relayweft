@@ -12,17 +12,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Task state for resume:
 //
-//   - Every task writes <user config dir>/switchyard/tasks/<id>.json: the
+//   - Every task writes <user config dir>/relayweft/tasks/<id>.json: the
 //     task text, its directory, the (approved) plan and each finished
 //     subtask's result. It is rewritten after every step, so a crash, a
 //     closed window or a frozen PC loses at most the steps that were running.
-//   - While a task runs, sy holds <id>.lock; a state that says "running" but
+//   - While a task runs, rw holds <id>.lock; a state that says "running" but
 //     whose lock is free was interrupted and can be resumed.
 //   - Resuming skips the planner and every subtask that already succeeded
 //     (their changes are already in the working tree) and runs the rest,
@@ -43,7 +43,7 @@ type StepState struct {
 }
 
 // StepRun is a subtask's agent that was started and has not finished: if
-// sy stops, a resume continues it (resumeStep).
+// rw stops, a resume continues it (resumeStep).
 type StepRun struct {
 	Provider string `json:"provider"`
 	// Kind is the provider's CLI protocol then; a resume needs the same.
@@ -88,7 +88,7 @@ type TaskState struct {
 	// plan's subtasks name them. A resume works in the same repos.
 	Repos []Repo `json:"repos,omitempty"`
 	// Authors counts the writing agents that finished ok, per provider
-	// (sy review asks the other one).
+	// (rw review asks the other one).
 	Authors map[string]int `json:"authors,omitempty"`
 	// Running are the subtasks whose agent started and did not finish, by
 	// subtask id.
@@ -114,7 +114,7 @@ func (s *TaskState) setRunning(id string, r StepRun) {
 	stateMu.Unlock()
 	s.save()
 	if r.Slot != "" {
-		// Keep its half-done edits there if sy dies (holds.go).
+		// Keep its half-done edits there if rw dies (holds.go).
 		holdSlot(r.Slot, slotHold{Task: s.ID, Step: id, Token: r.Token, Base: r.Base})
 	}
 }
@@ -182,9 +182,9 @@ func (s TaskState) Author() string {
 // stateDir is where task states live; tests point it elsewhere.
 var stateDir = func() string {
 	if d, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(d, "switchyard", "tasks")
+		return filepath.Join(d, "relayweft", "tasks")
 	}
-	return filepath.Join(os.TempDir(), "switchyard-tasks")
+	return filepath.Join(os.TempDir(), "relayweft-tasks")
 }
 
 var stateMu sync.Mutex
@@ -216,7 +216,7 @@ func (s *TaskState) saveErr() error {
 
 // setResult records a finished subtask. interrupted keeps its running
 // agent on record: the step was cancelled while its agent worked (the task
-// was cancelled), and a later sy resume --force can continue it.
+// was cancelled), and a later rw resume --force can continue it.
 func (s *TaskState) setResult(id string, r stepResult, interrupted bool) {
 	if s == nil {
 		return
@@ -260,7 +260,7 @@ func (s *TaskState) dropRunning(id, slot string) {
 }
 
 // lock takes the task's lock file for as long as it runs; ok is false when
-// another sy holds it. Another sy may hold it for a moment without running
+// another rw holds it. Another rw may hold it for a moment without running
 // the task (checking a hold, recording saved edits), so it is retried
 // briefly.
 func (s *TaskState) lock() (unlock func(), ok bool) {
@@ -269,7 +269,7 @@ func (s *TaskState) lock() (unlock func(), ok bool) {
 }
 
 // Interrupted reports whether the task stopped without finishing and no
-// sy is running it now.
+// rw is running it now.
 func (s TaskState) Interrupted() bool {
 	if s.Status != "running" {
 		return false
@@ -281,7 +281,7 @@ func (s TaskState) Interrupted() bool {
 func LoadTask(id string) (*TaskState, error) {
 	s, err := readTask(id)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("no task %q (sy history lists them)", id)
+		return nil, fmt.Errorf("no task %q (rw history lists them)", id)
 	}
 	return s, err
 }

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 //go:embed testimage/Dockerfile testimage/claude
@@ -26,7 +26,7 @@ func SelftestImage() string {
 		h.Write([]byte(n))
 		h.Write(testImageFile(n))
 	}
-	return "switchyard-sandbox-selftest:" + hex.EncodeToString(h.Sum(nil))[:12]
+	return "relayweft-sandbox-selftest:" + hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 // testImageFile reads an embedded file with Unix line endings (a Windows
@@ -70,7 +70,7 @@ func BuildSelftestImage(bin string) (string, error) {
 	if inspect.Run() == nil {
 		return tag, nil
 	}
-	dir, err := os.MkdirTemp("", "sy-sandbox-image-")
+	dir, err := os.MkdirTemp("", "rw-sandbox-image-")
 	if err != nil {
 		return "", err
 	}
@@ -90,11 +90,11 @@ func BuildSelftestImage(bin string) (string, error) {
 	return tag, nil
 }
 
-// Running lists the names of this user's sy containers that exist now.
+// Running lists the names of this user's rw containers that exist now.
 func Running(bin string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "ps", "-a", "--filter", "label=switchyard.owner="+owner(), "--format", "{{.Names}}")
+	cmd := exec.CommandContext(ctx, bin, "ps", "-a", "--filter", "label=relayweft.owner="+owner(), "--format", "{{.Names}}")
 	proc.Background(cmd)
 	out, err := cmd.Output()
 	return strings.Fields(string(out)), err

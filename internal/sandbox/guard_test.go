@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/config"
+	"github.com/sparkz400/relayweft/internal/config"
 )
 
 // addGitlink puts a submodule entry (mode 160000) for path into the index,
@@ -30,7 +30,7 @@ func TestCheckUndoesSubmoduleGitFiles(t *testing.T) {
 	orig := []byte("gitdir: ../../.git/modules/old\n")
 	os.WriteFile(filepath.Join(repo, "libs", "old", ".git"), orig, 0o644)
 
-	b := &Box{dir: repo, Name: "sy-1-2-ab"}
+	b := &Box{dir: repo, Name: "rw-1-2-ab"}
 	mounts := b.guardLinks(false)
 	// The existing one is mounted read-only over itself.
 	if len(mounts) != 1 || mounts[0].Target != "/work/libs/old/.git" || mounts[0].Writable {
@@ -83,13 +83,13 @@ func TestCheckQuarantinesChangedGitFolder(t *testing.T) {
 	// What an agent could do after getting around the mount.
 	os.WriteFile(filepath.Join(gd, "config"), []byte("[core]\n\tbare = false\n\tworktree = /elsewhere\n"), 0o644)
 	err := b.Check()
-	if err == nil || !strings.Contains(err.Error(), "legacy/.git changed: moved to .git.sy-quarantine-") {
+	if err == nil || !strings.Contains(err.Error(), "legacy/.git changed: moved to .git.rw-quarantine-") {
 		t.Fatalf("err = %v", err)
 	}
 	if _, err := os.Lstat(gd); !os.IsNotExist(err) {
 		t.Error("the changed .git folder is still active")
 	}
-	moved, _ := filepath.Glob(filepath.Join(repo, "legacy", ".git.sy-quarantine-*"))
+	moved, _ := filepath.Glob(filepath.Join(repo, "legacy", ".git.rw-quarantine-*"))
 	if len(moved) != 1 {
 		t.Fatalf("not moved aside: %v", moved)
 	}
@@ -117,7 +117,7 @@ func TestCheckRemovesSymlinkedSubmodule(t *testing.T) {
 		t.Error("the symlink is still there")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "keep.txt")); err != nil {
-		t.Error("sy removed what the symlink pointed to")
+		t.Error("rw removed what the symlink pointed to")
 	}
 }
 
@@ -157,7 +157,7 @@ func TestResetHome(t *testing.T) {
 		os.MkdirAll(filepath.Dir(p), 0o700)
 		os.WriteFile(p, []byte("x"), 0o600)
 	}
-	resetHome(home, []Mount{{Source: "/mine", Target: "/sy/home/.gitconfig"}})
+	resetHome(home, []Mount{{Source: "/mine", Target: "/rw/home/.gitconfig"}})
 	for f, want := range map[string]bool{
 		".bashrc": false, ".claude/settings.json": false, ".claude/hooks/x.sh": false, ".codex/config.toml": false,
 		// ~/.claude.json holds MCP servers; logout and login shells; fish; git.

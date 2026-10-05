@@ -494,7 +494,7 @@ func (g git) mergeFile(from, to, path string) (string, error) {
 		return "", err // deleted by the agent but edited by the user: conflict
 	}
 	base, _ := g.run(nil, nil, "cat-file", "--filters", from+":"+path)
-	tmp, err := os.MkdirTemp("", "sy-merge-*")
+	tmp, err := os.MkdirTemp("", "rw-merge-*")
 	if err != nil {
 		return "", err
 	}

@@ -7,12 +7,12 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/sandbox"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/sandbox"
 )
 
-// checkCmd is one verify command sy runs in dir: in the sandbox when
+// checkCmd is one verify command rw runs in dir: in the sandbox when
 // agents write in one (config.CheckSandbox, docs/sandbox.md), through the
 // system shell otherwise.
 func checkCmd(ctx context.Context, cfg *config.Config, dir, line string) (cmd *exec.Cmd, done func(err error, out []byte) string, err error) {
@@ -64,7 +64,7 @@ func selectExec(cfg *config.Config) func(ctx context.Context, dir string, argv [
 	}
 }
 
-// RunCheck runs one command line on code agents wrote (sy bench's check)
+// RunCheck runs one command line on code agents wrote (rw bench's check)
 // in dir, in the sandbox when agents write in one, and reports success and
 // the combined output.
 func RunCheck(ctx context.Context, cfg *config.Config, dir, line string) (bool, string) {
@@ -79,7 +79,7 @@ func RunCheck(ctx context.Context, cfg *config.Config, dir, line string) (bool, 
 	return err == nil, string(out)
 }
 
-// shellCmd runs a command line sy runs on code agents wrote (a verify
+// shellCmd runs a command line rw runs on code agents wrote (a verify
 // command, an after_merge or after_task hook) in dir, with env (NAME=value)
 // added: in the sandbox when agents write in one, through the system shell
 // otherwise. done must be called with the command's error and output once
@@ -98,8 +98,8 @@ func shellCmd(ctx context.Context, cfg *config.Config, dir, line string, env []s
 	var pass []string
 	for _, kv := range env {
 		// The folder is /work in the container.
-		if strings.HasPrefix(kv, "SY_DIR=") {
-			kv = "SY_DIR=" + sandbox.Work
+		if strings.HasPrefix(kv, "RW_DIR=") {
+			kv = "RW_DIR=" + sandbox.Work
 		}
 		pass = append(pass, kv)
 	}

@@ -1,7 +1,7 @@
 name: release
 
-# Builds sy for every supported platform, the Linux packages, and publishes
-# a GitHub release. Asset names are a contract: `sy update`, the scoop,
+# Builds rw for every supported platform, the Linux packages, and publishes
+# a GitHub release. Asset names are a contract: `rw update`, the scoop,
 # winget, Homebrew and AUR manifests and the CI install scripts all look
 # them up by name. Add new assets, never rename existing ones, and list
 # every asset in checksums.txt (packaging/README.md has the table).
@@ -66,11 +66,11 @@ jobs:
           for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os="${target%/*}"
             arch="${target#*/}"
-            out="dist/sy-$os-$arch"
+            out="dist/rw-$os-$arch"
             if [ "$os" = "windows" ]; then out="$out.exe"; fi
             echo "building $out"
             GOOS="$os" GOARCH="$arch" go build -trimpath \
-              -ldflags "-s -w -X main.version=$VERSION" -o "$out" ./cmd/sy
+              -ldflags "-s -w -X main.version=$VERSION" -o "$out" ./cmd/rw
           done
 
       - name: linux packages
@@ -83,7 +83,7 @@ jobs:
       - name: checksums
         run: |
           cd dist
-          sha256sum sy-* switchyard-* > checksums.txt
+          sha256sum rw-* relayweft-* > checksums.txt
           cat checksums.txt
 
       - name: create release
@@ -91,8 +91,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.v.outputs.tag }}
         # A tag with a suffix (v1.2.0-rc1) becomes a pre-release, which the
-        # releases/latest API (and so `sy update`) skips.
+        # releases/latest API (and so `rw update`) skips.
         run: |
           pre=""
           case "$TAG" in *-*) pre="--prerelease" ;; esac
-          gh release create "$TAG" dist/* --generate-notes --target "$GITHUB_SHA" --title "Switchyard $TAG" $pre
+          # packaging/release-notes/<tag>.md, when there is one, goes above
+          # the generated notes (gh prepends --notes-file to them).
+          notes=()
+          if [ -f "packaging/release-notes/$TAG.md" ]; then
+            notes=(--notes-file "packaging/release-notes/$TAG.md")
+          fi
+          gh release create "$TAG" dist/* --generate-notes "${notes[@]}" --target "$GITHUB_SHA" --title "Relayweft $TAG" $pre

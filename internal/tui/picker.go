@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // picker is the model picker: every role x every provider, editable live.
@@ -331,7 +331,7 @@ func (p *picker) view(m *Model, W, H int) string {
 		}
 		lines = append(lines, th.fg(th.Faint).Render("prefer: a provider = that one · other = not the planner's · auto = least used"))
 		lines = append(lines, th.fg(th.Faint).Render("At a usage limit the role's route on the next provider (routing.provider_order) is used automatically."))
-		lines = append(lines, th.fg(th.Faint).Render("Tip: `sy models --refresh` reads the current Codex catalog from `codex debug models`."))
+		lines = append(lines, th.fg(th.Faint).Render("Tip: `rw models --refresh` reads the current Codex catalog from `codex debug models`."))
 	}
 	box := th.box(th.Main, w).Render(clipLines(strings.Join(lines, "\n"), H-2))
 	return indent(box, max(0, (W-w)/2))

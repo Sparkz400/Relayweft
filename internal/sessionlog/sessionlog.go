@@ -1,5 +1,5 @@
 // Package sessionlog writes the append-only JSONL log of every routing
-// decision, agent run and task outcome, and aggregates it for `sy stats`.
+// decision, agent run and task outcome, and aggregates it for `rw stats`.
 package sessionlog
 
 import (
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // Record types.
@@ -76,7 +76,7 @@ type Record struct {
 	DurationMS int64             `json:"duration_ms,omitempty"`
 	Files      []string          `json:"files,omitempty"`
 	Cost       *event.TaskCost   `json:"cost,omitempty"`  // task_end
-	Bench      string            `json:"bench,omitempty"` // task name in a `sy bench` run
+	Bench      string            `json:"bench,omitempty"` // task name in a `rw bench` run
 	Passed     *bool             `json:"passed,omitempty"`
 	Quota      *event.QuotaInfo  `json:"quota,omitempty"` // quota
 	Until      *time.Time        `json:"until,omitempty"` // limit: limited until (the reset time when known)
@@ -110,7 +110,7 @@ func Open(dir, cwd string) (*Writer, error) {
 	return w, nil
 }
 
-// newSessionID is the start time plus a random suffix: two sy started in
+// newSessionID is the start time plus a random suffix: two rw started in
 // the same second must not share kept branches or undo refs.
 // Format: 20060102-150405-1a2b.
 func newSessionID() string {
@@ -120,7 +120,7 @@ func newSessionID() string {
 }
 
 // nilSession is the session id of a nil Writer, fixed for the process so
-// every caller in one sy agrees on it.
+// every caller in one rw agrees on it.
 var nilSession = sync.OnceValue(newSessionID)
 
 // Session returns the session id.

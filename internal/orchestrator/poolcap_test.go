@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 // cancelC runs longTask and cancels it while step c's agent works; edit,
@@ -44,7 +44,7 @@ func cancelC(t *testing.T, dir string, cfg func(*config.Config), edit string) *T
 // Every cancelled task kept its worktree held, and the pool grew by one
 // full checkout per cancel (the 30-minute stress test failed on it). At
 // its size (max_threads + 1), the pool now gives up the oldest held
-// worktree no sy is using, after saving its edits on a branch; sy resume
+// worktree no rw is using, after saving its edits on a branch; rw resume
 // of that task says where they are.
 func TestHeldPoolStaysAtItsSize(t *testing.T) {
 	dir := gitRepo(t)
@@ -77,7 +77,7 @@ func TestHeldPoolStaysAtItsSize(t *testing.T) {
 		t.Errorf("the newest cancelled task lost its worktree: %+v", last.Running)
 	}
 
-	// sy resume --force of the first task says where its edits are, and
+	// rw resume --force of the first task says where its edits are, and
 	// its step starts over.
 	var resumed []runner.Spec
 	set := bothCtx(func(ctx context.Context, s runner.Spec) runner.Result {
@@ -112,7 +112,7 @@ func TestCancelledCleanStepHoldsNothing(t *testing.T) {
 	if len(marks) != 0 {
 		t.Errorf("worktrees still held: %v", marks)
 	}
-	// With edits, the hold stays (sy resume --force continues there).
+	// With edits, the hold stays (rw resume --force continues there).
 	st = cancelC(t, dir, nil, "c1\n")
 	if r := st.Running["c"]; r.Slot == "" {
 		t.Error("a cancelled step with edits lost its worktree")

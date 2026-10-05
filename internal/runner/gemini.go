@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
 )
 
 // NewGemini returns a runner for `gemini --output-format stream-json`
@@ -143,7 +143,7 @@ func geminiPrecheck(cfg config.ProviderCfg) func(Spec) error {
 			return nil
 		}
 		return errors.New("this repo has settings of its own for Gemini CLI (.gemini or .env), which can run commands or redirect it, " +
-			"so sy does not trust the folder for Gemini; trust it in Gemini yourself (run `gemini` there once) " +
+			"so rw does not trust the folder for Gemini; trust it in Gemini yourself (run `gemini` there once) " +
 			"or set providers.gemini.allow_repo_settings, or route writers to another provider")
 	}
 }

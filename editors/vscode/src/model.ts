@@ -1,7 +1,7 @@
-// The agent tree and the activity log, folded from sy web's event stream
+// The agent tree and the activity log, folded from rw web's event stream
 // the way the web page does it (internal/web/static/app.js: fold).
 
-import type { SyEvent, StateView } from './types';
+import type { RwEvent, StateView } from './types';
 
 export type AgentStatus = 'queued' | 'running' | 'ok' | 'failed' | 'killed';
 
@@ -34,7 +34,7 @@ function newNode(id: string, role = '', title = ''): AgentNode {
   };
 }
 
-function freshTokens(t: SyEvent['tokens']): number {
+function freshTokens(t: RwEvent['tokens']): number {
   if (!t) {
     return 0;
   }
@@ -101,7 +101,7 @@ export class TaskModel {
   }
 
   /** Applies one event. It returns the activity log line for it, if any. */
-  fold(e: SyEvent): string | undefined {
+  fold(e: RwEvent): string | undefined {
     const k = e.kind;
     switch (k) {
       case 'task_start': {
@@ -165,7 +165,7 @@ export class TaskModel {
     return this.nodeEvent(this.node(e.agent_id), e);
   }
 
-  private nodeEvent(n: AgentNode, e: SyEvent): string | undefined {
+  private nodeEvent(n: AgentNode, e: RwEvent): string | undefined {
     const ts = Date.parse(e.ts) || Date.now();
     if (e.parent_id && n.id !== MAIN) {
       n.parent = e.parent_id;
@@ -243,7 +243,7 @@ export class TaskModel {
 }
 
 /** Formats a log line with the event's local time. */
-export function logLine(e: SyEvent, text: string): string {
+export function logLine(e: RwEvent, text: string): string {
   const d = new Date(Date.parse(e.ts) || Date.now());
   const p = (x: number) => String(x).padStart(2, '0');
   return `[${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}] ${text}`;

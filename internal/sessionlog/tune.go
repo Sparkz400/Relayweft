@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
-// Suggestion is one data-backed change to the routing config, for `sy tune`.
+// Suggestion is one data-backed change to the routing config, for `rw tune`.
 type Suggestion struct {
 	Severity string // "high", "medium" or "info"
 	Title    string
@@ -437,7 +437,7 @@ func (c Catalog) finalReviews(recs []Record) []Suggestion {
 	return []Suggestion{{
 		Severity: sev,
 		Title:    "final reviews reject a lot of work",
-		Detail: fmt.Sprintf("%d of %d final reviews requested changes (%.0f%%). Use a stronger worker route, or raise orchestrator.max_fix_rounds in switchyard.yaml so rejected work gets another fix round.",
+		Detail: fmt.Sprintf("%d of %d final reviews requested changes (%.0f%%). Use a stronger worker route, or raise orchestrator.max_fix_rounds in relayweft.yaml so rejected work gets another fix round.",
 			rejected, n, rate*100),
 		Commands: cmds,
 		Role:     event.RoleWorker, Provider: prov, Model: model,
@@ -706,7 +706,7 @@ func routedVsSingle(recs []Record) []Suggestion {
 	return []Suggestion{{
 		Severity: SevHigh,
 		Title:    "routed tasks succeed less often than the single-agent baseline",
-		Detail: fmt.Sprintf("routed: %d of %d ok (%.0f%%), single: %d of %d ok (%.0f%%). Check the failing routes below, or compare with `sy stats`.",
+		Detail: fmt.Sprintf("routed: %d of %d ok (%.0f%%), single: %d of %d ok (%.0f%%). Check the failing routes below, or compare with `rw stats`.",
 			ok["routed"], rt, rr*100, ok["single"], st, sr*100),
 	}}
 }

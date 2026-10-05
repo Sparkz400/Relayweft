@@ -24,9 +24,9 @@ const (
 	EventDone    = "done"    // a task finished ok
 	EventFailed  = "failed"  // a task failed
 	EventLimit   = "limit"   // a provider hit its usage limit
-	EventWaiting = "waiting" // sy waits for you (an approval, a budget question)
-	EventWatch   = "watch"   // sy watch ran a follow-up round, or a watched PR was merged or closed
-	EventTest    = "test"    // sy notify --test (always sent)
+	EventWaiting = "waiting" // rw waits for you (an approval, a budget question)
+	EventWatch   = "watch"   // rw watch ran a follow-up round, or a watched PR was merged or closed
+	EventTest    = "test"    // rw notify --test (always sent)
 )
 
 // Events lists the events a webhook can choose.
@@ -56,7 +56,7 @@ type Webhook struct {
 // Message is one notification.
 type Message struct {
 	Event  string
-	Title  string // e.g. "Switchyard: done"
+	Title  string // e.g. "Relayweft: done"
 	Body   string
 	Source string // the project folder's name ("" = none)
 	Link   string // a page to open (a pull request), optional
@@ -100,7 +100,7 @@ func (w Webhook) Validate() error {
 	return nil
 }
 
-// Name is how errors and sy notify refer to the webhook: its kind and
+// Name is how errors and rw notify refer to the webhook: its kind and
 // host, never the path (Slack and Discord URLs are secrets, so is an ntfy
 // topic).
 func (w Webhook) Name() string {
@@ -117,7 +117,7 @@ func (w Webhook) Name() string {
 	return host
 }
 
-// Redacted returns a copy for display (sy bugreport): the URL keeps its
+// Redacted returns a copy for display (rw bugreport): the URL keeps its
 // scheme and host, the token is hidden; ${VAR} references are kept.
 func (w Webhook) Redacted() Webhook {
 	if strings.TrimSpace(envRef.ReplaceAllString(w.URL, "")) != "" {
@@ -317,7 +317,7 @@ func (w Webhook) request(ctx context.Context, m Message) (*http.Request, error) 
 		}
 	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("User-Agent", "switchyard")
+	req.Header.Set("User-Agent", "relayweft")
 	return req, nil
 }
 

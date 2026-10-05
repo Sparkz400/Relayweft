@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 func tierRouter(st State) (*Router, *config.Config) {
@@ -72,7 +72,7 @@ func TestTiersByDifficulty(t *testing.T) {
 	}{
 		{"routine edit goes fast", Step{Kind: KindEdit, Title: "Fix typo", Prompt: "fix the typo in the readme"},
 			event.RoleWorker, TierFast, event.RoleExplorer},
-		{"plain edit stays standard", Step{Kind: KindEdit, Title: "Add flag", Prompt: "add a --json flag to sy stats"},
+		{"plain edit stays standard", Step{Kind: KindEdit, Title: "Add flag", Prompt: "add a --json flag to rw stats"},
 			event.RoleWorker, TierStandard, event.RoleWorker},
 		// Seen in the tiers bench: a planner's prompt for a logic fix
 		// that mentions a routine word in passing.
@@ -110,7 +110,7 @@ func TestTiersByDifficulty(t *testing.T) {
 }
 
 func TestTiersSaveQuota(t *testing.T) {
-	step := Step{Kind: KindEdit, Title: "Add flag", Prompt: "add a --json flag to sy stats"}
+	step := Step{Kind: KindEdit, Title: "Add flag", Prompt: "add a --json flag to rw stats"}
 	// Plenty left: standard.
 	r, _ := tierRouter(state{util: map[string]float64{event.Codex: 0.3}})
 	if d := r.Route(step); d.Tier != TierStandard {

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // providerName is what a provider may be called: it appears in routes
@@ -153,7 +153,7 @@ func (c *Config) SessionPerDir(provider string) bool {
 	return false
 }
 
-// SupportsMCP reports whether sy can hand MCP servers to the provider's
+// SupportsMCP reports whether rw can hand MCP servers to the provider's
 // CLI on the command line. Gemini CLI reads them only from its own
 // settings.json.
 func (c *Config) SupportsMCP(provider string) bool {
@@ -273,7 +273,7 @@ func (c *Config) validateProviders() []string {
 			if WritingRole(role) && !pc.CanWrite(rc.Prefer) {
 				errs = append(errs, fmt.Sprintf("role %s: prefers %s, which takes read-only work only (no write_args)", role, rc.Prefer))
 			} else if !WritingRole(role) && !pc.CanReadOnly(rc.Prefer) {
-				errs = append(errs, fmt.Sprintf("role %s: prefers %s, which has no read_only_args, so sy cannot keep it read-only", role, rc.Prefer))
+				errs = append(errs, fmt.Sprintf("role %s: prefers %s, which has no read_only_args, so rw cannot keep it read-only", role, rc.Prefer))
 			}
 		}
 		// Every route is checked, also those on disabled providers: a
@@ -301,7 +301,7 @@ func (c *Config) validateProviders() []string {
 			case !c.IsProvider(p):
 				errs = append(errs, fmt.Sprintf("mcp server %s: unknown provider %q", name, p))
 			case !c.SupportsMCP(p):
-				errs = append(errs, fmt.Sprintf("mcp server %s: provider %s (%s) takes MCP servers only from its own settings, not from sy", name, p, c.Kind(p)))
+				errs = append(errs, fmt.Sprintf("mcp server %s: provider %s (%s) takes MCP servers only from its own settings, not from rw", name, p, c.Kind(p)))
 			}
 		}
 	}

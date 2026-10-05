@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 // fakeApprover answers with functions.
@@ -179,7 +179,7 @@ func TestChangeReviewFeedbackAndPartialApply(t *testing.T) {
 	if a1 == nil || len(a1.Files) != 2 || !strings.Contains(a1.Files[0].Patch+a1.Files[1].Patch, "+a") {
 		t.Fatalf("first change set of a: %+v", a1)
 	}
-	branches, _ := git{dir}.out("branch", "--list", "sy/*")
+	branches, _ := git{dir}.out("branch", "--list", "rw/*")
 	if !strings.HasSuffix(strings.TrimSpace(branches), "/b") || !strings.Contains(branches, "a-full") {
 		t.Errorf("rejected / full changes not kept on branches:\n%s", branches)
 	}
@@ -342,7 +342,7 @@ func TestChangeReviewFeedbackNeverApplies(t *testing.T) {
 	}
 }
 
-// A resume works from the state on disk: a task another sy finished since
+// A resume works from the state on disk: a task another rw finished since
 // is not run again.
 func TestResumeRefusesFinishedTask(t *testing.T) {
 	ran := false
@@ -352,13 +352,13 @@ func TestResumeRefusesFinishedTask(t *testing.T) {
 		Plan: &Plan{Summary: "p", Subtasks: []Subtask{{ID: "a", Title: "a", Kind: router.KindEdit, Prompt: "a"}}}}
 	st.save()
 	stale := *st
-	st.Status = "done" // another sy finished it
+	st.Status = "done" // another rw finished it
 	st.save()
 	res := o.RunWith(context.Background(), "", TaskOptions{Resume: &stale})
 	if res.OK || ran || !strings.Contains(res.Summary, "is done now") {
 		t.Fatalf("stale resume ran: %+v ran=%v", res, ran)
 	}
-	// While another sy holds the lock, it is refused too.
+	// While another rw holds the lock, it is refused too.
 	st.Status = "running"
 	st.save()
 	unlock, ok := st.lock()
@@ -367,7 +367,7 @@ func TestResumeRefusesFinishedTask(t *testing.T) {
 	}
 	res = o.RunWith(context.Background(), "", TaskOptions{Resume: st})
 	unlock()
-	if res.OK || ran || !strings.Contains(res.Summary, "another sy") {
+	if res.OK || ran || !strings.Contains(res.Summary, "another rw") {
 		t.Fatalf("locked resume ran: %+v", res)
 	}
 }
@@ -486,9 +486,9 @@ func TestHooks(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "hooks.log")
 	echo := func(tag string) string {
 		if runtime.GOOS == "windows" {
-			return "echo " + tag + " %SY_STATUS%%SY_STEP%>> \"" + out + "\""
+			return "echo " + tag + " %RW_STATUS%%RW_STEP%>> \"" + out + "\""
 		}
-		return "echo " + tag + " $SY_STATUS$SY_STEP >> '" + out + "'"
+		return "echo " + tag + " $RW_STATUS$RW_STEP >> '" + out + "'"
 	}
 	set := both(func(s runner.Spec) runner.Result {
 		if r, ok := twoEdits(s); ok {
@@ -519,15 +519,15 @@ func TestHooks(t *testing.T) {
 	}
 }
 
-// Hooks run while agents' changes are in the tree: they never see sy's
+// Hooks run while agents' changes are in the tree: they never see rw's
 // forge tokens (the CI job's GITHUB_TOKEN can push).
 func TestHooksWithoutTokens(t *testing.T) {
 	dir := gitRepo(t)
 	out := filepath.Join(t.TempDir(), "env.log")
 	t.Setenv("GITHUB_TOKEN", "ghs_secret")
-	hook := "echo [$GITHUB_TOKEN] $SY_HOOK > '" + out + "'; exit 3"
+	hook := "echo [$GITHUB_TOKEN] $RW_HOOK > '" + out + "'; exit 3"
 	if runtime.GOOS == "windows" {
-		hook = "echo [%GITHUB_TOKEN%] %SY_HOOK%> \"" + out + "\" & exit 3"
+		hook = "echo [%GITHUB_TOKEN%] %RW_HOOK%> \"" + out + "\" & exit 3"
 	}
 	o, _ := newOrc(t, dir, both(func(s runner.Spec) runner.Result { return runner.Result{} }), func(c *config.Config) {
 		c.Hooks.BeforeTask = []string{hook}
@@ -539,7 +539,7 @@ func TestHooksWithoutTokens(t *testing.T) {
 	}
 }
 
-// One-step plans skip the plan review by default (sy bench: never rejected).
+// One-step plans skip the plan review by default (rw bench: never rejected).
 func TestSingleStepPlanSkipsPlanReview(t *testing.T) {
 	reviews := 0
 	set := both(func(s runner.Spec) runner.Result {

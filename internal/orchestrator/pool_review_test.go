@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Regression tests for an adversarial review of the worktree pool, the
@@ -165,7 +165,7 @@ func TestPoolMovesUndeletableSlotAside(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(trash[0]); !os.IsNotExist(err) {
-		t.Error("sy clean left the moved-aside slot")
+		t.Error("rw clean left the moved-aside slot")
 	}
 }
 
@@ -186,7 +186,7 @@ func TestCommitWorkAgentUsesGit(t *testing.T) {
 	// The agent commits on its own.
 	write(t, filepath.Join(s.path, "shared.txt"), "agent\n")
 	tgit(t, s.path, "-c", "core.hooksPath=/nonexistent", "commit", "-qam", "agent commit")
-	sc, err := (git{s.path}).commitWork(snap, "switchyard: x")
+	sc, err := (git{s.path}).commitWork(snap, "relayweft: x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestCommitWorkAgentUsesGit(t *testing.T) {
 	tgit(t, s.path, "-c", "core.hooksPath=/nonexistent", "commit", "-qm", "on feature")
 	tip := tgit(t, dir, "rev-parse", "feature")
 	write(t, filepath.Join(s.path, "uncommitted.txt"), "u\n")
-	sc, err = (git{s.path}).commitWork(snap, "switchyard: y")
+	sc, err = (git{s.path}).commitWork(snap, "relayweft: y")
 	if err != nil {
 		t.Fatalf("commit with a failing prepare-commit-msg hook: %v", err)
 	}
@@ -576,11 +576,11 @@ func TestPoolClearsUnfinishedGitOperations(t *testing.T) {
 	}
 }
 
-// Finding 13: an agent left running by a sy that was killed is stopped
+// Finding 13: an agent left running by a rw that was killed is stopped
 // before the slot is used again.
 func TestPoolKillsOrphanAgents(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		t.Skip("killing leftover agents is implemented for Linux and macOS (Windows: the job object kills them with sy)")
+		t.Skip("killing leftover agents is implemented for Linux and macOS (Windows: the job object kills them with rw)")
 	}
 	dir := gitRepo(t)
 	snap, _ := git{dir}.snapshot("s")
@@ -597,7 +597,7 @@ func TestPoolKillsOrphanAgents(t *testing.T) {
 	done := make(chan struct{})
 	go func() { cmd.Wait(); close(done) }()
 	defer cmd.Process.Kill()
-	// sy dies: the lock is released by the OS, nothing else happens.
+	// rw dies: the lock is released by the OS, nothing else happens.
 	s.untrack()
 	s.unlock()
 	s2, err := acquireSlot(dir, snap)
@@ -632,12 +632,12 @@ func TestSaveBranchNeverOverwrites(t *testing.T) {
 			t.Errorf("branch %q = %q (%v), want %s", b, got, err, want)
 		}
 	}
-	if b := o.saveBranch(tk, "../..", c1); !strings.HasPrefix(b, "sy/") {
+	if b := o.saveBranch(tk, "../..", c1); !strings.HasPrefix(b, "rw/") {
 		t.Errorf("odd step id gave %q", b)
 	}
 }
 
-// Finding 15: sy clean counts only slots it actually removed.
+// Finding 15: rw clean counts only slots it actually removed.
 func TestCleanPoolCountsOnlyRemovedSlots(t *testing.T) {
 	dir := gitRepo(t)
 	snap, _ := git{dir}.snapshot("s")

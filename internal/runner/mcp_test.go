@@ -13,22 +13,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 func mcpCfg() config.MCPCfg {
 	return config.MCPCfg{Servers: map[string]config.MCPServer{
 		"docs": {Command: `C:\Program Files\nodejs\npx.cmd`, Args: []string{"-y", "@some/mcp-server", "--root", `C:\Users\Nico Schu\repo`, "it's"},
-			Env: map[string]string{"API_KEY": "${SY_TEST_SECRET}", "PLAIN": "a b", "MISSING": "x${SY_TEST_UNSET}y"}},
-		"db":   {URL: "http://localhost:8080/mcp?token=${SY_TEST_SECRET}", Headers: map[string]string{"Authorization": "Bearer ${SY_TEST_SECRET}"}},
+			Env: map[string]string{"API_KEY": "${RW_TEST_SECRET}", "PLAIN": "a b", "MISSING": "x${RW_TEST_UNSET}y"}},
+		"db":   {URL: "http://localhost:8080/mcp?token=${RW_TEST_SECRET}", Headers: map[string]string{"Authorization": "Bearer ${RW_TEST_SECRET}"}},
 		"feed": {URL: "http://localhost:9/sse", Type: "sse"},
 		"only": {Command: "uvx", Providers: []string{event.Claude}},
 	}}
 }
 
 func lookup(name string) (string, bool) {
-	if name == "SY_TEST_SECRET" {
+	if name == "RW_TEST_SECRET" {
 		return `s3cr"et`, true
 	}
 	return "", false
@@ -42,7 +42,7 @@ func TestPrepareMCPClaudeFile(t *testing.T) {
 	if !slices.Equal(m.Names, []string{"db", "docs", "feed", "only"}) {
 		t.Fatalf("names = %v", m.Names)
 	}
-	if !slices.Equal(m.Missing, []string{"SY_TEST_UNSET"}) {
+	if !slices.Equal(m.Missing, []string{"RW_TEST_UNSET"}) {
 		t.Errorf("missing = %v", m.Missing)
 	}
 	data, err := os.ReadFile(m.ConfigFile)
@@ -157,7 +157,7 @@ func TestCodexMCPArgs(t *testing.T) {
 	// in a url cannot and stays a -c value.
 	want := []string{
 		"-c", `mcp_servers.db.url="http://localhost:8080/mcp?token=s3cr\u0022et"`,
-		"-c", `mcp_servers.db.bearer_token_env_var='SY_MCP_DB_BEARER'`,
+		"-c", `mcp_servers.db.bearer_token_env_var='RW_MCP_DB_BEARER'`,
 		"-c", `mcp_servers.docs.command='C:\Program Files\nodejs\npx.cmd'`,
 		"-c", `mcp_servers.docs.args=['-y', '@some/mcp-server', '--root', 'C:\Users\Nico Schu\repo', "it's"]`,
 		"-c", `mcp_servers.docs.env={PLAIN = 'a b'}`,
@@ -216,7 +216,7 @@ func TestExecClaudeMCPConfigLifetime(t *testing.T) {
 	pc := cfg.Providers[event.Claude]
 	pc.Command = wrapper
 	r := NewClaude(pc, nil)
-	r.MCP = config.MCPCfg{Servers: map[string]config.MCPServer{"docs": {Command: "npx", Env: map[string]string{"K": "${SY_TEST_SECRET}"}}}}
+	r.MCP = config.MCPCfg{Servers: map[string]config.MCPServer{"docs": {Command: "npx", Env: map[string]string{"K": "${RW_TEST_SECRET}"}}}}
 	r.LookupEnv = lookup
 	var c collector
 	res := r.Run(context.Background(), Spec{AgentID: "a", Role: event.RoleWorker, Model: "haiku", Dir: t.TempDir()}, c.emit)
@@ -288,22 +288,22 @@ func TestTOMLStringSafeForCmdShim(t *testing.T) {
 func TestCodexMCPSecretsStayOffCommandLine(t *testing.T) {
 	cfg := config.MCPCfg{Servers: map[string]config.MCPServer{
 		"docs": {Command: "npx", Env: map[string]string{
-			"API_KEY": "${SY_TEST_SECRET}", "LITERAL": "visible",
+			"API_KEY": "${RW_TEST_SECRET}", "LITERAL": "visible",
 			// The environment has OPENAI_API_KEY with another value:
 			// setting it for Codex would change Codex's own login, so this
 			// one stays a -c value (documented).
-			"OPENAI_API_KEY": "${SY_TEST_SECRET}",
+			"OPENAI_API_KEY": "${RW_TEST_SECRET}",
 		}},
-		"other": {Command: "uvx", Env: map[string]string{"API_KEY": "${SY_TEST_OTHER}"}},
+		"other": {Command: "uvx", Env: map[string]string{"API_KEY": "${RW_TEST_OTHER}"}},
 		"web": {URL: "https://mcp.example.com/mcp", Headers: map[string]string{
-			"Authorization": "Bearer ${SY_TEST_SECRET}", "X-Api-Key": "${SY_TEST_SECRET}", "X-Plain": "p",
+			"Authorization": "Bearer ${RW_TEST_SECRET}", "X-Api-Key": "${RW_TEST_SECRET}", "X-Plain": "p",
 		}},
 	}}
 	look := func(name string) (string, bool) {
 		switch name {
-		case "SY_TEST_SECRET":
+		case "RW_TEST_SECRET":
 			return "s3cret", true
-		case "SY_TEST_OTHER":
+		case "RW_TEST_OTHER":
 			return "0ther", true
 		case "OPENAI_API_KEY":
 			return "sk-own", true
@@ -322,8 +322,8 @@ func TestCodexMCPSecretsStayOffCommandLine(t *testing.T) {
 		// Same name, other value: one Codex environment cannot hold both.
 		`mcp_servers.other.env={API_KEY = '0ther'}`,
 		`mcp_servers.web.http_headers={X-Plain = 'p'}`,
-		`mcp_servers.web.bearer_token_env_var='SY_MCP_WEB_BEARER'`,
-		`mcp_servers.web.env_http_headers={X-Api-Key = 'SY_MCP_WEB_HEADER_1'}`,
+		`mcp_servers.web.bearer_token_env_var='RW_MCP_WEB_BEARER'`,
+		`mcp_servers.web.env_http_headers={X-Api-Key = 'RW_MCP_WEB_HEADER_1'}`,
 	} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args miss %s:\n%s", want, args)
@@ -332,7 +332,7 @@ func TestCodexMCPSecretsStayOffCommandLine(t *testing.T) {
 	if n := strings.Count(args, "s3cret"); n != 1 {
 		t.Errorf("secret on the command line %d times (want only the documented OPENAI_API_KEY case):\n%s", n, args)
 	}
-	want := []string{"API_KEY=s3cret", "SY_MCP_WEB_BEARER=s3cret", "SY_MCP_WEB_HEADER_1=s3cret"}
+	want := []string{"API_KEY=s3cret", "RW_MCP_WEB_BEARER=s3cret", "RW_MCP_WEB_HEADER_1=s3cret"}
 	got := append([]string(nil), m.ChildEnv...)
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
@@ -360,7 +360,7 @@ func TestExecCodexMCPSecretsInChildEnv(t *testing.T) {
 	pc := cfg.Providers[event.Codex]
 	pc.Command = wrapper
 	r := NewCodex(pc, nil)
-	r.MCP = config.MCPCfg{Servers: map[string]config.MCPServer{"docs": {Command: "npx", Env: map[string]string{"SY_MCP_TEST_KEY": "${SY_TEST_SECRET}"}}}}
+	r.MCP = config.MCPCfg{Servers: map[string]config.MCPServer{"docs": {Command: "npx", Env: map[string]string{"RW_MCP_TEST_KEY": "${RW_TEST_SECRET}"}}}}
 	r.LookupEnv = lookup
 	var c collector
 	res := r.Run(context.Background(), Spec{AgentID: "a", Role: event.RoleWorker, Model: "m", Dir: t.TempDir()}, c.emit)
@@ -369,15 +369,15 @@ func TestExecCodexMCPSecretsInChildEnv(t *testing.T) {
 	}
 	args, _ := os.ReadFile(argsFile)
 	env, _ := os.ReadFile(envFile)
-	if strings.Contains(string(args), "s3cr") || !strings.Contains(string(args), "mcp_servers.docs.env_vars=['SY_MCP_TEST_KEY']") {
+	if strings.Contains(string(args), "s3cr") || !strings.Contains(string(args), "mcp_servers.docs.env_vars=['RW_MCP_TEST_KEY']") {
 		t.Errorf("args = %s", args)
 	}
-	if !strings.Contains(string(env), "SY_MCP_TEST_KEY=s3cr\"et\n") || !strings.Contains(string(env), "PATH=") {
+	if !strings.Contains(string(env), "RW_MCP_TEST_KEY=s3cr\"et\n") || !strings.Contains(string(env), "PATH=") {
 		t.Errorf("child env lacks the secret or the inherited environment:\n%s", env)
 	}
 }
 
-// Claude's config files live in sy's own dir; dirs a hard kill left behind
+// Claude's config files live in rw's own dir; dirs a hard kill left behind
 // are removed after a day.
 func TestMCPTempDirSweepsStale(t *testing.T) {
 	root := t.TempDir()
@@ -385,8 +385,8 @@ func TestMCPTempDirSweepsStale(t *testing.T) {
 	mcpRoot = func() string { return root }
 	sweepOnce = sync.Once{}
 	t.Cleanup(func() { mcpRoot = old; sweepOnce = sync.Once{} })
-	stale := filepath.Join(root, "sy-mcp-stale")
-	fresh := filepath.Join(root, "sy-mcp-fresh")
+	stale := filepath.Join(root, "rw-mcp-stale")
+	fresh := filepath.Join(root, "rw-mcp-fresh")
 	mine := filepath.Join(root, "keep-me")
 	for _, d := range []string{stale, fresh, mine} {
 		os.MkdirAll(d, 0o700)
@@ -400,11 +400,11 @@ func TestMCPTempDirSweepsStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if !strings.HasPrefix(m.ConfigFile, filepath.Join(root, "sy-mcp-")) {
-		t.Errorf("config file %s is not in sy's dir %s", m.ConfigFile, root)
+	if !strings.HasPrefix(m.ConfigFile, filepath.Join(root, "rw-mcp-")) {
+		t.Errorf("config file %s is not in rw's dir %s", m.ConfigFile, root)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Error("stale sy-mcp-* dir not removed")
+		t.Error("stale rw-mcp-* dir not removed")
 	}
 	for _, d := range []string{fresh, mine} {
 		if _, err := os.Stat(d); err != nil {
@@ -414,15 +414,15 @@ func TestMCPTempDirSweepsStale(t *testing.T) {
 }
 
 // TestMain keeps Claude's MCP config files out of the real cache dir. Run
-// with SY_FAKE_CLI set, the test binary is a fake agent CLI (fakeExe).
+// with RW_FAKE_CLI set, the test binary is a fake agent CLI (fakeExe).
 func TestMain(m *testing.M) {
-	if os.Getenv("SY_FAKE_CLI") != "" {
+	if os.Getenv("RW_FAKE_CLI") != "" {
 		os.Exit(runFakeCLI())
 	}
-	if os.Getenv("SY_FAKE_DOCKER") != "" {
+	if os.Getenv("RW_FAKE_DOCKER") != "" {
 		os.Exit(runFakeDocker())
 	}
-	dir, err := os.MkdirTemp("", "sy-runner-test-")
+	dir, err := os.MkdirTemp("", "rw-runner-test-")
 	if err != nil {
 		panic(err)
 	}

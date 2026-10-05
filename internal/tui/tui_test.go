@@ -9,11 +9,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 func newModel(t *testing.T, ascii bool) (*Model, *orchestrator.Orchestrator, chan event.Event) {
@@ -22,12 +22,12 @@ func newModel(t *testing.T, ascii bool) (*Model, *orchestrator.Orchestrator, cha
 }
 
 // newModelWith builds a model on fake runners; ap (may be nil) is wired
-// into both the orchestrator and the TUI, as cmd/sy does.
+// into both the orchestrator and the TUI, as cmd/rw does.
 func newModelWith(t *testing.T, ascii bool, ap *Approver) (*Model, *orchestrator.Orchestrator, chan event.Event) {
 	t.Helper()
 	isolateState(t)
 	ch := make(chan event.Event, 4096)
-	store := config.NewStore(config.Default(), filepath.Join(t.TempDir(), "switchyard.yaml"))
+	store := config.NewStore(config.Default(), filepath.Join(t.TempDir(), "relayweft.yaml"))
 	fake := runner.NewFakeSet(0)
 	opts := orchestrator.Options{
 		Dir: t.TempDir(), Store: store, Runners: func(*config.Config) runner.Set { return fake },

@@ -72,7 +72,7 @@ func selectDotnet(cmd string, f []string, c *change) Plan {
 		for _, m := range reProjectRef.FindAllStringSubmatch(string(data), -1) {
 			ref := path.Clean(path.Join(path.Dir(p), strings.ReplaceAll(m[1], `\`, "/")))
 			if !known[foldKey(ref)] {
-				return full(cmd, fmt.Sprintf("%s references %s, which sy cannot find", p, m[1]))
+				return full(cmd, fmt.Sprintf("%s references %s, which rw cannot find", p, m[1]))
 			}
 			deps[p] = append(deps[p], findFold(projs, ref))
 		}
@@ -140,7 +140,7 @@ func solutionProjects(dir string) (map[string]bool, string) {
 		}
 	}
 	if len(slns) != 1 {
-		return nil, fmt.Sprintf("plain dotnet test runs what is in the folder, and sy narrows only one solution (found %d)", len(slns))
+		return nil, fmt.Sprintf("plain dotnet test runs what is in the folder, and rw narrows only one solution (found %d)", len(slns))
 	}
 	data, err := os.ReadFile(dir + "/" + slns[0])
 	if err != nil {
@@ -155,7 +155,7 @@ func solutionProjects(dir string) (map[string]bool, string) {
 		out[foldKey(path.Clean(strings.ReplaceAll(string(m[1]), `\`, "/")))] = true
 	}
 	if len(out) == 0 {
-		return nil, slns[0] + " lists no projects sy can read"
+		return nil, slns[0] + " lists no projects rw can read"
 	}
 	return out, ""
 }
@@ -341,7 +341,7 @@ func gradleProjects(dir string) (map[string]string, string) {
 		return nil, "the project has no settings.gradle"
 	}
 	if reGradleUnsure.Match(data) {
-		return nil, name + " places projects in a way sy does not follow"
+		return nil, name + " places projects in a way rw does not follow"
 	}
 	projects := map[string]string{}
 	for _, line := range strings.Split(string(data), "\n") {
@@ -354,7 +354,7 @@ func gradleProjects(dir string) (map[string]string, string) {
 			if !plainGradleName(p) {
 				// Task names become command arguments and allow rules
 				// (comma-joined for Claude): letters, digits, . _ - : only.
-				return nil, fmt.Sprintf("%s names project %q, which sy does not pass on", name, m[1])
+				return nil, fmt.Sprintf("%s names project %q, which rw does not pass on", name, m[1])
 			}
 			projects[p] = strings.ReplaceAll(strings.TrimPrefix(p, ":"), ":", "/")
 		}
@@ -423,7 +423,7 @@ func selectGradle(cmd string, f []string, c *change) Plan {
 				continue
 			}
 			if reGradleUnsure.Match(b) {
-				return full(cmd, path.Join(d, n)+" names projects in a way sy does not follow")
+				return full(cmd, path.Join(d, n)+" names projects in a way rw does not follow")
 			}
 			for _, m := range reGradleProject.FindAllSubmatch(b, -1) {
 				deps[p] = append(deps[p], string(m[1]))

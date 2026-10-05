@@ -5,7 +5,7 @@ import (
 	"sort"
 )
 
-// Best-of thresholds for `sy tune`.
+// Best-of thresholds for `rw tune`.
 const (
 	bestOfOwnWins   = 0.90 // the step's own route wins this often: the extra runs buy nothing
 	bestOfOtherWins = 0.60 // another route beats the own route this often: make it the role's route
@@ -82,7 +82,7 @@ func bestOfAdvice(recs []Record) []Suggestion {
 			out = append(out, Suggestion{
 				Severity: SevInfo,
 				Title:    fmt.Sprintf("best of N rarely changes the result for %s steps", role),
-				Detail: fmt.Sprintf("The step's own route won %d of %d best-of steps (%.0f%%). Each costs about N times a single run: set routing.best_of.when to hard (or off) in switchyard.yaml.",
+				Detail: fmt.Sprintf("The step's own route won %d of %d best-of steps (%.0f%%). Each costs about N times a single run: set routing.best_of.when to hard (or off) in relayweft.yaml.",
 					own, n, pct(own, n)*100),
 			})
 		}

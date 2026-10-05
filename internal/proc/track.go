@@ -13,8 +13,8 @@ import (
 )
 
 // Pid files: while a directory is tracked, every agent process started in
-// it (or below) is recorded in a file, so the next sy that takes over the
-// directory can deal with agents a killed sy left running there.
+// it (or below) is recorded in a file, so the next rw that takes over the
+// directory can deal with agents a killed rw left running there.
 //
 // Only context-bound commands are recorded (agents, hooks, verify commands:
 // exec.CommandContext sets cmd.Cancel); git helpers are short-lived and not
@@ -84,7 +84,7 @@ func trackedFile(dir string) string {
 // program's that got the pid after the agent's group ended.
 func ReapOrphans(file string) bool { return reapFile(file, false) }
 
-// ReapOwn is ReapOrphans for a pid file this sy wrote since it took the
+// ReapOwn is ReapOrphans for a pid file this rw wrote since it took the
 // directory (its agents just ended): a group still running under a pid it
 // recorded is what its agent left behind (POSIX does not reuse a pid while
 // its group exists) and is killed too.
@@ -130,15 +130,15 @@ func Alive(pid int) bool { return pid > 0 && alive(pid) }
 
 // Identity identifies a running process beyond its pid (its start time),
 // so a pid the system gave to another program since is not mistaken for
-// it. "" when the process is gone, or where sy cannot tell (macOS: use
+// it. "" when the process is gone, or where rw cannot tell (macOS: use
 // Alive there).
 func Identity(pid int) string { return procStamp(pid) }
 
 // Containers: a sandboxed agent runs in a container (internal/sandbox).
-// When the sy that started it dies, the container may outlive it, so it
+// When the rw that started it dies, the container may outlive it, so it
 // is recorded in the tracked directory's pid file as
 // "container <runtime> <name>", and ReapOrphans removes it before the
-// next sy uses the directory.
+// next rw uses the directory.
 
 const containerTag = "container"
 
@@ -185,11 +185,11 @@ func ForgetContainer(dir, runtime, name string) {
 	os.WriteFile(file, []byte(strings.Join(keep, "\n")+"\n"), 0o644)
 }
 
-// validContainer accepts only the runtimes sy runs and the names it gives
-// its containers (sy-...): a pid file never makes sy run another program
+// validContainer accepts only the runtimes rw runs and the names it gives
+// its containers (rw-...): a pid file never makes rw run another program
 // or remove another container.
 func validContainer(runtime, name string) bool {
-	if runtime != "docker" && runtime != "podman" || !strings.HasPrefix(name, "sy-") || len(name) > 128 {
+	if runtime != "docker" && runtime != "podman" || !strings.HasPrefix(name, "rw-") || len(name) > 128 {
 		return false
 	}
 	for _, r := range name {
@@ -207,14 +207,14 @@ var (
 	lookRuntime = Resolve
 )
 
-// RemoveContainer stops and removes a container sy started (docker rm -f).
+// RemoveContainer stops and removes a container rw started (docker rm -f).
 // It reports false only when the runtime did not answer in time, so the
 // container may still be running. A container that is already gone, and
 // a runtime that is not installed or not running (its containers cannot
 // run either), count as removed.
 func RemoveContainer(runtime, name string) bool {
 	if !validContainer(runtime, name) {
-		return true // not one of sy's: never touched
+		return true // not one of rw's: never touched
 	}
 	bin, err := lookRuntime(runtime)
 	if err != nil {

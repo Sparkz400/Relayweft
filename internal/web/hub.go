@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 )
@@ -24,7 +25,7 @@ type hub struct {
 	clients map[*client]struct{}
 	replay  [][]byte
 
-	// Connection bookkeeping for `sy app` (exit when the window is gone).
+	// Connection bookkeeping for `rw app` (exit when the window is gone).
 	everConnected bool
 	lastSeen      time.Time
 	byeAt         time.Time // a page said it is closing; zero after a new page connects
@@ -43,13 +44,8 @@ func frame(name string, v any) []byte {
 	if err != nil {
 		data = []byte(`{}`)
 	}
-	b := make([]byte, 0, len(data)+len(name)+16)
-	b = append(b, "event: "...)
-	b = append(b, name...)
-	b = append(b, "\ndata: "...)
-	b = append(b, data...)
-	b = append(b, "\n\n"...)
-	return b
+	// One allocation; slices.Concat checks the total size itself.
+	return slices.Concat([]byte("event: "), []byte(name), []byte("\ndata: "), data, []byte("\n\n"))
 }
 
 // publish sends a frame to every client; record also keeps it for replay.
@@ -76,7 +72,7 @@ func (h *hub) publish(f []byte, record, taskStart bool) {
 	}
 }
 
-var errTooManyClients = errors.New("too many open pages - close some Switchyard tabs")
+var errTooManyClients = errors.New("too many open pages - close some Relayweft tabs")
 
 // subscribe registers a client and returns the replay to send first.
 func (h *hub) subscribe() (*client, [][]byte, error) {
@@ -110,7 +106,7 @@ func (h *hub) bye() {
 	h.byeAt = time.Now()
 }
 
-// gone reports whether `sy app`'s window is gone at now: a page was
+// gone reports whether `rw app`'s window is gone at now: a page was
 // connected, none is now, and either the last one said goodbye at least
 // grace ago without a page reconnecting (a reload reconnects within it), or
 // none has been connected for idle (the connection dropped without a

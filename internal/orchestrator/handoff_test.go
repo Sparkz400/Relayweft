@@ -11,7 +11,7 @@ import (
 
 func TestRepoMap(t *testing.T) {
 	dir := gitRepo(t)
-	for _, f := range []string{"cmd/sy/main.go", "internal/a/a.go", "internal/b/b.go", "internal/b/b_test.go", "docs/x.md"} {
+	for _, f := range []string{"cmd/rw/main.go", "internal/a/a.go", "internal/b/b.go", "internal/b/b_test.go", "docs/x.md"} {
 		os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
 		os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644)
 	}

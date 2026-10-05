@@ -1,8 +1,8 @@
 {"type":"thread.started","thread_id":"01a107b5-1c1d-7103-b0dc-97b48bf23ca1"}
 {"type":"turn.started"}
 {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll create notes.txt and print its contents.\n"}}
-{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"C:\\Users\\dev\\AppData\\Local\\Temp\\sy-cli-test\\raw-codex\\notes.txt","kind":"add"}],"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"C:\\Users\\dev\\AppData\\Local\\Temp\\sy-cli-test\\raw-codex\\notes.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"C:\\Users\\dev\\AppData\\Local\\Temp\\rw-cli-test\\raw-codex\\notes.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"C:\\Users\\dev\\AppData\\Local\\Temp\\rw-cli-test\\raw-codex\\notes.txt","kind":"add"}],"status":"completed"}}
 {"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'Get-Content -LiteralPath notes.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
 {"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'Get-Content -LiteralPath notes.txt'","aggregated_output":"alpha\r\n","exit_code":0,"status":"completed"}}
 {"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"done"}}

@@ -3,7 +3,7 @@
 // it. The answer goes to POST /api/approvals/{id}/plan.
 
 import * as vscode from 'vscode';
-import type { SyApi } from './api';
+import type { RwApi } from './api';
 import { oneLine } from './model';
 import type { ApprovalRequest, Plan } from './types';
 
@@ -14,7 +14,7 @@ export class PlanFlow implements vscode.CodeLensProvider {
   readonly onDidChangeCodeLenses = this.lensChanged.event;
   private readonly disposables: vscode.Disposable[] = [];
 
-  constructor(private readonly getApi: () => SyApi | undefined) {
+  constructor(private readonly getApi: () => RwApi | undefined) {
     this.disposables.push(
       this.lensChanged,
       vscode.workspace.onDidCloseTextDocument((d) => this.editors.delete(d.uri.toString())),
@@ -29,7 +29,7 @@ export class PlanFlow implements vscode.CodeLensProvider {
   }
 
   private updateContext(ed = vscode.window.activeTextEditor): void {
-    void vscode.commands.executeCommand('setContext', 'switchyard.planEditorActive', !!ed && this.editors.has(ed.document.uri.toString()));
+    void vscode.commands.executeCommand('setContext', 'relayweft.planEditorActive', !!ed && this.editors.has(ed.document.uri.toString()));
   }
 
   /** Forgets editors of approvals that are no longer waiting. */
@@ -55,8 +55,8 @@ export class PlanFlow implements vscode.CodeLensProvider {
     }
     const top = new vscode.Range(0, 0, 0, 0);
     return [
-      new vscode.CodeLens(top, { title: '$(check) Approve this plan', command: 'switchyard.plan.approveEdited', arguments: [doc.uri] }),
-      new vscode.CodeLens(top, { title: '$(close) Reject (cancel the task)', command: 'switchyard.plan.reject', arguments: [doc.uri] }),
+      new vscode.CodeLens(top, { title: '$(check) Approve this plan', command: 'relayweft.plan.approveEdited', arguments: [doc.uri] }),
+      new vscode.CodeLens(top, { title: '$(close) Reject (cancel the task)', command: 'relayweft.plan.reject', arguments: [doc.uri] }),
     ];
   }
 
@@ -80,7 +80,7 @@ export class PlanFlow implements vscode.CodeLensProvider {
       })),
     ];
     const pick = await vscode.window.showQuickPick(items, {
-      title: 'Switchyard plan: ' + oneLine(plan.summary || req.task, 100),
+      title: 'Relayweft plan: ' + oneLine(plan.summary || req.task, 100),
       placeHolder: 'Approve, edit or reject the plan (pick a subtask to edit it)',
       ignoreFocusOut: true,
       matchOnDescription: true,
@@ -105,7 +105,7 @@ export class PlanFlow implements vscode.CodeLensProvider {
     await vscode.window.showTextDocument(doc, { preview: false });
     this.lensChanged.fire();
     this.updateContext();
-    void vscode.window.setStatusBarMessage('Switchyard: edit the plan, then use "Approve this plan" at the top of the document', 8000);
+    void vscode.window.setStatusBarMessage('Relayweft: edit the plan, then use "Approve this plan" at the top of the document', 8000);
   }
 
   private docFor(uri?: vscode.Uri): vscode.TextDocument | undefined {
@@ -119,18 +119,18 @@ export class PlanFlow implements vscode.CodeLensProvider {
     const doc = this.docFor(uri);
     const id = doc && this.editors.get(doc.uri.toString());
     if (!doc || !id) {
-      void vscode.window.showWarningMessage('Switchyard: this is not a plan waiting for approval.');
+      void vscode.window.showWarningMessage('Relayweft: this is not a plan waiting for approval.');
       return;
     }
     let plan: Plan;
     try {
       plan = JSON.parse(doc.getText()) as Plan;
     } catch (e) {
-      void vscode.window.showErrorMessage('Switchyard: the plan is not valid JSON: ' + (e as Error).message);
+      void vscode.window.showErrorMessage('Relayweft: the plan is not valid JSON: ' + (e as Error).message);
       return;
     }
     if (!plan || !Array.isArray(plan.subtasks)) {
-      void vscode.window.showErrorMessage('Switchyard: the plan needs a "subtasks" list.');
+      void vscode.window.showErrorMessage('Relayweft: the plan needs a "subtasks" list.');
       return;
     }
     if (await this.answer(id, plan, true)) {
@@ -172,15 +172,15 @@ export class PlanFlow implements vscode.CodeLensProvider {
   private async answer(id: string, plan: Plan | undefined, ok: boolean): Promise<boolean> {
     const api = this.getApi();
     if (!api) {
-      void vscode.window.showErrorMessage('Switchyard is not running.');
+      void vscode.window.showErrorMessage('Relayweft is not running.');
       return false;
     }
     try {
       const res = await api.call<{ message: string }>('POST', `/api/approvals/${encodeURIComponent(id)}/plan`, { ok, plan: plan ?? { summary: '', subtasks: [] } });
-      void vscode.window.showInformationMessage('Switchyard: ' + res.message);
+      void vscode.window.showInformationMessage('Relayweft: ' + res.message);
       return true;
     } catch (e) {
-      void vscode.window.showErrorMessage('Switchyard: ' + (e as Error).message);
+      void vscode.window.showErrorMessage('Relayweft: ' + (e as Error).message);
       return false;
     }
   }

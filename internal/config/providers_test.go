@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 func TestDefaultPresets(t *testing.T) {
@@ -102,7 +102,7 @@ func TestProviderEnv(t *testing.T) {
 
 func TestRoleRoutesForNewProvidersSurviveSaveAndOldFiles(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "switchyard.yaml")
+	path := filepath.Join(dir, "relayweft.yaml")
 	// A file written before the new providers existed: whole roles without
 	// them, and only the two old providers.
 	old := `roles:
@@ -234,7 +234,7 @@ func TestRouteValuesCannotCarryShellOrFlags(t *testing.T) {
 // Review finding: enabling a preset with `disabled: false` alone must keep
 // the rest of it (only_preferred, env, extra_args).
 func TestEnablingAPresetKeepsItsSettings(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "switchyard.yaml")
+	path := filepath.Join(t.TempDir(), "relayweft.yaml")
 	os.WriteFile(path, []byte("providers:\n  qwen: {disabled: false}\n  ollama: {disabled: false, env: {EXTRA: \"1\"}}\n"), 0o644)
 	c, _, err := Load(path)
 	if err != nil {

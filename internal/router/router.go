@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // Kind classifies a step.
@@ -79,7 +79,7 @@ const (
 type Router struct {
 	Cfg   func() *config.Config
 	State State
-	// ForceProvider, when set, pins every role to one provider (sy --provider).
+	// ForceProvider, when set, pins every role to one provider (rw --provider).
 	ForceProvider string
 	// Pinned reports roles set explicitly (repo file, flags, session
 	// edits); tiers never move them. nil = none.
@@ -153,7 +153,7 @@ func (r *Router) Hard(s Step) (bool, string) {
 
 // learned notes in the reason when the route came from the role's learned
 // route (config/learned.go), so logs and reports can be traced back to
-// `sy tune --learned`. A fallback to the other provider is not learned.
+// `rw tune --learned`. A fallback to the other provider is not learned.
 func learned(cfg *config.Config, d event.Decision) event.Decision {
 	lr, ok := cfg.Learned[d.Role]
 	if !ok || d.Fallback || d.Provider != lr.Provider || d.Model != lr.Model || d.Effort != lr.Effort {
@@ -403,7 +403,7 @@ func (r *Router) NeedsJudge(d event.Decision) bool {
 
 // JudgePrompt is the closed question sent to the judge model.
 func JudgePrompt(s Step) string {
-	return "[SY:JUDGE] You route coding work. Pick one route for this step:\n" +
+	return "[RW:JUDGE] You route coding work. Pick one route for this step:\n" +
 		"A) explorer (read-only, cheap)\nB) worker\nC) worker-high (hard or risky change)\nD) planner (needs re-planning)\n\n" +
 		"Step: " + s.Title + "\n" + truncate(s.Prompt, 1500) + "\n\nReply with the letter only."
 }

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // estApprover is a fakeApprover that also takes the estimate.
@@ -37,7 +37,7 @@ func (a *estApprover) ApprovePlanEstimate(ctx context.Context, task string, p Pl
 }
 
 // seedHistory writes n worker edit runs on the default worker route into
-// the orchestrator's session log folder, as an earlier sy in cwd would.
+// the orchestrator's session log folder, as an earlier rw in cwd would.
 func seedHistory(t *testing.T, o *Orchestrator, cwd string, toks ...int64) {
 	t.Helper()
 	w, err := sessionlog.Open(o.logDir(), cwd)
@@ -121,7 +121,7 @@ func TestPlanWall(t *testing.T) {
 	planWall(p, w, true)
 }
 
-// `sy run --estimate`: only the planner runs, nothing is snapshotted, no
+// `rw run --estimate`: only the planner runs, nothing is snapshotted, no
 // step runs, and the working tree and refs stay as they were.
 func TestEstimateRunsNothing(t *testing.T) {
 	dir := gitRepo(t)
@@ -151,7 +151,7 @@ func TestEstimateRunsNothing(t *testing.T) {
 		t.Fatalf("plan %+v, estimate %+v, ran %v", p, e.Steps, ran)
 	}
 	after, _ := (git{dir}).out("status", "--porcelain")
-	refs, _ := (git{dir}).out("for-each-ref", "refs/switchyard")
+	refs, _ := (git{dir}).out("for-each-ref", "refs/relayweft")
 	if after != before || refs != "" {
 		t.Fatalf("tree or refs changed:\n%s\n--\n%s\nrefs: %s", before, after, refs)
 	}

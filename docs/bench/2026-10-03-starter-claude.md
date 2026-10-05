@@ -1,5 +1,7 @@
 # sy bench: starter set, Claude only (3 Oct 2026)
 
+> A record of a run with Switchyard (`sy`), as Relayweft (`rw`) was called up to v0.2.0. Today the commands are `rw bench` and `rw tune`.
+
 `sy bench --starter`, run with `--provider claude` because no Codex CLI was
 available. The modes were routed, routed without the context hand-off, and a
 single Claude Opus agent at high effort. Switchyard was at branch

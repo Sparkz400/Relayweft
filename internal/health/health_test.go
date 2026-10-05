@@ -49,15 +49,15 @@ func TestBuild(t *testing.T) {
 	add(day(2, 18), deadPID+400, "agent-timeout PID agent=a3 after=30m0s")
 	add(day(1, 8), deadPID+400, "pause PID for=7h0m0s")
 	add(day(1, 8), deadPID+400, `leftover PID what=orphan-agent path="C:\pool\1"`)
-	writeLog(t, dir, "sy-health.log", lines...)
+	writeLog(t, dir, "rw-health.log", lines...)
 	writeLog(t, dir, fmt.Sprintf("fatal-%d-%s.log", deadPID+300, day(2, 15).Format("20060102-150405")), "fatal error: concurrent map writes", "", "goroutine 1 [running]:")
 	writeLog(t, dir, fmt.Sprintf("fatal-%d-%s.log", deadPID+500, day(1, 15).Format("20060102-150405"))) // empty: killed, not fatal
 	os.WriteFile(filepath.Join(dir, fmt.Sprintf("fatal-%d-x.log", deadPID+501)), nil, 0o644)
-	// A crash log written by a Go test is not a crash of sy.
-	writeLog(t, dir, "crash-"+day(4, 9).Format("20060102-150405.000")+".log", "Switchyard dev crashed in subtask boom", "\tD:/x/phase1_test.go:545 +0x42d")
+	// A crash log written by a Go test is not a crash of rw.
+	writeLog(t, dir, "crash-"+day(4, 9).Format("20060102-150405.000")+".log", "Relayweft dev crashed in subtask boom", "\tD:/x/phase1_test.go:545 +0x42d")
 	// Debug log from before the health log: one use day and a panic.
-	writeLog(t, dir, "sy-debug.log",
-		stamp(day(13, 7))+" === sy dev run (windows/amd64, 16 cpus) cwd=C:\\x args=[]",
+	writeLog(t, dir, "rw-debug.log",
+		stamp(day(13, 7))+" === rw dev run (windows/amd64, 16 cpus) cwd=C:\\x args=[]",
 		stamp(day(13, 7).Add(time.Minute))+" PANIC in task: boom",
 		"    continuation line",
 		stamp(day(13, 7).Add(2*time.Minute))+` exit agent=a1 pid=5 code=1 after 30m0s ok=false killed=false limit=false tokens=0 err=timed out after 30m0s stderr=""`,
@@ -83,7 +83,7 @@ func TestBuild(t *testing.T) {
 	if len(r.Pauses) != 1 || len(r.LeftoverLogs) != 1 {
 		t.Errorf("pauses = %+v, leftovers = %+v", r.Pauses, r.LeftoverLogs)
 	}
-	if r.Load.CPU != 97 || r.Load.MemFreeMB != 900 || r.Load.SyMemMB != 60 || r.Load.Goroutines != 25 || r.Load.Samples != 13 || r.Load.HotSamples != 12 || r.Load.LowMemFrees != 12 {
+	if r.Load.CPU != 97 || r.Load.MemFreeMB != 900 || r.Load.RwMemMB != 60 || r.Load.Goroutines != 25 || r.Load.Samples != 13 || r.Load.HotSamples != 12 || r.Load.LowMemFrees != 12 {
 		t.Errorf("load = %+v", r.Load)
 	}
 	// Use: days 13 (debug log), 12..1 (runs), 3 and 2 already counted.
@@ -93,6 +93,21 @@ func TestBuild(t *testing.T) {
 	c := r.Criterion
 	if c.Met || !c.CleanSince.Equal(day(2, 15)) || c.UseDays != 13 || !strings.Contains(c.Summary, "1 day clean since the last crash or hang, 13 days to go") {
 		t.Errorf("criterion = %+v", c)
+	}
+}
+
+// rw copies sy's logs on its first start (config.MigrateSwitchyard): the
+// debug log's "=== sy ..." session lines still count as days of use.
+func TestReadDebugOfSy(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 4, 9, 0, 0, 0, time.Local)
+	writeLog(t, dir, "rw-debug.log",
+		at.Format("2006-01-02 15:04:05.000")+" === sy 0.2.0 health (windows/amd64, 16 cpus) cwd=C:\\x args=[]",
+		at.Add(time.Hour).Format("2006-01-02 15:04:05.000")+" === rw 0.3.0 run (windows/amd64, 16 cpus) cwd=C:\\x args=[]",
+	)
+	sessions, _, _, _ := readDebug(dir, at.Add(24*time.Hour))
+	if len(sessions) != 2 || sessions[0].Version != "0.2.0" || sessions[0].Cmd != "health" || sessions[1].Cmd != "run" {
+		t.Errorf("sessions = %+v", sessions)
 	}
 }
 
@@ -106,7 +121,7 @@ func TestCriterionMet(t *testing.T) {
 			fmt.Sprintf("%s start pid=%d ver=dev cmd=run", stamp(at), deadPID+d),
 			fmt.Sprintf("%s end pid=%d ok=true after=1h0m0s", stamp(at.Add(time.Hour)), deadPID+d))
 	}
-	writeLog(t, dir, "sy-health.log", lines...)
+	writeLog(t, dir, "rw-health.log", lines...)
 	r, err := Build(Options{Dir: dir, Now: now, NoLeftovers: true})
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +150,7 @@ func TestNoRecords(t *testing.T) {
 func TestRunningIsNotUnclean(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	writeLog(t, dir, "sy-health.log", fmt.Sprintf("%s start pid=%d ver=dev cmd=web", stamp(now.Add(-time.Hour)), os.Getpid()))
+	writeLog(t, dir, "rw-health.log", fmt.Sprintf("%s start pid=%d ver=dev cmd=web", stamp(now.Add(-time.Hour)), os.Getpid()))
 	r, err := Build(Options{Dir: dir, Now: now, NoLeftovers: true})
 	if err != nil {
 		t.Fatal(err)

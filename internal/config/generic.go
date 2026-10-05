@@ -5,10 +5,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
-// GenericCfg describes a CLI sy has no built-in support for (kind: generic):
+// GenericCfg describes a CLI rw has no built-in support for (kind: generic):
 // the command line, how to read its output, how to resume a session and how
 // it says it is at a usage limit. The prompt always goes in on stdin.
 //
@@ -20,7 +20,7 @@ type GenericCfg struct {
 	EffortArgs []string `yaml:"effort_args,omitempty"` // when the route has an effort
 	// ReadOnlyArgs are added for read-only agents and must keep the CLI from
 	// editing files or running commands (a plan mode). Without them a CLI
-	// with tools takes no read-only work: sy cannot check what it does.
+	// with tools takes no read-only work: rw cannot check what it does.
 	ReadOnlyArgs []string `yaml:"read_only_args,omitempty"`
 	// WriteArgs are added for writing agents. Without them the provider
 	// takes read-only work only.
@@ -45,7 +45,7 @@ type GenericCfg struct {
 	// whose first group is a token count.
 	Usage UsagePatterns `yaml:"usage,omitempty"`
 	// InputExcludesCached: the input count does not include the cached
-	// part (sy counts input with the cache included).
+	// part (rw counts input with the cache included).
 	InputExcludesCached bool `yaml:"input_excludes_cached,omitempty"`
 	// EditTools are the tool names that change files (jsonl `tool`).
 	EditTools []string `yaml:"edit_tools,omitempty"`

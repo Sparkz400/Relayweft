@@ -21,7 +21,7 @@ kotlin {
 
 // src/uiTest: the plugin in a real IDE (a separate process with its own
 // window), driven through its UI by the Starter and Driver frameworks.
-// SY_UI_TEST=1 xvfb-run -a ./gradlew uiTest; it types and clicks with
+// RW_UI_TEST=1 xvfb-run -a ./gradlew uiTest; it types and clicks with
 // java.awt.Robot, so it wants a display of its own (CI: the ui job).
 sourceSets {
     create("uiTest") {
@@ -96,7 +96,7 @@ providers.gradleProperty("localIde").orNull?.let { ide ->
 }
 
 tasks.test {
-    // The integration tests start sy and agents: one test JVM at a time.
+    // The integration tests start rw and agents: one test JVM at a time.
     maxParallelForks = 1
     testLogging {
         events("failed")

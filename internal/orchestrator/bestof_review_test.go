@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // Regression tests from the adversarial review of best of N.
@@ -99,7 +99,7 @@ func stopInReview(t *testing.T, dir string, feedback int) reviewStop {
 	return reviewStop{st: History(dir, 1)[0], o: o, work: work, edit: edit}
 }
 
-// resume continues the stopped task in a new sy (change review off) and
+// resume continues the stopped task in a new rw (change review off) and
 // returns the agents it ran.
 func (rs reviewStop) resume(t *testing.T, dir string) (TaskResult, []runner.Spec) {
 	t.Helper()
@@ -121,7 +121,7 @@ func (rs reviewStop) resume(t *testing.T, dir string) (TaskResult, []runner.Spec
 
 // A cancel while the winner waits for change review keeps its work: the
 // winner is the step's running agent in its held worktree, its work is on
-// a branch, and sy resume --force continues the winner there (no
+// a branch, and rw resume --force continues the winner there (no
 // candidate runs again) and lands it, keeping the step's best-of trail.
 func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
 	dir := gitRepo(t)
@@ -133,7 +133,7 @@ func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
 	if !slotHeld(run.Slot) {
 		t.Error("the winner's worktree is not held")
 	}
-	branches := tgit(t, dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/sy/")
+	branches := tgit(t, dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/rw/")
 	if !strings.Contains(branches, "/work--claude") {
 		t.Errorf("the winner's work is on no branch: %q", branches)
 	}
@@ -194,7 +194,7 @@ func TestBestOfFeedbackRerunIsTheRunningAgent(t *testing.T) {
 }
 
 // When the winner's worktree cannot be claimed on resume (here: another
-// sy has it locked), its kept work lands from a fresh worktree instead of
+// rw has it locked), its kept work lands from a fresh worktree instead of
 // a fresh agent redoing the step.
 func TestBestOfResumeLandsKeptWork(t *testing.T) {
 	dir := gitRepo(t)
@@ -240,7 +240,7 @@ func TestBestOfCandidateSlotNotes(t *testing.T) {
 	o.Run(context.Background(), bestOfTask)
 	noted := false
 	for _, e := range rec.all() {
-		noted = noted || (e.Kind == event.Log && strings.Contains(e.Text, "sy-unfinished.patch"))
+		noted = noted || (e.Kind == event.Log && strings.Contains(e.Text, "rw-unfinished.patch"))
 	}
 	if !noted {
 		t.Error("the saved edits are not named in the log")

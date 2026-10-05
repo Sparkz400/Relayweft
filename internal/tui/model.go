@@ -14,11 +14,11 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/harmonica"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/notify"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/notify"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
 )
 
 const (
@@ -278,7 +278,7 @@ func (m *Model) Init() tea.Cmd {
 		task := m.opt.DemoTask
 		cmds = append(cmds, func() tea.Msg { return submitMsg(task) })
 	}
-	m.addLog(logLine{kind: event.Log, text: fmt.Sprintf("Switchyard %s · %s · config %s", m.opt.Version, m.opt.Dir, m.store.Path())})
+	m.addLog(logLine{kind: event.Log, text: fmt.Sprintf("Relayweft %s · %s · config %s", m.opt.Version, m.opt.Dir, m.store.Path())})
 	if m.opt.Orc != nil {
 		for _, r := range m.opt.Orc.Repos() {
 			m.addLog(logLine{kind: event.Log, text: "multi-repo workspace: repo " + r.Name + " at " + r.Dir})
@@ -297,7 +297,7 @@ func (m *Model) Init() tea.Cmd {
 type submitMsg string
 
 // Shutdown cancels a running task and waits (bounded) for agents to die, so
-// no CLI keeps running after sy exits.
+// no CLI keeps running after rw exits.
 func (m *Model) Shutdown() {
 	m.queue = nil
 	if m.awake != nil {
@@ -467,7 +467,7 @@ func (m *Model) handleEvent(e event.Event) {
 		pv := m.prov(e.Provider)
 		if pv != nil {
 			if e.Until.After(time.Now()) && !e.Until.Equal(pv.until) {
-				m.alert(notify.EventLimit, "Switchyard: "+e.Provider+" hit its limit", e.Text)
+				m.alert(notify.EventLimit, "Relayweft: "+e.Provider+" hit its limit", e.Text)
 			}
 			pv.until = e.Until
 		}
@@ -721,7 +721,7 @@ func (m *Model) focusable() []string {
 }
 
 // Update implements tea.Model. A panic is written to a crash log, then
-// re-raised so Bubble Tea restores the terminal before sy exits.
+// re-raised so Bubble Tea restores the terminal before rw exits.
 func (m *Model) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 	defer func() {
 		if r := recover(); r != nil {

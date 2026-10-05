@@ -1,4 +1,4 @@
-// Package web is `sy web` and `sy app`: a local browser UI on the same
+// Package web is `rw web` and `rw app`: a local browser UI on the same
 // engine as the TUI. One process serves one orchestrator on 127.0.0.1; the
 // page is embedded (no build step, no CDN) and talks to a small JSON API,
 // with live events over server-sent events.
@@ -15,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/notify"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/notify"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
 )
 
 // Options configure a server.
@@ -34,7 +34,7 @@ type Options struct {
 	DemoTask   string
 	Version    string
 	SessionLog string
-	// Warn prints a security warning on sy's terminal (a link used twice).
+	// Warn prints a security warning on rw's terminal (a link used twice).
 	Warn func(string)
 	// AllowSleep: do not keep the machine awake while scheduled tasks
 	// wait or run.
@@ -100,11 +100,11 @@ func New(o Options) (*Server, error) {
 	s.ap.setNotify(s.kick, func(r *Request) {
 		switch r.Type {
 		case "plan":
-			s.alert(notify.EventWaiting, "Switchyard needs you", "approve the plan: "+oneLine(r.Task, 120))
+			s.alert(notify.EventWaiting, "Relayweft needs you", "approve the plan: "+oneLine(r.Task, 120))
 		case "budget":
-			s.alert(notify.EventWaiting, "Switchyard needs you", "budget reached: "+r.Budget.Text)
+			s.alert(notify.EventWaiting, "Relayweft needs you", "budget reached: "+r.Budget.Text)
 		default:
-			s.alert(notify.EventWaiting, "Switchyard needs you", "review the changes of "+r.Changes.StepID)
+			s.alert(notify.EventWaiting, "Relayweft needs you", "review the changes of "+r.Changes.StepID)
 		}
 	})
 	go s.pump()
@@ -202,13 +202,13 @@ func (s *Server) Shutdown() {
 	}
 }
 
-// byeGrace is how long `sy app` waits after its page said goodbye: a
+// byeGrace is how long `rw app` waits after its page said goodbye: a
 // reload reconnects within it, a closed window does not.
 const byeGrace = 5 * time.Second
 
 // WaitIdle returns when a page has been connected once and then no page
 // has been connected for byeGrace after it said goodbye, or for idle
-// without one (sy app: the window was closed), or when ctx ends.
+// without one (rw app: the window was closed), or when ctx ends.
 func (s *Server) WaitIdle(ctx context.Context, idle time.Duration) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -283,9 +283,9 @@ func (s *Server) observe(e event.Event) {
 			took := time.Since(s.taskStart)
 			rv.Took = took.Round(time.Second).String()
 			if took >= s.store.Get().Notify.MinTask.D() {
-				title, ev := "Switchyard: done", notify.EventDone
+				title, ev := "Relayweft: done", notify.EventDone
 				if !e.OK {
-					title, ev = "Switchyard: failed", notify.EventFailed
+					title, ev = "Relayweft: failed", notify.EventFailed
 				}
 				s.alert(ev, title, oneLine(e.Text, 600)+"\n"+rv.Took)
 			}
@@ -302,7 +302,7 @@ func (s *Server) observe(e event.Event) {
 				s.limitUntil = map[string]time.Time{}
 			}
 			s.limitUntil[e.Provider] = e.Until
-			s.webhook(notify.EventLimit, "Switchyard: "+e.Provider+" hit its limit", e.Text)
+			s.webhook(notify.EventLimit, "Relayweft: "+e.Provider+" hit its limit", e.Text)
 		}
 	}
 }
@@ -339,7 +339,7 @@ func (s *Server) webhook(ev, title, body string) {
 	}()
 }
 
-// desktopAlert shows a desktop notification from the sy process, only
+// desktopAlert shows a desktop notification from the rw process, only
 // when no page is open (an open page notifies through the browser).
 func (s *Server) desktopAlert(title, body string) {
 	if s.opt.Demo || !s.store.Get().Notify.Enabled {

@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 // Plan is what the planner returns.
@@ -74,7 +74,7 @@ func extractJSON(s string, v any) error {
 	return fmt.Errorf("no JSON object in reply")
 }
 
-// ExtractJSON is extractJSON for other model replies (sy review's
+// ExtractJSON is extractJSON for other model replies (rw review's
 // findings).
 func ExtractJSON(s string, v any) error { return extractJSON(s, v) }
 
@@ -226,7 +226,7 @@ func clip(s string, n int) string {
 
 func planPrompt(task, advice string, previous *Plan) string {
 	var b strings.Builder
-	b.WriteString(runner.MarkerPlan + " You are the planner of Switchyard, a team of coding agents.\n")
+	b.WriteString(runner.MarkerPlan + " You are the planner of Relayweft, a team of coding agents.\n")
 	b.WriteString("Investigate the repository as needed, but DO NOT modify any files.\n\n")
 	b.WriteString("TASK:\n" + task + "\n\n")
 	if previous != nil {
@@ -305,7 +305,7 @@ func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat,
 		b.WriteString("\nMERGE NOTES:\n- " + strings.Join(mergeNotes, "\n- ") + "\n")
 	}
 	if verifyReport != "" {
-		b.WriteString("\nTHE REPO'S CHECKS (run by Switchyard just now):\n" + clip(verifyReport, 6000) + "\n")
+		b.WriteString("\nTHE REPO'S CHECKS (run by Relayweft just now):\n" + clip(verifyReport, 6000) + "\n")
 	}
 	if stat != "" {
 		b.WriteString("\nDIFF STAT:\n" + stat + "\n\nDIFF:\n" + diff + "\n")
@@ -323,7 +323,7 @@ Only reject for real defects: bugs, missing requirements, broken builds or tests
 
 func stepPrompt(task string, st Subtask, depResults []string, prevErr, advice string, readOnly bool) string {
 	var b strings.Builder
-	b.WriteString(runner.MarkerStep + " You are one agent in Switchyard, a team of coding agents.\n")
+	b.WriteString(runner.MarkerStep + " You are one agent in Relayweft, a team of coding agents.\n")
 	b.WriteString("OVERALL TASK (for context; do only your part):\n" + task + "\n\n")
 	fmt.Fprintf(&b, "YOUR SUBTASK %q (%s):\n%s\n", st.ID, st.Title, st.Prompt)
 	if len(st.Files) > 0 {
@@ -351,7 +351,7 @@ func stepPrompt(task string, st Subtask, depResults []string, prevErr, advice st
 const lfsNote = "\nNOTE: Git LFS files (binary assets such as textures, models, audio) appear here as small text pointer files (\"version https://git-lfs.github.com/spec/v1 ...\"). This is expected: do not edit, \"fix\" or delete them, and do not run builds that need those assets.\n"
 
 func fixPrompt(task string, v Verdict) string {
-	return runner.MarkerFix + ` You are a worker in Switchyard. The reviewer checked the finished work and asked for changes.
+	return runner.MarkerFix + ` You are a worker in Relayweft. The reviewer checked the finished work and asked for changes.
 
 TASK:
 ` + task + `
@@ -366,12 +366,12 @@ Make the requested changes now, run the relevant tests if you can, then reply wi
 `
 }
 
-// resumePrompt continues a step's own CLI session after sy stopped in the
+// resumePrompt continues a step's own CLI session after rw stopped in the
 // middle of it. The session holds the step's prompt and what the agent did
 // so far; the files may hold half-done edits.
 func resumePrompt(st Subtask, verify []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s Switchyard (sy) stopped while you were working on your subtask %q (%s), so your last turn was cut off. This conversation shows what you did so far.\n", runner.MarkerResume, st.ID, st.Title)
+	fmt.Fprintf(&b, "%s Relayweft (rw) stopped while you were working on your subtask %q (%s), so your last turn was cut off. This conversation shows what you did so far.\n", runner.MarkerResume, st.ID, st.Title)
 	// The subtask again, in case the conversation does not have it.
 	fmt.Fprintf(&b, "\nYOUR SUBTASK (as given before):\n%s\n", st.Prompt)
 	if len(st.Files) > 0 {

@@ -18,15 +18,15 @@ import (
 // or another process for longer than a moment):
 //
 //   - The server listens on 127.0.0.1 only.
-//   - sy prints (and opens) http://127.0.0.1:P/#b=<BOOTSTRAP>. The fragment
+//   - rw prints (and opens) http://127.0.0.1:P/#b=<BOOTSTRAP>. The fragment
 //     is never sent to the server or in a Referer. A bootstrap is single
-//     use and expires after bootstrapTTL; sy prints a fresh one on Enter.
+//     use and expires after bootstrapTTL; rw prints a fresh one on Enter.
 //   - The page reads the fragment, removes it from the address bar and
 //     trades it (POST /api/session) for a random session secret, kept in
 //     the tab's sessionStorage. Every /api request must carry it in
-//     X-Switchyard-Session (or Authorization: Bearer); the event stream,
+//     X-Relayweft-Session (or Authorization: Bearer); the event stream,
 //     which cannot set headers, takes it as ?s=.
-//   - A bootstrap presented again after it was used is refused and sy warns
+//   - A bootstrap presented again after it was used is refused and rw warns
 //     on its terminal: someone else may have read the link.
 //   - Static files (the page, js, css) hold no secrets and need no session.
 //   - The Host header must name this server (127.0.0.1/localhost/[::1]
@@ -38,7 +38,7 @@ import (
 //     leak their bytes through timing.
 
 // SessionHeader carries the session secret.
-const SessionHeader = "X-Switchyard-Session"
+const SessionHeader = "X-Relayweft-Session"
 
 const (
 	bootstrapTTL = 2 * time.Minute
@@ -90,7 +90,7 @@ func (a *auth) newBootstrap() string {
 var (
 	errBootstrapUsed    = errors.New("this link was already used")
 	errBootstrapExpired = errors.New("this link has expired")
-	errBootstrapUnknown = errors.New("this link is not valid for this sy (was sy restarted?)")
+	errBootstrapUnknown = errors.New("this link is not valid for this rw (was rw restarted?)")
 )
 
 // trade spends a bootstrap and returns a new session secret.
@@ -216,7 +216,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		// The page and its assets are public; the API needs a session,
 		// except the call that trades a bootstrap for one.
 		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/session" && !s.auth.sessionOK(sessionOf(r)) {
-			fail(w, http.StatusUnauthorized, errors.New("no session - open the link printed by sy (press Enter in its terminal for a new one)"))
+			fail(w, http.StatusUnauthorized, errors.New("no session - open the link printed by rw (press Enter in its terminal for a new one)"))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -235,7 +235,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.auth.trade(req.Bootstrap)
 	if err != nil {
 		if errors.Is(err, errBootstrapUsed) && s.opt.Warn != nil {
-			s.opt.Warn("warning: a sy web link was used twice. If you did not open it twice, someone else on this machine may have read it - restart sy web.")
+			s.opt.Warn("warning: a rw web link was used twice. If you did not open it twice, someone else on this machine may have read it - restart rw web.")
 		}
 		fail(w, http.StatusUnauthorized, err)
 		return
@@ -243,7 +243,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"session": sess})
 }
 
-// reTaskID matches the task ids sy writes (no path separators).
+// reTaskID matches the task ids rw writes (no path separators).
 var reTaskID = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 func validTaskID(id string) bool {

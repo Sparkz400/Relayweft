@@ -1,4 +1,4 @@
-// Package report builds one self-contained, shareable page per task (`sy
+// Package report builds one self-contained, shareable page per task (`rw
 // report`): the task, its plan and results, every routing decision with its
 // rule and reason, reviewer verdicts, verify checks, the task's diff and
 // its cost. Sources are the task state (orchestrator.LoadTask), the session
@@ -19,15 +19,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // Options tunes Build.
 type Options struct {
 	SessionDir string // where the session logs are ("" = no routing details)
-	Version    string // sy version, shown in the footer
+	Version    string // rw version, shown in the footer
 	// Diff limits (0 = defaults).
 	MaxFileLines int   // lines shown per file
 	MaxDiffLines int   // lines shown in total
@@ -174,9 +174,9 @@ func Build(st *orchestrator.TaskState, o Options) *Data {
 		default:
 			d.Diff = diff
 			if diff.Undone {
-				d.UndoCmd = "sy undo --redo --dir " + shellQuote(st.Dir) + " " + st.UndoKey
+				d.UndoCmd = "rw undo --redo --dir " + shellQuote(st.Dir) + " " + st.UndoKey
 			} else {
-				d.UndoCmd = "sy undo --dir " + shellQuote(st.Dir) + " " + st.UndoKey
+				d.UndoCmd = "rw undo --dir " + shellQuote(st.Dir) + " " + st.UndoKey
 			}
 		}
 		// A multi-repo task recorded each extra repo under the same key:
@@ -210,7 +210,7 @@ func shellQuote(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
-// partKey identifies one run of the task in one sy session (a resumed task
+// partKey identifies one run of the task in one rw session (a resumed task
 // has several).
 type partKey struct{ session, task string }
 

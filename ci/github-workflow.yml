@@ -1,11 +1,11 @@
-# Switchyard in GitHub Actions: copy this file to .github/workflows/switchyard.yml
+# Relayweft in GitHub Actions: copy this file to .github/workflows/relayweft.yml
 # in your repository. Setup and the security model: docs/ci.md.
 #
-#   - Label an issue "sy": a job runs it and opens a pull request ("Closes #N").
-#   - Every night at 02:30 UTC: the open issues labelled "sy" that no open
+#   - Label an issue "rw": a job runs it and opens a pull request ("Closes #N").
+#   - Every night at 02:30 UTC: the open issues labelled "rw" that no open
 #     pull request closes yet, at most 5.
-#   - Actions > Switchyard > Run workflow: one issue by number.
-name: switchyard
+#   - Actions > Relayweft > Run workflow: one issue by number.
+name: relayweft
 
 on:
   issues:
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       issue:
-        description: Issue number (empty runs every open issue labelled sy)
+        description: Issue number (empty runs every open issue labelled rw)
         required: false
 
 # The job needs to push a branch, open a pull request and comment on the
@@ -26,31 +26,31 @@ permissions:
   issues: write
 
 jobs:
-  switchyard:
-    # Only the "sy" label starts a run. Adding a label needs triage access,
+  relayweft:
+    # Only the "rw" label starts a run. Adding a label needs triage access,
     # so someone you trust decides which issue the agents read.
-    if: github.event_name != 'issues' || github.event.label.name == 'sy'
+    if: github.event_name != 'issues' || github.event.label.name == 'rw'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     # One run per issue at a time; the nightly batch waits for the others.
     concurrency:
-      group: switchyard-${{ github.event.issue.number || inputs.issue || 'batch' }}
+      group: relayweft-${{ github.event.issue.number || inputs.issue || 'batch' }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
         with:
-          # The agents must not find the token in .git/config; Switchyard
+          # The agents must not find the token in .git/config; Relayweft
           # gives git its own credential helper for the push.
           persist-credentials: false
 
-      # @main builds sy from source. Pin a release tag (it installs that
+      # @main builds rw from source. Pin a release tag (it installs that
       # release's binary) or a commit SHA once one includes this action.
-      - uses: Sparkz400/switchyard@main
+      - uses: Sparkz400/relayweft@main
         with:
           issue: ${{ github.event.issue.number || inputs.issue }}
-          issues-label: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.issue == '')) && 'sy' || '' }}
+          issues-label: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.issue == '')) && 'rw' || '' }}
           # One of the two Claude Code sign-ins and/or one of the two Codex
-          # ones. With both providers, Switchyard routes between them.
+          # ones. With both providers, Relayweft routes between them.
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -58,4 +58,4 @@ jobs:
           budget-task-usd: "10"
           # A token that is not GITHUB_TOKEN lets the pull request start your
           # CI workflows (see docs/ci.md):
-          # github-token: ${{ secrets.SWITCHYARD_TOKEN }}
+          # github-token: ${{ secrets.RELAYWEFT_TOKEN }}
