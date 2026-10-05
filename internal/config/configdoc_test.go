@@ -81,7 +81,7 @@ func goFieldDocs(t *testing.T) map[string]fieldDoc {
 	out := map[string]fieldDoc{}
 	for _, dir := range []string{".", "../notify"} {
 		fset := token.NewFileSet()
-		pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, parser.ParseComments)
+		pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, parser.ParseComments) //nolint:staticcheck // deprecated for module-aware loading; this reads known folders of plain files
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -520,7 +520,7 @@ func entryNames(v reflect.Value) string {
 // typeDoc is a type's own doc comment.
 func typeDoc(t *testing.T, name string) string {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, parser.ParseComments)
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, parser.ParseComments) //nolint:staticcheck // deprecated for module-aware loading; this reads one known folder of plain files
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/sparkz400/relayweft/internal/config"
 	"github.com/sparkz400/relayweft/internal/event"
@@ -118,14 +119,22 @@ func writeCompletion(w *bufio.Writer, res completion) {
 	if d == "" {
 		d = "default"
 	}
-	w.WriteString(d + "\n")
+	// The writes go to the shell; a failed one has nowhere to be reported,
+	// and the shell then just offers nothing.
+	_, _ = w.WriteString(d + "\n")
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ")
 	for _, c := range res.cands {
-		w.WriteString(clean.Replace(c.value))
-		if c.desc != "" {
-			w.WriteString("\t" + clean.Replace(c.desc))
+		// Values come from files in the user's folders (task ids, undo
+		// keys, provider and model names): one with a control character,
+		// such as an escape sequence, is never sent to the terminal.
+		if strings.IndexFunc(c.value, unicode.IsControl) >= 0 {
+			continue
 		}
-		w.WriteString("\n")
+		_, _ = w.WriteString(clean.Replace(c.value))
+		if c.desc != "" {
+			_, _ = w.WriteString("\t" + clean.Replace(c.desc))
+		}
+		_, _ = w.WriteString("\n")
 	}
 }
 

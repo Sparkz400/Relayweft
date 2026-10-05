@@ -1,8 +1,16 @@
 name: ci
 
 on:
+  # Branch pushes are covered by their pull request; a push run as well
+  # would test every PR commit twice.
   push:
+    branches: [main]
   pull_request:
+
+# A newer push to the same PR (or main) cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 # Pull requests from forks run here too: the token only needs to read.
 permissions:
@@ -14,6 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        # internal/orchestrator (real git in every test) takes as long as
+        # everything else together, so it runs in a job of its own.
+        shard: [orchestrator, rest]
+    name: test (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     env:
       # Ubuntu runners have docker: the container sandbox test must run
@@ -36,13 +48,22 @@ jobs:
           git config --global user.name ci
           git config --global user.email ci@example.com
       - run: go vet ./...
-      - run: go test -race ./...
-        if: matrix.os != 'windows-latest'
-      # internal/orchestrator takes ~9.5 of the default 10 minutes on the
-      # Windows runner (real git in every test).
-      - run: go test -timeout 20m ./...
-        if: matrix.os == 'windows-latest'
+        if: matrix.shard == 'rest'
+      - name: test
+        shell: bash
+        run: |
+          if [ "${{ matrix.shard }}" = orchestrator ]; then
+            pkgs=./internal/orchestrator/...
+          else
+            pkgs=$(go list ./... | grep -v '/internal/orchestrator')
+          fi
+          # The race detector runs on Linux only: it is several times
+          # slower, and one OS is enough to find races.
+          race=
+          if [ "${{ matrix.os }}" = ubuntu-latest ]; then race=-race; fi
+          go test $race -timeout 25m $pkgs
       - name: onboarding timing (guided setup to first task, scripted agents)
+        if: matrix.shard == 'rest'
         run: go test -run '^TestOnboarding$' -v -count=1 ./cmd/rw
 
   build:

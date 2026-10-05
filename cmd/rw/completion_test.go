@@ -306,3 +306,16 @@ func TestCompletionScripts(t *testing.T) {
 		t.Error("no shell accepted")
 	}
 }
+
+// Values come from files in the user's folders: one carrying a control
+// character (here an escape sequence planted in a task file's undo key)
+// is never written to the terminal; the others still are.
+func TestCompletionSkipsControlCharacters(t *testing.T) {
+	var b bytes.Buffer
+	w := bufio.NewWriter(&b)
+	writeCompletion(w, completion{cands: []candidate{{"k1;$(id)\x1b[2J", ""}, {"ok", ""}, {"bell\a", "d"}}})
+	w.Flush()
+	if got, want := b.String(), "default\nok\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

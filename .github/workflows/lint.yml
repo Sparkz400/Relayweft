@@ -5,6 +5,7 @@ name: lint
 # not changed.
 on:
   push:
+    branches: [main]
   pull_request:
   schedule:
     - cron: "41 4 * * 1" # weekly, Monday
@@ -12,6 +13,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   GOLANGCI_LINT_VERSION: "2.14.0"
