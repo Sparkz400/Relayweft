@@ -30,6 +30,20 @@ func TestTermApproverBudget(t *testing.T) {
 	}
 }
 
+func TestTermApproverConflict(t *testing.T) {
+	q := orchestrator.ConflictQuestion{StepID: "b", With: "your uncommitted edits", Files: []string{"shared.txt"}, Yours: true}
+	for in, want := range map[string]bool{"maybe\ny\n": true, "yes\n": true, "\n": false, "n\n": false, "": false} {
+		var out bytes.Buffer
+		a := newTermApprover(strings.NewReader(in), &out)
+		if got := a.ApproveResolve(context.Background(), q); got != want {
+			t.Errorf("answer %q: %v, want %v\n%s", in, got, want, out.String())
+		}
+		if o := out.String(); !strings.Contains(o, "Merge conflict: b conflicts with your uncommitted edits in shared.txt") || !strings.Contains(o, "never in your folder") {
+			t.Errorf("prompt:\n%s", o)
+		}
+	}
+}
+
 func TestScheduleFlagsTarget(t *testing.T) {
 	cfg := config.Default()
 	cfg.LogDir = t.TempDir()

@@ -179,9 +179,14 @@ class ReviewPanel(private val project: Project, private val svc: RwService) : Si
             when (item) {
                 is ReviewItem.Set -> {
                     t.append("${r.cv.stepId}: ${oneLine(r.cv.title, 80)}", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-                    t.append("  round ${r.cv.round} · ${selectionSummary(r.files, r.sel)}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                    t.icon = AllIcons.Actions.Diff
-                    t.toolTipText = "<html>" + Notify.escape(r.cv.summary.ifEmpty { r.cv.title }) + "</html>"
+                    val resolution = r.cv.conflict.isNotEmpty()
+                    t.append(
+                        "  ${if (resolution) "conflict resolution · " else ""}round ${r.cv.round} · ${selectionSummary(r.files, r.sel)}",
+                        SimpleTextAttributes.GRAYED_ATTRIBUTES,
+                    )
+                    t.icon = if (resolution) AllIcons.Vcs.Merge else AllIcons.Actions.Diff
+                    val conflict = if (resolution) "<b>Conflict resolution:</b> " + Notify.escape(r.cv.conflict) + "<br>" else ""
+                    t.toolTipText = "<html>" + conflict + Notify.escape(r.cv.summary.ifEmpty { r.cv.title }) + "</html>"
                 }
                 is ReviewItem.File -> {
                     val f = r.files[item.file]

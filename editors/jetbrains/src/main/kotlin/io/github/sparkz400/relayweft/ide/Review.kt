@@ -195,10 +195,13 @@ class ReviewController(private val project: Project, private val svc: RwService)
         return p
     }
 
+    /** "b review", or "b conflict resolution review" when an agent resolved a merge conflict. */
+    private fun reviewName(r: Review): String = "${r.cv.stepId} ${if (r.cv.conflict.isEmpty()) "" else "conflict resolution "}review"
+
     private fun request(r: Review, i: Int): DiffRequest {
         val f = r.files[i]
         // Paths and step ids come from the agent: never let Swing read them as HTML.
-        val title = plainText("${f.path} — ${r.cv.stepId} review")
+        val title = plainText("${f.path} — ${reviewName(r)}")
         val target = ReviewTarget(r.req.id, i)
         val c = if (f.binary) null else contents(r, i)
         val req: DiffRequest = if (c == null) {
@@ -228,7 +231,7 @@ class ReviewController(private val project: Project, private val svc: RwService)
         // A headless IDE (the plugin's tests) has no editor tabs to show it in;
         // the documents and their marks exist all the same.
         if (ApplicationManager.getApplication().isHeadlessEnvironment) return
-        val vf = ChainDiffVirtualFile(SimpleDiffRequestChain(requests, file), "${r.cv.stepId} review")
+        val vf = ChainDiffVirtualFile(SimpleDiffRequestChain(requests, file), reviewName(r))
         r.diffFile = vf
         DiffEditorTabFilesManager.getInstance(project).showDiffFile(vf, true)
     }

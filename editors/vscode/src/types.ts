@@ -85,6 +85,8 @@ export interface ChangeView {
   summary?: string;
   round: number;
   files: FileView[];
+  /** Set when the change set is an agent's resolution of a merge conflict. */
+  conflict?: string;
 }
 
 export interface BudgetView {
@@ -92,13 +94,25 @@ export interface BudgetView {
   hint: string;
 }
 
+export interface ConflictView {
+  task: string;
+  step_id: string;
+  title: string;
+  with: string;
+  files: string[];
+  yours?: boolean;
+  text: string;
+  hint: string;
+}
+
 export interface ApprovalRequest {
   id: string;
-  type: 'plan' | 'changes' | 'budget';
+  type: 'plan' | 'changes' | 'budget' | 'conflict';
   task?: string;
   plan?: Plan;
   changes?: ChangeView;
   budget?: BudgetView;
+  conflict?: ConflictView;
   created: string;
 }
 

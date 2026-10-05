@@ -33,6 +33,7 @@ type Approver struct {
 var (
 	_ orchestrator.Approver         = (*Approver)(nil)
 	_ orchestrator.EstimateApprover = (*Approver)(nil)
+	_ orchestrator.ConflictApprover = (*Approver)(nil)
 )
 
 // NewApprover returns an approver that waits for the browser.
@@ -61,11 +62,13 @@ func (a *Approver) changed() {
 // Request is one question for the person: a plan or a change set.
 type Request struct {
 	ID      string             `json:"id"`
-	Type    string             `json:"type"` // "plan", "changes" or "budget"
+	Type    string             `json:"type"` // "plan", "changes", "budget" or "conflict"
 	Task    string             `json:"task,omitempty"`
 	Plan    *orchestrator.Plan `json:"plan,omitempty"`
 	Changes *ChangeView        `json:"changes,omitempty"`
 	Budget  *BudgetView        `json:"budget,omitempty"`
+	// Conflict asks whether an agent may resolve a merge conflict.
+	Conflict *ConflictView `json:"conflict,omitempty"`
 	// Estimate is the plan's dry-run estimate (plan requests whose
 	// orchestrator made one); the page asks for a new one after edits.
 	Estimate *orchestrator.PlanEstimate `json:"estimate,omitempty"`
@@ -90,6 +93,9 @@ type ChangeView struct {
 	Summary string     `json:"summary,omitempty"`
 	Round   int        `json:"round"`
 	Files   []FileView `json:"files"`
+	// Conflict is set when the change is an agent's resolution of a merge
+	// conflict: what conflicted.
+	Conflict string `json:"conflict,omitempty"`
 }
 
 // FileView is one file of a change set, with its hunks split out when the
@@ -107,7 +113,7 @@ type FileView struct {
 }
 
 func changeView(cs orchestrator.ChangeSet) *ChangeView {
-	v := &ChangeView{StepID: cs.StepID, Title: cs.Title, Summary: cs.Summary, Round: cs.Round, Files: []FileView{}}
+	v := &ChangeView{StepID: cs.StepID, Title: cs.Title, Summary: cs.Summary, Round: cs.Round, Files: []FileView{}, Conflict: cs.Conflict}
 	for _, f := range cs.Files {
 		fv := FileView{Path: f.Path, Status: f.Status, Added: f.Added, Deleted: f.Deleted, Binary: f.Binary, Patch: f.Patch, Splittable: f.Splittable()}
 		if fv.Splittable {
@@ -266,6 +272,29 @@ type BudgetView struct {
 func (a *Approver) ApproveBudget(ctx context.Context, r orchestrator.BudgetRequest) bool {
 	rep, ok := a.ask(&Request{ctx: ctx, Type: "budget", Task: r.Task, Budget: &BudgetView{BudgetRequest: r, Text: r.String(), Hint: r.RaiseHint()}})
 	return ok && rep.ok
+}
+
+// ConflictView is a conflict question as the page shows it.
+type ConflictView struct {
+	orchestrator.ConflictQuestion
+	Text string `json:"text"` // e.g. "b conflicts with step a (Add the flag) in shared.txt"
+	Hint string `json:"hint"` // what yes and no do
+}
+
+// ApproveResolve implements orchestrator.ConflictApprover: true lets an
+// agent resolve the conflict, false keeps the change on a branch.
+func (a *Approver) ApproveResolve(ctx context.Context, q orchestrator.ConflictQuestion) bool {
+	rep, ok := a.ask(&Request{ctx: ctx, Type: "conflict", Task: q.Task, Conflict: &ConflictView{ConflictQuestion: q, Text: q.String(), Hint: q.Hint()}})
+	return ok && rep.ok
+}
+
+// AnswerConflict answers a conflict question: let an agent resolve it (ok)
+// or keep the change on a branch.
+func (a *Approver) AnswerConflict(id string, ok bool) error {
+	if _, err := a.find(id, "conflict"); err != nil {
+		return err
+	}
+	return a.answer(id, reply{ok: ok})
 }
 
 // AnswerBudget answers a budget question: go on (ok) or stop the task.

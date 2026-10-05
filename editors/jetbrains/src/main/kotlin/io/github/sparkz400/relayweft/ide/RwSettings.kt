@@ -61,7 +61,7 @@ class RwSettingsConfigurable : Configurable {
         val p = TextFieldWithBrowseButton()
         p.addBrowseFolderListener(null, FileChooserDescriptorFactory.createSingleFileNoJarsDescriptor().withTitle("The rw Executable"))
         val a = JBTextArea(4, 40)
-        val na = JBCheckBox("Notify when a plan, a change set or a budget question waits for me")
+        val na = JBCheckBox("Notify when a plan, a change set, a budget or a merge conflict question waits for me")
         val nt = JBCheckBox("Notify when a task is done or failed")
         path = p
         args = a

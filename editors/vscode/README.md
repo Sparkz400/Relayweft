@@ -40,6 +40,8 @@ used.
      as JSON with *Approve this plan* / *Reject* CodeLens at the top.
    - **Changes** (with "review changes" on): see below.
    - **Budget**: go on past the limit or stop the task.
+   - **Merge conflict**: let an agent resolve it (you then review its
+     resolution like any change set) or keep the change on a branch.
 5. **Relayweft: Follow Up with Agent…** (or the inline button on an agent)
    sends `@agent message` to a finished agent (it resumes its session) or
    to a running one (delivered when its turn ends).
@@ -81,7 +83,7 @@ web UI.
 |---|---|---|
 | `relayweft.path` | `""` | Path to `rw` / `rw.exe`; empty searches as above. This and `relayweft.args` are read from your user settings only, never from a workspace's `.vscode/settings.json`. |
 | `relayweft.args` | `[]` | Extra arguments for `rw web --client`, one per item, e.g. `["--threads", "2"]`, `["--provider", "claude"]` or `["--demo"]` to try it with fake agents. Nothing is shell-quoted. |
-| `relayweft.notifyApprovals` | `true` | Notify when a plan, change set or budget question waits. |
+| `relayweft.notifyApprovals` | `true` | Notify when a plan, change set, budget or merge conflict question waits. |
 
 ## How it connects (security)
 

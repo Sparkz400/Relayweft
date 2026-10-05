@@ -26,6 +26,7 @@ type Approver struct {
 var (
 	_ orchestrator.Approver         = (*Approver)(nil)
 	_ orchestrator.EstimateApprover = (*Approver)(nil)
+	_ orchestrator.ConflictApprover = (*Approver)(nil)
 )
 
 // NewApprover returns an approver that waits for the TUI.
@@ -45,6 +46,8 @@ type approvalReq struct {
 	plan    *orchestrator.Plan      // set for plan approval
 	changes *orchestrator.ChangeSet // set for change review
 	budget  *orchestrator.BudgetRequest
+	// conflict asks whether an agent may resolve a merge conflict.
+	conflict *orchestrator.ConflictQuestion
 	// estimate re-estimates the plan (nil: the plan has no estimate).
 	estimate func(orchestrator.Plan) orchestrator.PlanEstimate
 	reply    chan approvalReply // buffered: answering never blocks
@@ -115,6 +118,13 @@ func (a *Approver) ApproveBudget(ctx context.Context, r orchestrator.BudgetReque
 	return ok && rep.ok
 }
 
+// ApproveResolve implements orchestrator.ConflictApprover: the person
+// decides whether an agent resolves a merge conflict.
+func (a *Approver) ApproveResolve(ctx context.Context, q orchestrator.ConflictQuestion) bool {
+	rep, ok := a.ask(&approvalReq{ctx: ctx, task: q.Task, conflict: &q})
+	return ok && rep.ok
+}
+
 // approvalMsg delivers a request to the model.
 type approvalMsg struct{ req *approvalReq }
 
@@ -177,9 +187,16 @@ func (m *Model) openApproval() {
 	case r.budget != nil:
 		m.overlay = &budgetOverlay{r: r}
 		m.alert(notify.EventWaiting, "Relayweft needs you", "budget reached: "+r.budget.String())
+	case r.conflict != nil:
+		m.overlay = &conflictOverlay{r: r}
+		m.alert(notify.EventWaiting, "Relayweft needs you", "merge conflict: "+r.conflict.String())
 	default:
 		m.overlay = newReviewOverlay(r)
-		m.alert(notify.EventWaiting, "Relayweft needs you", "review changes of "+r.changes.StepID)
+		what := "review changes of "
+		if r.changes.Conflict != "" {
+			what = "review the conflict resolution of "
+		}
+		m.alert(notify.EventWaiting, "Relayweft needs you", what+r.changes.StepID)
 	}
 	m.input.Blur()
 	m.focus = focusTree

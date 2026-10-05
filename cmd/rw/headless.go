@@ -714,6 +714,9 @@ func (a *termApprover) ReviewChanges(ctx context.Context, cs orchestrator.Change
 			round = fmt.Sprintf(" (round %d)", cs.Round)
 		}
 		fmt.Fprintf(a.out, "\nChanges from %s: %s%s\n", cs.StepID, cs.Title, round)
+		if cs.Conflict != "" {
+			fmt.Fprintf(a.out, "  conflict resolution: %s (an agent merged both; this is what lands)\n", cs.Conflict)
+		}
 		if cs.Summary != "" {
 			fmt.Fprintf(a.out, "  %s\n", oneLine(cs.Summary, 200))
 		}
@@ -793,7 +796,29 @@ func (a *termApprover) ApproveBudget(ctx context.Context, r orchestrator.BudgetR
 	}
 }
 
+// ApproveResolve asks whether an agent may resolve a merge conflict.
+// Anything but yes keeps the change on a branch.
+func (a *termApprover) ApproveResolve(ctx context.Context, q orchestrator.ConflictQuestion) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	fmt.Fprintf(a.out, "\nMerge conflict: %s\n  (%s)\n", q, q.Hint())
+	for {
+		ans, ok := a.ask(ctx, "Let an agent resolve it? [y/N]: ")
+		if !ok {
+			return false
+		}
+		switch strings.ToLower(ans) {
+		case "y", "yes":
+			return true
+		case "", "n", "no", "q":
+			return false
+		}
+		fmt.Fprintln(a.out, "answer y or n")
+	}
+}
+
 var (
 	_ orchestrator.Approver         = (*termApprover)(nil)
 	_ orchestrator.EstimateApprover = (*termApprover)(nil)
+	_ orchestrator.ConflictApprover = (*termApprover)(nil)
 )
