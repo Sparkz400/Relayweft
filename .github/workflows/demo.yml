@@ -40,6 +40,10 @@ jobs:
           vhs --version
       - name: record
         run: docs/demo/record.sh
+        env:
+          # Ubuntu's AppArmor rules stop Chrome's sandbox on the runner;
+          # the browser only renders the terminal.
+          VHS_NO_SANDBOX: "true"
       - uses: actions/upload-artifact@v7
         with:
           name: demo
