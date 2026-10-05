@@ -103,6 +103,41 @@ func (g git) exec(literal bool, env []string, stdin []byte, args []string) (stri
 			return "", fmt.Errorf("git %s: command line too long (%d bytes)", gitArgs(args), n)
 		}
 	}
+	// Another git in the same repo (another rw, an editor's git, the user)
+	// may hold index.lock or a ref lock for a moment. git takes its locks
+	// before it changes anything, so the command is run again.
+	wait := lockRetryFirst
+	for began := time.Now(); ; {
+		out, msg, took, err := g.execOnce(env, stdin, args)
+		if err != nil {
+			if reLockBusy.MatchString(msg) && time.Since(began) < lockRetryFor {
+				diag.Logf("git %s (in %s): a lock is taken, trying again in %s: %s", gitArgs(args), g.dir, wait, clip(msg, 300))
+				time.Sleep(wait)
+				wait = min(2*wait, time.Second)
+				continue
+			}
+			diag.Logf("git %s (in %s) failed after %s: %v: %s", gitArgs(args), g.dir, took.Round(time.Millisecond), err, clip(msg, 500))
+			return out, &gitError{args: strings.Join(args, " "), err: err, msg: msg}
+		}
+		if took > 300*time.Millisecond {
+			diag.Logf("git %s (in %s) took %s", gitArgs(args), g.dir, took.Round(time.Millisecond))
+		}
+		return out, nil
+	}
+}
+
+// reLockBusy matches git's message for a lock file another process holds
+// ("Unable to create '.../index.lock': File exists.").
+var reLockBusy = regexp.MustCompile(`Unable to create '[^']*\.lock': File exists`)
+
+// How long a git command waits for another git's lock, and its first pause.
+var (
+	lockRetryFor   = 10 * time.Second
+	lockRetryFirst = 50 * time.Millisecond
+)
+
+// execOnce runs git once; msg is its error output when it failed.
+func (g git) execOnce(env []string, stdin []byte, args []string) (out, msg string, took time.Duration, err error) {
 	gitRuns.Add(1)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = g.dir
@@ -112,28 +147,23 @@ func (g git) exec(literal bool, env []string, stdin []byte, args []string) (stri
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
+	var ob, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &ob, &errb
 	proc.Background(cmd)
 	start := time.Now()
-	err := cmd.Start()
+	err = cmd.Start()
 	if err == nil {
 		proc.Started(cmd)
 		err = cmd.Wait()
 	}
-	took := time.Since(start)
+	took = time.Since(start)
 	if err != nil {
-		msg := strings.TrimSpace(errb.String())
+		msg = strings.TrimSpace(errb.String())
 		if msg == "" {
-			msg = strings.TrimSpace(out.String())
+			msg = strings.TrimSpace(ob.String())
 		}
-		diag.Logf("git %s (in %s) failed after %s: %v: %s", gitArgs(args), g.dir, took.Round(time.Millisecond), err, clip(msg, 500))
-		return out.String(), &gitError{args: strings.Join(args, " "), err: err, msg: msg}
 	}
-	if took > 300*time.Millisecond {
-		diag.Logf("git %s (in %s) took %s", gitArgs(args), g.dir, took.Round(time.Millisecond))
-	}
-	return out.String(), nil
+	return ob.String(), msg, took, err
 }
 
 // gitArgs shortens an argument list for the debug log.

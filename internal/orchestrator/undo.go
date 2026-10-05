@@ -85,13 +85,14 @@ func undoPrefix(root string) string {
 	return undoRefs + hex.EncodeToString(h[:])[:10] + "/"
 }
 
-// recordSnapshot stores a task snapshot ref (best effort). g.dir must be the
-// working tree's top level.
-func (g git) recordSnapshot(key, which, commit string) {
+// recordSnapshot stores a task snapshot ref. g.dir must be the working
+// tree's top level.
+func (g git) recordSnapshot(key, which, commit string) error {
 	if commit == "" {
-		return
+		return nil
 	}
-	_, _ = g.out("update-ref", undoPrefix(g.dir)+key+"/"+which, commit)
+	_, err := g.out("update-ref", undoPrefix(g.dir)+key+"/"+which, commit)
+	return err
 }
 
 func (g git) deleteSnapshot(key, which string) {
@@ -375,9 +376,14 @@ func undoOne(dir string, t UndoTask, redo bool, only []string) error {
 		g.deleteSnapshot(t.Key, "undone")
 		return nil
 	}
-	// Keep the exact pre-undo state so nothing is ever lost.
-	if snap, err := g.snapshot("relayweft before undo of " + t.Key); err == nil {
-		g.recordSnapshot(t.Key, "undone", snap)
+	// Keep the exact pre-undo state so nothing is ever lost (and a redo
+	// finds the task): without it, nothing is changed.
+	snap, err := g.snapshot("relayweft before undo of " + t.Key)
+	if err == nil {
+		err = g.recordSnapshot(t.Key, "undone", snap)
+	}
+	if err != nil {
+		return fmt.Errorf("could not record the state before the undo: %w", err)
 	}
 	if err := g.applyDiff(t.After, t.Before, only...); err != nil {
 		g.deleteSnapshot(t.Key, "undone")

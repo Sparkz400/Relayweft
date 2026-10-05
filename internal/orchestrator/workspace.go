@@ -418,7 +418,9 @@ func (o *Orchestrator) snapshotExtra(t, r *task) error {
 	r.useGit = true
 	r.snapshot, r.start = snap, snap
 	if o.opts.Bench == "" && !t.keepBefore && t.key != "" {
-		git{root}.recordSnapshot(t.key, "before", snap)
+		if err := (git{root}).recordSnapshot(t.key, "before", snap); err != nil {
+			o.logf("warning: repo %s: could not record the start state, so rw undo cannot undo this task there: %v", r.repoName, err)
+		}
 	}
 	return nil
 }
@@ -711,10 +713,15 @@ func (o *Orchestrator) snapshotAfterExtras(t *task) {
 		t.tokensMu.Lock()
 		msg := afterMessage(t.text, r.agentFiles)
 		t.tokensMu.Unlock()
-		if snap, err := g.snapshot(msg); err == nil {
-			g.recordSnapshot(t.key, "after", snap)
-			trimUndo(r.root)
+		snap, err := g.snapshot(msg)
+		if err == nil {
+			err = g.recordSnapshot(t.key, "after", snap)
 		}
+		if err != nil {
+			o.logf("warning: repo %s: could not record the end state of this task, so rw undo cannot undo it there: %v", r.repoName, err)
+			continue
+		}
+		trimUndo(r.root)
 	}
 }
 
