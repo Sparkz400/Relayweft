@@ -27,6 +27,7 @@ Out of the box Switchyard uses **subscriptions only**: it drives the official `c
 3. **Install Switchyard**, one of:
    - Download `sy-windows-amd64.exe` from the [latest release](https://github.com/sparkz400/switchyard/releases/latest), rename it to `sy.exe` and put it on your PATH. Later, `sy update` replaces it with the newest release (checksum-verified).
    - Scoop: `scoop install https://raw.githubusercontent.com/sparkz400/switchyard/main/packaging/scoop/sy.json`. winget follows once the package is accepted into winget-pkgs; see `packaging/README.md`.
+   - macOS and Linux: `brew tap sparkz400/switchyard https://github.com/Sparkz400/Switchyard && brew install switchyard`. From v0.3.0 each release also has `switchyard-linux-amd64.deb`, `.rpm` and `.apk` (`sudo apt install ./switchyard-linux-amd64.deb`, `sudo dnf install ./switchyard-linux-amd64.rpm`), and the AUR has `switchyard-cli-bin`. `sy update` tells you to use the package manager that installed `sy`.
    - From source with **Go 1.24+**:
      ```powershell
      git clone https://github.com/sparkz400/switchyard
