@@ -3,7 +3,7 @@
     "description": "Windows-first terminal app that routes coding work between the Codex CLI and Claude Code.",
     "homepage": "https://github.com/sparkz400/relayweft",
     "license": "MIT",
-    "notes": "Run `rw doctor` to check the codex and claude CLIs. Update with `scoop update rw`.",
+    "notes": "Run `rw doctor` to check the codex and claude CLIs. Update with `scoop update rw`. Tab completion: add `rw completion powershell | Out-String | Invoke-Expression` to your PowerShell profile ($PROFILE).",
     "architecture": {
         "64bit": {
             "url": "https://github.com/sparkz400/relayweft/releases/download/v0.2.0/rw-windows-amd64.exe#/rw.exe",

@@ -337,6 +337,48 @@ func History(dir string, limit int) []TaskState {
 	return out
 }
 
+// recentReads caps the state files Recent reads.
+const recentReads = 40
+
+// Recent is History for shell completion, which runs on every Tab: it
+// reads only the recentReads newest state files (by modification time),
+// so it stays quick however many there are. dir filters by project
+// ("" = all); at most limit states, newest first.
+func Recent(dir string, limit int) []TaskState {
+	files, _ := filepath.Glob(filepath.Join(stateDir(), "*.json"))
+	type file struct {
+		path string
+		mod  time.Time
+	}
+	var fs []file
+	for _, f := range files {
+		if st, err := os.Stat(f); err == nil {
+			fs = append(fs, file{f, st.ModTime()})
+		}
+	}
+	sort.Slice(fs, func(i, j int) bool { return fs[i].mod.After(fs[j].mod) })
+	var out []TaskState
+	for _, f := range fs[:min(len(fs), recentReads)] {
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			continue
+		}
+		var s TaskState
+		if json.Unmarshal(data, &s) != nil || s.ID == "" {
+			continue
+		}
+		if dir != "" && !samePath(s.Dir, dir) {
+			continue
+		}
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
 // LastInterrupted returns the newest interrupted task in dir, if any.
 func LastInterrupted(dir string) *TaskState {
 	for _, s := range History(dir, 20) {

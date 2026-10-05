@@ -111,8 +111,8 @@ rest into the review text. The review is shown before it is posted.
 	}
 	var ref string
 	rest := args
-	for len(rest) > 0 {
-		fs.Parse(rest)
+	for { // parse at least once, also without arguments
+		parseFlags(fs, rest)
 		if fs.NArg() == 0 {
 			break
 		}

@@ -192,7 +192,9 @@ the modules linked into `rw`, while `gh` and `cosign` already do it.
 `linux-packages.sh` builds the `.deb`, `.rpm` and `.apk` packages with
 [nfpm](https://nfpm.goreleaser.com/), pinned to one version and checked
 against its SHA-256 before it runs. Each package installs `/usr/bin/rw`,
-the README and the license, and depends on `git`. The packages carry no
+the README, the license and the bash, zsh and fish completion scripts
+(printed by `rw completion`; zsh's goes to `vendor-completions` on Debian
+and `site-functions` elsewhere), and depends on `git`. The packages carry no
 package-manager signature (GPG or apk key), and there is no apt or dnf
 repository, so users download them from the release (from v0.4.0 they
 can check them with `gh attestation verify` or the signed
@@ -235,7 +237,10 @@ brew upgrade relayweft
 ```
 
 `brew update` fetches the committed formula, so render and commit after
-each release.
+each release. The formula installs the bash, zsh and fish completion with
+`generate_completions_from_executable` for releases that have
+`rw completion` (v0.4.0 on; the version check can go once the manifests
+name v0.4.0 or later). The AUR `PKGBUILD` does the same in `package()`.
 
 ## AUR
 
@@ -299,6 +304,10 @@ manifest in a bucket repo (for example `sparkz400/scoop-bucket` with
 scoop bucket add sparkz400 https://github.com/sparkz400/scoop-bucket
 scoop install sparkz400/rw
 ```
+
+Scoop and winget install only `rw.exe`. For Tab completion in PowerShell
+(5.1 and 7), add `rw completion powershell | Out-String | Invoke-Expression`
+to `$PROFILE`; the Scoop manifest's notes say so.
 
 ## Submitting to winget
 
