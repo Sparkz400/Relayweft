@@ -89,6 +89,22 @@ func TryLock(path string) (unlock func(), ok bool) {
 	return nil, false
 }
 
+// Locked reports whether someone holds TryLock's exclusive lock on path. It
+// probes with a shared lock: probes never block each other, so two sy
+// looking at the same lock at once both see it free. (A probe that took
+// the exclusive lock and released it made a concurrent probe see it held:
+// a stopped task looked like one a sy was running.) A real TryLock that
+// meets a probe fails for that moment; callers that must get the lock
+// retry.
+func Locked(path string) bool {
+	f, err := openLock(path)
+	if err != nil {
+		return true // cannot tell: assume it is held
+	}
+	defer f.Close()
+	return !tryLockShared(f)
+}
+
 // stillAt reports whether the open file f is the file currently at path.
 func stillAt(f *os.File, path string) bool {
 	a, err := f.Stat()

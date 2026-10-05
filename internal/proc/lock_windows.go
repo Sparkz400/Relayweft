@@ -30,3 +30,10 @@ func tryLock(f *os.File) bool {
 	return windows.LockFileEx(windows.Handle(f.Fd()),
 		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, ol) == nil
 }
+
+// tryLockShared takes a shared lock on the same byte (released when f is
+// closed): it fails only while someone holds the exclusive one.
+func tryLockShared(f *os.File) bool {
+	ol := new(windows.Overlapped)
+	return windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, ol) == nil
+}

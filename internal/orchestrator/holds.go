@@ -155,13 +155,11 @@ func checkHold(slot string) holdInfo {
 }
 
 // taskLocked reports whether a sy is running the task now (it holds the
-// task's lock).
+// task's lock). It only probes (proc.Locked): two writers of one task
+// that took worktrees at once used to see each other's probe and skip an
+// expired hold as if its task were running.
 func taskLocked(id string) bool {
-	unlock, ok := proc.TryLock(filepath.Join(stateDir(), id+".lock"))
-	if ok {
-		unlock()
-	}
-	return !ok
+	return proc.Locked(filepath.Join(stateDir(), id+".lock"))
 }
 
 // holdState reports whether slot is held, and whether its mark is stale

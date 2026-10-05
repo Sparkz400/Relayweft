@@ -4,7 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +15,59 @@ import (
 	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/runner"
 )
+
+// slotPaths lists the pool worktrees of the repo at dir.
+func slotPaths(dir string) []string {
+	var out []string
+	es, _ := os.ReadDir(poolDir(dir))
+	for _, e := range es {
+		if _, err := strconv.Atoi(e.Name()); err == nil && e.IsDir() {
+			out = append(out, filepath.Join(poolDir(dir), e.Name()))
+		}
+	}
+	return out
+}
+
+// Two writers of a task take worktrees at once, and both look at the
+// expired hold's task lock. A probe that took the lock and let it go made
+// the other probe see it held: the expired hold counted as its task's
+// running and was skipped (the release run of v0.3.0 failed on it).
+// Probes must never see each other.
+func TestTaskLockProbesDoNotCollide(t *testing.T) {
+	st := &TaskState{ID: "probe-task", Status: "running"}
+	st.save()
+	var wg sync.WaitGroup
+	var seen atomic.Int32
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 300; i++ {
+				if taskLocked(st.ID) {
+					seen.Add(1)
+				}
+				if !st.Interrupted() {
+					seen.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if n := seen.Load(); n > 0 {
+		t.Fatalf("a task no sy runs looked locked %d times while others probed it", n)
+	}
+	unlock, ok := st.lock()
+	if !ok {
+		t.Fatal("lock after the probes")
+	}
+	if !taskLocked(st.ID) || st.Interrupted() {
+		t.Error("a task this process runs does not look locked")
+	}
+	unlock()
+	if taskLocked(st.ID) {
+		t.Error("still locked after unlock")
+	}
+}
 
 // logText joins the log lines a task showed.
 func logText(rec *recorder) string {
@@ -116,6 +172,14 @@ func TestExpiredHoldSavesEdits(t *testing.T) {
 		os.WriteFile(filepath.Join(s.Dir, s.StepID+".txt"), []byte(s.StepID+"\n"), 0o644)
 		return runner.Result{Final: "wrote"}
 	})
+	// The other task must need that worktree: with free ones around, its
+	// writers may finish one after the other in another slot and never
+	// look at the held one, which then rightly stays held.
+	for _, p := range slotPaths(dir) {
+		if !samePath(p, run.Slot) {
+			removeSlot(git{dir}.commonDir(), p)
+		}
+	}
 	o, rec := newOrc(t, dir, other, nil)
 	if res := o.Run(context.Background(), longTask); !res.OK {
 		t.Fatalf("other task: %+v", res)
