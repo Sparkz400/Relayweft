@@ -177,7 +177,41 @@ type RoutingCfg struct {
 	// TiersSaveAt is the quota left (0..1) below which tiers step down to
 	// save it; 0 = 0.5.
 	TiersSaveAt float64 `yaml:"tiers_save_below,omitempty"`
+	// BestOf runs writing steps on several routes and keeps the best
+	// result (orchestrator/bestof.go).
+	BestOf BestOfCfg `yaml:"best_of,omitempty"`
 }
+
+// BestOfCfg is routing.best_of: a writing step runs on several routes at
+// once, each in its own pool worktree, the repo's checks run in each and
+// the best result is kept.
+type BestOfCfg struct {
+	When string `yaml:"when,omitempty"` // off | hard | always ("" = off)
+	N    int    `yaml:"n,omitempty"`    // candidates per step, 2 to MaxBestOf (0 = 2)
+	// Routes are the candidates as provider[:model[:effort]] (a provider
+	// alone means the step's role there). Empty: the step's own route plus
+	// the same role on the next providers in provider_order.
+	Routes []string `yaml:"routes,omitempty"`
+}
+
+// Best-of modes (routing.best_of.when) and the most candidates per step.
+const (
+	BestOfOff    = "off"
+	BestOfHard   = "hard"
+	BestOfAlways = "always"
+	MaxBestOf    = 4
+)
+
+// Count is the number of candidates per step (n, default 2).
+func (b BestOfCfg) Count() int {
+	if b.N <= 0 {
+		return 2
+	}
+	return min(b.N, MaxBestOf)
+}
+
+// On reports whether any step may run as best of N by config.
+func (b BestOfCfg) On() bool { return b.When == BestOfHard || b.When == BestOfAlways }
 
 // Tier modes (routing.tiers).
 const (
@@ -494,11 +528,17 @@ func guardLocal(c *Config, data []byte, own []string) []string {
 	// only where the file itself sets them, since your own config differs
 	// from the defaults the file was read over.
 	changed := restoreCommandSettings(c, base)
+	// Best of N multiplies what a step costs: like a repo file, the local
+	// file may lower it, not raise it above your own config.
+	var ignored []string
+	if bestOfRaised(base.Routing.BestOf, c.Routing.BestOf) {
+		c.Routing.BestOf = base.Routing.BestOf
+		ignored = append(ignored, bestOfKey)
+	}
 	set, err := trustSubset(data)
 	if err != nil {
-		return changed // unreadable as a plain mapping: report all
+		return append(changed, ignored...) // unreadable as a plain mapping: report all
 	}
-	var ignored []string
 	for _, k := range changed {
 		if _, ok := set[k]; ok {
 			ignored = append(ignored, k)
@@ -654,6 +694,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Routing.LearnMinSamples < 0 {
 		errs = append(errs, "routing.learn_min_samples must be >= 0 (0 = 8)")
+	}
+	switch bo := c.Routing.BestOf; {
+	case bo.When != "" && bo.When != BestOfOff && !bo.On():
+		errs = append(errs, "routing.best_of.when must be off, hard or always")
+	case bo.N != 0 && (bo.N < 2 || bo.N > MaxBestOf):
+		errs = append(errs, fmt.Sprintf("routing.best_of.n must be between 2 and %d (0 = 2)", MaxBestOf))
+	}
+	for _, r := range c.Routing.BestOf.Routes {
+		if p, _, _ := strings.Cut(strings.TrimSpace(r), ":"); p == "" {
+			errs = append(errs, fmt.Sprintf("routing.best_of.routes: %q needs a provider (provider[:model[:effort]])", r))
+		}
 	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))

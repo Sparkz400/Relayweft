@@ -27,7 +27,8 @@ import (
 //   - Each update changes at most one route per role.
 //
 // A run succeeds when its agent finished ok; a writing step of a bench run
-// whose check failed counts as failed, whatever the agent said.
+// whose check failed counts as failed, whatever the agent said, and so
+// does a best-of candidate that lost on checks or by the reviewer.
 
 // Learning thresholds.
 const (
@@ -167,9 +168,23 @@ func benchFailed(recs []Record) map[string]bool {
 	return out
 }
 
+// bestOfLost returns the best-of candidates (session/task/agent) that lost
+// on checks or by the reviewer: their agent finished, but another route's
+// work was kept. A pick by the fixed order says nothing about the route.
+func bestOfLost(recs []Record) map[string]bool {
+	out := map[string]bool{}
+	for _, r := range recs {
+		if r.Type == TypeBestOf && r.OK != nil && !*r.OK && (r.Reason == BestOfByChecks || r.Reason == BestOfByReviewer) {
+			out[r.Session+"/"+r.TaskID+"/"+r.Agent] = true
+		}
+	}
+	return out
+}
+
 // learnStats aggregates this repo's routed runs per role and route.
 func learnStats(recs []Record, root string, now time.Time) map[string]map[RouteKey]*routeAgg {
 	failedBench := benchFailed(recs)
+	lost := bestOfLost(recs)
 	roles := map[string]bool{}
 	for _, r := range LearnRoles {
 		roles[r] = true
@@ -192,6 +207,9 @@ func learnStats(recs []Record, root string, now time.Time) map[string]map[RouteK
 		w := decay(now, r.TS)
 		ok := !failed(r)
 		if (r.Role == event.RoleWorker || r.Role == event.RoleWorkerHigh) && failedBench[r.Session+"/"+r.TaskID] {
+			ok = false
+		}
+		if lost[r.Session+"/"+r.TaskID+"/"+r.Agent] {
 			ok = false
 		}
 		a.n++

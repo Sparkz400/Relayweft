@@ -265,6 +265,15 @@ routing:
   # repeating-error steps never drop below worker_high's tier.
   tiers: off                       # auto | off
   tiers_save_below: 0.5            # with less quota left than this, steps move toward cheaper tiers
+  # Best of N: run a writing step on several routes at once, each in its own
+  # pool worktree, run verify.commands in each and keep the best result (the
+  # reviewer picks when the checks do not decide). The losers' work is kept
+  # on a branch. A step costs about N times as much. The plan view can turn
+  # it on or off per step (b in the TUI).
+  best_of:
+    when: off                      # off | hard (large, sensitive or difficult steps) | always
+    n: 2                           # candidates per step (2-4)
+    routes: []                     # provider[:model[:effort]] each; empty = the step's route plus the same role on the next provider in provider_order
 
 orchestrator:
   max_threads: 3                   # parallel agents at once

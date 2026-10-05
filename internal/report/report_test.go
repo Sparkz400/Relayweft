@@ -367,3 +367,61 @@ func TestBuildMultiRepoTask(t *testing.T) {
 		t.Fatalf("report files = %v, notes %v", paths, d.Notes)
 	}
 }
+
+// A best-of step shows the kept candidate's route and how it was picked.
+func TestBuildBestOfTask(t *testing.T) {
+	isolate(t)
+	dir := gitRepo(t)
+	fn := func(s runner.Spec) runner.Result {
+		switch {
+		case strings.Contains(s.Prompt, runner.MarkerBestOf):
+			// Candidates' names are shuffled: pick Claude's by its diff.
+			i := strings.Index(s.Prompt, "+claude")
+			a := strings.LastIndex(s.Prompt[:i], "### Candidate ")
+			return runner.Result{Final: `{"pick": "` + s.Prompt[a+14:a+15] + `", "why": "clearer"}`}
+		case strings.Contains(s.Prompt, runner.MarkerFinalReview):
+			return runner.Result{Final: `{"approve": true}`}
+		}
+		os.WriteFile(filepath.Join(s.Dir, "greet.txt"), []byte(s.Provider+"\n"), 0o644)
+		return runner.Result{Final: "changed it"}
+	}
+	set := runner.Set{event.Codex: scripted{event.Codex, fn}, event.Claude: scripted{event.Claude, fn}}
+	cfg := config.Default()
+	cfg.Routing.BestOf.When = config.BestOfAlways
+	logDir := t.TempDir()
+	log, err := sessionlog.Open(logDir, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan event.Event, 256)
+	go func() {
+		for range ch {
+		}
+	}()
+	o := orchestrator.New(orchestrator.Options{
+		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "sy.yaml")), Mode: "routed",
+		Runners: func(*config.Config) runner.Set { return set }, Tracker: limits.NewTracker(),
+		Log: log, Events: ch, Load: func() sysload.Sample { return sysload.Sample{} },
+	})
+	res := o.Run(context.Background(), "fix the greeting")
+	log.Close()
+	close(ch)
+	if !res.OK {
+		t.Fatalf("task failed: %+v", res)
+	}
+	st, err := orchestrator.LoadTask(orchestrator.History(dir, 1)[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Build(st, Options{SessionDir: logDir, Version: "test"})
+	if len(d.Steps) != 1 || !strings.HasPrefix(d.Steps[0].Route, "claude:") || !strings.Contains(d.Steps[0].BestOf, "kept work--claude") {
+		t.Fatalf("steps = %+v", d.Steps)
+	}
+	var md bytes.Buffer
+	if err := d.Markdown(&md); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(md.String(), "best of 2: kept work--claude") || !strings.Contains(md.String(), "work--codex") {
+		t.Errorf("markdown lacks the best-of outcome:\n%s", md.String())
+	}
+}

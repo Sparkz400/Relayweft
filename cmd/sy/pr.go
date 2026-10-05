@@ -802,6 +802,9 @@ func renderPRParts(st *orchestrator.TaskState, o prBodyOptions) prParts {
 						res += ": " + mdCell(oneLine(r.Err, 120))
 					}
 				}
+				if r.BestOf != "" {
+					res += "<br>" + mdCell(oneLine(r.BestOf, 300))
+				}
 			}
 			fmt.Fprintf(&b, "| `%s` %s | %s | %s | %s |\n", id, mdCell(oneLine(title, 100)), role, kind, res)
 		}

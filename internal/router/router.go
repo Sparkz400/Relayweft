@@ -45,6 +45,9 @@ type Step struct {
 	// BudgetUsed is the largest share (0..1) of a task, day or team budget
 	// in use when the step starts; 0 = no budget or unknown. Tiers use it.
 	BudgetUsed float64
+	// Pin is a route picked before the step runs (a best-of candidate's):
+	// Route returns it as it is.
+	Pin *event.Decision
 }
 
 // State is what the router needs to know about providers.
@@ -69,6 +72,7 @@ const (
 	RuleDefault     = "default"
 	RuleJudge       = "judge"
 	RuleForced      = "forced"
+	RuleBestOf      = "best-of"
 )
 
 // Router applies the rules to the live config.
@@ -103,6 +107,11 @@ func escalate(role string, n int) string {
 
 // Route decides how to run a step.
 func (r *Router) Route(s Step) event.Decision {
+	if s.Pin != nil {
+		d := *s.Pin
+		d.StepID, d.StepTitle = s.ID, s.Title
+		return d
+	}
 	cfg := r.Cfg()
 	role, rule, reason, conf := r.classify(cfg, s)
 	d := r.resolve(cfg, s, role)
@@ -119,6 +128,27 @@ func (r *Router) Route(s Step) event.Decision {
 	}
 	d.Rule, d.Reason = rule, reason
 	return Finalize(r.applyTier(cfg, s, learned(cfg, d), rule))
+}
+
+// Hard reports whether a writing step looks hard enough to run as best of
+// N (routing.best_of.when: hard), and why: a rule saw risk (large or
+// sensitive, or a repeating error), its role is worker_high, or its
+// difficulty (tiers.go) reaches the strong tier.
+func (r *Router) Hard(s Step) (bool, string) {
+	if s.Kind.ReadOnly() {
+		return false, ""
+	}
+	role, rule, reason, _ := r.classify(r.Cfg(), s)
+	switch {
+	case rule == RuleLargeDiff || rule == RuleRepeatError:
+		return true, reason
+	case role == event.RoleWorkerHigh:
+		return true, "role " + role
+	}
+	if d, why := Difficulty(s, role); d >= strongFrom {
+		return true, fmt.Sprintf("difficulty %.2f (%s)", d, strings.Join(why, ", "))
+	}
+	return false, ""
 }
 
 // learned notes in the reason when the route came from the role's learned

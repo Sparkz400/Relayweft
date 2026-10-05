@@ -65,6 +65,8 @@ type Data struct {
 	UndoKey string
 	UndoCmd string
 	Notes   []string // what could not be found
+
+	bestOfWinner map[string]string // best-of step -> the kept candidate's route
 }
 
 // Step is one planned subtask and its result.
@@ -73,6 +75,7 @@ type Step struct {
 	DependsOn, Files             []string
 	Result                       string // ok, failed, not run
 	Final, Err                   string
+	BestOf                       string // how a best-of step's winner was picked
 }
 
 // Route is one routing decision and the run it led to.
@@ -327,6 +330,13 @@ func (d *Data) fromRecords(recs []sessionlog.Record) {
 			d.Limits = append(d.Limits, Limit{Agent: r.Agent, Provider: r.Provider, Model: r.Model, Text: r.Text})
 		case sessionlog.TypeMerge:
 			d.Merges = append(d.Merges, Merge{Step: r.Step, Text: r.Text, OK: r.OK == nil || *r.OK})
+		case sessionlog.TypeBestOf:
+			if r.OK != nil && *r.OK {
+				if d.bestOfWinner == nil {
+					d.bestOfWinner = map[string]string{}
+				}
+				d.bestOfWinner[r.Step] = routeLabel(r.Provider, r.Model, r.Effort)
+			}
 		case sessionlog.TypeTaskEnd:
 			ends++
 			d.Duration += time.Duration(r.DurationMS) * time.Millisecond
@@ -383,9 +393,14 @@ func (d *Data) fromPlan(st *orchestrator.TaskState) {
 				}
 			}
 		}
+		// A best-of step's candidates each logged decisions: the kept one's
+		// route is the step's.
+		if w, ok := d.bestOfWinner[s.ID]; ok {
+			step.Route = w
+		}
 		if res, ok := st.Results[s.ID]; ok {
 			step.Result = map[bool]string{true: "ok", false: "failed"}[res.OK]
-			step.Final, step.Err = res.Final, res.Err
+			step.Final, step.Err, step.BestOf = res.Final, res.Err, res.BestOf
 		}
 		d.Steps = append(d.Steps, step)
 	}

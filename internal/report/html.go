@@ -158,6 +158,7 @@ const pageHTML = `<!doctype html>
 <table><thead><tr><th>Step</th><th>Kind</th><th>Role</th><th>Route</th><th>Depends on</th><th>Result</th></tr></thead><tbody>
 {{range .Steps}}<tr>
   <td><b class="mono">{{.ID}}</b> {{.Title}}{{if .Files}}<div class="muted small mono">{{join .Files ", "}}</div>{{end}}
+  {{if .BestOf}}<div class="muted small">{{.BestOf}}</div>{{end}}
   {{if .Final}}<details><summary class="small">final answer</summary><pre>{{.Final}}</pre></details>{{end}}
   {{if .Err}}<details><summary class="small">error</summary><pre>{{.Err}}</pre></details>{{end}}</td>
   <td>{{.Kind}}</td><td>{{.Role}}</td><td class="mono small">{{.Route}}</td><td class="mono small">{{join .DependsOn ", "}}</td>

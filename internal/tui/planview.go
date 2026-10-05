@@ -93,7 +93,40 @@ func (p *planOverlay) keys() string {
 	if p.deps {
 		return "dependencies: ↑↓ step · space toggle · enter done · esc cancel"
 	}
-	return "↑↓ select · e edit · x deps · d delete · k kind · r role · J/K move · enter run · esc cancel task"
+	return "↑↓ select · e edit · x deps · d delete · k kind · r role · b best-of · J/K move · enter run · esc cancel task"
+}
+
+// cycleBestOf steps a subtask's best-of choice: the config's, on, off.
+func cycleBestOf(v string) string {
+	switch v {
+	case "":
+		return orchestrator.BestOfOn
+	case orchestrator.BestOfOn:
+		return orchestrator.BestOfOff
+	}
+	return ""
+}
+
+// bestOfNote is what the plan shows about a step's best of N ("" when it
+// runs one agent as configured).
+func (p *planOverlay) bestOfNote(st orchestrator.Subtask) string {
+	n := 0
+	if p.est != nil {
+		if se, ok := p.est.Step(st.ID); ok {
+			n = se.BestOf
+		}
+	}
+	switch {
+	case st.BestOf == orchestrator.BestOfOff:
+		return "one agent"
+	case n > 0 && st.BestOf == orchestrator.BestOfOn:
+		return fmt.Sprintf("best of %d", n)
+	case n > 0:
+		return fmt.Sprintf("best of %d (auto)", n)
+	case st.BestOf == orchestrator.BestOfOn:
+		return "best of N (needs two usable routes)"
+	}
+	return ""
 }
 
 func cycleKind(k router.Kind) router.Kind {
@@ -194,6 +227,14 @@ func (p *planOverlay) update(m *Model, k tea.KeyMsg) tea.Cmd {
 	case "r":
 		if len(sts) > 0 {
 			sts[p.sel].Role = cycleRole(sts[p.sel].Role)
+		}
+	case "b": // best of N for this step: the config's choice, on, off
+		if len(sts) > 0 {
+			if sts[p.sel].Kind.ReadOnly() {
+				p.err = "best of N is for steps that change files (k changes the kind)"
+				return nil
+			}
+			sts[p.sel].BestOf = cycleBestOf(sts[p.sel].BestOf)
 		}
 	case "J", "shift+down":
 		if p.sel < len(sts)-1 {
@@ -352,6 +393,9 @@ func (p *planOverlay) view(m *Model, W, H int) string {
 		}
 		if repo := planRepo(p.plan, st); repo != "" { // multi-repo task (o changes it)
 			title += th.fg(th.Router).Render(" · in " + repo)
+		}
+		if note := p.bestOfNote(st); note != "" && !st.Kind.ReadOnly() { // b changes it
+			title += th.fg(th.Router).Render(" · " + note)
 		}
 		row := cursor + th.fg(th.Text).Render(fit(st.ID, 12)) + " " + th.fg(th.Role(string(st.Kind))).Render(fit(string(st.Kind), 9)) + " " + rs.Render(fit(role, 12)) + " "
 		if p.est != nil {

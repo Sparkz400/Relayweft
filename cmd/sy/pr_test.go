@@ -463,3 +463,16 @@ func TestDefuseRefs(t *testing.T) {
 		t.Fatalf("commit message:\n%s", msg)
 	}
 }
+
+// A best-of step says in the PR which candidate was kept and why.
+func TestRenderPRBodyBestOf(t *testing.T) {
+	st := &orchestrator.TaskState{
+		ID: "s1-task-2", Task: "fix it", Status: "done", UndoKey: "s1-task-2",
+		Plan:    &orchestrator.Plan{Subtasks: []orchestrator.Subtask{{ID: "work", Title: "fix it", Kind: "edit"}}},
+		Results: map[string]orchestrator.StepState{"work": {OK: true, BestOf: "best of 2: kept work--claude (claude:opus): the only candidate whose checks pass | x"}},
+	}
+	body := renderPRBody(st, prBodyOptions{})
+	if !strings.Contains(body, "| ok<br>best of 2: kept work--claude (claude:opus): the only candidate whose checks pass \\| x |") {
+		t.Errorf("body lacks the best-of outcome:\n%s", body)
+	}
+}

@@ -26,6 +26,40 @@ func TestTiersOffByDefault(t *testing.T) {
 	}
 }
 
+// Hard (routing.best_of.when: hard) reuses the risk rules and the
+// difficulty score, with or without tiers.
+func TestHardSteps(t *testing.T) {
+	cfg := config.Default()
+	r := &Router{Cfg: func() *config.Config { return cfg }}
+	for _, tc := range []struct {
+		name string
+		step Step
+		hard bool
+	}{
+		{"routine edit", Step{Kind: KindEdit, Title: "Fix typo", Prompt: "fix the typo in the readme"}, false},
+		{"plain edit", Step{Kind: KindEdit, Title: "Add flag", Prompt: "add a --json flag to the list command"}, false},
+		{"sensitive path", Step{Kind: KindEdit, Title: "Change login", Prompt: "change it", Files: []string{"internal/auth/login.go"}}, true},
+		{"many files", Step{Kind: KindEdit, Title: "Rename", Prompt: "rename it", Files: []string{"a", "b", "c", "d", "e", "f"}}, true},
+		{"hard words and files", Step{Kind: KindEdit, Title: "Fix race", Prompt: "fix the race condition between the scheduler and the cache", Files: []string{"a.go", "b.go", "c.go", "d.go", "e.go"}}, true},
+		{"pinned worker_high", Step{Kind: KindEdit, Title: "Small", Prompt: "small change", UserRole: event.RoleWorkerHigh}, true},
+		{"read-only", Step{Kind: KindExplore, Title: "Find", Prompt: "find the race condition", Files: []string{"auth.go"}}, false},
+	} {
+		if got, why := r.Hard(tc.step); got != tc.hard || (got && why == "") {
+			t.Errorf("%s: Hard = %v (%q), want %v", tc.name, got, why, tc.hard)
+		}
+	}
+}
+
+// A pinned route (a best-of candidate's) is used as it is.
+func TestPinnedRoute(t *testing.T) {
+	r, _ := tierRouter(state{})
+	pin := event.Decision{Role: event.RoleWorker, Provider: event.Claude, Model: "opus", Effort: "high", Rule: RuleBestOf}
+	d := r.Route(Step{ID: "w", Title: "work", Kind: KindEdit, Prompt: "fix a typo", Pin: &pin})
+	if d.Provider != event.Claude || d.Model != "opus" || d.Rule != RuleBestOf || d.StepID != "w" || d.Tier != "" {
+		t.Errorf("pinned route changed: %+v", d)
+	}
+}
+
 func TestTiersByDifficulty(t *testing.T) {
 	r, cfg := tierRouter(state{})
 	long := strings.Repeat("the handler must keep every field in sync with the store ", 30)

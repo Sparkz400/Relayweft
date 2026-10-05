@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,7 +9,55 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/sparkz400/switchyard/internal/orchestrator"
 )
+
+// The selftest finds a child sy's task states where that sy keeps them:
+// profileConfigDir must be what os.UserConfigDir says under profileEnv.
+func TestProfileConfigDir(t *testing.T) {
+	profile := filepath.Join(t.TempDir(), "Test User (äö)")
+	for _, kv := range profileEnv(profile) {
+		k, v, _ := strings.Cut(kv, "=")
+		switch strings.ToUpper(k) {
+		case "APPDATA", "XDG_CONFIG_HOME", "HOME":
+			t.Setenv(k, v)
+		}
+	}
+	got, err := os.UserConfigDir()
+	if err != nil || got != profileConfigDir(profile) {
+		t.Errorf("UserConfigDir = %q (%v), profileConfigDir = %q", got, err, profileConfigDir(profile))
+	}
+}
+
+// The kill waits until the task state records the agent's session, in
+// the format sy writes it.
+func TestWaitSessionSaved(t *testing.T) {
+	cfg := t.TempDir()
+	tasks := filepath.Join(cfg, "switchyard", "tasks")
+	os.MkdirAll(tasks, 0o755)
+	write := func(session string) {
+		st := orchestrator.TaskState{ID: "t1", Status: "running", Running: map[string]orchestrator.StepRun{"c": {Provider: "claude", Session: session}}}
+		b, _ := json.Marshal(st)
+		os.WriteFile(filepath.Join(tasks, "t1.json"), b, 0o644)
+	}
+	write("")
+	if _, ok := waitSessionSaved(cfg, "selftest-1", 100*time.Millisecond); ok {
+		t.Fatal("found a session that is not saved")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(200 * time.Millisecond)
+		write("selftest-1")
+	}()
+	waited, ok := waitSessionSaved(cfg, "selftest-1", 10*time.Second)
+	<-done
+	if !ok || waited < 150*time.Millisecond {
+		t.Errorf("waited %s, ok %v", waited, ok)
+	}
+}
 
 // TestSelftest builds sy and runs `sy selftest` end to end: a real sy run
 // killed while an agent works, sy history, sy resume, sy undo and redo, in
