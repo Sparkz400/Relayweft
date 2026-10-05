@@ -57,7 +57,8 @@ type fakeRelease struct {
 	tag     string
 	binary  []byte
 	sum     string
-	status  int // non-zero: the API answers with this status
+	status  int  // non-zero: the API answers with this status
+	signed  bool // the release has checksums.txt.sigstore.json (v0.4.0 and later)
 	gotAuth string
 }
 
@@ -77,13 +78,18 @@ func (f *fakeRelease) start(t *testing.T) *httptest.Server {
 				w.WriteHeader(f.status)
 				return
 			}
+			assets := []ghAsset{
+				{Name: name, BrowserDownloadURL: srv.URL + "/dl/" + name},
+				{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/dl/checksums.txt"},
+			}
+			if f.signed {
+				// Never downloaded: rw update does not verify it.
+				assets = append(assets, ghAsset{Name: signatureAsset, BrowserDownloadURL: srv.URL + "/dl/" + signatureAsset})
+			}
 			json.NewEncoder(w).Encode(ghRelease{
 				TagName: f.tag,
 				HTMLURL: srv.URL + "/notes",
-				Assets: []ghAsset{
-					{Name: name, BrowserDownloadURL: srv.URL + "/dl/" + name},
-					{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/dl/checksums.txt"},
-				},
+				Assets:  assets,
 			})
 		case "/dl/" + name:
 			w.Write(f.binary)
@@ -193,6 +199,11 @@ func TestUpdateReplacesBinary(t *testing.T) {
 	if !strings.Contains(out.String(), "sha256 verified") {
 		t.Errorf("output:\n%s", out)
 	}
+	// A release from before signing (v0.3.0 and older) updates as before,
+	// without a provenance hint.
+	if strings.Contains(out.String(), "attestation") {
+		t.Errorf("unsigned release got a provenance hint:\n%s", out)
+	}
 	if _, err := os.Stat(exe + ".new"); !os.IsNotExist(err) {
 		t.Error(".new left behind")
 	}
@@ -204,6 +215,35 @@ func TestUpdateReplacesBinary(t *testing.T) {
 		if _, err := os.Stat(exe + ".old"); !os.IsNotExist(err) {
 			t.Error("cleanupOldBinary left .old")
 		}
+	}
+}
+
+func TestUpdateSignedReleaseHint(t *testing.T) {
+	f := &fakeRelease{tag: "v2.0.0", binary: []byte("signed release"), signed: true}
+	srv := f.start(t)
+	exe, out := withUpdater(t, srv, "1.0.0", "y\n")
+	if err := cmdUpdate(nil); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := readFile(t, exe); got != "signed release" {
+		t.Fatalf("binary = %q", got)
+	}
+	// The command checks the installed file, with the path as it is (no
+	// doubled backslashes on Windows).
+	want := `gh attestation verify "` + exe + `" --repo Sparkz400/Relayweft`
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+
+	// The signature changes nothing about the checksum check.
+	f2 := &fakeRelease{tag: "v2.0.0", binary: []byte("tampered"), sum: strings.Repeat("ab", 32), signed: true}
+	srv2 := f2.start(t)
+	exe2, out2 := withUpdater(t, srv2, "1.0.0", "y\n")
+	if err := cmdUpdate(nil); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("err = %v", err)
+	}
+	if readFile(t, exe2) != "old binary" || strings.Contains(out2.String(), "attestation") {
+		t.Errorf("a mismatch replaced the binary or printed the hint:\n%s", out2)
 	}
 }
 

@@ -8,7 +8,8 @@ Scoop manifest, winget manifest templates, the Homebrew formula
 
 Release assets are a contract. `rw update`, the manifests and the CI
 install scripts all look them up by these exact names. Add new assets,
-never rename existing ones, and list every asset in `checksums.txt`.
+never rename existing ones, and list every asset in `checksums.txt`
+(except its own signature bundle, which cannot be in the file it signs).
 
 | Asset | Platform |
 | --- | --- |
@@ -18,7 +19,13 @@ never rename existing ones, and list every asset in `checksums.txt`.
 | `relayweft-linux-amd64.deb`, `relayweft-linux-arm64.deb` | Debian, Ubuntu (from v0.3.0) |
 | `relayweft-linux-amd64.rpm`, `relayweft-linux-arm64.rpm` | Fedora, RHEL, openSUSE (from v0.3.0) |
 | `relayweft-linux-amd64.apk`, `relayweft-linux-arm64.apk` | Alpine (from v0.3.0) |
-| `checksums.txt` | SHA-256 of every asset (`sha256sum` format) |
+| `rw-<os>-<arch>.cdx.json` (one per binary, without `.exe`) | CycloneDX SBOM of that binary (from v0.4.0) |
+| `checksums.txt` | SHA-256 of every asset above (`sha256sum` format) |
+| `checksums.txt.sigstore.json` | Sigstore bundle: keyless cosign signature of `checksums.txt` (from v0.4.0) |
+
+From v0.4.0 every asset (and `checksums.txt`) also has a build provenance
+attestation, and each binary an SBOM attestation, stored by GitHub (see
+[Verifying a release](#verifying-a-release)).
 
 The names above start with v0.3.0. v0.1.0 and v0.2.0 were released as
 Switchyard, and their binaries were `sy-<os>-<arch>[.exe]`. This is the
@@ -47,14 +54,47 @@ git push --tags
 ```
 
 The `release` workflow runs `go test ./...`, builds all six binaries with
-`-X main.version=1.2.3` (no leading `v`), builds the Linux packages,
-writes `checksums.txt` and creates the GitHub release with generated
-notes. A tag with a suffix (`v1.3.0-rc1`) becomes a pre-release, which
-`rw update` and Scoop ignore.
+`-X main.version=1.2.3` (no leading `v`), builds the Linux packages and
+an SBOM per binary, writes `checksums.txt`, attests and signs (below)
+and creates the GitHub release with generated notes. A tag with a suffix
+(`v1.3.0-rc1`) becomes a pre-release, which `rw update` and Scoop ignore.
+
+Its jobs get only the permissions they need: `build` (tests, binaries,
+packages, SBOMs, checksums) can only read; `attest` and `attest-sbom` get
+the OIDC token (`id-token: write`) and `attestations: write`; `publish`
+gets `contents: write` and runs only after the signature and every
+attestation have been verified. No secret is used besides the workflow's
+own `GITHUB_TOKEN` and OIDC token. Every action is pinned to a commit,
+and every downloaded tool (nfpm, cyclonedx-gomod, cosign) to a version
+and checksum.
 
 You can also start it by hand: **Actions > release > Run workflow** and
-enter a version such as `1.2.3`; the tag `v1.2.3` is created on the
-selected branch.
+enter a version such as `1.2.3`; the tag `v1.2.3` is created on `main`.
+Only a `v*` tag or `main` can publish a release, since that is the
+identity users check.
+
+### Dry run
+
+**Run workflow** with **dry run** ticked (on any branch, any version
+such as `0.4.0-dryrun.1`) does everything except publishing: tests,
+build, packages, SBOMs, the real build provenance and SBOM attestations,
+the keyless signature of `checksums.txt`, and all the checks below. No
+tag and no release are created; the files are in the run's
+`release-dist` and `release-signature` artifacts for a week. The
+attestations and the signature are real (in this repository's
+attestations and Sigstore's public transparency log), but name the
+branch the run used, so the `cosign` check and `gh attestation verify
+--source-ref` below reject them.
+
+```sh
+gh workflow run release.yml --ref my-branch -f version=0.4.0-dryrun.1 -f dry_run=true
+```
+
+A pull request that changes `release.yml`, `linux-packages.sh`,
+`nfpm.yaml` or `sbom.sh` runs the build, the SBOMs and the asset checks,
+and signs and verifies `checksums.txt` with a throwaway cosign key and no
+transparency log. Pull requests get no OIDC token here, so they cannot
+attest or sign keyless; a dry run tests that.
 
 After the release is published, refresh the manifests:
 
@@ -83,14 +123,80 @@ formula. `formula_renames.json` in the repo root maps it to `relayweft`,
 so `brew update && brew upgrade` moves them to `relayweft` once the
 formula names a Relayweft release.
 
+## Verifying a release
+
+From v0.4.0 a release can be checked three ways. Each is independent of
+GitHub serving the right `checksums.txt`; v0.3.0 and older releases have
+only `checksums.txt`.
+
+**Build provenance** (any asset, with the [gh CLI](https://cli.github.com/)):
+
+```sh
+gh attestation verify rw-linux-amd64 --repo Sparkz400/Relayweft
+```
+
+This shows that the file was built by a workflow of this repository, and
+from which commit. To insist that it is this release (a tag-pushed
+release; a release started by hand on `main` has `refs/heads/main`):
+
+```sh
+gh attestation verify rw-linux-amd64 --repo Sparkz400/Relayweft \
+  --signer-workflow Sparkz400/Relayweft/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.4.0
+```
+
+It works for every asset, including the packages, the SBOMs and
+`checksums.txt`, and on an installed binary (the file `rw update` or a
+package manager put in place is the release asset).
+
+**SBOM** (a binary's dependencies, attested by the same workflow):
+
+```sh
+gh attestation verify rw-linux-amd64 --repo Sparkz400/Relayweft \
+  --predicate-type https://cyclonedx.org/bom
+```
+
+The SBOM itself is the release asset `rw-linux-amd64.cdx.json`.
+
+**Signed checksums** (with [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) v3):
+
+```sh
+cosign verify-blob checksums.txt \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/Sparkz400/Relayweft/\.github/workflows/release\.yml@refs/(tags/v[0-9][^/]*|heads/main)$'
+sha256sum --ignore-missing -c checksums.txt
+```
+
+For a tag-pushed release, the exact identity works too:
+`--certificate-identity https://github.com/Sparkz400/Relayweft/.github/workflows/release.yml@refs/tags/v0.4.0`.
+The release workflow checks the signature against the expression above
+before it publishes, so a release that does not pass it is never
+published.
+
+Scoop, winget, Homebrew and the AUR package do not change: their
+manifests carry the SHA-256 from `checksums.txt`, and the package
+manager checks it on install. To check provenance as well, run
+`gh attestation verify` on the installed binary (for example
+`$(brew --prefix)/bin/rw`, or `(Get-Command rw).Source` in PowerShell).
+
+`rw update` checks only the SHA-256 against `checksums.txt`; after
+installing a release that is signed, it prints the
+`gh attestation verify` command for the installed binary. It does not
+verify the signature itself: that needs Sigstore's trust root kept
+current over TUF and the sigstore-go library, which would roughly triple
+the modules linked into `rw`, while `gh` and `cosign` already do it.
+
 ## Linux packages
 
 `linux-packages.sh` builds the `.deb`, `.rpm` and `.apk` packages with
 [nfpm](https://nfpm.goreleaser.com/), pinned to one version and checked
 against its SHA-256 before it runs. Each package installs `/usr/bin/rw`,
-the README and the license, and depends on `git`. The packages are not
-signed, and there is no apt or dnf repository, so users download them from
-the release:
+the README and the license, and depends on `git`. The packages carry no
+package-manager signature (GPG or apk key), and there is no apt or dnf
+repository, so users download them from the release (from v0.4.0 they
+can check them with `gh attestation verify` or the signed
+`checksums.txt`, see [Verifying a release](#verifying-a-release)):
 
 ```sh
 sudo apt install ./relayweft-linux-amd64.deb
