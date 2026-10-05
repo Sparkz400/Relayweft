@@ -45,6 +45,11 @@ func doctorProviders(w io.Writer, cfg *config.Config, ok func(bool) string, warn
 			continue
 		}
 		bin, err := proc.Resolve(pc.Command)
+		if sb := cfg.ProviderSandbox(p); err != nil && sb.On() && len(sb.Roles) == 0 {
+			// Every role runs it from the sandbox image (doctorSandbox).
+			fmt.Fprintf(w, "%s %-11s runs in the %s sandbox only; not needed on this machine\n", info, p, sb.Mode)
+			continue
+		}
 		if err != nil {
 			problems++
 			fmt.Fprintf(w, "%s %-11s %q not found on PATH", ok(false), p, pc.Command)

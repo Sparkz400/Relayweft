@@ -96,22 +96,28 @@ func cmdSelftest(args []string) error {
 	keep := fs.Bool("keep", false, "keep the work folder (it is always kept when a check fails)")
 	oneDrive := fs.Bool("onedrive", false, "also run a task in a test repo inside your OneDrive folder (removed afterwards; OneDrive may keep a copy in its recycle bin)")
 	in := fs.String("in", "", "create the work folder in this folder (default: the temp folder)")
+	sandboxMode := fs.String("sandbox", "auto", "auto: also run tasks in a container sandbox when docker or podman is there; off; only: just that")
 	firstOnly := fs.Bool("first-run", false, "only the guided first run (sy setup) from fresh profiles, timed")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: sy selftest [--files 2000] [--onedrive] [--keep] [--in <folder>]
+		fmt.Fprint(os.Stderr, `Usage: sy selftest [--files 2000] [--onedrive] [--sandbox auto|off|only] [--keep] [--in <folder>]
 
 Runs the automated part of the Windows test pass in a throwaway folder,
 with a scripted agent instead of Codex or Claude (no quota is used):
 a user profile and project path with spaces and non-ASCII letters, a
 .cmd-shim CLI, many files and Git LFS, a task killed mid-run (as closing
 the window does), then sy resume, sy undo and sy undo --redo. It also
-reports OneDrive and Microsoft Defender. Your own repos and config are
-not touched. What is left to check by hand is printed at the end.
+reports OneDrive and Microsoft Defender. With docker or podman it also
+runs tasks with the agent in a container sandbox (a scripted agent in a
+small test image). Your own repos and config are not touched. What is
+left to check by hand is printed at the end.
 `)
 	}
 	fs.Parse(args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if *sandboxMode != "auto" && *sandboxMode != "off" && *sandboxMode != "only" {
+		return fmt.Errorf("--sandbox must be auto, off or only")
 	}
 	if *files < 1 {
 		*files = 1
@@ -147,6 +153,7 @@ not touched. What is left to check by hand is printed at the end.
 	case ready && *firstOnly:
 		t.section("First run: guided setup from a fresh profile")
 		t.firstRun()
+	case ready && *sandboxMode == "only":
 	case ready:
 		t.section("Environment")
 		t.environment()
@@ -158,6 +165,10 @@ not touched. What is left to check by hand is printed at the end.
 		}
 		t.section("First run: guided setup from a fresh profile")
 		t.firstRun()
+	}
+	if ready && !*firstOnly && *sandboxMode != "off" {
+		t.section("Agents in a container sandbox")
+		t.sandboxScenario()
 	}
 
 	if !*firstOnly {
@@ -649,7 +660,7 @@ func (t *selftest) filesAre(proj string, want map[string]string, name, okText st
 }
 
 func gitStatus(dir string) (string, error) {
-	cmd := exec.Command("git", "status", "--porcelain")
+	cmd := exec.Command("git", proc.GitArgs("status", "--porcelain", "--ignore-submodules=all")...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err

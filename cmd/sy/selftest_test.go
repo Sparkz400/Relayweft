@@ -80,7 +80,7 @@ func TestSelftest(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 	isolate(t)
-	args := []string{"selftest", "--files", "50", "--in", dir}
+	args := []string{"selftest", "--files", "50", "--in", dir, "--sandbox", "off"} // TestSandboxSelftest
 	oneDrive := filepath.Join(dir, "OneDrive - Test")
 	if runtime.GOOS == "windows" {
 		os.MkdirAll(oneDrive, 0o755)

@@ -14,6 +14,7 @@ import (
 	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/router"
 	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/switchyard/internal/sandbox"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
 )
 
@@ -57,6 +58,41 @@ func (s *spy) note(sp runner.Spec) {
 		return
 	}
 	s.specs[sp.AgentID] = sp
+}
+
+// With writing agents in a sandbox, each candidate's checks run in it too
+// (they run the candidate's code): without docker here, no candidate's
+// check passes, although on this machine claude's would.
+func TestBestOfCandidateChecksInSandbox(t *testing.T) {
+	old := sandbox.LookPath
+	sandbox.LookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	defer func() { sandbox.LookPath = old }()
+	dir := gitRepo(t)
+	set := both(func(s runner.Spec) runner.Result {
+		if r, ok := twoEdits(s); ok && !strings.Contains(s.Prompt, runner.MarkerStep) {
+			return r
+		}
+		os.WriteFile(filepath.Join(s.Dir, "greet.txt"), []byte("hello from "+s.Provider+"\n"), 0o644)
+		if s.Provider == event.Claude {
+			os.WriteFile(filepath.Join(s.Dir, "ok.txt"), []byte("ok\n"), 0o644)
+		}
+		return runner.Result{Final: "done", Files: []string{"greet.txt"}}
+	})
+	o, _ := newOrc(t, dir, set, func(c *config.Config) {
+		bestOfOn(c)
+		c.Verify.Commands = []string{fileCheck("ok.txt")}
+		c.Sandbox = config.SandboxCfg{Mode: config.SandboxDocker}
+	})
+	o.Run(context.Background(), bestOfTask)
+	recs := bestOfRecs(t, o)
+	if len(recs) != 2 {
+		t.Fatalf("best_of records = %d, want 2", len(recs))
+	}
+	for _, r := range recs {
+		if r.Passed != nil && *r.Passed {
+			t.Errorf("a candidate's check ran outside the sandbox: %+v", r)
+		}
+	}
 }
 
 // Checks decide: the candidate whose checks pass wins and lands; the other

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
 )
 
@@ -108,7 +108,9 @@ func (o *Orchestrator) verifyAt(ctx context.Context, t *task, vc config.VerifyCf
 		return o.runChecks(ctx, t, vc, site, fullRuns(cmds, why))
 	}
 	var plans []affected.Plan
-	in := affected.Input{Root: site.root, Dir: site.dir, Files: files}
+	// The selection's tools read the agents' configs: in the sandbox when
+	// agents write in one.
+	in := affected.Input{Root: site.root, Dir: site.dir, Files: files, Exec: selectExec(o.taskCfg(t))}
 	for _, c := range cmds {
 		plans = append(plans, affected.Select(ctx, c, vc.AffectedCommands[c], in))
 	}
@@ -215,10 +217,21 @@ func (o *Orchestrator) runChecks(ctx context.Context, t *task, vc config.VerifyC
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, timeout)
-		cmd := proc.Shell(cctx, r.cmd)
-		cmd.Dir = site.dir
 		start := time.Now()
-		out, err := cmd.CombinedOutput()
+		var out []byte
+		// Full and narrowed runs alike: in the sandbox when agents write in one.
+		cmd, done, err := checkCmd(cctx, o.taskCfg(t), site.dir, r.cmd)
+		if err == nil {
+			out, err = cmd.CombinedOutput()
+			if why := done(err, out); why != "" {
+				out = append(out, "\n"+why...)
+				if err == nil {
+					err = errors.New(why) // it changed a submodule's .git
+				}
+			}
+		} else {
+			out = []byte(err.Error())
+		}
 		took := time.Since(start).Round(100 * time.Millisecond)
 		timedOut := cctx.Err() == context.DeadlineExceeded
 		cancel()

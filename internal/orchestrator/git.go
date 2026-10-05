@@ -83,6 +83,8 @@ func (g git) exec(literal bool, env []string, stdin []byte, args []string) (stri
 	// Parallel checkout for worktree creation, slot resets and restores into
 	// the main tree; git ignores it elsewhere.
 	pre := []string{"-c", "checkout.workers=" + strconv.Itoa(checkoutWorkers())}
+	// Agents write the folders sy runs git in (proc.GitGuard).
+	pre = append(append([]string(nil), proc.GitGuard...), pre...)
 	if literal {
 		// Paths are literal: "[id].tsx" must not also match "i.tsx".
 		pre = append([]string{"--literal-pathspecs"}, pre...)

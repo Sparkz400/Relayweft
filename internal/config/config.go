@@ -141,6 +141,9 @@ type ProviderCfg struct {
 	Standby []string `yaml:"standby,omitempty"`
 	// Generic describes the CLI for kind: generic (generic.go).
 	Generic *GenericCfg `yaml:"generic,omitempty"`
+	// Sandbox is added to the top-level sandbox section for this
+	// provider's agents (sandbox.go).
+	Sandbox *SandboxCfg `yaml:"sandbox,omitempty"`
 	// InstallHint is what `sy doctor` suggests when the command is missing.
 	InstallHint         string      `yaml:"install_hint,omitempty"`
 	Command             string      `yaml:"command"`
@@ -401,6 +404,7 @@ type Config struct {
 	Hooks         HooksCfg               `yaml:"hooks"`
 	MCP           MCPCfg                 `yaml:"mcp,omitempty"`
 	Workspace     WorkspaceCfg           `yaml:"workspace,omitempty"`
+	Sandbox       SandboxCfg             `yaml:"sandbox,omitempty"`
 	Budget        BudgetCfg              `yaml:"budget"`
 	Context       ContextCfg             `yaml:"context"`
 	Watch         WatchCfg               `yaml:"watch"`
@@ -611,6 +615,9 @@ func (c *Config) fillProviderDefaults(def *Config) {
 		if v.Generic == nil {
 			v.Generic = d.Generic
 		}
+		if v.Sandbox == nil {
+			v.Sandbox = d.Sandbox
+		}
 		c.Providers[k] = v
 	}
 }
@@ -636,6 +643,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, "orchestrator.max_threads must be >= 1")
 	}
 	errs = append(errs, c.MCP.validate()...)
+	errs = append(errs, c.validateSandbox()...)
 	if b := c.Budget; b.TaskTokens < 0 || b.TaskUSD < 0 || b.DayTokens < 0 || b.DayUSD < 0 {
 		errs = append(errs, "budget limits must be >= 0 (0 = off)")
 	}

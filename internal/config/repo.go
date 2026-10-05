@@ -31,7 +31,8 @@ import (
 // arguments, the log directory, MCP servers) apply only after you trust that exact
 // content with `sy trust`, and so do budget.team.dir (where sy writes its
 // usage file) and notify.webhooks (where sy sends what your tasks did).
-// Routes, preferences and toggles always apply.
+// Routes, preferences and toggles always apply. The sandbox section may
+// make the sandbox stricter without trust, never weaker (sandbox.go).
 
 // RepoFileName is the per-repo settings file.
 const RepoFileName = ".switchyard.yaml"
@@ -182,6 +183,12 @@ func restoreCommandSettings(c, before *Config) []string {
 		changed = append(changed, webhooksKey)
 	}
 	c.Notify.Webhooks = before.Notify.Webhooks
+	// The sandbox may get stricter, never weaker (sandbox.go).
+	sb, loosened := untrustedSandbox(before.Sandbox, c.Sandbox)
+	if loosened {
+		changed = append(changed, sandboxKey)
+	}
+	c.Sandbox = sb
 	c.Verify, c.Hooks, c.Providers, c.LogDir, c.MCP, c.Workspace = before.Verify, before.Hooks, before.Providers, before.LogDir, before.MCP, before.Workspace
 	c.Budget.Team.Dir = before.Budget.Team.Dir
 	dropUnknownProviders(c, before)
@@ -346,6 +353,9 @@ func trustSubset(data []byte) (map[string]any, error) {
 			out[webhooksKey] = w
 		}
 	}
+	if sb, ok := raw[sandboxKey]; ok {
+		out[sandboxKey] = sb
+	}
 	if r, ok := raw["routing"].(map[string]any); ok {
 		if b, ok := r["best_of"]; ok {
 			out[bestOfKey] = b // raising it needs trust (guardLocal)
@@ -475,6 +485,11 @@ func CommandSettings(path string) ([]string, error) {
 			}
 			out = append(out, fmt.Sprintf("%s: %s (sy sends task results there)", webhooksKey, strings.Join(where, ", ")))
 		}
+	}
+	if sb, ok := raw[sandboxKey]; ok {
+		// Untrusted, it may only make the sandbox stricter.
+		b, _ := yaml.Marshal(map[string]any{sandboxKey: sb})
+		out = append(out, strings.TrimRight(string(b), "\n")+" (trusted, it may turn the sandbox off or pass more into it)")
 	}
 	sort.Strings(out)
 	return out, nil

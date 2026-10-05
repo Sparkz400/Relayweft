@@ -206,7 +206,8 @@ func (t *task) changedFiles() []string {
 	if !t.useGit || t.start == "" {
 		return nil
 	}
-	s, err := git{t.root}.out("diff", "--name-only", t.start)
+	// The work tree is the agents': never look into its submodules.
+	s, err := git{t.root}.out("diff", "--name-only", "--ignore-submodules=all", t.start)
 	if err != nil || s == "" {
 		return nil
 	}

@@ -708,6 +708,7 @@ func runDoctor(w io.Writer, cfgPath string) error {
 	}
 	wd, _ := os.Getwd()
 	problems += doctorMCP(w, cfg, wd, ok, warn)
+	problems += doctorSandbox(w, cfg, wd, ok, warn)
 	problems += doctorMachine(w, cfg, ok, warn)
 	if problems > 0 {
 		return fmt.Errorf("%d problem(s) found", problems)

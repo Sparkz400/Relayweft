@@ -48,7 +48,7 @@ var (
 	prToken           = forge.Token
 	// prPush pushes the branch; it is interactive (credential prompts).
 	prPush = func(root, remote, branch string) error {
-		cmd := exec.Command("git", "push", "-u", remote, branch)
+		cmd := exec.Command("git", proc.GitArgs("push", "-u", remote, branch)...)
 		cmd.Dir = root
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
 		return cmd.Run()
@@ -56,7 +56,7 @@ var (
 	// prRemoteHas reports whether origin has the branch (an error counts
 	// as no: the push then says what is wrong).
 	prRemoteHas = func(root, branch string) bool {
-		cmd := exec.Command("git", "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+branch)
+		cmd := exec.Command("git", proc.GitArgs("ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+branch)...)
 		cmd.Dir = root
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		return cmd.Run() == nil
@@ -575,7 +575,9 @@ func writePRBody(body string) (string, error) {
 
 // prGit runs git in dir and returns its stdout unmodified.
 func prGit(dir string, env []string, stdin []byte, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	// Agents may have written dir: never let git act on a submodule's
+	// config there (proc.GitGuard).
+	cmd := exec.Command("git", append(append([]string(nil), proc.GitGuard...), args...)...)
 	cmd.Dir = dir
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)

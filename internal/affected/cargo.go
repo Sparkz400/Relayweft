@@ -71,7 +71,13 @@ func selectCargo(ctx context.Context, cmd string, f []string, c *change) Plan {
 			return full(cmd, file+" changed")
 		}
 	}
-	out, err := cargoMetadata(ctx, c.dir)
+	var out []byte
+	var err error
+	if c.exec != nil {
+		out, err = c.exec(ctx, c.dir, []string{"cargo", "metadata", "--format-version", "1", "--no-deps", "--offline"})
+	} else {
+		out, err = cargoMetadata(ctx, c.dir)
+	}
 	if err != nil {
 		return full(cmd, "cargo metadata failed: "+clipStr(err.Error(), 200))
 	}

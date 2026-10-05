@@ -97,7 +97,8 @@ func joins(fields ...string) string {
 // loadGo lists the packages of ./... in dir, keyed by import path. The
 // build tags of the verify command are used, so the graph is the one the
 // command sees.
-func loadGo(ctx context.Context, dir string, f []string) (map[string]*goPkg, error) {
+func loadGo(ctx context.Context, c *change, f []string) (map[string]*goPkg, error) {
+	dir := c.dir
 	args := []string{"-e"}
 	for i := 2; i < len(f); i++ {
 		switch a := f[i]; {
@@ -107,7 +108,14 @@ func loadGo(ctx context.Context, dir string, f []string) (map[string]*goPkg, err
 			args = append(args, "-tags="+f[i+1])
 		}
 	}
-	out, err := goList(ctx, dir, append(args, "-f", goListFormat, "./...")...)
+	args = append(args, "-f", goListFormat, "./...")
+	var out []byte
+	var err error
+	if c.exec != nil {
+		out, err = c.exec(ctx, dir, append([]string{"go", "list"}, args...))
+	} else {
+		out, err = goList(ctx, dir, args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +180,7 @@ func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 			return nil, file + " is vendored code"
 		}
 	}
-	pkgs, err := loadGo(ctx, c.dir, f)
+	pkgs, err := loadGo(ctx, c, f)
 	if err != nil {
 		return nil, "go list failed: " + clipStr(err.Error(), 200)
 	}

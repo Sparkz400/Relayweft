@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/switchyard/internal/proc"
 )
 
 // Diff is the task's change: its before -> after snapshots.
@@ -77,7 +78,7 @@ func loadDiff(dir, key string, o Options) (*Diff, error) {
 	if maxBytes <= 0 {
 		maxBytes = defMaxDiffBytes
 	}
-	base := []string{"-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames"}
+	base := append(append([]string(nil), proc.GitGuard...), "-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=all")
 	gitOut := func(limit int64, args ...string) ([]byte, bool, error) {
 		cmd := exec.Command("git", append(append([]string(nil), base...), args...)...)
 		cmd.Dir = dir

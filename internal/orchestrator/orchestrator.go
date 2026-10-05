@@ -1891,6 +1891,9 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	if !spec.ReadOnly {
 		spec.AllowedCommands = verifyAllowed(t.repoAt(dir).cfg.Verify, dir) // that repo's checks
 	}
+	// Project settings an agent of this task changed since its start are
+	// not used by a sandboxed CLI (sandbox.Spec.Base).
+	spec.Base = t.repoAt(dir).start
 	if resume != nil {
 		spec.Resume = resume.Session
 	}

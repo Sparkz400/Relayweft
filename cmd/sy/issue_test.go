@@ -357,6 +357,25 @@ func TestCleanTreeIgnoresHidingConfig(t *testing.T) {
 	}
 }
 
+// sy's own git in the project folder (where agents wrote) overrides
+// core.fsmonitor and submodule recursion (proc.GitGuard), so a config
+// there cannot decide what git runs; the value git sees is the guard's.
+func TestPrGitAndRunGitGuard(t *testing.T) {
+	dir := prRepo(t)
+	run(t, dir, "config", "core.fsmonitor", "sy-test-not-a-command")
+	run(t, dir, "config", "submodule.recurse", "true")
+	for name, get := range map[string]func(string) (string, error){
+		"prGit":  func(k string) (string, error) { return prGit(dir, nil, nil, "config", k) },
+		"runGit": func(k string) (string, error) { return runGit(dir, "config", k) },
+	} {
+		for _, k := range []string{"core.fsmonitor", "submodule.recurse"} {
+			if v, _ := get(k); strings.TrimSpace(v) != "false" {
+				t.Errorf("%s: %s = %q, want false", name, k, v)
+			}
+		}
+	}
+}
+
 // A scheduled batch reads the issues and checks the tree when it starts:
 // prepare (before the wait) reads nothing and does not look at the tree.
 func TestIssuePrepareReadsNothing(t *testing.T) {

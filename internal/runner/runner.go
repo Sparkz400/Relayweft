@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/sparkz400/switchyard/internal/event"
 	"github.com/sparkz400/switchyard/internal/limits"
 	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/switchyard/internal/sandbox"
 )
 
 // Spec describes one agent run.
@@ -50,6 +52,13 @@ type Spec struct {
 	// before the run ends: a step whose sy dies mid-run can resume that
 	// session. It runs on the runner's goroutine.
 	OnSession func(id string)
+	// Sandboxed is set by Exec when the CLI runs in a container
+	// (Exec.Sandbox): the container is the sandbox, so Codex's own is off.
+	Sandboxed bool
+	// Base is the commit the task started from ("" = HEAD). In a sandbox,
+	// project settings files an agent changed since are not used
+	// (sandbox.Spec.Base).
+	Base string
 }
 
 // Result is what an agent run produced.
@@ -97,8 +106,11 @@ type Exec struct {
 	MCP config.MCPCfg
 	// LookupEnv reads ${VAR}s in MCP values (nil = os.LookupEnv).
 	LookupEnv func(string) (string, bool)
-	args      func(s Spec) []string
-	parser    func() lineParser
+	// Sandbox runs the CLI in a container for the roles it covers
+	// (config.Config.ProviderSandbox; zero = never).
+	Sandbox config.SandboxCfg
+	args    func(s Spec) []string
+	parser  func() lineParser
 	// precheck refuses a run the CLI could not do properly (nil = none).
 	precheck func(s Spec) error
 	// limitExitCodes are exit codes that mean "at the usage limit".
@@ -141,9 +153,15 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		return Result{Err: err, Duration: time.Since(start)}
 	}
 
-	path, err := proc.Resolve(x.Cfg.Command)
-	if err != nil {
-		return fail(fmt.Errorf("%s CLI %q not found on PATH: %w", x.Provider, x.Cfg.Command, err))
+	// In a sandbox the CLI runs from the image, not from this machine.
+	sb := x.Sandbox
+	boxed := sb.Covers(s.Role)
+	var path string
+	if !boxed {
+		var err error
+		if path, err = proc.Resolve(x.Cfg.Command); err != nil {
+			return fail(fmt.Errorf("%s CLI %q not found on PATH: %w", x.Provider, x.Cfg.Command, err))
+		}
 	}
 	if s.Resume != "" && !ValidSessionID(s.Resume) {
 		// It came from a saved file: never let it become an option.
@@ -172,23 +190,69 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		defer cleanup()
 		s.MCP = m
 	}
+	var mounts []sandbox.Mount
+	if boxed {
+		s.Sandboxed = true
+		if s.MCP != nil {
+			// An MCP server runs in the container with its values: a forge
+			// or CI token it names would go in with it.
+			for _, n := range s.MCP.Names {
+				if v := x.MCP.Servers[n].SecretVars(); len(v) > 0 {
+					return fail(fmt.Errorf("%s: MCP server %s uses ${%s}, sy's forge or CI token, which never goes into the sandbox: leave the server out for this provider (mcp.servers.%s.providers) or turn the sandbox off for it",
+						x.Provider, n, strings.Join(v, "}, ${"), n))
+				}
+			}
+		}
+		if s.MCP != nil && s.MCP.ConfigFile != "" {
+			// Claude's MCP config file, at its place in the container.
+			m := *s.MCP
+			mounts = append(mounts, sandbox.Mount{Source: filepath.Dir(m.ConfigFile), Target: sandbox.MCPDir})
+			m.ConfigFile = sandbox.MCPDir + "/" + filepath.Base(m.ConfigFile)
+			s.MCP = &m
+		}
+	}
 	argv := x.args(s)
-	cmd := exec.CommandContext(ctx, path, argv...)
-	proc.Prepare(cmd)
-	cmd.Dir = s.Dir
-	// Without sy's forge and CI tokens (proc.WithoutSecrets); what the
-	// MCP servers and the provider name explicitly is added back below.
-	cmd.Env = proc.WithoutSecrets(os.Environ())
+	var childEnv []string
+	if boxed {
+		// In a sandbox only what the config names goes in: the sandbox's
+		// env names, then the MCP secrets and the provider's env as below.
+		childEnv = sandbox.PassEnv(sb.Env, x.LookupEnv)
+	}
 	if s.MCP != nil {
 		// MCP secrets from ${VAR}: in the environment, not on the command
 		// line (codexMCPArgs names them).
-		cmd.Env = append(cmd.Env, s.MCP.ChildEnv...)
+		childEnv = append(childEnv, s.MCP.ChildEnv...)
 	}
 	// The provider's env (an API endpoint and key) comes last and wins.
-	cmd.Env = append(cmd.Env, provEnv...)
-	// The prompt goes in on stdin: multi-line prompts as arguments get
-	// mangled by cmd.exe when the CLI is an npm .cmd shim on Windows.
-	cmd.Stdin = strings.NewReader(s.Prompt)
+	childEnv = append(childEnv, provEnv...)
+	var cmd *exec.Cmd
+	var box *sandbox.Box
+	if boxed {
+		cli := sandbox.CLIName(sb, x.Cfg.Command)
+		var err error
+		cmd, box, err = sandbox.Command(ctx, sandbox.Spec{Cfg: sb, Dir: s.Dir, ReadOnly: s.ReadOnly, Argv: append([]string{cli}, argv...),
+			Stdin: s.Prompt, Env: childEnv, Mounts: mounts, Label: s.AgentID, HomeName: x.Provider, Base: s.Base})
+		if err != nil {
+			return fail(fmt.Errorf("%s: %w", x.Provider, err))
+		}
+		path = box.Bin + " (" + box.Name + " " + box.Image + ") " + cli
+	} else {
+		cmd = exec.CommandContext(ctx, path, argv...)
+		proc.Prepare(cmd)
+		cmd.Dir = s.Dir
+		// Without sy's forge and CI tokens (proc.WithoutSecrets); what the
+		// MCP servers and the provider name explicitly is added back.
+		cmd.Env = append(proc.WithoutSecrets(os.Environ()), childEnv...)
+		// The prompt goes in on stdin: multi-line prompts as arguments get
+		// mangled by cmd.exe when the CLI is an npm .cmd shim on Windows.
+		cmd.Stdin = strings.NewReader(s.Prompt)
+	}
+	boxOK := false
+	defer func() {
+		if box != nil {
+			box.Close(boxOK)
+		}
+	}()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fail(err)
@@ -211,11 +275,21 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	}
 	proc.Started(cmd)
 	emit(stamp(event.Event{Kind: event.Started, Text: "started " + s.Model}))
+	if box != nil {
+		emit(stamp(event.Event{Kind: event.Thinking, Text: fmt.Sprintf("in a %s sandbox (image %s)", box.Runtime, box.Image)}))
+		if len(box.Pinned) > 0 {
+			emit(stamp(event.Event{Kind: event.Thinking, Text: fmt.Sprintf("warning: an agent of this task changed %s; this agent's CLI sees the version from the start of the task (the change itself stays for review)",
+				strings.Join(box.Pinned, ", "))}))
+		}
+	}
 
 	p := x.parser()
 	var res Result
 	handle := func(evs []event.Event) {
 		for _, e := range evs {
+			if e.Kind == event.FileEdit {
+				e.Text = box.HostPath(e.Text) // /work/... in a sandbox
+			}
 			if e.Kind == event.Error && x.Detector.Match(e.Text) {
 				e.Kind = event.LimitHit
 			}
@@ -259,6 +333,9 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		sr.Stderr(stderr.String())
 	}
 	p.Finish(&res)
+	for i, f := range res.Files {
+		res.Files[i] = box.HostPath(f)
+	}
 	res.Duration = time.Since(start)
 	if res.LimitHit && res.Err == nil && waitErr == nil && strings.TrimSpace(res.Final) != "" {
 		// A limit message mid-stream that the CLI recovered from (it still
@@ -266,6 +343,14 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		res.LimitHit, res.ResetAt = false, time.Time{}
 	}
 
+	var boxErr error
+	if waitErr != nil {
+		boxErr = box.Explain(exitCode(cmd), stderr.String())
+	}
+	boxOK = waitErr == nil && ctx.Err() == nil
+	// Whatever the exit: a submodule .git the agent wrote is undone, and
+	// the run fails (sandbox.Box.Check).
+	escape := box.Check()
 	switch {
 	case ctx.Err() != nil:
 		res.Killed = true
@@ -276,6 +361,10 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		} else {
 			res.Err = errors.New("killed")
 		}
+	case boxErr != nil:
+		// The container did not start (no image, runtime not running):
+		// say what to do instead of the runtime's own message.
+		res.Err, res.LimitHit, res.ResetAt = boxErr, false, time.Time{}
 	case waitErr != nil && res.Err == nil:
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
@@ -283,7 +372,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		}
 		res.Err = fmt.Errorf("%s exited: %s", x.Provider, lastLines(msg, 6))
 	}
-	if code := exitCode(cmd); waitErr != nil && !res.LimitHit && ctx.Err() == nil && containsInt(x.limitExitCodes, code) {
+	if code := exitCode(cmd); waitErr != nil && boxErr == nil && !res.LimitHit && ctx.Err() == nil && containsInt(x.limitExitCodes, code) {
 		res.LimitHit = true
 		if res.Err == nil {
 			res.Err = fmt.Errorf("%s exited with code %d (a usage limit): %s", x.Provider, code, lastLines(stderr.String(), 3))
@@ -293,7 +382,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		}
 		emit(stamp(event.Event{Kind: event.LimitHit, Text: res.Err.Error()}))
 	}
-	if res.Err != nil && !res.LimitHit {
+	if res.Err != nil && !res.LimitHit && boxErr == nil {
 		if x.Detector.Match(res.Err.Error()) || (waitErr != nil && x.Detector.Match(stderr.String())) {
 			res.LimitHit = true
 			if t, ok := limits.ParseReset(res.Err.Error()+"\n"+stderr.String(), time.Now()); ok {
@@ -301,6 +390,9 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 			}
 			emit(stamp(event.Event{Kind: event.LimitHit, Text: res.Err.Error()}))
 		}
+	}
+	if escape != nil {
+		res.Err, res.LimitHit, res.Killed, res.ResetAt = escape, false, false, time.Time{}
 	}
 	code := exitCode(cmd)
 	diag.Logf("exit agent=%s pid=%d code=%d after %s ok=%v killed=%v limit=%v tokens=%d err=%v stderr=%q",
@@ -448,6 +540,7 @@ func New(cfg *config.Config) Set {
 			continue // rejected by config validation
 		}
 		x.Provider, x.Kind, x.MCP = name, pc.KindOf(name), cfg.MCP
+		x.Sandbox = cfg.ProviderSandbox(name)
 		set[name] = x
 	}
 	return set

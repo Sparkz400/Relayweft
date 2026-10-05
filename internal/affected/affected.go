@@ -27,6 +27,11 @@ type Input struct {
 	Root  string   // the git repo's top folder
 	Dir   string   // the folder the checks run in (Root or below)
 	Files []string // changed files, slash paths relative to Root (deleted ones too)
+	// Exec runs a tool sy uses to select tests (go list, cargo metadata)
+	// in dir and returns its standard output. nil runs it here. With the
+	// sandbox on it runs in the container: the folder holds the agents'
+	// code and configs.
+	Exec func(ctx context.Context, dir string, argv []string) ([]byte, error)
 }
 
 // Plan says how to run one verify command.
@@ -149,6 +154,7 @@ func Allowed(dir, cmd, template string) (prefixes []string, hint string) {
 // change is Input made relative to the folder the checks run in.
 type change struct {
 	root, dir string
+	exec      func(ctx context.Context, dir string, argv []string) ([]byte, error) // Input.Exec
 	files     []string // changed files under dir, slash paths relative to dir
 	outside   []string // changed files outside dir, relative to root
 }
@@ -158,7 +164,7 @@ func prepare(in Input) (*change, string) {
 	if !ok {
 		return nil, "the check folder is not inside the repo"
 	}
-	c := &change{root: in.Root, dir: in.Dir}
+	c := &change{root: in.Root, dir: in.Dir, exec: in.Exec}
 	for _, f := range in.Files {
 		if strings.Contains(f, `\`) {
 			// git writes slashes; a backslash is part of a file name.

@@ -406,6 +406,17 @@ Switchyard should never be what tips a PC over.
   - `sy doctor` lists every pool with its size.
 - **Switch before the limit.** When a provider reports it has used `switch_at_utilization` (90%) of its limit (Claude's 5-hour or 7-day window), work moves to the other provider *before* the limit hits. The router panel shows these decisions as `quota-preempt`.
 
+### A container sandbox for the agents
+
+By default agents run on your machine with your permissions. For unattended runs (the queue, scheduled runs, `--issues`, CI, team mode) you can run them in a container instead, with only the step's folder writable:
+
+```yaml
+sandbox:
+  mode: docker        # or podman; off by default
+```
+
+Build the image once with `docker build -t switchyard-sandbox packaging/sandbox` (git, Node.js, Claude Code and Codex). sy's verify commands, `after_merge`/`after_task` hooks and bench checks run in a container too, since they run the agents' code. Only the API keys you name go in (each provider's `sandbox.env`; `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY` by default), never your home folder or sy's forge token. If Docker or the image is missing, the step fails with what to do; it never runs on your machine instead. `sy doctor` checks the setup. Details, the mount layout and the limits: [docs/sandbox.md](docs/sandbox.md).
+
 ### When something goes wrong
 
 - **Debug log.** Every agent spawn and exit, git command, routing decision and error is written to `sy-debug.log`, which rotates at 10 MB. It lives in `%AppData%\switchyard\logs` on Windows and `~/.config/switchyard/logs` on Linux.

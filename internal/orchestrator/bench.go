@@ -51,7 +51,7 @@ func (b *BenchWorkspace) Head() (string, error) { return git{b.root}.out("rev-pa
 
 // Dirty reports whether the user's tree has changes that HEAD does not.
 func (b *BenchWorkspace) Dirty() bool {
-	s, _ := git{b.root}.out("status", "--porcelain")
+	s, _ := git{b.root}.out("status", "--porcelain", "--ignore-submodules=all")
 	return s != ""
 }
 
@@ -215,9 +215,9 @@ func linkFiles(from, to string) error {
 // followed by a path) from repository src into dst as one pack. dst gets
 // copies and no link to src (no alternates, no remote).
 func copyObjects(src, dst string, list []byte) error {
-	pack := exec.Command("git", "pack-objects", "--stdout", "-q")
+	pack := exec.Command("git", proc.GitArgs("pack-objects", "--stdout", "-q")...)
 	pack.Dir, pack.Stdin = src, bytes.NewReader(list)
-	index := exec.Command("git", "index-pack", "--stdin")
+	index := exec.Command("git", proc.GitArgs("index-pack", "--stdin")...)
 	index.Dir = dst
 	pipe, err := pack.StdoutPipe()
 	if err != nil {
