@@ -5,11 +5,18 @@ name: packaging
 # branch in Ubuntu, Fedora and Alpine containers, and the AUR PKGBUILD in
 # an Arch Linux container. It also checks that the committed manifests are
 # what packaging/render-manifests.sh makes for their release.
+#
+# The jobs that use the committed manifests (manifests, homebrew, aur)
+# first run packaging/manifest-release.sh. While the manifests' release
+# predates the asset names they use (v0.2.0 shipped sy-*, the manifests
+# install rw-*) and no newer release has those names, they skip with a
+# notice. Once a release has them, stale or drifted manifests fail.
 on:
   pull_request:
     paths:
       - "packaging/**"
       - "Formula/**"
+      - "formula_renames.json"
       - ".github/workflows/release.yml"
       - ".github/workflows/packaging.yml"
       - "cmd/rw/update*.go"
@@ -26,15 +33,19 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: which release
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh packaging/manifest-release.sh
       - name: render for the formula's release and compare
+        if: steps.rel.outputs.ready == 'true'
         env:
           # For `gh release view` (the release date in the winget
           # manifests); reading is all it needs.
           GH_TOKEN: ${{ github.token }}
+          version: ${{ steps.rel.outputs.version }}
         run: |
-          version="$(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' Formula/relayweft.rb | head -n 1)"
-          echo "formula version: $version"
-          [ -n "$version" ]
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/checksums.txt" \
             "https://github.com/sparkz400/relayweft/releases/download/v$version/checksums.txt"
           sh packaging/render-manifests.sh "$version" "$RUNNER_TEMP/checksums.txt" "$RUNNER_TEMP/winget"
@@ -60,7 +71,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: which release
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh packaging/manifest-release.sh
       - name: brew install from this branch
+        if: steps.rel.outputs.ready == 'true'
         run: |
           if ! command -v brew >/dev/null; then
             # Linux runners have Homebrew, but not on PATH.
@@ -80,9 +97,11 @@ jobs:
           [ "$("$rw" version)" = "$want" ]
           echo "rw=$rw" >> "$GITHUB_ENV"
       - uses: actions/setup-go@v7
+        if: steps.rel.outputs.ready == 'true'
         with:
           go-version-file: go.mod
       - name: rw update leaves Homebrew's rw alone
+        if: steps.rel.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         # This branch's rw, as an old version, in place of the formula's.
@@ -143,5 +162,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: which release
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh packaging/manifest-release.sh
       - name: makepkg and pacman in Arch Linux
+        if: steps.rel.outputs.ready == 'true'
         run: docker run --rm -v "$PWD:/src:ro" -w /src archlinux:latest sh packaging/test-install.sh aur

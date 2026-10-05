@@ -1,4 +1,4 @@
-pkgbase = relayweft-cli-bin
+pkgbase = relayweft-bin
 	pkgdesc = Terminal app that routes coding work between the Codex CLI and Claude Code (rw)
 	pkgver = 0.2.0
 	pkgrel = 1
@@ -7,7 +7,8 @@ pkgbase = relayweft-cli-bin
 	arch = aarch64
 	license = MIT
 	depends = git
-	provides = rw
+	provides = relayweft
+	conflicts = relayweft
 	conflicts = rw
 	options = !strip
 	options = !debug
@@ -20,4 +21,4 @@ pkgbase = relayweft-cli-bin
 	source_aarch64 = rw-0.2.0-aarch64::https://github.com/sparkz400/relayweft/releases/download/v0.2.0/rw-linux-arm64
 	sha256sums_aarch64 = 4ff5f1019ea073adf30413c6d30976e312c9a9c08caa768a48330208efbd93ce
 
-pkgname = relayweft-cli-bin
+pkgname = relayweft-bin

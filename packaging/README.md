@@ -20,6 +20,12 @@ never rename existing ones, and list every asset in `checksums.txt`.
 | `relayweft-linux-amd64.apk`, `relayweft-linux-arm64.apk` | Alpine (from v0.3.0) |
 | `checksums.txt` | SHA-256 of every asset (`sha256sum` format) |
 
+The names above start with v0.3.0. v0.1.0 and v0.2.0 were released as
+Switchyard, and their binaries were `sy-<os>-<arch>[.exe]`. This is the
+one time the names changed. v0.3.0 has no `sy-*` copies, so `sy update`
+in v0.2.0 stops with "release v0.3.0 has no sy-… asset". Users of v0.2.0
+install `rw` once by hand (README, "Upgrading from sy").
+
 ## Cutting a release
 
 ```sh
@@ -52,6 +58,17 @@ This downloads `checksums.txt` with the `gh` CLI and updates in place:
 `winget-out/1.2.3/` (do not commit those). Edit the templates, not the
 rendered files. The `packaging` workflow checks on every pull request
 that touches these files that the committed ones match their release.
+It runs `manifest-release.sh` first. If the manifests' release has none of
+the asset names above (the manifests on `main` between the rename and
+v0.3.0 still name v0.2.0, which only has `sy-*`), and no newer release has
+them either, the install and compare checks are skipped with a notice. If a
+newer release has them, the check fails until the manifests are rendered
+for it.
+
+Homebrew users who tapped the repo as Switchyard have a `switchyard`
+formula. `formula_renames.json` in the repo root maps it to `relayweft`,
+so `brew update && brew upgrade` moves them to `relayweft` once the
+formula names a Relayweft release.
 
 ## Linux packages
 
@@ -103,11 +120,13 @@ each release.
 
 ## AUR
 
-`aur/` holds `PKGBUILD` and `.SRCINFO` for `relayweft-cli-bin`, built
-from the release's linux binaries (x86_64 and aarch64). The name is not
-`relayweft-bin` because the AUR already has an unrelated `relayweft`
-(an SMTP-to-XMPP bridge), and `-bin` names the binary build of the package
-with the same base name. It provides and conflicts with `rw`.
+`aur/` holds `PKGBUILD` and `.SRCINFO` for `relayweft-bin`, built
+from the release's linux binaries (x86_64 and aarch64). It provides
+`relayweft` and conflicts with `relayweft` and with `rw`: the AUR's
+unrelated `rw` and `rw-git` packages (Sortix's blockwise I/O tool) also
+install `/usr/bin/rw`. (Before the rename the package was to be called
+`switchyard-cli-bin`, since the AUR has an unrelated `switchyard`; it was
+never published.)
 
 To publish it (once, then after each release):
 
@@ -121,12 +140,12 @@ To publish it (once, then after each release):
    ```
 3. The first time, clone the empty package (this creates it on push):
    ```sh
-   git clone ssh://aur@aur.archlinux.org/relayweft-cli-bin.git
+   git clone ssh://aur@aur.archlinux.org/relayweft-bin.git
    ```
 4. After `render-manifests.sh`, copy `packaging/aur/PKGBUILD` and
    `packaging/aur/.SRCINFO` into that clone, check it, commit and push:
    ```sh
-   cd relayweft-cli-bin
+   cd relayweft-bin
    makepkg -f && namcap PKGBUILD *.pkg.tar.zst   # on Arch, optional
    git add PKGBUILD .SRCINFO
    git commit -m "Update to 1.2.3"

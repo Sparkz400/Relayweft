@@ -1,5 +1,5 @@
 # Maintainer: Sparkz400 <62327601+Sparkz400@users.noreply.github.com>
-pkgname=relayweft-cli-bin
+pkgname=relayweft-bin
 pkgver=0.2.0
 pkgrel=1
 pkgdesc='Terminal app that routes coding work between the Codex CLI and Claude Code (rw)'
@@ -7,8 +7,8 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/sparkz400/relayweft'
 license=('MIT')
 depends=('git')
-provides=('rw')
-conflicts=('rw')
+provides=('relayweft')
+conflicts=('relayweft' 'rw')
 options=('!strip' '!debug')
 source=("LICENSE-$pkgver::https://raw.githubusercontent.com/sparkz400/relayweft/v$pkgver/LICENSE"
         "README-$pkgver.md::https://raw.githubusercontent.com/sparkz400/relayweft/v$pkgver/README.md")

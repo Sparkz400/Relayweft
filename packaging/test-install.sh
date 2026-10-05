@@ -65,8 +65,8 @@ case "$format" in
     pacman -U --noconfirm "$work"/*.pkg.tar.zst >/dev/null
     owner="$(pacman -Qo /usr/bin/rw)"
     version="$(sed -n 's/^pkgver=//p' packaging/aur/PKGBUILD)"
-    list="pacman -Qlq relayweft-cli-bin"
-    remove="pacman -R --noconfirm relayweft-cli-bin"
+    list="pacman -Qlq relayweft-bin"
+    remove="pacman -R --noconfirm relayweft-bin"
     ;;
   *)
     fail "unknown format $format"

@@ -343,7 +343,7 @@ func TestPackageManagerByOwner(t *testing.T) {
 		{"dpkg-query", "relayweft: /usr/bin/rw", "a .deb package (relayweft)", "sudo apt install ./relayweft-linux-arm64.deb"},
 		{"dpkg-query", "diversion by foo from: /usr/bin/rw\ndiversion by foo to: /usr/bin/rw.real\nrelayweft: /usr/bin/rw", "a .deb package (relayweft)", "apt install"},
 		{"rpm", "relayweft\n", "an .rpm package (relayweft)", "sudo dnf install ./relayweft-linux-arm64.rpm"},
-		{"pacman", "relayweft-cli-bin\n", "pacman (relayweft-cli-bin)", "update the relayweft-cli-bin package"},
+		{"pacman", "relayweft-bin\n", "pacman (relayweft-bin)", "update the relayweft-bin package"},
 		{"apk", "relayweft\n", "an .apk package (relayweft)", "apk add --allow-untrusted ./relayweft-linux-arm64.apk"},
 	}
 	for _, c := range cases {
