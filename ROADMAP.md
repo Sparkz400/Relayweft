@@ -73,7 +73,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **Release v0.2.0** (4 Oct 2026): more providers, `sy health`, model tiers, CI and team mode, self-hosted forges, webhooks, `sy selftest` and the fixes from real use. `sy update` from v0.1.0 to v0.2.0 was run for real (checksum verified). Scoop manifest updated; winget manifests rendered.
   - The repository is public: release downloads, `sy update` and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
-- **Release v0.3.0** (5 Oct 2026): `sy setup`, best of N, affected tests in fix rounds, the container sandbox, the dashboard, the JetBrains plugin, Homebrew/`.deb`/`.rpm`/`.apk`/AUR packaging, Codex follow-ups in pool worktrees, saved half-done edits, macOS orphan cleanup, and `sy tune` thresholds that account for sample size. Every change had an independent adversarial review before merge.
+- **Release v0.3.0** (5 Oct 2026): `sy setup`, best of N, affected tests in fix rounds, the container sandbox, the dashboard, the JetBrains plugin, Homebrew/`.deb`/`.rpm`/`.apk`/AUR packaging, Codex follow-ups in pool worktrees, saved half-done edits, macOS orphan cleanup, and `sy tune` thresholds that account for sample size. Every change had an independent adversarial review before merge, and the 30-minute stress test passes on Ubuntu and Windows.
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
@@ -186,6 +186,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - A follow-up to an agent that ran in a pool worktree (Claude or Codex) resumes it in that worktree. A stopped follow-up's work is kept on a branch.
 - On macOS the agent of a killed `sy` is stopped by the next `sy` (it checks the process's start time), and the step continues in its own worktree.
 - The half-done edits of an interrupted step are saved on a branch (`sy/<task>/<step>-unfinished`) before its worktree is freed after 7 days or removed by `sy clean`. `sy history` and `sy resume` say where they are, with commands that work in Windows PowerShell 5.1 too.
+- The worktree pool keeps its size: a step cancelled before its agent changed anything holds no worktree, and a full pool gives up the oldest held worktree after saving its edits on a branch. A resume racing that waits for it, and edits a step left behind elsewhere are saved before reuse. The 30-minute stress test passes again (it had failed since mid-step resume).
 - A guided first run (`sy setup`): it finds the agent CLIs, checks versions and logins without using quota, says how to install or log in, writes the config with the ready ones and offers a read-only first task. `sy`, `sy run` and `sy web` start it when there is no config (not in CI, or with `SY_NO_SETUP=1`).
 - Codex resumes get an explicit sandbox.
 - The repo has an MIT license.
