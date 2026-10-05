@@ -1,0 +1,91 @@
+#!/bin/sh
+# A scripted stand-in for `claude -p --output-format stream-json`, for
+# `sy selftest` and the sandbox tests: no model, no quota. It checks the
+# sandbox from the inside (its folder, git, a read-only git folder, no
+# forge token) and fails the step when something is wrong.
+#
+# A task with SANDBOX-HANG in it waits in its working step until stopped.
+sid="sandbox-$$"
+ro=""
+prev=""
+for a in "$@"; do
+	[ "$prev" = "--resume" ] && sid="$a"
+	[ "$a" = "dontAsk" ] && ro=1
+	prev="$a"
+done
+prompt=$(cat)
+
+say() { printf '%s\n' "$1"; }
+clean() { printf '%s' "$1" | tr -d '"\\' | tr '\n\r\t' '   ' | cut -c1-300; }
+raw() { # $1 is already a JSON string body
+	say "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"$1\",\"session_id\":\"$sid\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10}}"
+	exit 0
+}
+result() { raw "$(clean "$1")"; }
+fail() {
+	say "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"sandbox check failed: $(clean "$1")\",\"session_id\":\"$sid\"}"
+	exit 1
+}
+wrote() { # tell sy about an edit, with the path as the agent sees it
+	say "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$(pwd)/$(clean "$1")\"}}]}}"
+}
+
+say "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$sid\",\"model\":\"sandbox-fake\"}"
+
+plan='```json\n{\"summary\": \"Look around, write two files in parallel, then combine them.\", \"subtasks\": [{\"id\": \"look\", \"title\": \"look around\", \"kind\": \"explore\", \"prompt\": \"List the top-level files.\", \"files\": []}, {\"id\": \"a\", \"title\": \"write a\", \"kind\": \"edit\", \"prompt\": \"write <<notes dir/a file.txt>> containing <<sandbox-a>>\", \"files\": [\"notes dir/a file.txt\"]}, {\"id\": \"b\", \"title\": \"write b\", \"kind\": \"edit\", \"prompt\": \"write <<b.txt>> containing <<sandbox-b>>\", \"files\": [\"b.txt\"]}, {\"id\": \"c\", \"title\": \"combine\", \"kind\": \"edit\", \"prompt\": \"combine <<notes dir/a file.txt>> and <<b.txt>> into <<c.txt>>\", \"files\": [\"c.txt\"], \"depends_on\": [\"a\", \"b\"]}]}\n```'
+hangplan='```json\n{\"summary\": \"Wait.\", \"subtasks\": [{\"id\": \"h\", \"title\": \"wait to be stopped\", \"kind\": \"edit\", \"prompt\": \"hang <<forever>>\", \"files\": [\"h.txt\"]}]}\n```'
+
+case "$prompt" in
+*"[SY:PLAN-REVIEW]"* | *"[SY:FINAL-REVIEW]"* | *"[SY:ERROR-REVIEW]"*)
+	raw '{\"approve\": true, \"advice\": \"ok\", \"issues\": []}' ;;
+*"[SY:JUDGE]"*)
+	result A ;;
+*"[SY:PLAN]"*)
+	case "$prompt" in
+	*SANDBOX-HANG*) raw "$hangplan" ;;
+	*) raw "$plan" ;;
+	esac ;;
+esac
+
+# Checks every working step makes from inside the sandbox.
+[ "$(pwd)" = /work ] || fail "the working folder is $(pwd), not /work"
+[ -z "$GITHUB_TOKEN$GH_TOKEN$GITLAB_TOKEN$GITEA_TOKEN" ] || fail "a forge token reached the sandbox"
+[ "$HOME" = /sy/home ] || fail "HOME is $HOME"
+echo "$sid" >>"$HOME/sessions.log" 2>/dev/null || fail "the session store in HOME is not writable"
+st=$(git status --porcelain 2>&1) || fail "git status: $st"
+gd=$(git rev-parse --absolute-git-dir 2>&1) || fail "git rev-parse: $gd"
+cd_=$(git rev-parse --path-format=absolute --git-common-dir 2>&1) || fail "git rev-parse: $cd_"
+echo "$gd" >>"$HOME/gitdirs.log"
+for d in "$gd" "$cd_"; do
+	if mkdir "$d/sy-sandbox-probe" 2>/dev/null; then
+		rmdir "$d/sy-sandbox-probe"
+		fail "the git folder $d is writable"
+	fi
+done
+if grep -qi 'url\|extraheader\|helper' "$cd_/config" 2>/dev/null; then
+	fail "the repository's remotes or credentials reached the sandbox"
+fi
+if [ -n "$ro" ] && touch /work/.sy-probe 2>/dev/null; then
+	rm -f /work/.sy-probe
+	fail "a read-only agent can write to /work"
+fi
+
+case "$prompt" in
+*"hang <<forever>>"* | *SANDBOX-HANG*) # a planned step, or a task small enough to skip planning
+	echo "$$" >"$HOME/hang.pid"
+	sleep 600
+	fail "was not stopped within 10 minutes" ;;
+*"combine <<"*)
+	cat "notes dir/a file.txt" b.txt >c.txt 2>/dev/null || fail "the finished steps' files are not here"
+	wrote c.txt
+	result "combined" ;;
+*"write <<"*)
+	f=$(printf '%s' "$prompt" | sed -n 's/.*write <<\([^>]*\)>> containing <<\([^>]*\)>>.*/\1/p' | head -n 1)
+	t=$(printf '%s' "$prompt" | sed -n 's/.*write <<\([^>]*\)>> containing <<\([^>]*\)>>.*/\2/p' | head -n 1)
+	[ -n "$f" ] || fail "no file in the step"
+	mkdir -p "$(dirname "$f")" && printf '%s\n' "$t" >"$f" || fail "cannot write $f"
+	wrote "$f"
+	result "wrote $f" ;;
+*)
+	result "The repository has a README.md." ;;
+esac

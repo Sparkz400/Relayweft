@@ -8,7 +8,6 @@ import (
 
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
 )
 
@@ -61,10 +60,17 @@ func (o *Orchestrator) verifyIn(ctx context.Context, t, r *task) (bool, string) 
 			return false, "cancelled"
 		}
 		cctx, cancel := context.WithTimeout(ctx, timeout)
-		cmd := proc.Shell(cctx, c)
-		cmd.Dir = dir
 		start := time.Now()
-		out, err := cmd.CombinedOutput()
+		var out []byte
+		cmd, done, err := checkCmd(cctx, r.cfg, dir, c) // in the sandbox when it is on
+		if err == nil {
+			out, err = cmd.CombinedOutput()
+			if why := done(err, out); why != "" {
+				out = append(out, "\n"+why...)
+			}
+		} else {
+			out = []byte(err.Error())
+		}
 		took := time.Since(start).Round(100 * time.Millisecond)
 		timedOut := cctx.Err() == context.DeadlineExceeded
 		cancel()

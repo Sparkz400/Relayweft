@@ -43,14 +43,16 @@ func WithoutSecrets(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if !isChildSecret(name) {
+		if !IsChildSecret(name) {
 			out = append(out, kv)
 		}
 	}
 	return out
 }
 
-func isChildSecret(name string) bool {
+// IsChildSecret reports whether name is one of sy's forge or CI tokens,
+// which no agent gets.
+func IsChildSecret(name string) bool {
 	for _, s := range childSecrets {
 		if name == s || runtime.GOOS == "windows" && strings.EqualFold(name, s) {
 			return true

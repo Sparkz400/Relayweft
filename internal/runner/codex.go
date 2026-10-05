@@ -33,6 +33,12 @@ func CodexArgs(cfg config.ProviderCfg, s Spec) []string {
 	if s.ReadOnly {
 		sandbox = "read-only"
 	}
+	if s.Sandboxed {
+		// In sy's sandbox the container is the sandbox: Codex's own needs
+		// kernel features containers block, and a read-only agent's folder
+		// is mounted read-only there.
+		sandbox = "danger-full-access"
+	}
 	if s.Resume != "" {
 		// `codex exec resume` takes no --sandbox, --color or -C; the sandbox
 		// is set through config so a follow-up never runs with another one.

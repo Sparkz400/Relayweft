@@ -419,6 +419,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("SY_FAKE_CLI") != "" {
 		os.Exit(runFakeCLI())
 	}
+	if os.Getenv("SY_FAKE_DOCKER") != "" {
+		os.Exit(runFakeDocker())
+	}
 	dir, err := os.MkdirTemp("", "sy-runner-test-")
 	if err != nil {
 		panic(err)

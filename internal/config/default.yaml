@@ -81,6 +81,7 @@ providers:
     tested_version: "codex-cli 0.160.0"
     write_sandbox: workspace-write # sandbox for writing agents (read-only agents always use read-only)
     extra_args: []                 # appended to every `codex exec` call
+    sandbox: {env: [OPENAI_API_KEY, CODEX_API_KEY]} # what goes into sy's container sandbox, when it is on (below)
     limit_cooldown: 1h             # how long a provider stays "at limit" if no reset time is known
     efforts: [low, medium, high, xhigh, max, ultra]
     models:                        # the catalog shown in the model picker (you can also type any id)
@@ -99,6 +100,7 @@ providers:
     write_permission_mode: acceptEdits # acceptEdits | auto | bypassPermissions | dontAsk
     write_allowed_tools: []            # e.g. ["Bash(go test *)", "Bash(npm test *)"] so workers can run tests
     extra_args: []
+    sandbox: {env: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN]}
     limit_cooldown: 1h
     efforts: [low, medium, high, xhigh, max]
     models:
@@ -129,6 +131,7 @@ providers:
     tested_version: "0.62.0"
     write_permission_mode: auto_edit # auto_edit approves edits, not shell commands (verify commands are allowed)
     extra_args: []
+    sandbox: {env: [GEMINI_API_KEY]}
     limit_cooldown: 1h
     efforts: []                      # Gemini CLI has no effort setting
     models:
@@ -320,6 +323,22 @@ hooks:
 #   roles: [worker, worker_high, explorer, researcher]   # the default
 #   allow_tools: true    # pre-approve their tools for Claude (mcp__<server>)
 #   strict: false        # true: Claude uses only these, not your own MCP config
+
+# Run the agents in a container (docker or podman) with only the step's
+# folder writable, and sy's verify commands too (docs/sandbox.md). Off by
+# default. Build the image once: docker build -t switchyard-sandbox packaging/sandbox
+# Only what you name goes in: the env variables below and each provider's
+# sandbox.env (API keys), and credential files, read-only. sy's forge and
+# CI tokens never do. A repo's .switchyard.yaml may turn the sandbox on or
+# its network off; turning it off or passing more in needs `sy trust`.
+sandbox:
+  mode: off                        # off | docker | podman
+  # image: switchyard-sandbox      # the default
+  # network: on                    # on | off (off also cuts the model API: for verify-only use)
+  # env: []                        # more variable names for every sandboxed agent and verify command
+  # credentials: []                # files under your home, mounted read-only, e.g. ~/.codex/auth.json
+  # mounts: []                     # {path: ~/cache, target: /cache, writable: false}
+  # roles: []                      # only these roles (empty = all); per provider: providers.<name>.sandbox
 
 # Desktop notifications (Windows toast, macOS, notify-send): a task finished
 # or failed, a provider hit its limit, or sy waits for your approval.
