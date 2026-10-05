@@ -588,8 +588,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	o.autoLearn() // routing.learn: auto (learn.go)
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
-	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
-	poolCap.Store(int64(poolSize(cfg)))
+	setPoolLimits(cfg)
 	snapshotMaxFile.Store(int64(max(0, cfg.Orchestrator.SnapshotMaxFileMB)) << 20)
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
@@ -1323,6 +1322,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		cs, err := claimSlot(rp.root, prev.Slot, prev.Base, &slotHold{Task: t.state.ID, Step: st.ID, Token: prev.Token})
 		if err == nil {
 			s, base = cs, prev.Base
+			o.slotNotes(t, cs)
 			o.logf("%s: continuing in %s, which holds the edits its agent made before sy stopped", st.ID, prev.Slot)
 		} else if prev.Kept != "" && rp.useWT {
 			// A best-of winner: its work is kept as a commit (bestof.go).
@@ -2063,6 +2063,7 @@ func (o *Orchestrator) RunSingle(ctx context.Context, text, provider string, rou
 	began := time.Now()
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
+	setPoolLimits(cfg)
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: "single"})
