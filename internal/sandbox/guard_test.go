@@ -65,6 +65,39 @@ func TestCheckUndoesSubmoduleGitFiles(t *testing.T) {
 	}
 }
 
+// A submodule from before git kept them in .git/modules has a .git folder
+// in the work tree, maybe its only history. Changed in the container, it
+// is moved aside (not deleted, not left active), and the error says so.
+func TestCheckQuarantinesChangedGitFolder(t *testing.T) {
+	repo := newRepo(t)
+	addGitlink(t, repo, "legacy")
+	gd := filepath.Join(repo, "legacy", ".git")
+	os.MkdirAll(filepath.Join(gd, "objects"), 0o755)
+	os.WriteFile(filepath.Join(gd, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+	os.WriteFile(filepath.Join(gd, "config"), []byte("[core]\n\tbare = false\n"), 0o644)
+	os.WriteFile(filepath.Join(gd, "objects", "history"), []byte("mine"), 0o644)
+	b := &Box{dir: repo}
+	if m := b.guardLinks(false); len(m) != 1 || m[0].Target != "/work/legacy/.git" {
+		t.Fatalf("the .git folder is not mounted read-only: %+v", m)
+	}
+	// What an agent could do after getting around the mount.
+	os.WriteFile(filepath.Join(gd, "config"), []byte("[core]\n\tbare = false\n\tworktree = /elsewhere\n"), 0o644)
+	err := b.Check()
+	if err == nil || !strings.Contains(err.Error(), "legacy/.git changed: moved to .git.sy-quarantine-") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Lstat(gd); !os.IsNotExist(err) {
+		t.Error("the changed .git folder is still active")
+	}
+	moved, _ := filepath.Glob(filepath.Join(repo, "legacy", ".git.sy-quarantine-*"))
+	if len(moved) != 1 {
+		t.Fatalf("not moved aside: %v", moved)
+	}
+	if b, _ := os.ReadFile(filepath.Join(moved[0], "objects", "history")); string(b) != "mine" {
+		t.Error("the submodule's history was not kept")
+	}
+}
+
 // A symlink where a submodule is (in the container it can point anywhere
 // on this machine) is removed itself, never what it points to.
 func TestCheckRemovesSymlinkedSubmodule(t *testing.T) {
@@ -118,7 +151,8 @@ func TestHomePerProvider(t *testing.T) {
 // itself, never followed.
 func TestResetHome(t *testing.T) {
 	home := t.TempDir()
-	for _, f := range []string{".bashrc", ".gitconfig", ".claude/settings.json", ".claude/hooks/x.sh", ".codex/config.toml", ".codex/sessions/s.jsonl", ".claude/projects/-work/s.jsonl"} {
+	for _, f := range []string{".bashrc", ".gitconfig", ".claude/settings.json", ".claude/hooks/x.sh", ".codex/config.toml", ".codex/sessions/s.jsonl", ".claude/projects/-work/s.jsonl",
+		".claude.json", ".bash_logout", ".zlogin", ".config/fish/config.fish", ".config/git/config"} {
 		p := filepath.Join(home, filepath.FromSlash(f))
 		os.MkdirAll(filepath.Dir(p), 0o700)
 		os.WriteFile(p, []byte("x"), 0o600)
@@ -126,6 +160,8 @@ func TestResetHome(t *testing.T) {
 	resetHome(home, []Mount{{Source: "/mine", Target: "/sy/home/.gitconfig"}})
 	for f, want := range map[string]bool{
 		".bashrc": false, ".claude/settings.json": false, ".claude/hooks/x.sh": false, ".codex/config.toml": false,
+		// ~/.claude.json holds MCP servers; logout and login shells; fish; git.
+		".claude.json": false, ".bash_logout": false, ".zlogin": false, ".config/fish/config.fish": false, ".config/git/config": false,
 		".gitconfig": true, ".codex/sessions/s.jsonl": true, ".claude/projects/-work/s.jsonl": true,
 	} {
 		_, err := os.Stat(filepath.Join(home, filepath.FromSlash(f)))
@@ -145,6 +181,58 @@ func TestResetHome(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
 		t.Error("the symlink is still there")
+	}
+}
+
+// Project settings an earlier agent of the task changed (hooks, MCP
+// servers that the next CLI would run with its own key) are not used in
+// the container: it sees the version from the task's start, or none. The
+// file on disk stays as the agent wrote it.
+func TestPinProjectConfigs(t *testing.T) {
+	repo := newRepo(t)
+	os.MkdirAll(filepath.Join(repo, ".claude"), 0o755)
+	os.MkdirAll(filepath.Join(repo, ".codex"), 0o755)
+	os.WriteFile(filepath.Join(repo, ".claude", "settings.json"), []byte(`{"permissions":{}}`+"\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, ".codex", "config.toml"), []byte("model = \"x\"\n"), 0o644)
+	git(t, repo, "add", "-A")
+	git(t, repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "settings")
+	base := git(t, repo, "rev-parse", "HEAD")
+
+	// What agents of the task wrote.
+	agent := []byte(`{"hooks":{"PreToolUse":[]}}` + "\n")
+	os.WriteFile(filepath.Join(repo, ".claude", "settings.json"), agent, 0o644)
+	os.WriteFile(filepath.Join(repo, ".mcp.json"), []byte(`{"mcpServers":{"x":{"command":"y"}}}`), 0o644)
+
+	run := t.TempDir()
+	mounts, pinned, err := pinProjectConfigs(repo, base, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(pinned, ",") != ".claude/settings.json,.mcp.json" {
+		t.Errorf("pinned = %v (the unchanged .codex/config.toml stays as it is)", pinned)
+	}
+	got := map[string]string{}
+	for _, m := range mounts {
+		if m.Writable {
+			t.Errorf("writable: %+v", m)
+		}
+		b, _ := os.ReadFile(m.Source)
+		got[m.Target] = string(b)
+	}
+	if got["/work/.claude/settings.json"] != `{"permissions":{}}`+"\n" || got["/work/.mcp.json"] != "{}\n" {
+		t.Errorf("what the container sees: %q", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(repo, ".claude", "settings.json")); string(b) != string(agent) {
+		t.Error("the agent's change on disk was touched")
+	}
+
+	// A symlink on such a path fails the run.
+	os.RemoveAll(filepath.Join(repo, ".codex"))
+	if err := os.Symlink(t.TempDir(), filepath.Join(repo, ".codex")); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	if _, _, err := pinProjectConfigs(repo, base, run); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("err = %v", err)
 	}
 }
 

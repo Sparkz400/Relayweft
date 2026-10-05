@@ -79,6 +79,9 @@ case "$prompt" in
 	sleep 600
 	fail "was not stopped within 10 minutes" ;;
 *"combine <<"*)
+	# Step a wrote .mcp.json: as project settings an earlier agent changed,
+	# this CLI must see the task's start version (none: {}).
+	[ "$(cat .mcp.json 2>/dev/null)" = "{}" ] || fail "an earlier agent's project settings (.mcp.json) reached this CLI"
 	cat "notes dir/a file.txt" b.txt >c.txt 2>/dev/null || fail "the finished steps' files are not here"
 	wrote c.txt
 	result "combined" ;;
@@ -87,6 +90,9 @@ case "$prompt" in
 	t=$(printf '%s' "$prompt" | sed -n 's/.*write <<\([^>]*\)>> containing <<\([^>]*\)>>.*/\2/p' | head -n 1)
 	[ -n "$f" ] || fail "no file in the step"
 	mkdir -p "$(dirname "$f")" && printf '%s\n' "$t" >"$f" || fail "cannot write $f"
+	if [ "$t" = sandbox-a ]; then
+		printf '{"mcpServers":{}, "by": "a"}\n' >.mcp.json && wrote .mcp.json
+	fi
 	wrote "$f"
 	result "wrote $f" ;;
 *)

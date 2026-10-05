@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/proc"
@@ -36,8 +37,7 @@ type linkState struct {
 // gitlinks lists the submodule paths in the index of the repository at dir
 // (git ls-files -s: mode 160000), relative, with forward slashes.
 func gitlinks(dir string) []string {
-	args := append(append([]string(nil), proc.GitGuard...), "ls-files", "-s", "-z")
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", proc.GitArgs("ls-files", "-s", "-z")...)
 	cmd.Dir = dir
 	proc.Background(cmd)
 	out, err := cmd.Output()
@@ -125,34 +125,64 @@ func (b *Box) Check() error {
 	if b == nil || len(b.links) == 0 {
 		return nil
 	}
-	var bad []string
+	var bad []string // what changed, and what sy did about it
 	for rel, before := range b.links {
 		if link := symlinkIn(b.dir, rel); link != "" {
-			os.Remove(link) // the link itself, never what it points to
-			bad = append(bad, filepath.ToSlash(strings.TrimPrefix(link, b.dir+string(filepath.Separator)))+" (a symlink)")
+			name := filepath.ToSlash(strings.TrimPrefix(link, b.dir+string(filepath.Separator)))
+			if err := os.Remove(link); err != nil { // the link itself, never what it points to
+				bad = append(bad, name+" is a symlink, which sy could not remove ("+err.Error()+"): remove it before you run git there")
+			} else {
+				bad = append(bad, name+" was a symlink: removed")
+			}
 			continue
 		}
 		now := linkStateOf(b.dir, rel)
 		if now.kind == before.kind && bytes.Equal(now.data, before.data) {
 			continue
 		}
-		p := filepath.Join(b.dir, filepath.FromSlash(rel), ".git")
-		switch before.kind {
-		case "missing":
-			os.RemoveAll(p)
-		case "file":
-			os.RemoveAll(p)
-			os.WriteFile(p, before.data, 0o644)
-		}
-		bad = append(bad, rel+"/.git")
+		bad = append(bad, rel+"/.git "+undoLink(filepath.Join(b.dir, filepath.FromSlash(rel), ".git"), before, now))
 	}
 	if len(bad) == 0 {
 		return nil
 	}
 	slices.Sort(bad)
-	diag.Logf("sandbox %s: submodule .git changed in the container: %s", b.Name, strings.Join(bad, ", "))
-	diag.Health("sandbox-escape-attempt", "container", b.Name, "paths", strings.Join(bad, " "))
-	return fmt.Errorf("sandbox: the agent changed %s, which git on this machine would follow (a way out of the sandbox); sy removed or restored it, and the run counts as failed", strings.Join(bad, ", "))
+	diag.Logf("sandbox %s: submodule .git changed in the container: %s", b.Name, strings.Join(bad, "; "))
+	diag.Health("sandbox-escape-attempt", "container", b.Name, "paths", strings.Join(bad, "; "))
+	return fmt.Errorf("sandbox: the agent changed a submodule's .git, which git on this machine would follow (a way out of the sandbox), and the run counts as failed: %s", strings.Join(bad, "; "))
+}
+
+// undoLink undoes a change of a submodule's .git at p (never following a
+// symlink) and says what it did. One that appeared is removed and a file
+// is put back. A .git folder (a submodule from before git kept them in
+// .git/modules) may hold the submodule's only history, so it is moved
+// aside, not deleted: without a .git, git takes the submodule as not
+// checked out and does not look into it.
+func undoLink(p string, before, now linkState) string {
+	if now.kind == "missing" {
+		if before.kind == "file" {
+			if err := os.WriteFile(p, before.data, 0o644); err == nil {
+				return "was removed: the original was put back"
+			}
+		}
+		return "was removed (sy cannot restore a .git folder; git takes the submodule as not checked out)"
+	}
+	if before.kind == "dir" || before.kind == "other" {
+		aside := fmt.Sprintf("%s.sy-quarantine-%d", p, time.Now().UnixNano())
+		if err := os.Rename(p, aside); err != nil {
+			return "changed; sy could not move it aside (" + err.Error() + "): look at it before you run git there"
+		}
+		return "changed: moved to " + filepath.Base(aside) + " (it may hold the submodule's history; look at it before you put it back)"
+	}
+	if err := os.RemoveAll(p); err != nil {
+		return "changed; sy could not remove it (" + err.Error() + "): remove it before you run git there"
+	}
+	if before.kind == "file" {
+		if err := os.WriteFile(p, before.data, 0o644); err != nil {
+			return "changed: removed, but sy could not put the original back (" + err.Error() + ")"
+		}
+		return "changed: the original was put back"
+	}
+	return "appeared: removed"
 }
 
 // symlinkIn returns the first part of rel's path in dir, then its .git,
@@ -193,9 +223,16 @@ func safeRel(rel string) bool {
 // the next agent's CLI. They are removed before every run (unless a mount
 // of yours goes there).
 var homeResets = []string{
-	".bashrc", ".bash_profile", ".bash_login", ".profile", ".zshrc", ".zshenv", ".zprofile",
+	// Shells, also at logout and in login shells.
+	".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile",
+	".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".config/fish",
+	// git and npm (git/config holds hooks and fsmonitor; npmrc scripts).
 	".gitconfig", ".config/git", ".npmrc",
-	".claude/settings.json", ".claude/settings.local.json", ".claude/hooks", ".claude/commands", ".claude/agents",
+	// Claude Code: ~/.claude.json holds MCP servers (commands); settings
+	// hold hooks.
+	".claude.json", ".claude.json.backup", ".claude/settings.json", ".claude/settings.local.json",
+	".claude/hooks", ".claude/commands", ".claude/agents", ".claude/plugins",
+	// Codex, Gemini CLI, Qwen Code.
 	".codex/config.toml", ".gemini/settings.json", ".qwen/settings.json",
 }
 
@@ -216,6 +253,68 @@ func resetHome(home string, mounts []Mount) {
 		}
 		os.RemoveAll(filepath.Join(home, filepath.FromSlash(rel)))
 	}
+}
+
+// projectConfigs are the files in a work tree that agent CLIs read as the
+// project's own settings, and that can make them run commands (hooks, MCP
+// servers) with that CLI's credentials. They are agent-writable in /work.
+var projectConfigs = []string{
+	".claude/settings.json", ".claude/settings.local.json", ".mcp.json",
+	".codex/config.toml", ".gemini/settings.json", ".qwen/settings.json",
+}
+
+// pinProjectConfigs keeps an agent of this task from leaving project
+// settings for the next agent's CLI (perhaps another provider's, with its
+// own key): each of projectConfigs that exists in dir and differs from
+// base (the commit the task started from; your committed and uncommitted
+// versions are in it) gets base's version mounted read-only over it, or
+// an empty one when base has none. The file on disk stays as the agent
+// wrote it, to be reviewed and landed as usual. It returns the mounts and
+// the files pinned. A symlink on such a path fails the run.
+func pinProjectConfigs(dir, base, runDir string) ([]Mount, []string, error) {
+	var mounts []Mount
+	var pinned []string
+	for i, rel := range projectConfigs {
+		if link := symlinkOnPath(dir, strings.Split(rel, "/")); link != "" {
+			return nil, nil, fmt.Errorf("%s in the work tree is a symlink: sy will not run an agent with it (remove it)", filepath.ToSlash(strings.TrimPrefix(link, dir+string(filepath.Separator))))
+		}
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		st, err := os.Lstat(p)
+		if err != nil || !st.Mode().IsRegular() {
+			continue // absent (nothing to read), or a folder the CLI cannot read as settings
+		}
+		now, err := os.ReadFile(p)
+		if err != nil {
+			return nil, nil, err
+		}
+		was, found := blobAt(dir, base, rel)
+		if found && bytes.Equal(now, was) {
+			continue
+		}
+		if !found {
+			was = []byte("{}\n")
+			if strings.HasSuffix(rel, ".toml") {
+				was = nil
+			}
+		}
+		src := filepath.Join(runDir, fmt.Sprintf("project-%d", i))
+		if err := os.WriteFile(src, was, 0o644); err != nil {
+			return nil, nil, err
+		}
+		mounts = append(mounts, Mount{Source: src, Target: Work + "/" + rel})
+		pinned = append(pinned, rel)
+	}
+	return mounts, pinned, nil
+}
+
+// blobAt is the content of rel (relative to dir) at commit base, and
+// whether it is there.
+func blobAt(dir, base, rel string) ([]byte, bool) {
+	cmd := exec.Command("git", proc.GitArgs("cat-file", "blob", base+":./"+rel)...)
+	cmd.Dir = dir
+	proc.Background(cmd)
+	out, err := cmd.Output()
+	return out, err == nil
 }
 
 // runtimeSockets are where docker's and podman's sockets usually are; a

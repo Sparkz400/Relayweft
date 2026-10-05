@@ -660,7 +660,7 @@ func (t *selftest) filesAre(proj string, want map[string]string, name, okText st
 }
 
 func gitStatus(dir string) (string, error) {
-	cmd := exec.Command("git", "status", "--porcelain")
+	cmd := exec.Command("git", proc.GitArgs("status", "--porcelain", "--ignore-submodules=all")...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err

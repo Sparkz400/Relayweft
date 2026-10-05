@@ -100,6 +100,10 @@ type Spec struct {
 	// agent of one cannot leave files that another provider's CLI reads
 	// with that provider's credentials ("" = "checks", for verify and hooks).
 	HomeName string
+	// Base is the commit the task started from: project settings that
+	// differ from it were written by an agent and are not used in the
+	// container ("" = HEAD).
+	Base string
 }
 
 // Mount is one bind mount.
@@ -119,6 +123,9 @@ type Box struct {
 	stdinW  io.Closer
 	once    sync.Once
 	links   map[string]linkState // submodules' .git before the run (Check)
+	// Pinned are project settings files an earlier agent changed; the
+	// container sees their version from Spec.Base (pinProjectConfigs).
+	Pinned []string
 }
 
 // Command builds the command that runs s in a container. The caller sets
@@ -175,6 +182,16 @@ func Command(ctx context.Context, s Spec) (*exec.Cmd, *Box, error) {
 	mounts = append(mounts, gm...)
 	if len(gm) > 0 {
 		mounts = append(mounts, b.guardLinks(s.ReadOnly)...)
+		base := s.Base
+		if base == "" {
+			base = "HEAD"
+		}
+		pm, pinned, err := pinProjectConfigs(dir, base, runDir)
+		if err != nil {
+			return fail(err)
+		}
+		mounts = append(mounts, pm...)
+		b.Pinned = pinned
 	}
 	mounts = append(mounts, Mount{Source: home, Target: Home, Writable: true}, Mount{Source: runDir, Target: runMount})
 	mounts = append(mounts, s.Mounts...)
@@ -652,7 +669,7 @@ func moreConfigs(common, root, runDir string) ([]Mount, error) {
 func safeConfigCopy(src, dst string) error {
 	var b strings.Builder
 	b.WriteString("# The repository's git config as the sandbox sees it (sy): format and extensions only.\n")
-	cmd := exec.Command("git", "config", "--file", src, "--get-regexp", `^(core|extensions)\.`)
+	cmd := exec.Command("git", proc.GitArgs("config", "--file", src, "--get-regexp", `^(core|extensions)\.`)...)
 	proc.Background(cmd)
 	out, _ := cmd.Output()
 	sections := map[string][]string{}

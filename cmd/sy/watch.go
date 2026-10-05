@@ -856,7 +856,7 @@ func (w *watcher) fetch(root, branch, ref string) (string, error) {
 // watchPush pushes commit to the branch on origin, never forced: the
 // remote refuses anything but a fast-forward.
 var watchPush = func(root, commit, branch string, unattended bool) error {
-	cmd := exec.Command("git", "push", "--quiet", "origin", commit+":refs/heads/"+branch)
+	cmd := exec.Command("git", proc.GitArgs("push", "--quiet", "origin", commit+":refs/heads/"+branch)...)
 	cmd.Dir = root
 	var errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &errb, &errb

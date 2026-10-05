@@ -55,6 +55,10 @@ type Spec struct {
 	// Sandboxed is set by Exec when the CLI runs in a container
 	// (Exec.Sandbox): the container is the sandbox, so Codex's own is off.
 	Sandboxed bool
+	// Base is the commit the task started from ("" = HEAD). In a sandbox,
+	// project settings files an agent changed since are not used
+	// (sandbox.Spec.Base).
+	Base string
 }
 
 // Result is what an agent run produced.
@@ -227,7 +231,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		cli := sandbox.CLIName(sb, x.Cfg.Command)
 		var err error
 		cmd, box, err = sandbox.Command(ctx, sandbox.Spec{Cfg: sb, Dir: s.Dir, ReadOnly: s.ReadOnly, Argv: append([]string{cli}, argv...),
-			Stdin: s.Prompt, Env: childEnv, Mounts: mounts, Label: s.AgentID, HomeName: x.Provider})
+			Stdin: s.Prompt, Env: childEnv, Mounts: mounts, Label: s.AgentID, HomeName: x.Provider, Base: s.Base})
 		if err != nil {
 			return fail(fmt.Errorf("%s: %w", x.Provider, err))
 		}
@@ -273,6 +277,10 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	emit(stamp(event.Event{Kind: event.Started, Text: "started " + s.Model}))
 	if box != nil {
 		emit(stamp(event.Event{Kind: event.Thinking, Text: fmt.Sprintf("in a %s sandbox (image %s)", box.Runtime, box.Image)}))
+		if len(box.Pinned) > 0 {
+			emit(stamp(event.Event{Kind: event.Thinking, Text: fmt.Sprintf("warning: an agent of this task changed %s; this agent's CLI sees the version from the start of the task (the change itself stays for review)",
+				strings.Join(box.Pinned, ", "))}))
+		}
 	}
 
 	p := x.parser()

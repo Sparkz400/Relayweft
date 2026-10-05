@@ -48,7 +48,7 @@ var (
 	prToken           = forge.Token
 	// prPush pushes the branch; it is interactive (credential prompts).
 	prPush = func(root, remote, branch string) error {
-		cmd := exec.Command("git", "push", "-u", remote, branch)
+		cmd := exec.Command("git", proc.GitArgs("push", "-u", remote, branch)...)
 		cmd.Dir = root
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
 		return cmd.Run()
@@ -56,7 +56,7 @@ var (
 	// prRemoteHas reports whether origin has the branch (an error counts
 	// as no: the push then says what is wrong).
 	prRemoteHas = func(root, branch string) bool {
-		cmd := exec.Command("git", "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+branch)
+		cmd := exec.Command("git", proc.GitArgs("ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+branch)...)
 		cmd.Dir = root
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		return cmd.Run() == nil
