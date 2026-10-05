@@ -607,6 +607,27 @@ func asExit(err error) (int, bool) {
 	return 0, false
 }
 
+// changedSince lists the files (slash paths from the top, deleted and
+// untracked ones included, both sides of a rename) that differ between a
+// commit and the working tree. skipped are untracked files left out of the
+// snapshot for their size.
+func (g git) changedSince(from string) (files, skipped []string, err error) {
+	now, skipped, err := g.snapshotSkipping("switchyard verify snapshot")
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := g.run(nil, nil, "-c", "core.quotepath=false", "diff", "--name-only", "--no-renames", "-z", from, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, f := range strings.Split(out, "\x00") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	return files, skipped, nil
+}
+
 // diff returns `git diff --stat` and the (truncated) patch between a commit
 // and the current working tree.
 func (g git) diff(from string, max int) (stat, patch string) {

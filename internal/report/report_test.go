@@ -36,7 +36,7 @@ func hostileData() *Data {
 		Routes: []Route{{Agent: "w1", Step: "a", Attempt: 2, Role: "worker", Provider: "codex", Model: "m<i>", Effort: "high",
 			Rule: "rule\" onmouseover=\"x", Reason: hostile, Confidence: 0.8, Ran: true, OK: true, Final: hostile, Error: hostile}},
 		Reviews: []Review{{Checkpoint: "final", Provider: "claude", Model: "opus", Approve: false, Advice: hostile}},
-		Checks:  []Check{{Kind: "verify", Command: "go test ./... | tee `x`", OK: false, Duration: time.Second}},
+		Checks:  []Check{{Kind: "verify", Command: "go test ./... | tee `x`", OK: false, Duration: time.Second, Scope: "affected", Why: hostile}},
 		Limits:  []Limit{{Agent: "w2", Provider: "codex", Model: "m", Text: hostile}},
 		HasCost: true,
 		Cost: event.TaskCost{PerProvider: map[string]event.TokenUsage{"claude": {Input: 12000, Cached: 2000, Output: 3000}},
@@ -119,6 +119,9 @@ func TestMarkdownEscapes(t *testing.T) {
 		if !strings.Contains(md, want) {
 			t.Errorf("markdown lacks %q", want)
 		}
+	}
+	if !strings.Contains(md, "| affected: ") {
+		t.Error("markdown lacks which tests a check ran")
 	}
 	// Table cells cannot break out of their row.
 	if !strings.Contains(md, `\| tee`) {
@@ -269,7 +272,7 @@ func TestBuildFromRealTask(t *testing.T) {
 	if len(d.Reviews) < 1 || !d.Reviews[len(d.Reviews)-1].Approve {
 		t.Errorf("reviews = %+v", d.Reviews)
 	}
-	if len(d.Checks) != 1 || d.Checks[0].Command != check || !d.Checks[0].OK {
+	if len(d.Checks) != 1 || d.Checks[0].Command != check || !d.Checks[0].OK || d.Checks[0].Tests() != "full: the full checks before the final review" {
 		t.Errorf("checks = %+v", d.Checks)
 	}
 	if !d.HasCost || d.Tokens.Total() == 0 {

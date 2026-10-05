@@ -185,8 +185,8 @@ const pageHTML = `<!doctype html>
 {{end}}</section>{{end}}
 
 {{if .Checks}}<section><h2>Checks</h2>
-<table><thead><tr><th>Command</th><th>Kind</th><th>Result</th><th class="n">Time</th></tr></thead><tbody>
-{{range .Checks}}<tr><td class="mono">{{.Command}}</td><td>{{.Kind}}</td><td><span class="pill {{if .OK}}ok{{else}}fail{{end}}">{{if .OK}}pass{{else}}fail{{end}}</span></td><td class="n">{{dur .Duration}}</td></tr>{{end}}
+<table><thead><tr><th>Command</th><th>Kind</th><th>Tests</th><th>Result</th><th class="n">Time</th></tr></thead><tbody>
+{{range .Checks}}<tr><td class="mono">{{.Command}}</td><td>{{.Kind}}</td><td class="small">{{.Tests}}</td><td><span class="pill {{if .OK}}ok{{else}}fail{{end}}">{{if .OK}}pass{{else}}fail{{end}}</span></td><td class="n">{{dur .Duration}}</td></tr>{{end}}
 </tbody></table></section>{{end}}
 
 {{if or .Limits .Merges}}<section><h2>Limits and merges</h2>

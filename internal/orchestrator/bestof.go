@@ -653,7 +653,7 @@ func (o *Orchestrator) runCandidate(ctx context.Context, t, rp *task, st Subtask
 		if ctx.Err() != nil {
 			return
 		}
-		c.checksOK, c.report, c.failing = o.verifyAt(ctx, t, rp, c.loc.dir, c.id+": ")
+		c.checksOK, c.report, c.failing = o.verifyAt(ctx, t, rp.cfg.Verify, checkSite{dir: c.loc.dir, label: c.id + ": "}, verifyFull)
 		c.checked = ctx.Err() == nil
 	}()
 	if err := restoreSlot(sl.path, c.commit); err != nil {

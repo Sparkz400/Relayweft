@@ -118,6 +118,20 @@ type Check struct {
 	Command  string
 	OK       bool
 	Duration time.Duration
+	Scope    string // verify: full | affected (only the tests the changes affect)
+	Why      string // verify: which tests ran and why
+}
+
+// Tests says which tests a verify check ran and why ("affected: 3 of 31
+// packages, ..."); "" for hooks and older logs.
+func (c Check) Tests() string {
+	switch {
+	case c.Scope == "":
+		return ""
+	case c.Why == "":
+		return c.Scope
+	}
+	return c.Scope + ": " + c.Why
 }
 
 // Limit is a usage-limit hit.
@@ -311,7 +325,7 @@ func (d *Data) fromRecords(recs []sessionlog.Record) {
 				Approve: r.OK != nil && *r.OK, Advice: r.Text})
 		case "verify", "hook":
 			d.Checks = append(d.Checks, Check{Kind: r.Type, Command: r.Text, OK: r.OK != nil && *r.OK,
-				Duration: time.Duration(r.DurationMS) * time.Millisecond})
+				Duration: time.Duration(r.DurationMS) * time.Millisecond, Scope: r.Kind, Why: r.Reason})
 		case sessionlog.TypeLimit:
 			d.Limits = append(d.Limits, Limit{Agent: r.Agent, Provider: r.Provider, Model: r.Model, Text: r.Text})
 		case sessionlog.TypeMerge:
