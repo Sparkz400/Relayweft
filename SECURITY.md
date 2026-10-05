@@ -18,6 +18,10 @@ relevant:
 - Per-repo `.relayweft.yaml`: settings that run commands (verify, hooks,
   providers) must not apply without `rw trust`.
 - `rw update`: downloads are checked against the release's `checksums.txt`.
+- Releases (from v0.4.0): build provenance and SBOM attestations, and a
+  keyless Sigstore signature of `checksums.txt`, made by
+  `.github/workflows/release.yml`. `packaging/README.md` ("Verifying a
+  release") has the commands to check them.
 - Git operations on your repository and its worktree pool.
 
 Relayweft never handles API keys; the CLIs use their own logins.
