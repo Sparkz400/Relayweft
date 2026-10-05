@@ -91,9 +91,9 @@ type Orchestrator struct {
 	pauseCh chan struct{}                         // closed when unpaused
 	cancels map[string]map[int]context.CancelFunc // agent id -> run seq -> cancel
 
-	// bestOfKids are the candidates' agent ids of each running best-of
-	// step (bestof.go): killing the step kills them.
-	bestOfKids map[string][]string
+	// bestOfStop stops a running best-of step (bestof.go): its candidates,
+	// also those still waiting to start, its pick and its landing.
+	bestOfStop map[string]context.CancelFunc
 
 	runSeq  int
 	active  int // agents past the load gate (guarded by mu)
@@ -186,10 +186,11 @@ func (o *Orchestrator) waitUnpaused(ctx context.Context) error {
 func (o *Orchestrator) Kill(agentID string) bool {
 	o.mu.Lock()
 	var fns []context.CancelFunc
-	for _, id := range append([]string{agentID}, o.bestOfKids[agentID]...) {
-		for _, c := range o.cancels[id] {
-			fns = append(fns, c)
-		}
+	for _, c := range o.cancels[agentID] {
+		fns = append(fns, c)
+	}
+	if stop, ok := o.bestOfStop[agentID]; ok {
+		fns = append(fns, stop)
 	}
 	o.mu.Unlock()
 	for _, c := range fns {
@@ -1390,6 +1391,15 @@ func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask
 				o.mergeEvent(t, st.ID, false, "stopped by budget during your review; the changes are kept on "+branch)
 				t.addNote(fmt.Sprintf("the budget stopped the task while %s was in review; its changes are on branch %s", st.ID, branch))
 				r.err = "stopped by budget during your review; the changes are kept on " + branch
+			} else if c != nil {
+				// A best-of winner: its candidate branch holds the first
+				// version; a version from a feedback round is kept as well.
+				branch := c.branch
+				if commit != c.commit {
+					branch = o.saveBranchIn(rp, c.id, commit)
+				}
+				o.logf("%s: stopped during your review; the kept candidate's work is on %s", st.ID, branch)
+				t.addNote(fmt.Sprintf("the task stopped while best-of step %s was in review; the kept candidate's work is on branch %s", st.ID, branch))
 			}
 			return r
 		}

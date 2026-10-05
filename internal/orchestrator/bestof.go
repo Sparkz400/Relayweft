@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/rand/v2"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/diag"
@@ -27,17 +29,22 @@ import (
 //     checks fail.
 //   - When the checks do not decide (several pass, or all fail), the
 //     reviewer picks from the candidates' diffs. They are untrusted text
-//     and are shown under neutral names (A, B), not their providers.
-//     Without a usable answer a fixed order decides: fewer failing checks,
-//     a change over none, the smaller diff, the cheaper run.
+//     and are shown under neutral names (A, B, shuffled per step), not
+//     their providers. Without a usable answer a fixed order decides:
+//     fewer failing checks, a change over none, the smaller diff, the
+//     cheaper run. A candidate that changed nothing never wins on checks
+//     alone over one that changed something.
 //   - The winner lands like any step in a worktree: change review sees only
-//     it. Each loser's work is kept on a branch.
+//     it. Each candidate's work is put on a branch as soon as it is
+//     committed; the winner's branch is deleted once its work landed.
 //   - Every candidate and how the winner was picked are logged (best_of
-//     records): `sy tune` and the learned routes count a loss on checks or
-//     by the reviewer against the loser's route.
+//     records, after the landing): `sy tune` and the learned routes count a
+//     loss on checks or by the reviewer against the loser's route.
 //   - The candidates are not recorded as the step's running agent, and
 //     nothing of them reaches the tree before the winner lands: a best-of
-//     step that sy stopped in the middle runs again as a whole on resume.
+//     step that sy stopped before the pick runs again as a whole on
+//     resume. From the pick on, the winner is the step's running agent in
+//     its (held) worktree, so a resume continues it like any step.
 
 // bestOfDiffMax caps each candidate's diff in the reviewer's prompt.
 const bestOfDiffMax = 12_000
@@ -62,8 +69,13 @@ type bestOfCand struct {
 	stat     string
 	diff     string
 	lines    int    // lines its diff adds and removes
-	branch   string // a loser's work is kept here
+	branch   string // its work is kept here (shown as "<repo>:<branch>" in an extra repo)
+	ref      string // the branch's name in its repo
 }
+
+// bestOfPerm shuffles the candidates' names in the reviewer's prompt, so
+// the step's own route is not always A (tests make it fixed).
+var bestOfPerm = rand.Perm
 
 // release frees the candidate's pool worktree (once).
 func (c *bestOfCand) release() {
@@ -73,18 +85,52 @@ func (c *bestOfCand) release() {
 	}
 }
 
-// keepFinished keeps the work of the candidates that finished on branches
-// when the task stops before a winner landed (cancel, budget): their slots
-// are reset by the next agent, and the step starts over on resume.
-func (o *Orchestrator) keepFinished(t, rp *task, st Subtask, cands []*bestOfCand) {
+// keep puts the candidate's committed work on a branch as soon as it
+// exists: its slot is reset by the next agent, and nothing else refers to
+// the commit until the winner lands (a crash, cancel or budget stop must
+// not lose paid-for work).
+func (o *Orchestrator) keep(rp *task, c *bestOfCand) {
+	c.ref = o.saveBranch(rp, c.id, c.commit)
+	c.branch = c.ref
+	if rp.repoName != "" {
+		c.branch = rp.repoName + ":" + c.ref
+	}
+}
+
+// dropKept deletes the winner's branch once its work is in the tree, if it
+// still points at the candidate's commit.
+func (o *Orchestrator) dropKept(rp *task, c *bestOfCand) {
+	if c.ref == "" || !strings.HasPrefix(c.ref, "sy/") {
+		return
+	}
+	if _, err := (git{rp.root}).out("update-ref", "-d", "refs/heads/"+c.ref, c.commit); err == nil {
+		c.branch, c.ref = "", ""
+	}
+}
+
+// keepFinished names the kept work of the candidates that finished when
+// the step stops before a winner landed (cancel, budget, kill): the step
+// starts over on resume.
+func (o *Orchestrator) keepFinished(t *task, st Subtask, cands []*bestOfCand) {
 	for _, c := range cands {
-		if !c.res.ok || !c.changed {
+		if c.branch == "" {
 			continue
 		}
-		c.branch = o.saveBranchIn(rp, c.id, c.commit)
-		o.logf("%s: the task stopped before a best-of candidate was picked; the work of %s is kept on %s", st.ID, c.id, c.branch)
-		t.addNote(fmt.Sprintf("the task stopped during best-of step %s; the work of %s (%s) is on branch %s", st.ID, c.id, c.pin.Label(), c.branch))
+		o.logf("%s: the best-of step stopped before a candidate landed; the work of %s is kept on %s", st.ID, c.id, c.branch)
+		t.addNote(fmt.Sprintf("best-of step %s stopped before a candidate landed; the work of %s (%s) is on branch %s", st.ID, c.id, c.pin.Label(), c.branch))
 	}
+}
+
+// restoreSlot puts a candidate's worktree back to its committed work: what
+// its checks wrote there must not land with a later feedback round or a
+// resume (HEAD stays at the slot's base; ignored files stay).
+func restoreSlot(path, commit string) error {
+	wg := git{path}
+	if _, err := wg.run(lfsSkip, nil, append(noHooks(), "read-tree", "--reset", "-u", commit)...); err != nil {
+		return err
+	}
+	_, err := wg.out("clean", "-fd")
+	return err
 }
 
 // forgetSession drops a remembered agent, so no follow-up resumes it.
@@ -305,30 +351,34 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 
 	cands := make([]*bestOfCand, len(routes))
 	used := map[string]bool{}
-	var names []string
+	perm := bestOfPerm(len(routes))
+	var names, labels []string
 	for i, d := range routes {
-		cands[i] = &bestOfCand{id: bestOfID(st.ID, d.Provider, used, t.planSteps), pin: d, label: string(rune('A' + i))}
+		cands[i] = &bestOfCand{id: bestOfID(st.ID, d.Provider, used, t.planSteps), pin: d, label: string(rune('A' + perm[i]))}
 		names = append(names, cands[i].id+" ("+d.Label()+")")
+		labels = append(labels, cands[i].label+" = "+cands[i].id)
 	}
-	kids := make([]string, len(cands))
-	for i, c := range cands {
-		kids[i] = c.id
-	}
+	sort.Strings(labels)
+	// sctx is the step's own context: Kill(step) cancels it, which stops
+	// running candidates, those still waiting to start, the pick and the
+	// landing.
+	sctx, stop := context.WithCancel(ctx)
 	o.mu.Lock()
-	if o.bestOfKids == nil {
-		o.bestOfKids = map[string][]string{}
+	if o.bestOfStop == nil {
+		o.bestOfStop = map[string]context.CancelFunc{}
 	}
-	o.bestOfKids[st.ID] = kids // Kill(step) stops its candidates
+	o.bestOfStop[st.ID] = stop
 	o.mu.Unlock()
 	defer func() {
 		o.mu.Lock()
-		delete(o.bestOfKids, st.ID)
+		delete(o.bestOfStop, st.ID)
 		o.mu.Unlock()
+		stop()
 		for _, c := range cands {
 			c.release()
 		}
 	}()
-	o.logf("%s: best of %d (%s): %s", st.ID, len(cands), t.bestOf[st.ID], strings.Join(names, " vs "))
+	o.logf("%s: best of %d (%s): %s; the reviewer would see them as %s", st.ID, len(cands), t.bestOf[st.ID], strings.Join(names, " vs "), strings.Join(labels, ", "))
 	o.emit(event.Event{Kind: event.Started, AgentID: st.ID, ParentID: AgentMain, Text: fmt.Sprintf("best of %d: %s", len(cands), strings.Join(names, " vs "))})
 	for _, c := range cands {
 		o.emit(event.Event{Kind: event.AgentQueued, AgentID: c.id, ParentID: AgentMain, Role: string(st.Kind), Text: st.Title + " · " + c.pin.Label()})
@@ -379,20 +429,36 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 			})
 			select {
 			case gate <- struct{}{}:
-			case <-ctx.Done():
-				c.res = stepResult{err: "cancelled"}
+			case <-sctx.Done():
+				c.res = stepResult{err: "killed before it started"}
 				return
 			}
 			defer func() { <-gate }()
-			o.runCandidate(ctx, t, rp, st, deps, base, c, &checkMu)
+			if sctx.Err() != nil { // stopped while it waited for its turn
+				c.res = stepResult{err: "killed before it started"}
+				return
+			}
+			o.runCandidate(sctx, t, rp, st, deps, base, c, &checkMu)
 		}()
 	}
 	wg.Wait()
 	free()
-	if ctx.Err() != nil {
-		o.keepFinished(t, rp, st, cands)
-		o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, Text: "killed: cancelled"})
-		return stepResult{err: "cancelled"}, true
+	// stopped ends the step when the task was cancelled or you killed the
+	// step: nothing lands, the finished candidates' work stays on branches.
+	stopped := func() (stepResult, bool) {
+		o.keepFinished(t, st, cands)
+		for _, c := range cands {
+			o.forgetSession(c.id) // the task state keeps what a resume needs
+		}
+		why := "cancelled"
+		if ctx.Err() == nil {
+			why = "killed: you stopped the best-of step"
+		}
+		o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, Text: "killed: " + why})
+		return stepResult{err: why}, true
+	}
+	if sctx.Err() != nil {
+		return stopped()
 	}
 
 	var done []*bestOfCand
@@ -400,6 +466,8 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 	for _, c := range cands {
 		if c.res.ok {
 			done = append(done, c)
+		} else {
+			o.forgetSession(c.id)
 		}
 		allLimit = allLimit && c.limit
 	}
@@ -423,18 +491,15 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 		o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, Text: r.err})
 		return r, true
 	}
-	winner, how, by := o.pickBestOf(ctx, t, st, done)
-	if ctx.Err() != nil {
-		o.keepFinished(t, rp, st, cands)
-		o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, Text: "killed: cancelled"})
-		return stepResult{err: "cancelled"}, true
+	winner, how, by := o.pickBestOf(sctx, t, st, done)
+	if sctx.Err() != nil {
+		return stopped()
 	}
 	for _, c := range cands {
 		if c == winner {
 			continue
 		}
-		if c.res.ok && c.changed {
-			c.branch = o.saveBranchIn(rp, c.id, c.commit)
+		if c.branch != "" {
 			o.mergeEvent(t, c.id, false, fmt.Sprintf("not used (%s kept %s); this work is kept on %s", st.ID, winner.id, c.branch))
 		}
 		// Its work is not in the tree: a follow-up would resume a session
@@ -442,23 +507,44 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 		o.forgetSession(c.id)
 		c.release() // the winner may wait for your review a long time
 	}
-	summary := bestOfSummary(cands, winner, how)
-	o.logf("%s: %s", st.ID, summary)
-	o.recordBestOf(t, st, cands, winner, by, how)
+	o.logf("%s: picked %s (%s): %s", st.ID, winner.id, winner.pin.Label(), how)
 
-	r = o.landSlotFrom(ctx, t, rp, st, deps, winner.loc, winner.res, true, winner)
+	// From here on the winner is the step's running agent, in its worktree
+	// (held): if sy stops during your review or while it lands, sy resume
+	// continues the winner there, like any step, instead of running every
+	// candidate again; a merge that already happened is then a no-op.
+	if t.state != nil && t.planSteps[st.ID] {
+		run := StepRun{Provider: winner.pin.Provider, Kind: t.cfg.Kind(winner.pin.Provider), Model: winner.pin.Model, Effort: winner.pin.Effort,
+			Role: winner.pin.Role, Dir: winner.loc.dir, Slot: winner.loc.slot, Base: winner.loc.base, Attempt: 1, Started: time.Now()}
+		if s, ok := o.Session(winner.id); ok && samePath(s.Dir, winner.loc.dir) {
+			run.Session = s.SessionID
+		}
+		t.state.setRunning(st.ID, run)
+	}
+	r = o.landSlotFrom(sctx, t, rp, st, deps, winner.loc, winner.res, true, winner)
 	if r.ok {
+		o.dropKept(rp, winner) // its work is in the tree now
+		o.recordBestOf(t, st, cands, winner, by, how)
 		t.state.noteAuthor(winner.pin.Provider)
 		// `@<step> message` continues the winner's session.
 		if s, ok := o.Session(winner.id); ok {
 			o.rememberSession(st.ID, s)
 		}
+	} else {
+		// Picked but not landed (rejected, a conflict, stopped): no route
+		// won, and the pick is no evidence for or against one.
+		o.recordBestOf(t, st, cands, nil, sessionlog.BestOfNone, fmt.Sprintf("picked %s (%s) but it did not land: %s", winner.id, how, r.err))
 	}
+	summary := bestOfSummary(cands, winner, how)
+	o.logf("%s: %s", st.ID, summary)
 	r.route = fmt.Sprintf("%s (best of %d)", winner.pin.Label(), len(cands))
 	r.bestOf = summary
 	text := summary
 	if !r.ok {
 		text = r.err + "; " + summary
+		if sctx.Err() != nil && ctx.Err() == nil {
+			text = "killed: " + text
+		}
 	}
 	o.emit(event.Event{Kind: event.Done, AgentID: st.ID, ParentID: AgentMain, OK: r.ok, Text: text})
 	return r, true
@@ -494,28 +580,37 @@ func (o *Orchestrator) runCandidate(ctx context.Context, t, rp *task, st Subtask
 	o.slotWarnings(t, rp, c.id, sc, &head)
 	c.commit, c.changed = sc.Commit, sc.Changed
 	if c.changed {
+		o.keep(rp, c)
+		// Plain diffs whatever the user's git config says (an external
+		// diff tool, textconv, colors): the reviewer reads them.
 		g := git{rp.root}
-		c.stat, _ = g.out("diff", "--stat", base, c.commit)
-		if patch, err := g.run(nil, nil, "diff", base, c.commit); err == nil {
+		plain := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color"}
+		c.stat, _ = g.out(append(plain, "--stat", base, c.commit)...)
+		if patch, err := g.run(nil, nil, append(plain, base, c.commit)...); err == nil {
 			if len(patch) > bestOfDiffMax {
 				patch = patch[:bestOfDiffMax] + "\n... (diff truncated) ..."
 			}
 			c.diff = patch
 		}
-		if ns, err := g.out("diff", "--numstat", base, c.commit); err == nil {
+		if ns, err := g.out(append(plain, "--numstat", base, c.commit)...); err == nil {
 			c.lines = numstatLines(ns)
 		}
 	}
 	if len(rp.cfg.Verify.Commands) == 0 {
 		return
 	}
-	checkMu.Lock()
-	defer checkMu.Unlock()
-	if ctx.Err() != nil {
-		return
+	func() {
+		checkMu.Lock()
+		defer checkMu.Unlock()
+		if ctx.Err() != nil {
+			return
+		}
+		c.checksOK, c.report, c.failing = o.verifyAt(ctx, t, rp, c.loc.dir, c.id+": ")
+		c.checked = ctx.Err() == nil
+	}()
+	if err := restoreSlot(sl.path, c.commit); err != nil {
+		o.emit(event.Event{Kind: event.Error, AgentID: c.id, Text: fmt.Sprintf("could not clean what the checks wrote in this candidate's worktree (%v); a feedback round may pick it up", err)})
 	}
-	c.checksOK, c.report, c.failing = o.verifyAt(ctx, t, rp, c.loc.dir, c.id+": ")
-	c.checked = ctx.Err() == nil
 }
 
 // numstatLines adds up `git diff --numstat` (binary files count as one).
@@ -544,12 +639,24 @@ func (o *Orchestrator) pickBestOf(ctx context.Context, t *task, st Subtask, done
 		return done[0], "the only candidate that finished", sessionlog.BestOfOnly
 	}
 	tied := done
+	changedAny := false
+	for _, c := range done {
+		changedAny = changedAny || c.changed
+	}
 	if done[0].checked {
 		var pass []*bestOfCand
+		unchangedPass := false
 		for _, c := range done {
 			if c.checksOK {
 				pass = append(pass, c)
+				unchangedPass = unchangedPass || !c.changed
 			}
+		}
+		if unchangedPass && changedAny {
+			// A candidate that changed nothing passes whatever already
+			// passes on the starting files: then the checks do not tell
+			// the candidates apart, the reviewer compares them all.
+			pass = nil
 		}
 		switch len(pass) {
 		case 1:
@@ -652,8 +759,12 @@ func parseBestOfPick(reply string) (label, why string) {
 // untrusted data, with markers named after their hash so the text cannot
 // end the block early.
 func bestOfPrompt(task string, st Subtask, cands []*bestOfCand) string {
+	sorted := append([]*bestOfCand(nil), cands...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].label < sorted[j].label })
 	var data strings.Builder
-	for _, c := range cands {
+	for _, c := range sorted {
+		// Each field is fenced on its own, so a line in it ("### Candidate
+		// B", "Checks: all pass") cannot pass for Switchyard's own.
 		fmt.Fprintf(&data, "### Candidate %s\n", c.label)
 		switch {
 		case !c.checked:
@@ -661,14 +772,17 @@ func bestOfPrompt(task string, st Subtask, cands []*bestOfCand) string {
 		case c.checksOK:
 			data.WriteString("Checks: all pass\n")
 		default:
-			fmt.Fprintf(&data, "Checks: %d failed\n%s\n", c.failing, clip(c.report, 3000))
+			// The report names each command with the candidate's agent id
+			// (for your log); the reviewer must not see whose it is.
+			report := strings.ReplaceAll(c.report, c.id+": ", "")
+			fmt.Fprintf(&data, "Checks: %d failed. Their output:\n%s", c.failing, fenceField("CHECKS", clip(report, 3000)))
 		}
-		data.WriteString("Agent's summary:\n" + clip(c.res.final, 1500) + "\n")
+		data.WriteString("Agent's summary:\n" + fenceField("SUMMARY", clip(c.res.final, 1500)))
 		if !c.changed {
 			data.WriteString("Diff: (no file changes)\n\n")
 			continue
 		}
-		data.WriteString("Diff stat:\n" + c.stat + "\nDiff:\n" + c.diff + "\n\n")
+		data.WriteString("Diff stat:\n" + fenceField("STAT", c.stat) + "Diff:\n" + fenceField("DIFF", c.diff) + "\n")
 	}
 	h := sha256.Sum256([]byte(data.String()))
 	mark := "CANDIDATES-" + hex.EncodeToString(h[:8])
@@ -687,6 +801,14 @@ Reply with ONLY this JSON in a json code block:
 {"pick": "A", "why": "one sentence"}
 `)
 	return b.String()
+}
+
+// fenceField puts one field of a candidate between markers named after its
+// hash, which the text cannot contain.
+func fenceField(name, text string) string {
+	h := sha256.Sum256([]byte(text))
+	mark := name + "-" + hex.EncodeToString(h[:6])
+	return "<<<" + mark + "\n" + strings.TrimRight(text, "\n") + "\n" + mark + ">>>\n"
 }
 
 // bestOfSummary describes the outcome in one line, e.g. "best of 2: kept

@@ -311,12 +311,13 @@ routing:
 ```
 
 - `hard` uses the router's own signals: a large or sensitive step, a `worker_high` step, or a difficulty score in the strong tier (the same score as `routing.tiers`).
-- Each candidate works in its own pool worktree from the same files. Then `verify.commands` run in each worktree, one at a time.
-- A candidate whose checks pass beats one whose checks fail. If that does not decide, the reviewer compares the diffs. It sees them as untrusted text named A and B, not by provider. Without a usable answer a fixed order decides: fewer failing checks, a change over none, the smaller diff, the cheaper run.
-- The winner lands like any step. Change review shows only the winner. Each loser's work is kept on a branch (`sy/<session>/<task>/<step>--<provider>`). `sy undo` reverts the task as usual.
+- Each candidate works in its own pool worktree from the same files. Then `verify.commands` run in each worktree, one at a time. They run each candidate's code before you review it, as the agents themselves already do when they run the checks.
+- A candidate whose checks pass beats one whose checks fail. A candidate that changed nothing never wins on checks alone over one that changed something. If the checks do not decide, the reviewer compares the diffs. It sees them as untrusted text named A and B (shuffled each time, so the step's own route is not always A), not by provider. Without a usable answer a fixed order decides: fewer failing checks, a change over none, the smaller diff, the cheaper run.
+- The winner lands like any step. Change review shows only the winner. Each candidate's work goes on a branch (`sy/<session>/<task>/<step>--<provider>`) as soon as it is done; the winner's branch is deleted once its work is in your tree. `sy undo` reverts the task as usual.
+- A repo's `.switchyard.yaml` may lower `best_of`. Raising it above your own config (a stronger `when`, a higher `n`, other `routes`) needs `sy trust`.
 - In the plan view, `b` turns it on or off for one step (in `sy web`, the step's best-of menu). The estimate counts every candidate.
 - It needs worktrees. A provider at or near its limit is left out. With fewer than two usable routes, or no worktree, the step runs once and the log says why. Candidates run at once only while `max_threads` has room and the machine is not busy.
-- If `sy` stops during a best-of step, `sy resume` runs that step again from the start. Nothing of it had reached your tree.
+- If `sy` stops before the winner is picked, `sy resume` runs that step again from the start (nothing of it had reached your tree; finished candidates' work is on their branches). From the pick on, the winner is the step's agent: if `sy` stops during your review or while it lands, `sy resume` continues the winner in its worktree, like any step. Killing the step (`work`) stops all its candidates, also those still waiting to start.
 - The agent tree shows each candidate (`work--claude`, `work--codex`). The log, `sy report` and `sy pr` say which one was kept and why.
 - Every candidate is logged. `sy tune` says when the step's own route nearly always wins (the extra runs buy nothing) and when another route keeps winning. A loss on checks or by the reviewer counts against the route in learned routes. `sy bench` has a `routed-bestof` mode to compare it with `routed` and `single`.
 

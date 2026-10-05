@@ -372,7 +372,10 @@ func TestBuildBestOfTask(t *testing.T) {
 	fn := func(s runner.Spec) runner.Result {
 		switch {
 		case strings.Contains(s.Prompt, runner.MarkerBestOf):
-			return runner.Result{Final: `{"pick": "B", "why": "clearer"}`}
+			// Candidates' names are shuffled: pick Claude's by its diff.
+			i := strings.Index(s.Prompt, "+claude")
+			a := strings.LastIndex(s.Prompt[:i], "### Candidate ")
+			return runner.Result{Final: `{"pick": "` + s.Prompt[a+14:a+15] + `", "why": "clearer"}`}
 		case strings.Contains(s.Prompt, runner.MarkerFinalReview):
 			return runner.Result{Final: `{"approve": true}`}
 		}

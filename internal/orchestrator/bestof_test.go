@@ -368,7 +368,7 @@ func TestBestOfCancel(t *testing.T) {
 		os.WriteFile(filepath.Join(s.Dir, "greet.txt"), []byte("half\n"), 0o644)
 		started <- s.Dir
 		<-ctx.Done()
-		return runner.Result{Err: errString("killed"), Killed: true}
+		return runner.Result{Err: errString("killed"), Killed: true, SessionID: "s-" + s.Provider}
 	})
 	o, _ := newOrc(t, dir, set, bestOfOn)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -391,6 +391,12 @@ func TestBestOfCancel(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "greet.txt")); !os.IsNotExist(err) {
 		t.Error("a cancelled best-of step changed the tree")
+	}
+	// A follow-up must not resume a candidate whose work is not in the tree.
+	for _, id := range []string{"work--codex", "work--claude"} {
+		if _, ok := o.Session(id); ok {
+			t.Errorf("%s can still take a follow-up", id)
+		}
 	}
 	st := History(dir, 1)[0]
 	if st.Status != "cancelled" || len(st.Running) != 0 {
