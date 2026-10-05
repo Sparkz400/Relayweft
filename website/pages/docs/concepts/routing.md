@@ -3,7 +3,7 @@ title: Roles and routing
 weight: 2
 ---
 
-Every step has a **role** (planner, worker, explorer, reviewer, ...). Every role has a **route** (a provider, a model and an effort) on each provider. `rw` picks the route per step, falls back to another provider when one hits its usage limit, and can learn better routes from your own logs.
+Every step has a role (planner, worker, explorer, reviewer, ...), and the router picks the route for it: a provider, a model and an effort. When a provider hits its usage limit, the work moves to another one.
 
 <!-- include README.md#choosing-models-any-model-for-any-job body -->
 
