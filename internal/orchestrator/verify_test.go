@@ -152,7 +152,13 @@ func TestWorkersMayRunNarrowedChecks(t *testing.T) {
 		mu.Unlock()
 		return runner.Result{Final: "done"}
 	})
-	o, _ := newOrc(t, "", set, func(c *config.Config) { c.Verify.Commands = []string{"go build ./...", "go test -race ./..."} })
+	// A repo without go.mod: sy's own verify run of these commands fails
+	// at once instead of running this package's tests (dir "" is the
+	// test's working folder).
+	o, _ := newOrc(t, gitRepo(t), set, func(c *config.Config) {
+		c.Verify.Commands = []string{"go build ./...", "go test -race ./..."}
+		c.Orchestrator.MaxFixRounds = 0
+	})
 	o.Run(context.Background(), longTask)
 	for _, c := range []string{"go build ./...", "go test -race ./...", "go build", "go test -race"} {
 		if !slices.Contains(work.AllowedCommands, c) {
