@@ -476,7 +476,7 @@ Build the image once with `docker build -t relayweft-sandbox packaging/sandbox` 
   - When it finishes, its work is merged with `git merge-tree --write-tree` (an object-only merge, hence git 2.38+).
   - The changed files are written into your working tree with `git restore --source`, so CRLF/`autocrlf` on Windows is handled by git itself.
   - If you edited one of those files meanwhile, a `git merge-file` 3-way merge is used; if that conflicts, nothing is overwritten.
-  - On a conflict, that agent's work is kept on branch `rw/<session>/<step>` and the reviewer is told.
+  - On a conflict (with another agent's change, or with your edits), a resolve agent can merge both in a pool worktree; rw checks for leftover markers and runs your checks before it lands (`orchestrator.conflicts`, [docs/conflicts.md](docs/conflicts.md)). Otherwise that agent's work is kept on branch `rw/<session>/<step>` and the reviewer is told.
   - Dependent subtasks start from the merged state.
   - Without git, or with one writing step, agents work directly in your directory, one writer at a time.
   - Big repos:
