@@ -59,5 +59,5 @@ EOF
 )
 
 cd "$repo"
-vhs docs/demo/demo.tape
+PATH="$work/bin:$PATH" vhs docs/demo/demo.tape
 ls -l docs/demo/demo.gif docs/demo/demo.webm
