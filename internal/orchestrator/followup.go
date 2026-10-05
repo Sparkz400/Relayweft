@@ -40,9 +40,9 @@ type AgentSession struct {
 	// in the worktree any more, and the next follow-up tells the agent.
 	Unlanded string `json:",omitempty"`
 	Final    string // its last answer
-	Title string // the step it worked on
-	Task  string // the task it was part of
-	Ended time.Time
+	Title    string // the step it worked on
+	Task     string // the task it was part of
+	Ended    time.Time
 }
 
 // maxSessions bounds the remembered agents (oldest are forgotten).
