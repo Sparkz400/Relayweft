@@ -125,7 +125,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - Codex: a usage-limit hit and a logged-out CLI.
 - Real daily use on your Windows PC.
 - Behaviour under heavy load: a big repo, three agents in parallel, hours of use.
-- A ~10-task comparison against a single agent on real, multi-file tasks (`plan.md` §9). The starter set is too small to show it: on its one-file tasks a single agent is faster.
+- A ~10-task comparison against a single agent on real, multi-file tasks ([docs/plan.md §9](docs/plan.md#9-measuring-success)). The starter set is too small to show it: on its one-file tasks a single agent is faster.
 - A macOS notification banner on screen: the runners' screenshots never show one (Notification Center logs it "as banner", but the runner's screen is shared, which may hide banners). Delivery itself is verified.
 - `rw app` in Edge on macOS and Linux (Chrome only), and on a real Linux desktop (GNOME/KDE) rather than Xvfb with fluxbox and dunst.
 - Webhooks to real Slack and Discord (payloads checked against their current docs only).
@@ -216,7 +216,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 | # | Item | Why |
 |---|---|---|
-| 3.1 | ✅ **Benchmark command**: `rw bench` with `bench.yaml`, check commands, routed vs single, saved results, `rw bench --starter` (five Python tasks with check scripts), and `rw bench --from-history` (real tasks from past multi-file commits, checked by the repo's tests with the commit's test files in place, each validated to fail before and pass after). Every run starts in a fresh repository with only the starting commit's files, so agents cannot find a solution in the history. `--own-tests` (or `{tests}`/`{test_dirs}` in the check) runs only the commit's tests. | This is the success measure from `plan.md` §9, automated. |
+| 3.1 | ✅ **Benchmark command**: `rw bench` with `bench.yaml`, check commands, routed vs single, saved results, `rw bench --starter` (five Python tasks with check scripts), and `rw bench --from-history` (real tasks from past multi-file commits, checked by the repo's tests with the commit's test files in place, each validated to fail before and pass after). Every run starts in a fresh repository with only the starting commit's files, so agents cannot find a solution in the history. `--own-tests` (or `{tests}`/`{test_dirs}` in the check) runs only the commit's tests. | This is the success measure from [docs/plan.md §9](docs/plan.md#9-measuring-success), automated. |
 | 3.2 | ✅ **Quota-aware scheduling** (done early, Claude; Codex as soon as its CLI reports `rate_limits`): `quota-preempt` at `switch_at_utilization`, and the planner and reviewer retry on the other provider. Was planned as: use Claude's live 5-hour and 7-day utilization (already received) and Codex limits to move work to the other provider *before* hitting the limit, not after. | Avoids stalls entirely. |
 | 3.3 | ✅ **Rule tuning from stats**: `rw tune` flags failing routes, frequent escalations, rejected reviews, quota pressure and over-sized read-only models, and prints the `/route` / `/prefer` command for each. | Routing improves from your own data. |
 | 3.4 | ✅ **Judge model** (measurement): decisions record whether the judge ran, and `rw tune` compares judged with rule-routed steps to suggest `/judge on` or `/judge off`. | Spend quota only where it pays. |
@@ -290,12 +290,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 ## Standing quality rules (all phases)
 
-- **A bug fix needs a test.** Every fixed bug gets a regression test that fails without the fix. This has been the practice so far.
-- **Windows first.** Every PR passes CI on Windows, Linux and macOS. Anything touching processes, paths or the console also gets a Windows-specific test.
-- **No silent failure.** Every error reaches the TUI log and the session log with a next step, such as "run `rw doctor`" or "/limit reset".
-- **Safe by default.** Never commit to your branch, never touch your index, never overwrite your concurrent edits, and keep the option to undo.
-- **Pin and record CLI versions.** When Codex or Claude Code updates, record new output fixtures before raising the tested version in `rw doctor`.
-- **Adversarial review before merge.** Changes to the orchestrator, git, process or runner code get a second review pass focused on concurrency, Windows and failure paths.
+The rules every change follows are in [CONTRIBUTING.md](CONTRIBUTING.md#rules): a test for every bug fix, Windows first, no silent failure, safe by default, pinned CLI versions and an adversarial review before merge.
 
 ---
 

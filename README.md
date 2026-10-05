@@ -595,6 +595,8 @@ Each repo must be a git work tree of its own: not the primary's repo, not inside
 
 ## Development
 
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and send a change. [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
+
 ```
 go test -race ./...          # unit + integration tests (real git repos, fake CLIs)
 go vet ./...
@@ -616,4 +618,4 @@ internal/proc/          process-tree kill (Unix process groups, Windows taskkill
 internal/tui/           Bubble Tea model, views, model picker, commands
 ```
 
-See [plan.md](plan.md) for the original design and [ROADMAP.md](ROADMAP.md) for what comes next.
+See [docs/plan.md](docs/plan.md) for the original design and [ROADMAP.md](ROADMAP.md) for what comes next.
