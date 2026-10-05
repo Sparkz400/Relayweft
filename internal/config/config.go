@@ -229,6 +229,13 @@ type OrchestratorCfg struct {
 type VerifyCfg struct {
 	Commands []string `yaml:"commands"`
 	Timeout  Duration `yaml:"timeout"`
+	// Affected: "auto" (or "") runs only the tests the changes affect
+	// after a fix round, and the full checks before the final review;
+	// "off" always runs the full checks.
+	Affected string `yaml:"affected,omitempty"`
+	// AffectedCommands maps a command to its narrowed form, with {files},
+	// {packages} and {test_files}; "off" never narrows that command.
+	AffectedCommands map[string]string `yaml:"affected_commands,omitempty"`
 }
 
 // HooksCfg runs your own commands around tasks. Each list runs in order in
@@ -631,6 +638,16 @@ func (c *Config) Validate() error {
 	case "", TiersAuto, TiersOff:
 	default:
 		errs = append(errs, "routing.tiers must be auto or off")
+	}
+	switch c.Verify.Affected {
+	case "", "auto", "off":
+	default:
+		errs = append(errs, "verify.affected must be auto or off")
+	}
+	for cmd, tmpl := range c.Verify.AffectedCommands {
+		if tmpl != "off" && !strings.Contains(tmpl, "{files}") && !strings.Contains(tmpl, "{packages}") && !strings.Contains(tmpl, "{test_files}") {
+			errs = append(errs, fmt.Sprintf("verify.affected_commands[%q] needs {files}, {packages} or {test_files} (or off)", cmd))
+		}
 	}
 	if v := c.Routing.TiersSaveAt; v < 0 || v > 1 {
 		errs = append(errs, "routing.tiers_save_below must be between 0 and 1 (0 = 0.5)")

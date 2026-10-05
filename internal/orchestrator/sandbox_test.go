@@ -45,6 +45,34 @@ func TestCheckCmdSandbox(t *testing.T) {
 	}
 }
 
+// With the sandbox on, the full and the narrowed verify runs both go into
+// the container, and so do the tools that pick the narrowed tests: here,
+// without docker, every run fails with the sandbox's message and nothing
+// runs on this machine.
+func TestVerifyRunsInSandbox(t *testing.T) {
+	old := sandbox.LookPath
+	sandbox.LookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	defer func() { sandbox.LookPath = old }()
+	dir := gitRepo(t)
+	cfg := config.Default()
+	cfg.Sandbox = config.SandboxCfg{Mode: config.SandboxDocker}
+	o := New(Options{Dir: dir, Store: config.NewStore(cfg, ""), Events: make(chan event.Event, 100)})
+	tk := &task{id: "t", cfg: cfg}
+	vc := config.VerifyCfg{Commands: []string{"go test ./..."}}
+	for _, scope := range []verifyScope{verifyFull, verifyAffected} {
+		ok, rep, _ := o.verifyAt(context.Background(), tk, vc, checkSite{dir: dir, root: dir, base: headOf(t, dir)}, scope)
+		if ok || !strings.Contains(rep, "docker is not installed") {
+			t.Errorf("scope %d: ok=%v report=%q", scope, ok, rep)
+		}
+	}
+	if selectExec(config.Default()) != nil {
+		t.Error("selection leaves this machine without a sandbox")
+	}
+	if _, err := selectExec(cfg)(context.Background(), dir, []string{"go", "list"}); err == nil || !strings.Contains(err.Error(), "docker is not installed") {
+		t.Errorf("selection: %v", err)
+	}
+}
+
 // after_merge and after_task hooks run on code agents wrote: in the
 // sandbox when agents write in one. before_task runs before any agent and
 // stays here.

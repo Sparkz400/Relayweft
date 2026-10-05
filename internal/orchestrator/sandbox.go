@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 
@@ -15,6 +17,42 @@ import (
 // system shell otherwise.
 func checkCmd(ctx context.Context, cfg *config.Config, dir, line string) (cmd *exec.Cmd, done func(err error, out []byte) string, err error) {
 	return shellCmd(ctx, cfg, dir, line, nil)
+}
+
+// selectExec is how the narrowed verify run (package affected) runs the
+// tools that pick the tests (go list, cargo metadata) in the agents'
+// folder: nil (here) when no writing agent runs in a sandbox, otherwise in
+// the sandbox with the folder read-only, since those tools read configs
+// agents may have written.
+func selectExec(cfg *config.Config) func(ctx context.Context, dir string, argv []string) ([]byte, error) {
+	sb, on := cfg.CheckSandbox()
+	if !on {
+		return nil
+	}
+	return func(ctx context.Context, dir string, argv []string) ([]byte, error) {
+		cmd, box, err := sandbox.Command(ctx, sandbox.Spec{Cfg: sb, Dir: dir, ReadOnly: true, Argv: argv,
+			Env: sandbox.PassEnv(sb.Env, nil), Label: "select"})
+		if err != nil {
+			return nil, err
+		}
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		escape := box.Check()
+		box.Close(err == nil && ctx.Err() == nil)
+		switch {
+		case escape != nil:
+			return nil, escape
+		case err != nil:
+			if cmd.ProcessState != nil {
+				if e := box.Explain(cmd.ProcessState.ExitCode(), stderr.String()); e != nil {
+					return nil, e
+				}
+			}
+			return nil, fmt.Errorf("%v: %s", err, clip(strings.TrimSpace(stderr.String()), 300))
+		}
+		return out, nil
+	}
 }
 
 // RunCheck runs one command line on code agents wrote (sy bench's check)
