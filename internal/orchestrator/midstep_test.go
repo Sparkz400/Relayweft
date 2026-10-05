@@ -544,7 +544,7 @@ func TestClaimSlotRejectsReuseAtDescendant(t *testing.T) {
 	s.release()
 	// Another task takes the slot at a commit built on base.
 	tree, _ := g.out("rev-parse", base+"^{tree}")
-	desc, err := g.commitTree("commit-tree", tree, "-p", base, "-m", "on top")
+	desc, err := g.commitTree(tree, []string{base}, "on top")
 	if err != nil {
 		t.Fatal(err)
 	}

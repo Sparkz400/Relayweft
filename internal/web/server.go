@@ -197,7 +197,7 @@ func (s *Server) Shutdown() {
 	s.mu.Unlock()
 	if hs != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		hs.Shutdown(ctx)
+		_ = hs.Shutdown(ctx)
 		cancel()
 	}
 }
@@ -349,7 +349,7 @@ func (s *Server) desktopAlert(title, body string) {
 		return
 	}
 	send := sendNotify
-	go send(title, body)
+	go send(title, body) //nolint:errcheck // a desktop notification is best effort
 }
 
 // notice shows a message on every page and records it in the log.

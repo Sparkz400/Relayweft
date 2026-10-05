@@ -33,7 +33,7 @@ func TestLearnedFileRoundTripAndCanonicalKey(t *testing.T) {
 	}
 	// The same repo through a symlink (macOS /var -> /private/var) or in
 	// other letter case on Windows shares the file.
-	alias := root
+	var alias string
 	if runtime.GOOS == "windows" {
 		alias = strings.ToUpper(root)
 	} else {

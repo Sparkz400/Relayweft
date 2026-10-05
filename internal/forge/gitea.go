@@ -51,7 +51,7 @@ func (g *gitea) DefaultBranch(r Repo) (string, error) {
 		return "", err
 	}
 	if out.DefaultBranch == "" {
-		return "", errors.New("Gitea reported no default branch")
+		return "", errors.New("Gitea reported no default branch") //nolint:staticcheck // ST1005: Gitea is a name
 	}
 	return out.DefaultBranch, nil
 }
@@ -322,7 +322,7 @@ func (g *gitea) Viewer() (string, error) {
 		return "", err
 	}
 	if u.Login == "" {
-		return "", errors.New("Gitea reported no login for the token")
+		return "", errors.New("Gitea reported no login for the token") //nolint:staticcheck // ST1005: Gitea is a name
 	}
 	return u.Login, nil
 }

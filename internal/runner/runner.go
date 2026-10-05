@@ -323,7 +323,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	if err := sc.Err(); err != nil && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, os.ErrClosed) {
 		stderr.Write([]byte("\nread stdout: " + err.Error()))
 		// Keep draining so the CLI never blocks on a full pipe.
-		io.Copy(io.Discard, stdout)
+		_, _ = io.Copy(io.Discard, stdout)
 	}
 	waitErr := cmd.Wait()
 	if f, ok := p.(flusher); ok {

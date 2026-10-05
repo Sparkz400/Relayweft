@@ -17,6 +17,6 @@ func startAwake() func() {
 	}
 	return func() {
 		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Wait()
 	}
 }

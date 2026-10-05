@@ -623,7 +623,7 @@ func checkDisk(dir string) error {
 // touch records a slot's last use (the lock file's mtime) for pruning.
 func touch(path string) {
 	now := time.Now()
-	os.Chtimes(path+".lock", now, now)
+	_ = os.Chtimes(path+".lock", now, now)
 }
 
 // prewarmPool creates the first n slots at commit if they are missing, so
@@ -656,7 +656,7 @@ func prewarmPool(root, commit string, n int, stop <-chan struct{}) {
 				// The first status check of a fresh checkout re-reads every
 				// file (racily clean entries); pay for it here, in the
 				// background, instead of when an agent needs the slot.
-				git{path}.out("update-index", "-q", "--refresh")
+				_, _ = git{path}.out("update-index", "-q", "--refresh")
 			}
 		}
 		unlock()
@@ -755,7 +755,7 @@ func CleanPoolSaved(dir string) (n int, saved []SavedEdits, err error) {
 	if unlock, ok := proc.TryLock(bench + ".lock"); ok {
 		if _, err := os.Stat(bench); err == nil {
 			if st, err := os.Lstat(filepath.Join(bench, ".git")); err == nil && st.IsDir() {
-				CleanPool(bench) // the bench repository's own pool
+				_, _ = CleanPool(bench) // the bench repository's own pool
 			}
 			os.RemoveAll(filepath.Join(filepath.Dir(bench), "packs"))
 			os.Remove(bench + ".index")
@@ -879,7 +879,7 @@ func lastUse(slot string) time.Time {
 
 func dirSize(dir string) uint64 {
 	var n uint64
-	filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

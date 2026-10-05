@@ -91,11 +91,11 @@ func (g git) recordSnapshot(key, which, commit string) {
 	if commit == "" {
 		return
 	}
-	g.out("update-ref", undoPrefix(g.dir)+key+"/"+which, commit)
+	_, _ = g.out("update-ref", undoPrefix(g.dir)+key+"/"+which, commit)
 }
 
 func (g git) deleteSnapshot(key, which string) {
-	g.out("update-ref", "-d", undoPrefix(g.dir)+key+"/"+which)
+	_, _ = g.out("update-ref", "-d", undoPrefix(g.dir)+key+"/"+which)
 }
 
 // UndoList returns the recorded tasks of the working tree containing dir,

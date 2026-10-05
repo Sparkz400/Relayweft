@@ -86,7 +86,7 @@ func dirDigest(gitDir string) []byte {
 		h.Write(b)
 	}
 	for _, sub := range []string{"hooks", "info"} {
-		filepath.WalkDir(filepath.Join(gitDir, sub), func(p string, d fs.DirEntry, err error) error {
+		_ = filepath.WalkDir(filepath.Join(gitDir, sub), func(p string, d fs.DirEntry, err error) error {
 			if err == nil {
 				info, _ := d.Info()
 				if info != nil {

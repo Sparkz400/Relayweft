@@ -89,14 +89,14 @@ func (t *selftest) firstRunCase(n int, c firstRunCase) (time.Duration, bool) {
 			return 0, false
 		}
 	} else {
-		os.MkdirAll(dir, 0o755)
+		_ = os.MkdirAll(dir, 0o755) // gitRoot and the run below fail on a missing folder
 		if _, err := gitRoot(dir); err == nil {
 			t.check(markSkip, name, "%s is inside a git repo, so the sample-project case cannot run here", dir)
 			return 0, true
 		}
 	}
 	state := filepath.Join(t.work, "agent "+name)
-	os.MkdirAll(state, 0o755)
+	_ = os.MkdirAll(state, 0o755) // the run below fails on it
 	path, err := barePath(npm, filepath.Join(profile, "tools"))
 	if err != nil {
 		t.check(markFail, name, "%v", err)
@@ -232,6 +232,6 @@ func (t *selftest) rwIn(bin, profile, dir, logName string, env []string, stdin s
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	err := runTimeout(cmd, 3*time.Minute)
-	os.WriteFile(filepath.Join(t.logs, logName+".log"), buf.Bytes(), 0o644)
+	_ = os.WriteFile(filepath.Join(t.logs, logName+".log"), buf.Bytes(), 0o644) // the output is also returned
 	return buf.String(), err
 }

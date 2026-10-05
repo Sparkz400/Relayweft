@@ -278,7 +278,7 @@ func (t *selftest) setup(proj string, files int) bool {
 	}
 	data, _ := yaml.Marshal(cfg)
 	t.cfg = filepath.Join(roaming, "relayweft", "relayweft.yaml")
-	os.MkdirAll(filepath.Dir(t.cfg), 0o755)
+	_ = os.MkdirAll(filepath.Dir(t.cfg), 0o755) // WriteFile reports it
 	if err := os.WriteFile(t.cfg, data, 0o644); err != nil {
 		t.check(markFail, "config", "%v", err)
 		return false
@@ -319,13 +319,15 @@ func (t *selftest) makeRepo(dir string, files int) error {
 	for i := 0; i < files; i++ {
 		p := filepath.Join(dir, "src", fmt.Sprintf("pkg %02d", i%20), fmt.Sprintf("file%04d.txt", i))
 		if i < 20 {
-			os.MkdirAll(filepath.Dir(p), 0o755)
+			_ = os.MkdirAll(filepath.Dir(p), 0o755) // WriteFile reports it
 		}
 		if err := os.WriteFile(p, []byte(fmt.Sprintf("file %d\n", i)), 0o644); err != nil {
 			return err
 		}
 	}
-	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# rw selftest\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# rw selftest\n"), 0o644); err != nil {
+		return err
+	}
 	if exec.Command("git", "lfs", "version").Run() == nil {
 		if err := git("lfs", "install", "--local"); err == nil {
 			if err := git("lfs", "track", "*.bin"); err != nil {
@@ -335,7 +337,7 @@ func (t *selftest) makeRepo(dir string, files int) error {
 			rand.New(rand.NewSource(1)).Read(blob)
 			sum := sha256.Sum256(blob)
 			t.blobSum = hex.EncodeToString(sum[:])
-			os.MkdirAll(filepath.Join(dir, "assets"), 0o755)
+			_ = os.MkdirAll(filepath.Join(dir, "assets"), 0o755) // WriteFile reports it
 			if err := os.WriteFile(filepath.Join(dir, "assets", "blob.bin"), blob, 0o644); err != nil {
 				return err
 			}
@@ -409,7 +411,7 @@ func (t *selftest) rw(dir, logName string, extraEnv []string, args ...string) (s
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	err := runTimeout(cmd, 5*time.Minute)
-	os.WriteFile(filepath.Join(t.logs, logName+".log"), buf.Bytes(), 0o644)
+	_ = os.WriteFile(filepath.Join(t.logs, logName+".log"), buf.Bytes(), 0o644) // the output is also returned
 	return buf.String(), err
 }
 
@@ -433,7 +435,7 @@ func runTimeout(cmd *exec.Cmd, d time.Duration) error {
 // the last step's agent works and the task is resumed; then it is undone
 // and redone.
 func (t *selftest) scenario(proj, stateDir string, kill bool) {
-	os.MkdirAll(stateDir, 0o755)
+	_ = os.MkdirAll(stateDir, 0o755) // rw run fails on it and the check says so
 	env := []string{envSelftestDir + "=" + stateDir}
 	tag := filepath.Base(stateDir)
 	runArgs := []string{"run", "--config", t.cfg, "--provider", "claude", selftestTask}
@@ -863,26 +865,26 @@ func cmdSelftestAgent() {
 			sid = resumed // a resumed session keeps its id
 		}
 	}
-	enc.Encode(map[string]any{"type": "system", "subtype": "init", "session_id": sid, "model": "selftest"})
+	_ = enc.Encode(map[string]any{"type": "system", "subtype": "init", "session_id": sid, "model": "selftest"})
 	result := func(text string) {
-		enc.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": text,
+		_ = enc.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": text,
 			"session_id": sid, "usage": map[string]any{"input_tokens": 100, "output_tokens": 10}})
 	}
 	wd, _ := os.Getwd()
 	write := func(rel, content string) error {
 		p := filepath.Join(wd, filepath.FromSlash(rel))
-		os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755) // WriteFile reports it
 		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 			return err
 		}
 		// Real CLIs report absolute paths.
-		enc.Encode(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{
+		_ = enc.Encode(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{
 			map[string]any{"type": "tool_use", "name": "Write", "input": map[string]any{"file_path": p}},
 		}}})
 		return nil
 	}
 	fail := func(err error) {
-		enc.Encode(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": err.Error(), "session_id": sid})
+		_ = enc.Encode(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": err.Error(), "session_id": sid})
 		os.Exit(1)
 	}
 
@@ -905,7 +907,7 @@ func cmdSelftestAgent() {
 		// that is interrupted): record which session and where.
 		note("resume:" + resumed)
 		if dir != "" {
-			os.WriteFile(filepath.Join(dir, "resume.wd"), []byte(wd), 0o644)
+			_ = os.WriteFile(filepath.Join(dir, "resume.wd"), []byte(wd), 0o644)
 		}
 		combine()
 	case strings.Contains(prompt, runner.MarkerPlanReview), strings.Contains(prompt, runner.MarkerFinalReview),
@@ -933,8 +935,8 @@ func cmdSelftestAgent() {
 		if os.Getenv(envSelftestHang) == "1" && dir != "" {
 			// Wait to be killed with rw; the pid tells the test who to watch.
 			note("hang")
-			os.WriteFile(filepath.Join(dir, "agent.wd"), []byte(wd), 0o644)
-			os.WriteFile(filepath.Join(dir, "agent.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
+			_ = os.WriteFile(filepath.Join(dir, "agent.wd"), []byte(wd), 0o644)
+			_ = os.WriteFile(filepath.Join(dir, "agent.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
 			time.Sleep(10 * time.Minute)
 			fail(errors.New("selftest agent: was not killed within 10 minutes"))
 		}

@@ -54,7 +54,7 @@ func Init(d string) error {
 	}
 	path := filepath.Join(d, debugFile)
 	if st, err := os.Stat(path); err == nil && st.Size() > maxSize {
-		os.Rename(path, path+".1")
+		_ = os.Rename(path, path+".1") // fails while another rw has it open: keep appending
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -81,7 +81,7 @@ func Close() {
 	mu.Lock()
 	defer mu.Unlock()
 	if fatalPath != "" {
-		debug.SetCrashOutput(nil, debug.CrashOptions{})
+		_ = debug.SetCrashOutput(nil, debug.CrashOptions{})
 		os.Remove(fatalPath)
 		fatalPath = ""
 	}
@@ -138,10 +138,10 @@ func Sync() {
 	mu.Lock()
 	defer mu.Unlock()
 	if f != nil {
-		f.Sync()
+		_ = f.Sync()
 	}
 	if hf != nil {
-		hf.Sync()
+		_ = hf.Sync()
 	}
 }
 
@@ -172,7 +172,7 @@ func Crash(where string, value any, stack []byte) string {
 			// among the user's real ones (rw health counts those).
 			d = filepath.Join(os.TempDir(), "relayweft-test-logs")
 		}
-		os.MkdirAll(d, 0o755)
+		_ = os.MkdirAll(d, 0o755) // WriteFile reports it
 	}
 	path := filepath.Join(d, "crash-"+time.Now().Format("20060102-150405.000")+".log")
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {

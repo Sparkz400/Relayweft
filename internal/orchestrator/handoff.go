@@ -181,7 +181,7 @@ func addRepoNote(root, task, summary string, files []string) {
 	}
 	tmp := p + ".tmp"
 	if os.WriteFile(tmp, []byte(strings.Join(entries, noteSep)+"\n"), 0o644) == nil {
-		os.Rename(tmp, p)
+		_ = os.Rename(tmp, p)
 	}
 }
 

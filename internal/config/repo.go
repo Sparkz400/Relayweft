@@ -308,7 +308,7 @@ func trustPath() string {
 func loadTrust() map[string]string {
 	m := map[string]string{}
 	if data, err := os.ReadFile(trustPath()); err == nil {
-		json.Unmarshal(data, &m)
+		_ = json.Unmarshal(data, &m) // what cannot be read is not trusted: rw asks again
 	}
 	return m
 }

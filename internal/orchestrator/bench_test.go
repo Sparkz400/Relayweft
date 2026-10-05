@@ -195,3 +195,21 @@ func TestBenchWorkspaceReplacesOldWorktree(t *testing.T) {
 		t.Errorf("README.md = %q", data)
 	}
 }
+
+// When the workspace's folder cannot be created, Lock says so instead of
+// blaming another rw bench.
+func TestBenchLockReportsUncreatableFolder(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := &BenchWorkspace{Path: filepath.Join(file, "bench", "work")}
+	unlock, err := ws.Lock()
+	if err == nil {
+		unlock()
+		t.Fatal("Lock succeeded under a file")
+	}
+	if strings.Contains(err.Error(), "another rw bench") {
+		t.Errorf("Lock blames another rw bench: %v", err)
+	}
+}

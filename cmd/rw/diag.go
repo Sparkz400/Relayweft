@@ -163,7 +163,7 @@ func cmdBugreport(args []string) error {
 	zw := zip.NewWriter(f)
 	add := func(name string, data []byte) {
 		if w, err := zw.Create(name); err == nil {
-			w.Write(data)
+			_, _ = w.Write(data) // a write error sticks: zw.Close reports it
 		}
 	}
 	addFile := func(name, path string) {

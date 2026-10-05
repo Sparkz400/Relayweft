@@ -97,7 +97,7 @@ func (h *headless) print(e event.Event, quiet bool) {
 	printEvent(e, quiet)
 	if e.Kind == event.ProviderState && !e.Until.IsZero() {
 		if h.cfg.Notify.Enabled {
-			go notify.Send("Relayweft: "+e.Provider+" limit", e.Text)
+			go notify.Send("Relayweft: "+e.Provider+" limit", e.Text) //nolint:errcheck // a desktop notification is best effort
 		}
 		h.webhook(notify.EventLimit, "Relayweft: "+e.Provider+" hit its limit", e.Text)
 	}
