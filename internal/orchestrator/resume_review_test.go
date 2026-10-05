@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 // Review fixes of the held-edits rescue and Codex follow-ups (PR #29).
@@ -83,7 +83,7 @@ func TestSavedHintCommandsApplyExactly(t *testing.T) {
 		s.OnSession("sess-c")
 	})
 	run := expire(t, st)
-	if held, note := giveUp(t, run.Slot); held || !strings.Contains(note, "sy-unfinished.patch") {
+	if held, note := giveUp(t, run.Slot); held || !strings.Contains(note, "rw-unfinished.patch") {
 		t.Fatalf("held %v, note %q", held, note)
 	}
 	after, _ := LoadTask(st.ID)
@@ -94,7 +94,7 @@ func TestSavedHintCommandsApplyExactly(t *testing.T) {
 	parts := strings.Split(h, "`")
 	var cmds [][]string
 	for i := 1; i < len(parts); i += 2 {
-		if a := splitArgs(parts[i]); len(a) > 0 && a[0] == "git" && strings.Contains(parts[i], "sy-unfinished.patch") {
+		if a := splitArgs(parts[i]); len(a) > 0 && a[0] == "git" && strings.Contains(parts[i], "rw-unfinished.patch") {
 			cmds = append(cmds, a)
 		}
 	}
@@ -120,14 +120,14 @@ func TestSavedHintCommandsApplyExactly(t *testing.T) {
 
 // When no branch and no ref can be created for the edits, nothing
 // references them: the worktree must stay held, not be freed and reset.
-// A branch named "sy" blocks every sy/... branch.
+// A branch named "rw" blocks every rw/... branch.
 func TestSavedEditsNeedARef(t *testing.T) {
 	dir := gitRepo(t)
 	st := interruptC(t, dir)
 	run := expire(t, st)
-	tgit(t, dir, "branch", "sy")
+	tgit(t, dir, "branch", "rw")
 	head := headOf(t, dir)
-	tgit(t, dir, "update-ref", "refs/switchyard/kept", head) // blocks refs/switchyard/kept/<commit>
+	tgit(t, dir, "update-ref", "refs/relayweft/kept", head) // blocks refs/relayweft/kept/<commit>
 	held, note := giveUp(t, run.Slot)
 	if !held || !strings.Contains(note, "could not be saved") {
 		t.Fatalf("held %v, note %q", held, note)
@@ -139,15 +139,15 @@ func TestSavedEditsNeedARef(t *testing.T) {
 		t.Errorf("state changed: %+v", after)
 	}
 
-	// Only the "sy" branch: the edits are kept under refs/switchyard/kept,
+	// Only the "rw" branch: the edits are kept under refs/relayweft/kept,
 	// and the hint names that ref, not a bare commit id.
-	tgit(t, dir, "update-ref", "-d", "refs/switchyard/kept")
+	tgit(t, dir, "update-ref", "-d", "refs/relayweft/kept")
 	held, note = giveUp(t, run.Slot)
 	if held {
 		t.Fatalf("still held: %s", note)
 	}
 	sv := checkSaved(t, dir, st, run.Base)
-	if !strings.HasPrefix(sv.Branch, "refs/switchyard/kept/") {
+	if !strings.HasPrefix(sv.Branch, "refs/relayweft/kept/") {
 		t.Errorf("saved on %q", sv.Branch)
 	}
 }
@@ -168,7 +168,7 @@ func TestSavedEditsNeedTheState(t *testing.T) {
 	if !held || !strings.Contains(note, "state") {
 		t.Fatalf("held %v, note %q", held, note)
 	}
-	if refs := tgit(t, dir, "for-each-ref", "refs/heads/sy"); refs != "" {
+	if refs := tgit(t, dir, "for-each-ref", "refs/heads/rw"); refs != "" {
 		t.Errorf("a branch was left although nothing records it: %s", refs)
 	}
 	if _, err := os.Stat(holdPath(run.Slot)); err != nil {
@@ -217,7 +217,7 @@ func TestSavedEditsNameWhatIsLeft(t *testing.T) {
 	}
 }
 
-// sy resume waits a moment for the task's lock: another sy may hold it
+// rw resume waits a moment for the task's lock: another rw may hold it
 // briefly to look at a hold or record saved edits.
 func TestResumeWaitsForABriefTaskLock(t *testing.T) {
 	dir := gitRepo(t)
@@ -236,7 +236,7 @@ func TestResumeWaitsForABriefTaskLock(t *testing.T) {
 	})
 	o, _ := newOrc(t, dir, set, nil)
 	if res := o.RunWith(context.Background(), "", TaskOptions{Resume: st}); !res.OK {
-		t.Fatalf("resume refused while another sy held the lock for a moment: %+v", res)
+		t.Fatalf("resume refused while another rw held the lock for a moment: %+v", res)
 	}
 }
 

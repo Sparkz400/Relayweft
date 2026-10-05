@@ -9,19 +9,19 @@ import (
 	"testing"
 )
 
-// Every git command sy runs on this machine goes through GitGuard (most
+// Every git command rw runs on this machine goes through GitGuard (most
 // run in a folder an agent wrote to; the rule is simpler to keep for all).
 // Exceptions build git's arguments with the guard elsewhere, or set up the
-// throwaway repositories of sy selftest and sy bench --starter, which no
+// throwaway repositories of rw selftest and rw bench --starter, which no
 // agent has touched yet.
 func TestHostGitIsGuarded(t *testing.T) {
 	allowed := map[string][]string{
 		"internal/orchestrator/git.go": {`exec.Command("git", args...)`},      // args start with GitGuard (git.exec)
 		"internal/report/diff.go":      {`append(append([]string(nil), base`}, // base starts with GitGuard
-		"cmd/sy/selftest.go":           {`exec.Command("git", args...)`, `exec.Command("git", "lfs", "version")`},
-		"cmd/sy/selftest_firstrun.go":  {`exec.Command("git", args...)`},
-		"cmd/sy/selftest_sandbox.go":   {`"remote", "add"`, `"rev-parse", "HEAD"`, `append([]string{"-C", proj}, args...)`},
-		"cmd/sy/starter.go":            {`exec.Command("git", args...)`},
+		"cmd/rw/selftest.go":           {`exec.Command("git", args...)`, `exec.Command("git", "lfs", "version")`},
+		"cmd/rw/selftest_firstrun.go":  {`exec.Command("git", args...)`},
+		"cmd/rw/selftest_sandbox.go":   {`"remote", "add"`, `"rev-parse", "HEAD"`, `append([]string{"-C", proj}, args...)`},
+		"cmd/rw/starter.go":            {`exec.Command("git", args...)`},
 	}
 	re := regexp.MustCompile(`exec\.Command(Context)?\([^"]*"git"`)
 	root := filepath.Join("..", "..")

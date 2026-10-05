@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // bestOfSteps makes n best-of steps of the worker between the own codex

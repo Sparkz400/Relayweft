@@ -19,7 +19,7 @@ jobs:
       # Ubuntu runners have docker: the container sandbox test must run
       # there, not skip (TestSandboxSelftest). Elsewhere it skips without
       # docker for Linux containers.
-      SY_TEST_SANDBOX: ${{ matrix.os == 'ubuntu-latest' && 'require' || '' }}
+      RW_TEST_SANDBOX: ${{ matrix.os == 'ubuntu-latest' && 'require' || '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -37,7 +37,7 @@ jobs:
       - run: go test -timeout 20m ./...
         if: matrix.os == 'windows-latest'
       - name: onboarding timing (guided setup to first task, scripted agents)
-        run: go test -run '^TestOnboarding$' -v -count=1 ./cmd/sy
+        run: go test -run '^TestOnboarding$' -v -count=1 ./cmd/rw
 
   build:
     runs-on: ubuntu-latest
@@ -50,11 +50,11 @@ jobs:
       - name: build binaries
         run: |
           mkdir -p dist
-          GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/sy.exe ./cmd/sy
-          GOOS=windows GOARCH=arm64 go build -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/sy-arm64.exe ./cmd/sy
-          GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/sy-linux ./cmd/sy
-          GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/sy-macos ./cmd/sy
+          GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/rw.exe ./cmd/rw
+          GOOS=windows GOARCH=arm64 go build -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/rw-arm64.exe ./cmd/rw
+          GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/rw-linux ./cmd/rw
+          GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/rw-macos ./cmd/rw
       - uses: actions/upload-artifact@v7
         with:
-          name: sy-binaries
+          name: rw-binaries
           path: dist/

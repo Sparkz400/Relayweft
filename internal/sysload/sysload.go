@@ -1,5 +1,5 @@
 // Package sysload measures how busy the machine is (CPU, free memory, free
-// disk) so Switchyard can hold back new agents instead of tipping a machine
+// disk) so Relayweft can hold back new agents instead of tipping a machine
 // over. Every measurement is best effort: ok=false means unknown, and
 // unknown never blocks anything.
 package sysload

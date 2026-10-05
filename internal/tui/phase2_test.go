@@ -8,11 +8,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/notify"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/router"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/notify"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/router"
 )
 
 // isolateState points task state (resume/history) at a temp dir and stubs
@@ -495,7 +495,7 @@ func TestNotifications(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	all := strings.Join(got, "\n")
-	if !strings.Contains(all, "Switchyard: done: all good") || !strings.Contains(all, "limit") || strings.Contains(all, "short") {
+	if !strings.Contains(all, "Relayweft: done: all good") || !strings.Contains(all, "limit") || strings.Contains(all, "short") {
 		t.Errorf("notifications = %q", all)
 	}
 }
@@ -522,7 +522,7 @@ func TestWebhookNotifications(t *testing.T) {
 	m.running = true
 	m.taskStart = time.Now().Add(-2 * time.Minute)
 	m.handleEvent(event.Event{Kind: event.TaskDone, OK: true, Text: "all good"}.Stamp())
-	m.alert(notify.EventWaiting, "Switchyard needs you", "not in this webhook's events")
+	m.alert(notify.EventWaiting, "Relayweft needs you", "not in this webhook's events")
 	m.handleEvent(event.Event{Kind: event.ProviderState, Provider: event.Codex, Until: time.Now().Add(time.Hour), Text: "codex limit"}.Stamp())
 	var got []notify.Message
 	for len(got) < 2 {

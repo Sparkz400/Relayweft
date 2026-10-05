@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // Learned routes (config/learned.go, sessionlog/learn.go): this file finds
@@ -125,6 +125,6 @@ func (o *Orchestrator) autoLearn() {
 		if c.Remove {
 			to = c.To.String() + " (configured)"
 		}
-		o.logf("learned route for %s: %s -> %s: %s (sy tune --learned; routing.learn: suggest stops this)", c.Role, c.From, to, c.Why)
+		o.logf("learned route for %s: %s -> %s: %s (rw tune --learned; routing.learn: suggest stops this)", c.Role, c.From, to, c.Why)
 	}
 }

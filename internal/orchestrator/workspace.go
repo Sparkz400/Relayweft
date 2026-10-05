@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/router"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/router"
 )
 
 // Multi-repo tasks (workspaces):
@@ -18,8 +18,8 @@ import (
 //   - A workspace is the project folder (the primary repo, named "primary")
 //     plus extra git repositories, each with a short name: `--repo
 //     frontend=../web` on the command line, or `workspace: repos:
-//     {frontend: ../web}` in the config / .switchyard.yaml (a relative path
-//     in a .switchyard.yaml is taken from that file's folder, in the user's
+//     {frontend: ../web}` in the config / .relayweft.yaml (a relative path
+//     in a .relayweft.yaml is taken from that file's folder, in the user's
 //     config from the project folder, in a flag from the current folder).
 //     Every repo must be a git work tree of its own, not inside, around or
 //     a linked worktree of another repo of the task. A config entry that
@@ -34,13 +34,13 @@ import (
 //     main tree) with that repo as its working directory. Read-only steps
 //     run in their repo too and get every repo's path in their prompt.
 //   - Verify runs the primary's checks in the project folder and each extra
-//     repo's own `verify` (from its .switchyard.yaml, only when trusted) in
+//     repo's own `verify` (from its .relayweft.yaml, only when trusted) in
 //     that repo. The final review gets the diff of every repo, labelled.
 //     The fix round runs once per repo that changed (or whose checks fail),
 //     inside that repo.
 //   - Undo: every repo records before/after snapshots under the same task
 //     key in its own refs; the primary's "before" snapshot lists the extra
-//     repos, so `sy undo <key>` in the project folder undoes (or redoes)
+//     repos, so `rw undo <key>` in the project folder undoes (or redoes)
 //     every repo. The task state records the repos for history and resume.
 //   - A task without extra repos takes none of these paths.
 
@@ -79,7 +79,7 @@ func checkRepoName(name string) error {
 }
 
 // WorkspaceEntry is a workspace.repos entry from a config file. A relative
-// Path is taken from Base: the folder of the .switchyard.yaml that set it,
+// Path is taken from Base: the folder of the .relayweft.yaml that set it,
 // or the project folder for the user's config.
 type WorkspaceEntry struct {
 	Name, Path string
@@ -95,7 +95,7 @@ type WorkspaceEntry struct {
 // linked worktree of one of them (same git common dir). A bad --repo flag
 // is an error; a bad config entry is skipped and described in skipped, so
 // a committed workspace that does not fit a teammate's machine never stops
-// sy from starting. Sorted by name.
+// rw from starting. Sorted by name.
 func ResolveWorkspace(dir string, fromConfig []WorkspaceEntry, flags []string) (repos []Repo, skipped []string, err error) {
 	type cand struct {
 		name, path, origin string
@@ -360,7 +360,7 @@ func (t *task) addNote(s string) {
 }
 
 // setupWorkspace creates the repo states of a multi-repo task. Each extra
-// repo checks its own .switchyard.yaml for verify commands; only a trusted
+// repo checks its own .relayweft.yaml for verify commands; only a trusted
 // file's commands are used.
 func (o *Orchestrator) setupWorkspace(t *task, repos []Repo) error {
 	if o.opts.NoGit || len(repos) == 0 {
@@ -385,7 +385,7 @@ func (o *Orchestrator) setupWorkspace(t *task, repos []Repo) error {
 }
 
 // repoVerify reads an extra repo's own verify commands (its trusted
-// .switchyard.yaml); the user's config does not apply to other repos.
+// .relayweft.yaml); the user's config does not apply to other repos.
 func (o *Orchestrator) repoVerify(rp Repo, timeout config.Duration) config.VerifyCfg {
 	c := config.Default()
 	c.Verify = config.VerifyCfg{Timeout: timeout}
@@ -396,7 +396,7 @@ func (o *Orchestrator) repoVerify(rp Repo, timeout config.Duration) config.Verif
 	}
 	for _, k := range info.Ignored {
 		if k == "verify" {
-			o.logf("repo %s: %s sets verify commands, ignored until you trust it (sy trust --dir %s)", rp.Name, info.Path, rp.Dir)
+			o.logf("repo %s: %s sets verify commands, ignored until you trust it (rw trust --dir %s)", rp.Name, info.Path, rp.Dir)
 		}
 	}
 	if c.Verify.Timeout <= 0 {
@@ -455,7 +455,7 @@ const workspaceMark = "workspace-repos:"
 
 // beforeMessage is the primary's "before" snapshot message.
 func (t *task) beforeMessage() string {
-	msg := subject("switchyard before: ", t.text)
+	msg := subject("relayweft before: ", t.text)
 	if len(t.repos) == 0 {
 		return msg
 	}
@@ -478,7 +478,7 @@ const primaryMark = "workspace-primary:"
 
 // extraBeforeMessage is an extra repo's "before" snapshot message.
 func extraBeforeMessage(t *task) string {
-	msg := subject("switchyard before: ", t.text)
+	msg := subject("relayweft before: ", t.text)
 	if t.root == "" {
 		return msg
 	}
@@ -660,7 +660,7 @@ func (r *task) changedSinceStart() bool {
 		return false
 	}
 	g := git{r.root}
-	now, err := g.snapshot("switchyard fix check")
+	now, err := g.snapshot("relayweft fix check")
 	if err != nil {
 		return true // cannot tell: let a fix agent look
 	}

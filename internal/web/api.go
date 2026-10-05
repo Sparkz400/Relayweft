@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/health"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/health"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 //go:embed static
@@ -644,7 +644,7 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case t.Status == "running" && !t.Interrupted():
-			fail(w, http.StatusConflict, fmt.Errorf("task %s is still running in another sy", t.ID))
+			fail(w, http.StatusConflict, fmt.Errorf("task %s is still running in another rw", t.ID))
 			return
 		case t.Status != "running":
 			force = true // failed, cancelled or done: run the steps that did not succeed
@@ -656,7 +656,7 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.Dir != "" && !sameDir(t.Dir, s.opt.Dir) {
-		s.notice("warn", fmt.Sprintf("note: task %s ran in %s, this sy works in %s", t.ID, t.Dir, s.opt.Dir))
+		s.notice("warn", fmt.Sprintf("note: task %s ran in %s, this rw works in %s", t.ID, t.Dir, s.opt.Dir))
 	}
 	writeJSON(w, res)
 }
@@ -699,7 +699,7 @@ type statsView struct {
 	USD         float64                 `json:"usd"`
 }
 
-// minTuneTasks matches `sy tune`: below it suggestions are hints.
+// minTuneTasks matches `rw tune`: below it suggestions are hints.
 const minTuneTasks = 10
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -820,7 +820,7 @@ func (s *Server) handleLimit(w http.ResponseWriter, r *http.Request) {
 // temporary log directory.
 var healthOptions health.Options
 
-// handleHealth serves the reliability report (sy health).
+// handleHealth serves the reliability report (rw health).
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	o := healthOptions
 	o.Days, _ = strconv.Atoi(r.URL.Query().Get("days"))

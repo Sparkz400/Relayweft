@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // A local model standing by takes cheap read-only work once Codex and
@@ -50,7 +50,7 @@ func TestStandbyTakesReadOnlyWorkNearTheLimit(t *testing.T) {
 	if d := r.Route(Step{Kind: KindPlan}); d.Provider == event.Qwen || d.Provider == "ollama-run" {
 		t.Fatalf("planner on standby: %+v", d)
 	}
-	// sy --provider pins everything.
+	// rw --provider pins everything.
 	r.ForceProvider = event.Codex
 	if d := r.Route(explore); d.Provider != event.Codex {
 		t.Fatalf("forced: %+v", d)

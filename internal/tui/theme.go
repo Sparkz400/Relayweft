@@ -5,7 +5,7 @@ import (
 	"runtime"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // Glyphs are the characters used for status and decoration; the ASCII set
@@ -120,7 +120,7 @@ func legacyConsole() bool {
 }
 
 // ProviderColor returns the provider's color: the brand color of the
-// providers sy ships presets for, else a stable pick from a palette.
+// providers rw ships presets for, else a stable pick from a palette.
 func (t Theme) ProviderColor(p string) lipgloss.Color {
 	switch p {
 	case event.Codex:

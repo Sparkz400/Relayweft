@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sysload"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sysload"
 )
 
 func TestCheckoutWorkersCapped(t *testing.T) {
@@ -144,7 +144,7 @@ func TestLowDiskFallsBackToMainTree(t *testing.T) {
 				map[string]any{"id": "a", "kind": "edit", "prompt": "a", "files": []string{"a.txt"}},
 				map[string]any{"id": "b", "kind": "edit", "prompt": "b", "files": []string{"b.txt"}},
 			)}
-		case strings.Contains(s.Prompt, "[SY:STEP]"):
+		case strings.Contains(s.Prompt, "[RW:STEP]"):
 			dirs.Store(s.StepID, s.Dir)
 			os.WriteFile(filepath.Join(s.Dir, s.StepID+".txt"), []byte(s.StepID), 0o644)
 			return runner.Result{Final: "done"}
@@ -233,7 +233,7 @@ func TestUndoAndRedo(t *testing.T) {
 	dir := gitRepo(t)
 	os.WriteFile(filepath.Join(dir, "story.txt"), []byte("one\ntwo\nthree\nfour\nfive\nsix\n"), 0o644)
 	set := both(func(s runner.Spec) runner.Result {
-		if strings.Contains(s.Prompt, "[SY:STEP]") {
+		if strings.Contains(s.Prompt, "[RW:STEP]") {
 			os.WriteFile(filepath.Join(s.Dir, "story.txt"), []byte("ONE\ntwo\nthree\nfour\nfive\nsix\n"), 0o644)
 			os.WriteFile(filepath.Join(s.Dir, "new.txt"), []byte("created\n"), 0o644)
 			os.Remove(filepath.Join(s.Dir, "shared.txt"))
@@ -292,7 +292,7 @@ func TestUndoAndRedo(t *testing.T) {
 func TestUndoConflictChangesNothing(t *testing.T) {
 	dir := gitRepo(t)
 	set := both(func(s runner.Spec) runner.Result {
-		if strings.Contains(s.Prompt, "[SY:STEP]") {
+		if strings.Contains(s.Prompt, "[RW:STEP]") {
 			os.WriteFile(filepath.Join(s.Dir, "shared.txt"), []byte("agent\n"), 0o644)
 			os.WriteFile(filepath.Join(s.Dir, "other.txt"), []byte("agent other\n"), 0o644)
 			return runner.Result{Final: "edited"}
@@ -464,7 +464,7 @@ func TestWorktreesOfOneRepoShareAPool(t *testing.T) {
 func TestUndoFlagsEditsMadeDuringTheTask(t *testing.T) {
 	dir := gitRepo(t)
 	set := both(func(s runner.Spec) runner.Result {
-		if strings.Contains(s.Prompt, "[SY:STEP]") {
+		if strings.Contains(s.Prompt, "[RW:STEP]") {
 			os.WriteFile(filepath.Join(s.Dir, "agent.txt"), []byte("by agent\n"), 0o644)
 			// meanwhile the user edits their own file
 			os.WriteFile(filepath.Join(dir, "README.md"), []byte("# user edit during the task\n"), 0o644)
@@ -495,7 +495,7 @@ func TestUndoFlagsEditsMadeDuringTheTask(t *testing.T) {
 func TestUndoKeyedTaskStateIsChecked(t *testing.T) {
 	dir := gitRepo(t)
 	set := both(func(s runner.Spec) runner.Result {
-		if strings.Contains(s.Prompt, "[SY:STEP]") {
+		if strings.Contains(s.Prompt, "[RW:STEP]") {
 			os.WriteFile(filepath.Join(s.Dir, "x.txt"), []byte("x"), 0o644)
 			return runner.Result{Final: "ok", Files: []string{"x.txt"}}
 		}
@@ -527,7 +527,7 @@ func TestBenchRunsAreNotUndoable(t *testing.T) {
 		t.Fatal(err)
 	}
 	set := both(func(s runner.Spec) runner.Result {
-		if strings.Contains(s.Prompt, "[SY:STEP]") {
+		if strings.Contains(s.Prompt, "[RW:STEP]") {
 			os.WriteFile(filepath.Join(s.Dir, "bench.txt"), []byte("b"), 0o644)
 		}
 		return runner.Result{Final: `{"approve": true}`}

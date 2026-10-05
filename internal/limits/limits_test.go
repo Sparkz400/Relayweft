@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 var patterns = []string{"usage limit", "hit your (usage )?limit", "rate.?limit", "\\b429\\b"}

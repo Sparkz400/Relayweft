@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
-// BenchWorkspace is where `sy bench` runs: a standalone repository outside
+// BenchWorkspace is where `rw bench` runs: a standalone repository outside
 // the user's working tree, rebuilt for every run from one commit's files.
 // It holds a single commit with that tree and nothing else: no history, no
 // remote, no objects or refs shared with the user's repo. So an agent
@@ -31,17 +31,17 @@ type BenchWorkspace struct {
 func NewBenchWorkspace(dir string) (*BenchWorkspace, error) {
 	root, err := repoRoot(dir)
 	if err != nil {
-		return nil, fmt.Errorf("sy bench needs a git repository: %s", dir)
+		return nil, fmt.Errorf("rw bench needs a git repository: %s", dir)
 	}
 	return &BenchWorkspace{root: root, Path: filepath.Join(repoCache(root), "bench", "work")}, nil
 }
 
-// Lock makes sure only one sy bench uses the workspace.
+// Lock makes sure only one rw bench uses the workspace.
 func (b *BenchWorkspace) Lock() (unlock func(), err error) {
 	os.MkdirAll(filepath.Dir(b.Path), 0o755)
 	unlock, ok := proc.TryLock(b.Path + ".lock")
 	if !ok {
-		return nil, fmt.Errorf("another sy bench is running for this repo")
+		return nil, fmt.Errorf("another rw bench is running for this repo")
 	}
 	return unlock, nil
 }
@@ -56,7 +56,7 @@ func (b *BenchWorkspace) Dirty() bool {
 }
 
 // BenchCommitMessage is the message of the workspace's only commit.
-const BenchCommitMessage = "sy bench: the task's starting point (the repository's history is left out)"
+const BenchCommitMessage = "rw bench: the task's starting point (the repository's history is left out)"
 
 // Reset makes the workspace a fresh repository whose only commit has the
 // files of commit (a new commit, not the original one).
@@ -76,7 +76,7 @@ func (b *BenchWorkspace) Reset(commit string) error {
 		// The pool worktrees of the previous run's repository hold its work.
 		CleanPool(b.Path)
 	} else if _, err := os.Lstat(b.Path); err == nil {
-		// The workspace of an older sy (a worktree sharing the repo's
+		// The workspace of an older rw (a worktree sharing the repo's
 		// history) or a broken one: remove it and its worktree record.
 		if err := removeSlot(git{b.root}.commonDir(), b.Path); err != nil {
 			return err
@@ -332,7 +332,7 @@ func (b *BenchWorkspace) RestoreFiles(commit string, paths []string) error {
 	}
 	// A temporary index with just these files: checkout-index writes them
 	// with the workspace's line endings and filters, like a checkout.
-	idx := filepath.Join(b.Path, ".git", "sy-restore-index")
+	idx := filepath.Join(b.Path, ".git", "rw-restore-index")
 	os.Remove(idx)
 	defer os.Remove(idx)
 	env := append([]string{"GIT_INDEX_FILE=" + idx}, lfsSkip...)
@@ -343,7 +343,7 @@ func (b *BenchWorkspace) RestoreFiles(commit string, paths []string) error {
 	return err
 }
 
-// HistoryCommit is a past commit `sy bench --from-history` can turn into a
+// HistoryCommit is a past commit `rw bench --from-history` can turn into a
 // task.
 type HistoryCommit struct {
 	SHA, Parent string

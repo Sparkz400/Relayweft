@@ -16,12 +16,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/sandbox"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/sandbox"
 )
 
 // Spec describes one agent run.
@@ -49,7 +49,7 @@ type Spec struct {
 	MCP *MCPRun
 	// OnSession, when set, is called with the CLI's session id as soon as
 	// the CLI reports it (Claude's init line, Codex's thread.started), long
-	// before the run ends: a step whose sy dies mid-run can resume that
+	// before the run ends: a step whose rw dies mid-run can resume that
 	// session. It runs on the runner's goroutine.
 	OnSession func(id string)
 	// Sandboxed is set by Exec when the CLI runs in a container
@@ -198,7 +198,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 			// or CI token it names would go in with it.
 			for _, n := range s.MCP.Names {
 				if v := x.MCP.Servers[n].SecretVars(); len(v) > 0 {
-					return fail(fmt.Errorf("%s: MCP server %s uses ${%s}, sy's forge or CI token, which never goes into the sandbox: leave the server out for this provider (mcp.servers.%s.providers) or turn the sandbox off for it",
+					return fail(fmt.Errorf("%s: MCP server %s uses ${%s}, rw's forge or CI token, which never goes into the sandbox: leave the server out for this provider (mcp.servers.%s.providers) or turn the sandbox off for it",
 						x.Provider, n, strings.Join(v, "}, ${"), n))
 				}
 			}
@@ -240,7 +240,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		cmd = exec.CommandContext(ctx, path, argv...)
 		proc.Prepare(cmd)
 		cmd.Dir = s.Dir
-		// Without sy's forge and CI tokens (proc.WithoutSecrets); what the
+		// Without rw's forge and CI tokens (proc.WithoutSecrets); what the
 		// MCP servers and the provider name explicitly is added back.
 		cmd.Env = append(proc.WithoutSecrets(os.Environ()), childEnv...)
 		// The prompt goes in on stdin: multi-line prompts as arguments get

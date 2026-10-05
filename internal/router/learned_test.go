@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // A decision on a learned route says so in its reason; the same role on

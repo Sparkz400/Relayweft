@@ -1,7 +1,7 @@
 name: jetbrains
 
 # The JetBrains plugin in editors/jetbrains: unit tests, the tests against
-# a real sy (built here) with a scripted agent, the plugin in a headless
+# a real rw (built here) with a scripted agent, the plugin in a headless
 # IDE, the IntelliJ Plugin Verifier against several IDE versions, and the
 # plugin zip as an artifact. Nothing is published.
 on:
@@ -29,8 +29,8 @@ jobs:
       run:
         working-directory: editors/jetbrains
     env:
-      # The tests against a real sy must run here, not be skipped.
-      SY_IT_REQUIRED: '1'
+      # The tests against a real rw must run here, not be skipped.
+      RW_IT_REQUIRED: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: gradle/actions/wrapper-validation@v6
@@ -42,7 +42,7 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: gradle/actions/setup-gradle@v6
-      - name: tests (unit, real sy, headless IDE)
+      - name: tests (unit, real rw, headless IDE)
         run: ./gradlew --no-daemon test
       - name: build the plugin zip
         run: ./gradlew --no-daemon buildPlugin
@@ -54,13 +54,13 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: matrix.os == 'ubuntu-latest'
         with:
-          name: switchyard-jetbrains-plugin
+          name: relayweft-jetbrains-plugin
           path: editors/jetbrains/build/distributions/*.zip
           if-no-files-found: error
 
   # The plugin in a real IntelliJ IDEA (its own process and window, on an
   # Xvfb display with fluxbox), driven through its UI by the IDE Starter and
-  # Driver frameworks, against a real sy with the scripted agent.
+  # Driver frameworks, against a real rw with the scripted agent.
   # Screenshots of the IDE window are uploaded.
   ui:
     runs-on: ubuntu-latest
@@ -68,8 +68,8 @@ jobs:
       run:
         working-directory: editors/jetbrains
     env:
-      SY_IT_REQUIRED: '1'
-      SY_UI_TEST: '1'
+      RW_IT_REQUIRED: '1'
+      RW_UI_TEST: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: gradle/actions/wrapper-validation@v6
@@ -101,7 +101,7 @@ jobs:
           path: |
             editors/jetbrains/build/reports/uiTest/
             editors/jetbrains/build/reports/tests/uiTest/
-            out/ide-tests/tests/*/switchyard-ui/log/
+            out/ide-tests/tests/*/relayweft-ui/log/
           if-no-files-found: ignore
 
   verify:

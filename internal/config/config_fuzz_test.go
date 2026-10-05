@@ -6,8 +6,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// FuzzParse (ROADMAP 1.8): a hand-edited switchyard.yaml must never crash
-// sy. Parsing, the Load path (defaults + partial file + validation) and,
+// FuzzParse (ROADMAP 1.8): a hand-edited relayweft.yaml must never crash
+// rw. Parsing, the Load path (defaults + partial file + validation) and,
 // for a valid config, Clone must not panic.
 func FuzzParse(f *testing.F) {
 	f.Add(DefaultYAML())

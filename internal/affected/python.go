@@ -48,7 +48,7 @@ func pyAffected(c *change) ([]string, string) {
 			changed = append(changed, file)
 		case isDoc(file):
 		default:
-			return nil, file + " is not Python code, so sy cannot tell which tests read it"
+			return nil, file + " is not Python code, so rw cannot tell which tests read it"
 		}
 	}
 	if len(changed) == 0 {
@@ -79,7 +79,7 @@ func pyAffected(c *change) ([]string, string) {
 	for _, file := range changed {
 		if !present[file] {
 			if c.exists(file) {
-				return nil, file + " is in a folder sy does not read (build output, a virtualenv, ...)"
+				return nil, file + " is in a folder rw does not read (build output, a virtualenv, ...)"
 			}
 			addNames(file) // deleted: who imported it?
 		}
@@ -111,7 +111,7 @@ func pyAffected(c *change) ([]string, string) {
 			}
 		}
 		if !hit {
-			return nil, fmt.Sprintf("no test imports %s, so sy cannot tell which tests cover it", file)
+			return nil, fmt.Sprintf("no test imports %s, so rw cannot tell which tests cover it", file)
 		}
 	}
 	return sortedSet(tests), ""

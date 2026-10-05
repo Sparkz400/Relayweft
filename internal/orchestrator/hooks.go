@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // runHooks runs one hook list (config hooks.*) in the project folder. It
@@ -25,15 +25,15 @@ func (o *Orchestrator) runHooks(ctx context.Context, t *task, which string, cmds
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	base := map[string]string{"SY_TASK": t.text, "SY_TASK_ID": t.key, "SY_DIR": o.opts.Dir, "SY_HOOK": which}
+	base := map[string]string{"RW_TASK": t.text, "RW_TASK_ID": t.key, "RW_DIR": o.opts.Dir, "RW_HOOK": which}
 	for k, v := range env {
 		base[k] = v
 	}
-	var sy []string
+	var rw []string
 	for k, v := range base {
-		sy = append(sy, k+"="+v)
+		rw = append(rw, k+"="+v)
 	}
-	vars := append(proc.WithoutSecrets(os.Environ()), sy...)
+	vars := append(proc.WithoutSecrets(os.Environ()), rw...)
 	// after_merge and after_task run on code agents wrote (npm run lint
 	// runs their scripts): in the sandbox when agents write in one.
 	_, boxed := o.taskCfg(t).CheckSandbox()
@@ -46,7 +46,7 @@ func (o *Orchestrator) runHooks(ctx context.Context, t *task, which string, cmds
 		if boxed {
 			var cmd *exec.Cmd
 			var done func(error, []byte) string
-			if cmd, done, err = shellCmd(cctx, o.taskCfg(t), o.opts.Dir, c, sy); err == nil {
+			if cmd, done, err = shellCmd(cctx, o.taskCfg(t), o.opts.Dir, c, rw); err == nil {
 				out, err = cmd.CombinedOutput()
 				if why := done(err, out); why != "" {
 					out = append(out, "\n"+why...)
@@ -80,5 +80,5 @@ func (o *Orchestrator) runHooks(ctx context.Context, t *task, which string, cmds
 
 // afterMerge runs the after_merge hooks for a step's landed files.
 func (o *Orchestrator) afterMerge(ctx context.Context, t *task, stepID string, files []string) {
-	o.runHooks(ctx, t, "after_merge", t.cfg.Hooks.AfterMerge, map[string]string{"SY_STEP": stepID, "SY_FILES": strings.Join(files, "\n")})
+	o.runHooks(ctx, t, "after_merge", t.cfg.Hooks.AfterMerge, map[string]string{"RW_STEP": stepID, "RW_FILES": strings.Join(files, "\n")})
 }

@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
 )
 
 // Review finding: a limit hit is retried only while a provider that could

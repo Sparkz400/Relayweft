@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 func TestDefaultIsValid(t *testing.T) {
@@ -31,13 +31,13 @@ func TestRepoConfigMatchesEmbeddedDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(root, DefaultYAML()) {
-		t.Fatal("switchyard.yaml at the repo root differs from internal/config/default.yaml; copy one over the other")
+		t.Fatal("relayweft.yaml at the repo root differs from internal/config/default.yaml; copy one over the other")
 	}
 }
 
 func TestPartialUserConfig(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "sy.yaml")
+	p := filepath.Join(dir, "rw.yaml")
 	os.WriteFile(p, []byte(`
 roles:
   worker:
@@ -148,7 +148,7 @@ func TestRepoFileBestOf(t *testing.T) {
 
 func TestStoreEditAndSave(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "switchyard.yaml")
+	path := filepath.Join(dir, "relayweft.yaml")
 	s := NewStore(Default(), path)
 	if err := s.SetRoute("reviewer", event.Claude, Route{Model: "fable", Effort: "max"}); err != nil {
 		t.Fatal(err)

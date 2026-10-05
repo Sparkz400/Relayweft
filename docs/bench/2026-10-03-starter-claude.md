@@ -1,8 +1,8 @@
-# sy bench: starter set, Claude only (3 Oct 2026)
+# rw bench: starter set, Claude only (3 Oct 2026)
 
-`sy bench --starter`, run with `--provider claude` because no Codex CLI was
+`rw bench --starter`, run with `--provider claude` because no Codex CLI was
 available. The modes were routed, routed without the context hand-off, and a
-single Claude Opus agent at high effort. Switchyard was at branch
+single Claude Opus agent at high effort. Relayweft was at branch
 claude/phase2-3 (before one-step plans skipped the plan review).
 
 ## What it shows
@@ -23,7 +23,7 @@ claude/phase2-3 (before one-step plans skipped the plan review).
   default (`orchestrator.review_single_step_plan: false`). This saves one
   strong-model call per small task. The final review still checks the work.
 - **Still open:** this does not show whether routing pays off on bigger,
-  multi-file tasks. That needs `sy bench` on about 10 real tasks from your
+  multi-file tasks. That needs `rw bench` on about 10 real tasks from your
   own repos, with Codex available.
 
 Starter repo commit 523b9ac8422b5f45ab9e3571caabea36031f3e30

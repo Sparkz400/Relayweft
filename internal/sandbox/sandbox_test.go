@@ -13,28 +13,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
-// TestMain: with SY_FAKE_RUNTIME set the test binary is a fake docker. It
-// appends its arguments to that file, prints SY_FAKE_PS for `ps`, and for
-// `run` waits until its input closes when SY_FAKE_HANG is set.
+// TestMain: with RW_FAKE_RUNTIME set the test binary is a fake docker. It
+// appends its arguments to that file, prints RW_FAKE_PS for `ps`, and for
+// `run` waits until its input closes when RW_FAKE_HANG is set.
 func TestMain(m *testing.M) {
-	if log := os.Getenv("SY_FAKE_RUNTIME"); log != "" {
+	if log := os.Getenv("RW_FAKE_RUNTIME"); log != "" {
 		f, _ := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintln(f, strings.Join(os.Args[1:], " "))
 		f.Close()
 		if len(os.Args) > 1 && os.Args[1] == "ps" {
-			fmt.Print(os.Getenv("SY_FAKE_PS"))
+			fmt.Print(os.Getenv("RW_FAKE_PS"))
 		}
-		if len(os.Args) > 1 && os.Args[1] == "run" && os.Getenv("SY_FAKE_HANG") != "" {
+		if len(os.Args) > 1 && os.Args[1] == "run" && os.Getenv("RW_FAKE_HANG") != "" {
 			buf := make([]byte, 1)
 			os.Stdin.Read(buf) // returns when the input closes
 		}
 		os.Exit(0)
 	}
-	root, err := os.MkdirTemp("", "sy-sandbox-test-")
+	root, err := os.MkdirTemp("", "rw-sandbox-test-")
 	if err != nil {
 		panic(err)
 	}
@@ -53,7 +53,7 @@ func fakeRuntime(t *testing.T) string {
 		t.Fatal(err)
 	}
 	log := filepath.Join(t.TempDir(), "calls")
-	t.Setenv("SY_FAKE_RUNTIME", log)
+	t.Setenv("RW_FAKE_RUNTIME", log)
 	old := LookPath
 	LookPath = func(string) (string, error) { return exe, nil }
 	t.Cleanup(func() { LookPath = old })
@@ -79,7 +79,7 @@ func hasArgs(args []string, seq ...string) bool {
 }
 
 func TestRunArgs(t *testing.T) {
-	base := argSpec{runtime: "docker", name: "sy-1-2-ab", image: "img", label: "work", owner: "o", network: true,
+	base := argSpec{runtime: "docker", name: "rw-1-2-ab", image: "img", label: "work", owner: "o", network: true,
 		mounts: []Mount{{Source: "/p", Target: Work, Writable: true}, {Source: "/p/.git", Target: Work + "/.git"}},
 		env:    []string{"ANTHROPIC_API_KEY"}, argv: []string{"claude", "-p"}}
 
@@ -88,14 +88,14 @@ func TestRunArgs(t *testing.T) {
 	a := runArgs(linux)
 	for _, seq := range [][]string{
 		// --pull never: a mistyped image name never fetches a stranger's.
-		{"run", "--rm", "-i", "--init", "--pull", "never", "--name", "sy-1-2-ab"},
+		{"run", "--rm", "-i", "--init", "--pull", "never", "--name", "rw-1-2-ab"},
 		{"--cap-drop", "ALL"}, {"--security-opt", "no-new-privileges"},
 		{"--add-host", "host.docker.internal:host-gateway"},
 		{"--user", "1000:1000"},
 		{"--mount", "type=bind,source=/p,target=/work"},
 		{"--mount", "type=bind,source=/p/.git,target=/work/.git,readonly"},
 		{"-e", "ANTHROPIC_API_KEY"},
-		{"--entrypoint", "sh", "img", "-c", wrapper, "sy-sandbox", stdin, "claude", "-p"},
+		{"--entrypoint", "sh", "img", "-c", wrapper, "rw-sandbox", stdin, "claude", "-p"},
 	} {
 		if !hasArgs(a, seq...) {
 			t.Errorf("linux args lack %q:\n%q", seq, a)
@@ -152,7 +152,7 @@ func TestHostPath(t *testing.T) {
 		"/work":                 slash,
 		"/work/../etc/passwd":   "/work/../etc/passwd",
 		"/workshop/x":           "/workshop/x",
-		"/sy/home/.claude/x":    "/sy/home/.claude/x",
+		"/rw/home/.claude/x":    "/rw/home/.claude/x",
 		"relative/c.txt":        "relative/c.txt",
 		"/work/sub/../c.txt":    slash + "/c.txt",
 		"/work/./d.txt":         slash + "/d.txt",
@@ -238,7 +238,7 @@ func TestGitLayoutMainTree(t *testing.T) {
 
 // A pool worktree: its .git file points into the main repository on the
 // host (D:\... on Windows), which means nothing in the container. The
-// shared git folder is mounted read-only at /sy/git and a generated .git
+// shared git folder is mounted read-only at /rw/git and a generated .git
 // file points to the worktree's folder in it.
 func TestGitLayoutWorktree(t *testing.T) {
 	repo := newRepo(t)
@@ -264,11 +264,11 @@ func TestGitLayoutWorktree(t *testing.T) {
 		switch m.Target {
 		case "/work/.git":
 			gitfile = m
-		case "/sy/git/config":
+		case "/rw/git/config":
 			cfg = m
-		case "/sy/git":
+		case "/rw/git":
 			if !samePath(m.Source, common) {
-				t.Errorf("/sy/git from %s, want %s", m.Source, common)
+				t.Errorf("/rw/git from %s, want %s", m.Source, common)
 			}
 		}
 	}
@@ -276,7 +276,7 @@ func TestGitLayoutWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no generated .git file: %+v", mounts)
 	}
-	if string(b) != "gitdir: /sy/git/worktrees/3\n" {
+	if string(b) != "gitdir: /rw/git/worktrees/3\n" {
 		t.Errorf(".git file = %q", b)
 	}
 	checkSafeConfig(t, cfg.Source)
@@ -321,7 +321,7 @@ func TestUserMounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Mount{
-		{Source: filepath.Join(home, ".codex", "auth.json"), Target: "/sy/home/.codex/auth.json"},
+		{Source: filepath.Join(home, ".codex", "auth.json"), Target: "/rw/home/.codex/auth.json"},
 		{Source: cache, Target: "/cache", Writable: true},
 	}
 	if !slices.Equal(ms, want) {
@@ -340,7 +340,7 @@ func TestUserMounts(t *testing.T) {
 }
 
 // The home folder is the agents' to write: a symlink one left there must
-// not make sy create a file outside the sandbox when it prepares a mount
+// not make rw create a file outside the sandbox when it prepares a mount
 // point.
 func TestUserMountsRefuseSymlinkInHome(t *testing.T) {
 	home := t.TempDir()
@@ -357,7 +357,7 @@ func TestUserMountsRefuseSymlinkInHome(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "auth.json")); !os.IsNotExist(err) {
-		t.Error("sy created a file through the agent's symlink")
+		t.Error("rw created a file through the agent's symlink")
 	}
 }
 
@@ -384,7 +384,7 @@ func TestExplain(t *testing.T) {
 		{1, "error during connect: Get \"http://%2F%2F.%2Fpipe%2FdockerDesktopLinuxEngine/v1.51/containers/json\": open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.", "is not running"},
 		{1, "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?", "is not running"},
 		{125, "docker: Error response from daemon: invalid mount config", "could not start the container"},
-		{127, "sy-sandbox: line 4: claude: not found", "not in image"},
+		{127, "rw-sandbox: line 4: claude: not found", "not in image"},
 		{1, "Error: model overloaded", ""},
 		{127, "the agent itself exited 127", ""},
 	}
@@ -427,12 +427,12 @@ func TestCommandWithoutRuntime(t *testing.T) {
 func TestOwnerGone(t *testing.T) {
 	self := containerName()
 	if ownerGone(self) {
-		t.Errorf("%s: this sy counted as gone", self)
+		t.Errorf("%s: this rw counted as gone", self)
 	}
-	if !ownerGone("sy-999999999-12345-ab") {
-		t.Error("a dead sy's container counted as alive")
+	if !ownerGone("rw-999999999-12345-ab") {
+		t.Error("a dead rw's container counted as alive")
 	}
-	if ownerGone("someone-elses-container") || ownerGone("sy-1-x-ab") {
+	if ownerGone("someone-elses-container") || ownerGone("rw-1-x-ab") {
 		t.Error("a foreign name counted as ours")
 	}
 	if !reName.MatchString(self) || !proc.RemoveContainer("docker", "evil name") {
@@ -440,20 +440,20 @@ func TestOwnerGone(t *testing.T) {
 	}
 }
 
-// The first sandboxed run removes the containers of an sy that ended, and
+// The first sandboxed run removes the containers of an rw that ended, and
 // only those.
 func TestSweep(t *testing.T) {
 	log := fakeRuntime(t)
 	self := containerName()
-	dead := "sy-999999999-12345-ab"
-	t.Setenv("SY_FAKE_PS", self+"\n"+dead+"\nforeign\n")
+	dead := "rw-999999999-12345-ab"
+	t.Setenv("RW_FAKE_PS", self+"\n"+dead+"\nforeign\n")
 	exe, _ := os.Executable()
 	gone, err := Sweep("docker", exe, true)
 	if err != nil || !slices.Equal(gone, []string{dead}) {
 		t.Fatalf("Sweep = %v %v", gone, err)
 	}
 	c := calls(t, log)
-	if len(c) != 2 || !strings.HasPrefix(c[0], "ps -a --filter label=switchyard.owner=") || c[1] != "rm -f "+dead {
+	if len(c) != 2 || !strings.HasPrefix(c[0], "ps -a --filter label=relayweft.owner=") || c[1] != "rm -f "+dead {
 		t.Errorf("calls = %q", c)
 	}
 }
@@ -462,7 +462,7 @@ func TestSweep(t *testing.T) {
 // record of a pool worktree, and cleanup.
 func TestCommandAndClose(t *testing.T) {
 	log := fakeRuntime(t)
-	t.Setenv("SY_FAKE_PS", "")
+	t.Setenv("RW_FAKE_PS", "")
 	t.Setenv("GITHUB_TOKEN", "ghs_secret")
 	slot := t.TempDir()
 	pidFile := slot + ".pid"
@@ -505,8 +505,8 @@ func TestCommandAndClose(t *testing.T) {
 // Cancelling stops the container (docker kill) as well as the client.
 func TestCommandCancelKills(t *testing.T) {
 	log := fakeRuntime(t)
-	t.Setenv("SY_FAKE_PS", "")
-	t.Setenv("SY_FAKE_HANG", "1")
+	t.Setenv("RW_FAKE_PS", "")
+	t.Setenv("RW_FAKE_HANG", "1")
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd, box, err := Command(ctx, Spec{Cfg: config.SandboxCfg{Mode: "docker"}, Dir: t.TempDir(), Argv: []string{"claude"}})
 	if err != nil {

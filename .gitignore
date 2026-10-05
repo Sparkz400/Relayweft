@@ -1,13 +1,13 @@
 # build output
-/sy
-/sy.exe
+/rw
+/rw.exe
 /dist/
 /build/
 *.test
 *.out
 
 # local sessions / scratch
-.switchyard/
+.relayweft/
 
 # editors/jetbrains ui tests (IDE Starter output)
 /out/

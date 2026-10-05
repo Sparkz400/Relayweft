@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// What sy watch and sy review read and write on a pull request: its state,
+// What rw watch and rw review read and write on a pull request: its state,
 // diff, check runs (with the Actions job log), reviews and review
 // comments, and a review of its own (always a plain COMMENT).
 
@@ -235,7 +235,7 @@ type InlineComment struct {
 }
 
 // CommentReview posts one review with inline comments. Its event is always
-// COMMENT: sy never approves or requests changes on anyone's behalf.
+// COMMENT: rw never approves or requests changes on anyone's behalf.
 func (c *Client) CommentReview(r Repo, n int, commit, body string, comments []InlineComment) (*Review, error) {
 	for i := range comments {
 		comments[i].Side = "RIGHT"

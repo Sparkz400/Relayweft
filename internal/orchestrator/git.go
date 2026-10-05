@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Worktree strategy (decided for v1):
@@ -34,7 +34,7 @@ import (
 //   - The difference between the old and new integration commit is applied to
 //     the main working tree (apply.go), so the user sees results as soon as
 //     each agent finishes.
-//   - On a conflict the agent's commit is kept on branch sy/<session>/<step>
+//   - On a conflict the agent's commit is kept on branch rw/<session>/<step>
 //     and the reviewer is told; nothing is half-applied.
 
 type git struct{ dir string }
@@ -83,7 +83,7 @@ func (g git) exec(literal bool, env []string, stdin []byte, args []string) (stri
 	// Parallel checkout for worktree creation, slot resets and restores into
 	// the main tree; git ignores it elsewhere.
 	pre := []string{"-c", "checkout.workers=" + strconv.Itoa(checkoutWorkers())}
-	// Agents write the folders sy runs git in (proc.GitGuard).
+	// Agents write the folders rw runs git in (proc.GitGuard).
 	pre = append(append([]string(nil), proc.GitGuard...), pre...)
 	if literal {
 		// Paths are literal: "[id].tsx" must not also match "i.tsx".
@@ -229,7 +229,7 @@ func (g git) snapshot(msg string) (string, error) {
 // snapshotSkipping is snapshot that also returns the untracked files left
 // out for being bigger than snapshotMaxFile.
 func (g git) snapshotSkipping(msg string) (commit string, skipped []string, err error) {
-	f, err := os.CreateTemp("", "sy-index-*")
+	f, err := os.CreateTemp("", "rw-index-*")
 	if err != nil {
 		return "", nil, err
 	}
@@ -323,13 +323,13 @@ func (g git) copyIndex(dst string) bool {
 	return true
 }
 
-// commitTree runs `git commit-tree` as Switchyard, never signing (commit-tree
+// commitTree runs `git commit-tree` as Relayweft, never signing (commit-tree
 // honours commit.gpgSign, which would prompt or fail): these commits are
 // internal plumbing, never pushed.
 func (g git) commitTree(args ...string) (string, error) {
 	env := []string{
-		"GIT_AUTHOR_NAME=Switchyard", "GIT_AUTHOR_EMAIL=switchyard@localhost",
-		"GIT_COMMITTER_NAME=Switchyard", "GIT_COMMITTER_EMAIL=switchyard@localhost",
+		"GIT_AUTHOR_NAME=Relayweft", "GIT_AUTHOR_EMAIL=relayweft@localhost",
+		"GIT_COMMITTER_NAME=Relayweft", "GIT_COMMITTER_EMAIL=relayweft@localhost",
 	}
 	s, err := g.run(env, nil, append([]string{"-c", "commit.gpgsign=false"}, args...)...)
 	return strings.TrimSpace(s), err
@@ -407,7 +407,7 @@ func (g git) commitAll(msg string) (commit string, changed bool, err error) {
 // matter, its files are what counts.
 func (g git) commitWork(base, msg string) (slotCommit, error) {
 	var res slotCommit
-	f, err := os.CreateTemp("", "sy-index-*")
+	f, err := os.CreateTemp("", "rw-index-*")
 	if err != nil {
 		return res, err
 	}
@@ -578,7 +578,7 @@ func (g git) mergeTree(ours, theirs string) (tree string, clean bool, info strin
 // that was interrupted, and the resumed run's snapshot of the tree is a new
 // commit. Git would pick an older merge base and see every change made
 // since base on both sides; with base, a change already in ours (merged
-// before sy stopped) is not applied twice.
+// before rw stopped) is not applied twice.
 func (g git) mergeTreeBase(base, ours, theirs string) (tree string, clean bool, info string, err error) {
 	if base == "" || base == ours || g.isAncestor(base, ours) {
 		return g.mergeTree(ours, theirs)
@@ -588,7 +588,7 @@ func (g git) mergeTreeBase(base, ours, theirs string) (tree string, clean bool, 
 	if err != nil {
 		return "", false, "", err
 	}
-	o2, err := g.commitTree("commit-tree", ot, "-p", base, "-m", "switchyard: tree on top of the step's base")
+	o2, err := g.commitTree("commit-tree", ot, "-p", base, "-m", "relayweft: tree on top of the step's base")
 	if err != nil {
 		return "", false, "", err
 	}
@@ -614,7 +614,7 @@ func asExit(err error) (int, bool) {
 // commit and the working tree. skipped are untracked files left out of the
 // snapshot for their size.
 func (g git) changedSince(from string) (files, skipped []string, err error) {
-	now, skipped, err := g.snapshotSkipping("switchyard verify snapshot")
+	now, skipped, err := g.snapshotSkipping("relayweft verify snapshot")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -633,7 +633,7 @@ func (g git) changedSince(from string) (files, skipped []string, err error) {
 // diff returns `git diff --stat` and the (truncated) patch between a commit
 // and the current working tree.
 func (g git) diff(from string, max int) (stat, patch string) {
-	now, err := g.snapshot("switchyard review snapshot")
+	now, err := g.snapshot("relayweft review snapshot")
 	if err != nil {
 		return "", ""
 	}

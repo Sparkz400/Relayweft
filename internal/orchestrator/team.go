@@ -3,14 +3,14 @@ package orchestrator
 import (
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // Team budget (budget.team): several machines share a day budget through
 // a folder they all reach (OneDrive, a network share).
 //
-//   - After every task, sy writes this machine's usage of the last days
-//     (the `sy stats --json` format, without task texts or paths) to
+//   - After every task, rw writes this machine's usage of the last days
+//     (the `rw stats --json` format, without task texts or paths) to
 //     <folder>/<machine id>.json, atomically. It never writes another
 //     machine's file.
 //   - Before an agent starts, the budget check adds the other machines'
@@ -26,7 +26,7 @@ import (
 //     count their own day.
 
 // teamExportDays is how many days of usage this machine's team file holds
-// (enough for a weekly `sy stats --merge <folder>`).
+// (enough for a weekly `rw stats --merge <folder>`).
 const teamExportDays = 7
 
 // teamCache holds the other machines' totals for today.

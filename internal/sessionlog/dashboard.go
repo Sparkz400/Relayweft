@@ -7,17 +7,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
-// The dashboard (`sy web`) is one pass over the session records of a range
-// of local calendar days: tasks and cost per day (as `sy stats` counts
-// them), results per route and role with what `sy tune` flags, limit hits
+// The dashboard (`rw web`) is one pass over the session records of a range
+// of local calendar days: tasks and cost per day (as `rw stats` counts
+// them), results per route and role with what `rw tune` flags, limit hits
 // and switches, and the learned routes decisions used. Everything in it is
 // counts and the records' own words: the page escapes all text.
 
 // Dashboard is the result of BuildDashboard. New fields only add, so
-// clients written for an older sy keep working.
+// clients written for an older rw keep working.
 type Dashboard struct {
 	From      string      `json:"from"` // first day of the range, YYYY-MM-DD local
 	To        string      `json:"to"`   // last day (today)
@@ -66,7 +66,7 @@ type RouteRow struct {
 	Model    string `json:"model"`
 	Effort   string `json:"effort,omitempty"`
 	Route    string `json:"route"` // provider:model[:effort]
-	// Runs are the agent runs; limit hits are counted apart, as `sy tune`
+	// Runs are the agent runs; limit hits are counted apart, as `rw tune`
 	// does: they say nothing about the route.
 	Runs      int     `json:"runs"`
 	OK        int     `json:"ok"`
@@ -81,7 +81,7 @@ type RouteRow struct {
 	AvgMS     int64   `json:"avg_ms"`
 	// Escalated counts steps that hit the same error twice on this route and
 	// were moved up (the "error-repeats" rule). A step counts once, on the
-	// route of its first escalation, as `sy tune` counts it.
+	// route of its first escalation, as `rw tune` counts it.
 	Escalated int `json:"escalated"`
 	// Reviews and Rejected count the final reviews of tasks this route
 	// wrote in (worker roles), and how many asked for changes.
@@ -192,7 +192,7 @@ func DashboardSince(now time.Time, days int) time.Time {
 }
 
 // SuggestSince is where the suggestions of a range of days start: days
-// times 24 hours before now, like `sy tune --since <days>d`. It is up to a
+// times 24 hours before now, like `rw tune --since <days>d`. It is up to a
 // day before DashboardSince, so read from here.
 func SuggestSince(now time.Time, days int) time.Time {
 	if days <= 0 {
@@ -215,7 +215,7 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 	since := DashboardSince(o.Now, o.Days)
 	f := Filter{Since: since, Cwd: o.Cwd}
 	account := Filter{Since: since} // limits are per account, not per repo
-	// The suggestions look back N times 24 hours, as `sy tune --since Nd`
+	// The suggestions look back N times 24 hours, as `rw tune --since Nd`
 	// does; the per-day charts and rows use whole calendar days.
 	tune := Filter{Since: SuggestSince(o.Now, o.Days), Cwd: o.Cwd}
 	d := Dashboard{From: since.Format("2006-01-02"), To: DayStart(o.Now).Format("2006-01-02"),
@@ -225,7 +225,7 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 		d.Flags = append(d.Flags, fl.Name)
 	}
 
-	days := map[string]*DayStats{} // what `sy stats` counts per day
+	days := map[string]*DayStats{} // what `rw stats` counts per day
 	extra := map[string]*DashDay{} // failed, cancelled and wall time
 	routes := map[string]*RouteRow{}
 	decisions := map[string]Record{}         // session|task|step|attempt -> decision
@@ -250,7 +250,7 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 		return fmt.Sprintf("%s|%s|%s|%d", r.Session, r.TaskID, r.Step, attempt)
 	}
 
-	var kept []Record // the records `sy tune --since Nd` would read
+	var kept []Record // the records `rw tune --since Nd` would read
 	for _, r := range recs {
 		if tune.keep(r) {
 			kept = append(kept, r)

@@ -11,7 +11,7 @@ var (
 )
 
 // WithEnabled turns the named providers on (true) or off (false) in the
-// commented default config text, for `sy setup`. Comments and the other
+// commented default config text, for `rw setup`. Comments and the other
 // providers stay as they are.
 func WithEnabled(yamlText []byte, on map[string]bool) []byte {
 	lines := strings.Split(string(yamlText), "\n")

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/schedule"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/schedule"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // scheduleTick is how often due scheduled jobs are looked for.

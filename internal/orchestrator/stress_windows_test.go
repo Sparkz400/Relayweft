@@ -86,7 +86,7 @@ func sameImage(pid uint32, path string) bool {
 // TestStrayHelperSleep is the process TestSameImage starts; it does
 // nothing in a normal run.
 func TestStrayHelperSleep(t *testing.T) {
-	if os.Getenv("SY_STRAY_HELPER") != "1" {
+	if os.Getenv("RW_STRAY_HELPER") != "1" {
 		t.Skip("helper process for TestSameImage")
 	}
 	time.Sleep(30 * time.Second)
@@ -112,7 +112,7 @@ func TestSameImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(other, "-test.run=^TestStrayHelperSleep$")
-	cmd.Env = append(os.Environ(), "SY_STRAY_HELPER=1")
+	cmd.Env = append(os.Environ(), "RW_STRAY_HELPER=1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { test } from 'node:test';
 import { decisionBody, selectAll, setFile, setHunk, type ReviewFile } from '../decision';
-import { clientArgs, locateSy, parseHello, userSetting } from '../locate';
+import { clientArgs, locateRw, parseHello, userSetting } from '../locate';
 import { parseFollowUp, TaskModel } from '../model';
 import { SseParser, type SseMessage } from '../sse';
-import { LineReader } from '../syProcess';
+import { LineReader } from '../rwProcess';
 
 test('SSE parser handles split chunks, CRLF, comments and retry', () => {
   const got: SseMessage[] = [];
@@ -34,12 +34,12 @@ test('LineReader splits lines across chunks', () => {
 const hex = 'ab'.repeat(32);
 
 test('parseHello accepts the client hello and refuses anything else', () => {
-  const h = parseHello(JSON.stringify({ switchyard: 'web-client', protocol: 1, version: 'v1', url: 'http://127.0.0.1:1234', addr: '127.0.0.1:1234', bootstrap: hex, dir: '/x', pid: 9 }));
+  const h = parseHello(JSON.stringify({ relayweft: 'web-client', protocol: 1, version: 'v1', url: 'http://127.0.0.1:1234', addr: '127.0.0.1:1234', bootstrap: hex, dir: '/x', pid: 9 }));
   assert.equal(h.url, 'http://127.0.0.1:1234');
-  assert.throws(() => parseHello('Switchyard web UI on http://127.0.0.1:1'), /not the client hello/);
-  assert.throws(() => parseHello(JSON.stringify({ switchyard: 'web-client', protocol: 2, url: 'http://127.0.0.1:1', bootstrap: hex })), /protocol 2/);
-  assert.throws(() => parseHello(JSON.stringify({ switchyard: 'web-client', protocol: 1, url: 'http://10.0.0.1:1', bootstrap: hex })), /non-loopback/);
-  assert.throws(() => parseHello(JSON.stringify({ switchyard: 'web-client', protocol: 1, url: 'http://127.0.0.1:1', bootstrap: 'x' })), /bootstrap/);
+  assert.throws(() => parseHello('Relayweft web UI on http://127.0.0.1:1'), /not the client hello/);
+  assert.throws(() => parseHello(JSON.stringify({ relayweft: 'web-client', protocol: 2, url: 'http://127.0.0.1:1', bootstrap: hex })), /protocol 2/);
+  assert.throws(() => parseHello(JSON.stringify({ relayweft: 'web-client', protocol: 1, url: 'http://10.0.0.1:1', bootstrap: hex })), /non-loopback/);
+  assert.throws(() => parseHello(JSON.stringify({ relayweft: 'web-client', protocol: 1, url: 'http://127.0.0.1:1', bootstrap: 'x' })), /bootstrap/);
 });
 
 test('clientArgs passes arguments as they are', () => {
@@ -48,25 +48,25 @@ test('clientArgs passes arguments as they are', () => {
   ]);
 });
 
-test('locateSy on Windows wants an .exe on PATH, then the Go and Scoop folders', () => {
-  const files = new Set(['C:\\tools\\sy.cmd', 'C:\\Users\\me\\go\\bin\\sy.exe']);
+test('locateRw on Windows wants an .exe on PATH, then the Go and Scoop folders', () => {
+  const files = new Set(['C:\\tools\\rw.cmd', 'C:\\Users\\me\\go\\bin\\rw.exe']);
   const le = { platform: 'win32' as const, env: { Path: 'C:\\tools;"C:\\Program Files\\x"' }, home: 'C:\\Users\\me', isFile: (p: string) => files.has(p) };
-  assert.equal(locateSy('', le).path, 'C:\\Users\\me\\go\\bin\\sy.exe');
-  files.add('C:\\Program Files\\x\\sy.exe');
-  assert.equal(locateSy('', le).path, 'C:\\Program Files\\x\\sy.exe');
-  assert.equal(locateSy('D:\\sy\\sy', le).path, undefined);
-  files.add('D:\\sy\\sy.exe');
-  assert.equal(locateSy('D:\\sy\\sy', le).path, 'D:\\sy\\sy.exe');
-  assert.equal(locateSy('~\\go\\bin\\sy.exe', le).path, 'C:\\Users\\me\\go\\bin\\sy.exe');
+  assert.equal(locateRw('', le).path, 'C:\\Users\\me\\go\\bin\\rw.exe');
+  files.add('C:\\Program Files\\x\\rw.exe');
+  assert.equal(locateRw('', le).path, 'C:\\Program Files\\x\\rw.exe');
+  assert.equal(locateRw('D:\\rw\\rw', le).path, undefined);
+  files.add('D:\\rw\\rw.exe');
+  assert.equal(locateRw('D:\\rw\\rw', le).path, 'D:\\rw\\rw.exe');
+  assert.equal(locateRw('~\\go\\bin\\rw.exe', le).path, 'C:\\Users\\me\\go\\bin\\rw.exe');
 });
 
-test('locateSy on Unix', () => {
-  const files = new Set(['/home/me/go/bin/sy']);
+test('locateRw on Unix', () => {
+  const files = new Set(['/home/me/go/bin/rw']);
   const le = { platform: 'linux' as const, env: { PATH: '/usr/bin:/bin' }, home: '/home/me', isFile: (p: string) => files.has(p) };
-  const r = locateSy('', le);
-  assert.equal(r.path, path.posix.join('/home/me/go/bin', 'sy'));
-  assert.ok(r.tried.includes('/usr/bin/sy'));
-  assert.equal(locateSy('/opt/sy', le).path, undefined);
+  const r = locateRw('', le);
+  assert.equal(r.path, path.posix.join('/home/me/go/bin', 'rw'));
+  assert.ok(r.tried.includes('/usr/bin/rw'));
+  assert.equal(locateRw('/opt/rw', le).path, undefined);
 });
 
 test('parseFollowUp matches the server', () => {
@@ -115,16 +115,16 @@ test('TaskModel folds events into a tree and log lines', () => {
   assert.equal(m.nodes.get('main')?.status, 'failed');
 });
 
-test('sy path and args come only from user settings, never a workspace', () => {
+test('rw path and args come only from user settings, never a workspace', () => {
   // A repository's .vscode/settings.json must not choose what program runs.
   const ws = { defaultValue: '', workspaceValue: '/repo/evil', workspaceFolderValue: '/repo/evil' };
   assert.equal(userSetting(ws, 'x'), '');
-  assert.equal(userSetting({ ...ws, globalValue: '/usr/bin/sy' }, ''), '/usr/bin/sy');
+  assert.equal(userSetting({ ...ws, globalValue: '/usr/bin/rw' }, ''), '/usr/bin/rw');
   assert.deepEqual(userSetting({ defaultValue: [], workspaceValue: ['--evil'] }, ['x']), []);
   assert.deepEqual(userSetting(undefined, ['x']), ['x']);
   const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
   const props = pkg.contributes.configuration.properties;
-  for (const k of ['switchyard.path', 'switchyard.args']) {
+  for (const k of ['relayweft.path', 'relayweft.args']) {
     assert.equal(props[k].scope, 'machine', k);
   }
   assert.equal(pkg.capabilities?.untrustedWorkspaces?.supported, false);

@@ -136,7 +136,7 @@ func TestClientWithoutOrigin(t *testing.T) {
 func TestHello(t *testing.T) {
 	env := newEnv(t, nil)
 	h := env.srv.Hello(42)
-	if h.Switchyard != "web-client" || h.Protocol != ClientProtocol || h.PID != 42 || h.Addr != env.srv.Addr() || h.URL != "http://"+env.srv.Addr() || !h.Demo {
+	if h.Relayweft != "web-client" || h.Protocol != ClientProtocol || h.PID != 42 || h.Addr != env.srv.Addr() || h.URL != "http://"+env.srv.Addr() || !h.Demo {
 		t.Fatalf("hello %+v", h)
 	}
 	if code, sess := env.trade(h.Bootstrap); code != 200 || sess == "" {

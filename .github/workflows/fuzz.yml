@@ -38,7 +38,7 @@ jobs:
             targets: FuzzParse FuzzParseRouteSpec
           - pkg: ./internal/tui
             targets: FuzzParseFollowUp
-          - pkg: ./cmd/sy
+          - pkg: ./cmd/rw
             targets: FuzzParseTaskFile
           - pkg: ./internal/diag
             targets: FuzzParseRecord

@@ -68,7 +68,7 @@ export class AgentsTree implements vscode.TreeDataProvider<AgentsItem> {
     const None = vscode.TreeItemCollapsibleState.None;
     switch (e.kind) {
       case 'status': {
-        const it = new vscode.TreeItem(st?.project || 'Switchyard', None);
+        const it = new vscode.TreeItem(st?.project || 'Relayweft', None);
         if (!this.connected) {
           it.description = this.error ? 'disconnected: ' + this.error : 'connecting…';
           it.iconPath = new vscode.ThemeIcon('debug-disconnect');
@@ -83,7 +83,7 @@ export class AgentsTree implements vscode.TreeDataProvider<AgentsItem> {
           it.iconPath = new vscode.ThemeIcon('circle-large-outline');
         }
         const md = new vscode.MarkdownString();
-        md.appendMarkdown(`**Switchyard ${st?.version ?? ''}**${st?.demo ? ' (demo)' : ''}\n\n`);
+        md.appendMarkdown(`**Relayweft ${st?.version ?? ''}**${st?.demo ? ' (demo)' : ''}\n\n`);
         md.appendText(`${st?.dir ?? ''}\n`);
         if (st?.task) {
           md.appendText(`\ntask: ${oneLine(st.task, 300)}\n`);
@@ -126,7 +126,7 @@ export class AgentsTree implements vscode.TreeDataProvider<AgentsItem> {
         it.description = oneLine(r.type === 'budget' ? r.budget?.text : r.type === 'changes' ? r.changes?.title : r.plan?.summary || r.task, 80);
         it.iconPath = new vscode.ThemeIcon(icon);
         it.contextValue = 'approval.' + r.type;
-        it.command = { command: 'switchyard.answerApproval', title: 'Answer', arguments: [r.id] };
+        it.command = { command: 'relayweft.answerApproval', title: 'Answer', arguments: [r.id] };
         return it;
       }
       case 'queue': {

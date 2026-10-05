@@ -7,28 +7,28 @@
 //	                 folder), read-write; read-only for read-only agents
 //	/work/.git       the repository's git folder, read-only: a main tree's
 //	                 .git, or for a worktree a generated .git file that
-//	                 points into /sy/git
-//	/sy/git          the repository's shared git folder (a worktree's),
+//	                 points into /rw/git
+//	/rw/git          the repository's shared git folder (a worktree's),
 //	                 read-only
 //	.../config       a copy of the repository's git config without remotes,
 //	                 credentials or helpers, read-only
-//	/sy/home         HOME: a folder sy keeps per project, so the CLIs'
+//	/rw/home         HOME: a folder rw keeps per project, so the CLIs'
 //	                 session stores survive between runs (resume); the
 //	                 credential files are mounted read-only inside it
-//	/sy/run          this run's standard input, read-only
-//	/sy/mcp          Claude's MCP config file, read-only
+//	/rw/run          this run's standard input, read-only
+//	/rw/mcp          Claude's MCP config file, read-only
 //
 // Paths the agent prints (/work/...) are turned back into host paths
-// (HostPath), so sy sees the same paths as without a sandbox on Windows,
+// (HostPath), so rw sees the same paths as without a sandbox on Windows,
 // Linux and macOS.
 //
-// Stopping: the container is named and labelled (sy-<pid>-<start>-<rand>,
-// switchyard.owner). Cancel runs `docker kill`; the container's standard
-// input stays open while sy runs, and a small shell wrapper in the
+// Stopping: the container is named and labelled (rw-<pid>-<start>-<rand>,
+// relayweft.owner). Cancel runs `docker kill`; the container's standard
+// input stays open while rw runs, and a small shell wrapper in the
 // container ends it when that input closes, which happens when the docker
-// client dies with sy (Windows' kill-on-exit job, a hard kill). The pid
+// client dies with rw (Windows' kill-on-exit job, a hard kill). The pid
 // file of a pool worktree records the container (proc.NoteContainer), and
-// the first sandboxed run of every sy removes containers of an sy that is
+// the first sandboxed run of every rw removes containers of an rw that is
 // gone (Sweep).
 package sandbox
 
@@ -53,33 +53,33 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/canon"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/canon"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Paths in the container.
 const (
 	Work     = "/work"
-	gitMount = "/sy/git"
-	Home     = "/sy/home"
-	runMount = "/sy/run"
+	gitMount = "/rw/git"
+	Home     = "/rw/home"
+	runMount = "/rw/run"
 	// MCPDir is where Claude's MCP config folder is mounted.
-	MCPDir = "/sy/mcp"
+	MCPDir = "/rw/mcp"
 	stdin  = runMount + "/stdin"
 )
 
 // LookPath finds the container runtime; tests swap in a fake one.
 var LookPath = proc.Resolve
 
-// stateRoot is sy's own folder for sandbox state (per-project homes, run
+// stateRoot is rw's own folder for sandbox state (per-project homes, run
 // folders); tests point it elsewhere.
 var stateRoot = func() string {
 	if d, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(d, "switchyard", "sandbox")
+		return filepath.Join(d, "relayweft", "sandbox")
 	}
-	return filepath.Join(os.TempDir(), "switchyard-sandbox")
+	return filepath.Join(os.TempDir(), "relayweft-sandbox")
 }
 
 // Spec is one command to run in a container.
@@ -140,7 +140,7 @@ func Command(ctx context.Context, s Spec) (*exec.Cmd, *Box, error) {
 	}
 	bin, err := LookPath(rt)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sandbox: %s is not installed or not on PATH (sandbox.mode: %s): install it, or set sandbox.mode: off to run agents without a sandbox; `sy doctor` checks the setup", rt, rt)
+		return nil, nil, fmt.Errorf("sandbox: %s is not installed or not on PATH (sandbox.mode: %s): install it, or set sandbox.mode: off to run agents without a sandbox; `rw doctor` checks the setup", rt, rt)
 	}
 	sweepFor(rt, bin)
 	dir := s.Dir
@@ -209,7 +209,7 @@ func Command(ctx context.Context, s Spec) (*exec.Cmd, *Box, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	proc.Prepare(cmd)
 	cmd.Dir = dir
-	// The runtime client gets your environment without sy's tokens, plus
+	// The runtime client gets your environment without rw's tokens, plus
 	// the values the container is given by name; the container itself
 	// gets only those.
 	cmd.Env = proc.WithoutSecrets(os.Environ())
@@ -218,8 +218,8 @@ func Command(ctx context.Context, s Spec) (*exec.Cmd, *Box, error) {
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
-	// The container's input stays open while sy runs: when it closes (the
-	// client died with sy), the wrapper ends the container.
+	// The container's input stays open while rw runs: when it closes (the
+	// client died with rw), the wrapper ends the container.
 	w, err := cmd.StdinPipe()
 	if err != nil {
 		return fail(err)
@@ -254,7 +254,7 @@ func (b *Box) Close(ok bool) {
 	})
 }
 
-// removeContainer stops and removes one of sy's containers.
+// removeContainer stops and removes one of rw's containers.
 func removeContainer(bin, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -329,11 +329,11 @@ func explain(rt, image string, code int, stderr string) error {
 		if rt == config.SandboxPodman {
 			start = "start podman (podman machine start)"
 		}
-		return fmt.Errorf("sandbox: %s is not running: %s, then run `sy doctor` (%s)", rt, start, last)
+		return fmt.Errorf("sandbox: %s is not running: %s, then run `rw doctor` (%s)", rt, start, last)
 	case code == 125 && reNoImage.MatchString(stderr):
 		return fmt.Errorf("sandbox: image %q not found: build it with `%s build -t %s packaging/sandbox` (docs/sandbox.md) or set sandbox.image (%s)", image, rt, config.DefaultSandboxImage, last)
 	case code == 125:
-		return fmt.Errorf("sandbox: %s could not start the container: %s; run `sy doctor`", rt, last)
+		return fmt.Errorf("sandbox: %s could not start the container: %s; run `rw doctor`", rt, last)
 	case (code == 126 || code == 127) && reNotFound.MatchString(stderr):
 		return fmt.Errorf("sandbox: the command is not in image %q (%s): install it in the image (docs/sandbox.md); for an agent CLI with another name there, set providers.<name>.sandbox.command", image, last)
 	}
@@ -350,7 +350,7 @@ func lastLine(s string) string {
 }
 
 // wrapper runs the command in the container ($2...) with $1 as its input
-// and ends the container when the container's own input closes: sy keeps
+// and ends the container when the container's own input closes: rw keeps
 // it open while it runs, and the runtime closes it when its client dies
 // (docker run -i closes a container's input when the client goes away).
 // The wrapper's exit is the command's.
@@ -378,8 +378,8 @@ func runArgs(a argSpec) []string {
 	// --pull never: the image is built here; a name typed wrong must not
 	// fetch someone else's image from a registry.
 	args := []string{"run", "--rm", "-i", "--init", "--pull", "never", "--name", a.name,
-		"--label", "switchyard.sandbox=1", "--label", "switchyard.owner=" + a.owner,
-		"--label", "switchyard.what=" + labelValue(a.label),
+		"--label", "relayweft.sandbox=1", "--label", "relayweft.owner=" + a.owner,
+		"--label", "relayweft.what=" + labelValue(a.label),
 		// The agent needs no privileges: no capabilities, no setuid, a cap
 		// on processes so a runaway build cannot starve the machine.
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "4096",
@@ -406,7 +406,7 @@ func runArgs(a argSpec) []string {
 	args = append(args, "-w", Work,
 		// IS_SANDBOX tells Claude Code it runs in a sandbox (it then
 		// accepts bypassPermissions as root).
-		"-e", "HOME="+Home, "-e", "SY_SANDBOX=1", "-e", "IS_SANDBOX=1",
+		"-e", "HOME="+Home, "-e", "RW_SANDBOX=1", "-e", "IS_SANDBOX=1",
 		// The mounts belong to another user as the container sees it, and
 		// the git folder is read-only: git must neither refuse the
 		// repository nor try to write its index.
@@ -415,7 +415,7 @@ func runArgs(a argSpec) []string {
 	for _, n := range a.env {
 		args = append(args, "-e", n)
 	}
-	args = append(args, "--entrypoint", "sh", a.image, "-c", wrapper, "sy-sandbox", stdin)
+	args = append(args, "--entrypoint", "sh", a.image, "-c", wrapper, "rw-sandbox", stdin)
 	return append(args, a.argv...)
 }
 
@@ -468,8 +468,8 @@ func owner() string {
 	return hex.EncodeToString(h[:6])
 }
 
-// containerName is sy-<pid>-<start>-<rand>: the pid and start time of this
-// sy, so a sweep can tell whether the sy that started it still runs.
+// containerName is rw-<pid>-<start>-<rand>: the pid and start time of this
+// rw, so a sweep can tell whether the rw that started it still runs.
 func containerName() string {
 	stamp := proc.Identity(os.Getpid())
 	if stamp == "" {
@@ -477,12 +477,12 @@ func containerName() string {
 	}
 	var r [4]byte
 	rand.Read(r[:])
-	return fmt.Sprintf("sy-%d-%s-%s", os.Getpid(), stamp, hex.EncodeToString(r[:]))
+	return fmt.Sprintf("rw-%d-%s-%s", os.Getpid(), stamp, hex.EncodeToString(r[:]))
 }
 
-var reName = regexp.MustCompile(`^sy-(\d+)-(\d+)-[0-9a-f]+$`)
+var reName = regexp.MustCompile(`^rw-(\d+)-(\d+)-[0-9a-f]+$`)
 
-// ownerGone reports whether the sy that started the container named name
+// ownerGone reports whether the rw that started the container named name
 // has ended.
 func ownerGone(name string) bool {
 	m := reName.FindStringSubmatch(name)
@@ -501,7 +501,7 @@ var (
 	sweptOnce = map[string]bool{}
 )
 
-// sweepFor removes, once per process and runtime, the containers of an sy
+// sweepFor removes, once per process and runtime, the containers of an rw
 // that is gone (Sweep).
 func sweepFor(rt, bin string) {
 	sweepMu.Lock()
@@ -513,12 +513,12 @@ func sweepFor(rt, bin string) {
 	if gone, err := Sweep(rt, bin, true); err != nil {
 		diag.Logf("sandbox: looking for leftover containers: %v", err)
 	} else if len(gone) > 0 {
-		diag.Logf("sandbox: removed %d container(s) of an sy that ended: %s", len(gone), strings.Join(gone, " "))
+		diag.Logf("sandbox: removed %d container(s) of an rw that ended: %s", len(gone), strings.Join(gone, " "))
 		diag.Health("leftover", "what", "sandbox-container", "path", strings.Join(gone, " "))
 	}
 }
 
-// Sweep lists this user's sy containers whose sy has ended, and removes
+// Sweep lists this user's rw containers whose rw has ended, and removes
 // them when remove is set. bin is the runtime's path.
 func Sweep(rt, bin string, remove bool) ([]string, error) {
 	names, err := Running(bin)
@@ -575,7 +575,7 @@ func gitLayout(dir, runDir string) ([]Mount, string, error) {
 	}
 	rel, err := filepath.Rel(common, gitdir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		// A layout sy does not create: run without git rather than
+		// A layout rw does not create: run without git rather than
 		// mounting more than the repository.
 		diag.Logf("sandbox: %s: git folder %s is outside %s; no git in the container", dir, gitdir, common)
 		return nil, dir, nil
@@ -668,7 +668,7 @@ func moreConfigs(common, root, runDir string) ([]Mount, error) {
 // safeConfigCopy writes the safe part of the git config file src to dst.
 func safeConfigCopy(src, dst string) error {
 	var b strings.Builder
-	b.WriteString("# The repository's git config as the sandbox sees it (sy): format and extensions only.\n")
+	b.WriteString("# The repository's git config as the sandbox sees it (rw): format and extensions only.\n")
 	cmd := exec.Command("git", proc.GitArgs("config", "--file", src, "--get-regexp", `^(core|extensions)\.`)...)
 	proc.Background(cmd)
 	out, _ := cmd.Output()
@@ -712,9 +712,9 @@ func projectHome(key, name string) (string, error) {
 var reHomeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // ProjectHome is the HOME folder the containers of the project at dir get
-// for a provider (name; "" = verify commands and hooks) (sy doctor, tests).
+// for a provider (name; "" = verify commands and hooks) (rw doctor, tests).
 func ProjectHome(dir, name string) (string, error) {
-	runDir, err := os.MkdirTemp("", "sy-sandbox-probe-")
+	runDir, err := os.MkdirTemp("", "rw-sandbox-probe-")
 	if err != nil {
 		return "", err
 	}
@@ -795,7 +795,7 @@ func userMounts(cfg config.SandboxCfg, home string) ([]Mount, error) {
 
 // mountPoint creates rel (a folder, or an empty file) inside home, where a
 // mount will go. Agents write to home, so every part of the path must be a
-// plain folder or file, never a symlink an agent left there: sy would
+// plain folder or file, never a symlink an agent left there: rw would
 // otherwise create files wherever it points on this machine.
 func mountPoint(home, rel string, dir bool) error {
 	parts := strings.Split(rel, "/")
@@ -822,7 +822,7 @@ func mountPoint(home, rel string, dir bool) error {
 					f.Close()
 				}
 			}
-			// Another agent of this sy may have created it a moment ago:
+			// Another agent of this rw may have created it a moment ago:
 			// look again (it must still not be a symlink).
 			if err == nil || !errors.Is(err, os.ErrExist) || try > 0 {
 				if err != nil {
@@ -847,7 +847,7 @@ func expandHome(p, home string) (string, error) {
 }
 
 // PassEnv returns NAME=value for the variables in names that are set
-// (lookup nil = the environment). sy's forge and CI tokens never pass.
+// (lookup nil = the environment). rw's forge and CI tokens never pass.
 func PassEnv(names []string, lookup func(string) (string, bool)) []string {
 	if lookup == nil {
 		lookup = os.LookupEnv

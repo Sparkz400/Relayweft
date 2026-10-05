@@ -15,17 +15,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/canon"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/sysload"
+	"github.com/sparkz400/relayweft/internal/canon"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/sysload"
 )
 
 // Worktree pool:
 //
 //   - Writing agents run in pooled worktrees that persist between tasks
-//     (<user cache dir>/switchyard/worktrees/<repo hash>/pool/<n>) instead of
+//     (<user cache dir>/relayweft/worktrees/<repo hash>/pool/<n>) instead of
 //     a fresh `git worktree add` per agent and task.
 //   - Acquiring a slot moves it to the task's integration commit with
 //     `git checkout --force --detach` plus `git clean -fd`: git rewrites only
@@ -34,16 +34,16 @@ import (
 //   - Ignored files (node_modules, build caches) survive in the slots, so
 //     agents can run builds there once those exist.
 //   - Each slot has a lock file held while an agent uses it; the OS releases
-//     it if sy crashes, and two sy instances never share a slot.
+//     it if rw crashes, and two rw instances never share a slot.
 //   - The first slots are created in the background while the planner runs.
-//   - `sy clean` removes the pool.
+//   - `rw clean` removes the pool.
 
 const maxPoolSlots = 16
 
 // cacheDir is where pools live; tests point it at a temporary directory.
 var cacheDir = os.UserCacheDir
 
-// repoCache is Switchyard's cache directory for a repo: outside the repo, so
+// repoCache is Relayweft's cache directory for a repo: outside the repo, so
 // `git status` in the user's tree stays clean.
 // It is keyed by the repository's shared git directory, so every worktree
 // of a repo (the main tree, the bench workspace) shares one pool.
@@ -57,7 +57,7 @@ func repoCache(root string) string {
 	if err != nil {
 		base = os.TempDir()
 	}
-	return filepath.Join(base, "switchyard", "worktrees", hex.EncodeToString(h[:])[:12])
+	return filepath.Join(base, "relayweft", "worktrees", hex.EncodeToString(h[:])[:12])
 }
 
 func poolDir(root string) string { return filepath.Join(repoCache(root), "pool") }
@@ -75,16 +75,16 @@ type slot struct {
 // running there (Unix), and unlocks it.
 func (s *slot) release() {
 	s.untrack()
-	proc.ReapOwn(pidFile(s.path)) // recorded by this sy since it locked the slot
+	proc.ReapOwn(pidFile(s.path)) // recorded by this rw since it locked the slot
 	s.unlock()
 }
 
 // pidFile lists the agent processes running in a slot (see proc.TrackDir):
-// a sy killed with SIGKILL cannot stop its agents, and the next user of
+// a rw killed with SIGKILL cannot stop its agents, and the next user of
 // the slot must not share it with them.
 func pidFile(slot string) string { return slot + ".pid" }
 
-// claimWait is how long a resume waits for a slot another sy locked for a
+// claimWait is how long a resume waits for a slot another rw locked for a
 // moment (to look at it).
 var claimWait = 5 * time.Second
 
@@ -98,7 +98,7 @@ func lockSlotWait(path string, d time.Duration) (func(), error) {
 		if ok {
 			if !proc.ReapOrphans(pidFile(path)) {
 				unlock()
-				return nil, fmt.Errorf("%s: an agent of an earlier sy is still running there", path)
+				return nil, fmt.Errorf("%s: an agent of an earlier rw is still running there", path)
 			}
 			return unlock, nil
 		}
@@ -109,18 +109,18 @@ func lockSlotWait(path string, d time.Duration) (func(), error) {
 	}
 }
 
-// errSlotBusy: another sy has the slot locked.
-var errSlotBusy = errors.New("in use (another sy)")
+// errSlotBusy: another rw has the slot locked.
+var errSlotBusy = errors.New("in use (another rw)")
 
 // claimHeldWait is how long a resume keeps waiting for its own held
-// worktree while another sy has it locked. A sy giving up a full pool's
+// worktree while another rw has it locked. A rw giving up a full pool's
 // held worktree (evictHeld) keeps the lock while it saves the edits, which
-// can take a while in a big repo, and lets go once it sees that a sy runs
+// can take a while in a big repo, and lets go once it sees that a rw runs
 // the task (the resume holds the task's lock). Giving up sooner would
 // start the step over and leave the edits behind.
 var claimHeldWait = 60 * time.Second
 
-// lockSlot locks a slot and makes sure no leftover agent of a crashed sy is
+// lockSlot locks a slot and makes sure no leftover agent of a crashed rw is
 // still running in it.
 func lockSlot(path string) (unlock func(), ok bool) {
 	unlock, ok = proc.TryLock(path + ".lock")
@@ -128,7 +128,7 @@ func lockSlot(path string) (unlock func(), ok bool) {
 		return nil, false
 	}
 	if !proc.ReapOrphans(pidFile(path)) {
-		diag.Logf("pool: %s skipped, an agent of an earlier sy is still running in it", path)
+		diag.Logf("pool: %s skipped, an agent of an earlier rw is still running in it", path)
 		diag.Health("leftover", "what", "orphan-agent", "path", path)
 		unlock()
 		return nil, false
@@ -187,13 +187,13 @@ func acquireSlot(root, commit string) (*slot, error) {
 	if cap := int(poolCap.Load()); cap > 0 && countSlots(dir) >= cap {
 		// The pool is at its size and every slot is busy or held: before
 		// it grows by another full checkout, the oldest held worktree no
-		// sy is using is given up, its edits saved first.
+		// rw is using is given up, its edits saved first.
 		s, held := evictHeld(root, dir, commit, &notes)
 		if s != nil {
 			return s, nil
 		}
 		if held > 0 {
-			msg := fmt.Sprintf("the worktree pool of this repo is at its size (%d), and %d worktree(s) holding interrupted tasks' edits cannot be given up now (their tasks are running, or their edits could not be saved): adding another one. sy history lists the interrupted tasks; sy resume finishes them, sy clean frees them", cap, held)
+			msg := fmt.Sprintf("the worktree pool of this repo is at its size (%d), and %d worktree(s) holding interrupted tasks' edits cannot be given up now (their tasks are running, or their edits could not be saved): adding another one. rw history lists the interrupted tasks; rw resume finishes them, rw clean frees them", cap, held)
 			diag.Logf("pool: %s", msg)
 			notes = append(notes, msg)
 		}
@@ -224,7 +224,7 @@ var poolCap atomic.Int64
 
 // setPoolLimits applies cfg's disk minimum and pool size. Everything that
 // starts agents calls it first (a task, a follow-up, a read-only run, a
-// single-agent run): they are per process, and a follow-up in a fresh sy
+// single-agent run): they are per process, and a follow-up in a fresh rw
 // runs before any task.
 func setPoolLimits(cfg *config.Config) {
 	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
@@ -261,9 +261,9 @@ func countSlots(dir string) int {
 }
 
 // evictHeld gives up the oldest held worktree of the pool in dir that no
-// sy is using and reuses it at commit: like an expired hold, its half-done
+// rw is using and reuses it at commit: like an expired hold, its half-done
 // edits are saved on a branch first (saveHeldEdits), and the task's state
-// and sy history say where. A worktree whose task a sy is running, or
+// and rw history say where. A worktree whose task a rw is running, or
 // whose edits cannot be saved, is left as it is. held is how many held
 // worktrees there were.
 func evictHeld(root, dir, commit string, notes *[]string) (s *slot, held int) {
@@ -412,14 +412,14 @@ func slotOf(root, dir string) string {
 // agent used before, instead of any free one: Claude Code keeps its
 // sessions per folder, so an agent's session can only be resumed in the
 // folder it ran in (a follow-up), and a step that was interrupted left its
-// half-done edits there (a resumed task). The lock of an sy that died is
+// half-done edits there (a resumed task). The lock of an rw that died is
 // free again (the OS released it), and agents it left running in the slot
 // are dealt with as in acquireSlot.
 //
 // With keep, the slot must still hold the work of the step run that keep
 // names (its hold mark, holds.go) and that started at commit: it is used as
 // it is (nothing is reset or cleaned), and an error says why it cannot be
-// (in use, gone, or reused since). Another sy may lock the slot for a
+// (in use, gone, or reused since). Another rw may lock the slot for a
 // moment to look at its hold mark, so a busy lock is waited for a little.
 // Without keep, the slot is moved to commit like acquireSlot does, and
 // recreated at the same path if needed.
@@ -433,15 +433,15 @@ func claimSlot(root, path, commit string, keep *slotHold) (*slot, error) {
 		var err error
 		unlock, err = lockSlotWait(path, claimWait)
 		if errors.Is(err, errSlotBusy) && ownHold(path, *keep) == nil {
-			// Still this run's worktree: another sy is saving its edits
+			// Still this run's worktree: another rw is saving its edits
 			// to give it up, and lets go when it sees the task running.
 			began := time.Now()
-			diag.Logf("pool: %s is locked by another sy but still holds this task's edits; waiting for it (up to %s)", path, claimHeldWait)
+			diag.Logf("pool: %s is locked by another rw but still holds this task's edits; waiting for it (up to %s)", path, claimHeldWait)
 			for errors.Is(err, errSlotBusy) && ownHold(path, *keep) == nil && time.Since(began) < claimHeldWait {
 				unlock, err = lockSlotWait(path, time.Second)
 			}
 			if err == nil {
-				notes = append(notes, fmt.Sprintf("waited %s for another sy that had %s locked", (claimWait+time.Since(began)).Round(time.Second), path))
+				notes = append(notes, fmt.Sprintf("waited %s for another rw that had %s locked", (claimWait+time.Since(began)).Round(time.Second), path))
 			}
 		}
 		if err != nil {
@@ -461,7 +461,7 @@ func claimSlot(root, path, commit string, keep *slotHold) (*slot, error) {
 	} else {
 		var ok bool
 		if unlock, ok = lockSlot(path); !ok {
-			return nil, fmt.Errorf("%s is in use (another sy, or an agent still running there)", path)
+			return nil, fmt.Errorf("%s is in use (another rw, or an agent still running there)", path)
 		}
 		held, note := slotHeldNote(path)
 		if note != "" {
@@ -469,7 +469,7 @@ func claimSlot(root, path, commit string, keep *slotHold) (*slot, error) {
 		}
 		if held {
 			unlock()
-			return nil, fmt.Errorf("%s holds the half-done edits of an interrupted task (sy resume)", path)
+			return nil, fmt.Errorf("%s holds the half-done edits of an interrupted task (rw resume)", path)
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			unlock()
@@ -628,7 +628,7 @@ func touch(path string) {
 
 // prewarmPool creates the first n slots at commit if they are missing, so
 // the expensive first checkout overlaps with planning. Slots in use by
-// another sy are skipped. Closing stop ends it before the next slot.
+// another rw are skipped. Closing stop ends it before the next slot.
 func prewarmPool(root, commit string, n int, stop <-chan struct{}) {
 	dir := poolDir(root)
 	if os.MkdirAll(dir, 0o755) != nil {
@@ -722,10 +722,10 @@ func CleanPoolSaved(dir string) (n int, saved []SavedEdits, err error) {
 		path := filepath.Join(pd, e.Name())
 		unlock, ok := lockSlot(path)
 		if !ok {
-			continue // in use by a running sy
+			continue // in use by a running rw
 		}
 		if i := checkHold(path); i.held || i.save {
-			s, err := saveHeldEdits(path, i, "sy clean removed its worktree")
+			s, err := saveHeldEdits(path, i, "rw clean removed its worktree")
 			if err != nil {
 				kept = append(kept, fmt.Sprintf("%s (%v)", path, err))
 				unlock()
@@ -741,9 +741,9 @@ func CleanPoolSaved(dir string) (n int, saved []SavedEdits, err error) {
 			continue
 		}
 		n++
-		// sy clean is explicit and leaves nothing behind. The lock file is
+		// rw clean is explicit and leaves nothing behind. The lock file is
 		// deleted while it is held: proc.TryLock refuses a lock on a file
-		// that is no longer at its path, so no two sy can end up holding
+		// that is no longer at its path, so no two rw can end up holding
 		// different files for one slot.
 		os.Remove(pidFile(path))
 		os.Remove(holdPath(path))
@@ -774,7 +774,7 @@ func CleanPoolSaved(dir string) (n int, saved []SavedEdits, err error) {
 		msgs = append(msgs, fmt.Sprintf("could not delete %s (a program may still have files open there)", strings.Join(failed, ", ")))
 	}
 	if len(kept) > 0 {
-		msgs = append(msgs, fmt.Sprintf("kept %s: it holds half-done edits of an interrupted task that were not saved on a branch. If its task is running, run sy clean when it ends; otherwise `sy resume` continues the task there, or copy what you need and delete the folder", strings.Join(kept, ", ")))
+		msgs = append(msgs, fmt.Sprintf("kept %s: it holds half-done edits of an interrupted task that were not saved on a branch. If its task is running, run rw clean when it ends; otherwise `rw resume` continues the task there, or copy what you need and delete the folder", strings.Join(kept, ", ")))
 	}
 	if len(msgs) > 0 {
 		return n, saved, fmt.Errorf("removed %d pooled worktree(s); %s", n, strings.Join(msgs, "; "))
@@ -824,7 +824,7 @@ func worktreesBase() string {
 	if err != nil {
 		base = os.TempDir()
 	}
-	return filepath.Join(base, "switchyard", "worktrees")
+	return filepath.Join(base, "relayweft", "worktrees")
 }
 
 // Pools lists every repo's pool with its size. Walking big pools takes a
@@ -965,7 +965,7 @@ func PrunePools(maxIdle time.Duration) (removed int, freed uint64) {
 				freed += size
 			}
 			unlock()
-			// The lock file stays: deleting it could let two sy instances lock
+			// The lock file stays: deleting it could let two rw instances lock
 			// different files for the same slot.
 		}
 		for _, s := range slots {
@@ -993,10 +993,10 @@ func humanBytes(n uint64) string {
 	return fmt.Sprintf("%d KB", n>>10)
 }
 
-// HumanBytes formats a byte count (exported for sy doctor).
+// HumanBytes formats a byte count (exported for rw doctor).
 func HumanBytes(n uint64) string { return humanBytes(n) }
 
-// Leftover is something a sy that ended badly left behind.
+// Leftover is something a rw that ended badly left behind.
 type Leftover struct {
 	Kind   string `json:"kind"` // orphan-agent, trash, temp
 	Path   string `json:"path"`
@@ -1004,11 +1004,11 @@ type Leftover struct {
 	Bytes  uint64 `json:"bytes,omitempty"`
 }
 
-// tempPrefixes are the temporary files sy removes when it ends normally.
-var tempPrefixes = []string{"sy-merge-", "sy-index-", "sy-pr-index-", "sy-pr-body-"}
+// tempPrefixes are the temporary files rw removes when it ends normally.
+var tempPrefixes = []string{"rw-merge-", "rw-index-", "rw-pr-index-", "rw-pr-body-"}
 
-// Leftovers lists what ended sy processes left behind: agents still
-// running in a pool slot no sy holds, slot directories that could not be
+// Leftovers lists what ended rw processes left behind: agents still
+// running in a pool slot no rw holds, slot directories that could not be
 // deleted, and temporary files older than a day. It changes nothing.
 func Leftovers() []Leftover {
 	var out []Leftover
@@ -1021,19 +1021,19 @@ func Leftovers() []Leftover {
 			switch {
 			case e.IsDir() && isTrash(e.Name()):
 				out = append(out, Leftover{Kind: "trash", Path: p, Bytes: dirSize(p),
-					Detail: "pool worktree that could not be deleted (a program had a file open); `sy clean` retries"})
+					Detail: "pool worktree that could not be deleted (a program had a file open); `rw clean` retries"})
 			case !e.IsDir() && strings.HasSuffix(e.Name(), ".pid"):
 				slot := strings.TrimSuffix(p, ".pid")
 				if _, err := os.Stat(slot + ".lock"); err == nil {
 					unlock, free := proc.TryLock(slot + ".lock")
 					if !free {
-						continue // a running sy uses the slot
+						continue // a running rw uses the slot
 					}
 					unlock()
 				}
 				if pids := proc.LiveOrphans(p); len(pids) > 0 {
 					out = append(out, Leftover{Kind: "orphan-agent", Path: slot,
-						Detail: fmt.Sprintf("agent process %v of an ended sy still runs in this pool worktree", pids)})
+						Detail: fmt.Sprintf("agent process %v of an ended rw still runs in this pool worktree", pids)})
 				}
 			}
 		}
@@ -1062,7 +1062,7 @@ func Leftovers() []Leftover {
 	}
 	if n > 0 {
 		out = append(out, Leftover{Kind: "temp", Path: tmp, Bytes: bytes,
-			Detail: fmt.Sprintf("%d temporary sy-* file(s) older than a day", n)})
+			Detail: fmt.Sprintf("%d temporary rw-* file(s) older than a day", n)})
 	}
 	return out
 }

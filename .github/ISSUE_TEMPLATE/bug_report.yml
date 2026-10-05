@@ -1,12 +1,12 @@
 name: Bug report
-description: Something in sy does not work as expected
+description: Something in rw does not work as expected
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks! The fastest way to a fix: run `sy bugreport` and attach the zip it writes
-        (logs, config and `sy doctor` output; no API keys - sy never has any).
+        Thanks! The fastest way to a fix: run `rw bugreport` and attach the zip it writes
+        (logs, config and `rw doctor` output; no API keys - rw never has any).
         Security problems: please use **Security → Report a vulnerability** instead.
   - type: textarea
     id: what
@@ -18,12 +18,12 @@ body:
     id: steps
     attributes:
       label: Steps to reproduce
-      placeholder: "1. sy in a repo with ...\n2. task: ...\n3. ..."
+      placeholder: "1. rw in a repo with ...\n2. task: ...\n3. ..."
   - type: input
     id: version
     attributes:
-      label: sy version
-      placeholder: "sy version"
+      label: rw version
+      placeholder: "rw version"
     validations:
       required: true
   - type: dropdown

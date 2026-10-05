@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Held pool worktrees:
@@ -22,26 +22,26 @@ import (
 //   - A pool worktree in which a plan step's agent works is marked as held
 //     (<slot>.hold names the task, the step and the run's token) until the
 //     step ends.
-//   - If sy dies, or the task is cancelled, the mark keeps the step's
-//     half-done edits there for sy resume: other tasks, follow-ups and
+//   - If rw dies, or the task is cancelled, the mark keeps the step's
+//     half-done edits there for rw resume: other tasks, follow-ups and
 //     pruning do not take the worktree while the task's state still records
-//     the step in it, for at most holdMaxAge. sy undo of the task releases
-//     it; sy clean removes it.
+//     the step in it, for at most holdMaxAge. rw undo of the task releases
+//     it; rw clean removes it.
 //   - A mark that cannot be read for sure (a read racing a save on Windows,
-//     a state file another sy is replacing) counts as held: wrongly freeing
+//     a state file another rw is replacing) counts as held: wrongly freeing
 //     a slot would delete the edits.
 //   - A resume claims the worktree only if the mark is still its own run's
 //     (same token): any other use of the worktree replaces or removes it.
 //   - The pool does not grow past its size (poolSize) for holds: when it
-//     is full, the oldest held worktree whose task no sy runs is given up
+//     is full, the oldest held worktree whose task no rw runs is given up
 //     (evictHeld). A step cancelled before its agent changed anything
 //     holds nothing (dropCleanHold).
 //   - Before a hold that expired (or whose task's state is gone) is
-//     released, before a full pool gives one up, and before sy clean
+//     released, before a full pool gives one up, and before rw clean
 //     removes a held worktree, the half-done
-//     edits in it are saved on a branch (sy/<task>/<step>-unfinished, like
-//     rejected work) and recorded in the task's state (Saved), so sy history
-//     and sy resume can say where they are. Only a new branch is created:
+//     edits in it are saved on a branch (rw/<task>/<step>-unfinished, like
+//     rejected work) and recorded in the task's state (Saved), so rw history
+//     and rw resume can say where they are. Only a new branch is created:
 //     the person's branches, index and working tree are never touched. If
 //     they cannot be saved, the worktree stays held.
 
@@ -135,9 +135,9 @@ func checkHold(slot string) holdInfo {
 	r, running := st.Running[h.Step]
 	if !running || !samePath(r.Slot, slot) {
 		// The step works elsewhere now, or ended, without this mark being
-		// removed: a step that finishes, sy undo and a clean cancel remove
+		// removed: a step that finishes, rw undo and a clean cancel remove
 		// it. So the step started over without these edits (its resume
-		// lost the worktree to another sy, or a leftover agent ran in it):
+		// lost the worktree to another rw, or a leftover agent ran in it):
 		// they never landed and are saved before the worktree is reused.
 		// Nothing changed there means nothing is saved.
 		i.stale, i.save = true, true
@@ -145,8 +145,8 @@ func checkHold(slot string) holdInfo {
 	}
 	i.run = r
 	if time.Since(r.Started) < holdMaxAge || taskLocked(h.Task) {
-		// Held; or expired, but a sy is running the task right now and
-		// may still claim the worktree: that sy decides.
+		// Held; or expired, but a rw is running the task right now and
+		// may still claim the worktree: that rw decides.
 		i.held = true
 		return i
 	}
@@ -154,7 +154,7 @@ func checkHold(slot string) holdInfo {
 	return i
 }
 
-// taskLocked reports whether a sy is running the task now (it holds the
+// taskLocked reports whether a rw is running the task now (it holds the
 // task's lock). It only probes (proc.Locked): two writers of one task
 // that took worktrees at once used to see each other's probe and skip an
 // expired hold as if its task were running.
@@ -180,8 +180,8 @@ func slotHeld(slot string) bool {
 // reported already.
 var unsavedSaid sync.Map
 
-// errTaskRunning: a sy runs the task now; its state is that sy's.
-var errTaskRunning = errors.New("its task is running in a sy")
+// errTaskRunning: a rw runs the task now; its state is that rw's.
+var errTaskRunning = errors.New("its task is running in a rw")
 
 // slotHeldNote is slotHeld that also says what was saved where, or why
 // the slot stays held.
@@ -193,11 +193,11 @@ func slotHeldNote(slot string) (held bool, note string) {
 	if i.save {
 		saved, err := saveHeldEdits(slot, i, "its worktree was freed after 7 days")
 		if errors.Is(err, errTaskRunning) {
-			return true, "" // its sy decides
+			return true, "" // its rw decides
 		}
 		if err != nil {
 			// Not saved: keep the worktree held rather than lose them.
-			// Said once per worktree and sy: every scan of the pool
+			// Said once per worktree and rw: every scan of the pool
 			// comes here again.
 			if _, said := unsavedSaid.LoadOrStore(canonPath(slot), true); said {
 				return true, ""
@@ -250,7 +250,7 @@ func (s SavedEdits) Hint() string {
 		gitC = `git -C "` + s.Repo + `"`
 	}
 	base := s.Base[:min(12, len(s.Base))]
-	h := fmt.Sprintf("%s were saved on branch %s when %s. See them: `%s diff %s %s`. Put them in your tree: `%s diff --binary --no-ext-diff --no-color %s %s --output=sy-unfinished.patch`, then `%s apply sy-unfinished.patch` (add --3way if it does not apply), then delete sy-unfinished.patch",
+	h := fmt.Sprintf("%s were saved on branch %s when %s. See them: `%s diff %s %s`. Put them in your tree: `%s diff --binary --no-ext-diff --no-color %s %s --output=rw-unfinished.patch`, then `%s apply rw-unfinished.patch` (add --3way if it does not apply), then delete rw-unfinished.patch",
 		what, s.Branch, s.Why, gitC, base, s.Branch, gitC, base, s.Branch, gitC)
 	if len(s.Left) > 0 {
 		h += ". Not on the branch (nested repositories, files outside the sparse checkout): " + strings.Join(s.Left, ", ")
@@ -262,7 +262,7 @@ func (s SavedEdits) Hint() string {
 // new branch and records it in the task's state, which then no longer
 // counts the step as running there. The caller holds the slot lock. A
 // slot that is no longer a worktree, or holds no edits, gives nil. It
-// fails when the task is running in a sy right now: that sy owns its
+// fails when the task is running in a rw right now: that rw owns its
 // state and may still claim the worktree.
 func saveHeldEdits(slot string, i holdInfo, why string) (*SavedEdits, error) {
 	task, step := i.hold.Task, i.hold.Step
@@ -277,14 +277,14 @@ func saveHeldEdits(slot string, i holdInfo, why string) (*SavedEdits, error) {
 	if base == "" {
 		base = i.hold.Base // the task's state is gone
 	}
-	name := "sy/unfinished-" + time.Now().Format("20060102") + "-" + refPart(filepath.Base(slot))
+	name := "rw/unfinished-" + time.Now().Format("20060102") + "-" + refPart(filepath.Base(slot))
 	label := "unfinished work"
 	if task != "" {
-		name = "sy/" + refPart(task) + "/" + refPart(step) + "-unfinished"
+		name = "rw/" + refPart(task) + "/" + refPart(step) + "-unfinished"
 		label = "unfinished " + step + " of " + task
 	}
 	// The git work runs before the task's lock is taken: it can take a
-	// while in a big tree, and sy resume of the task must not find the
+	// while in a big tree, and rw resume of the task must not find the
 	// lock taken meanwhile.
 	saved, err := saveSlotWork(slot, base, name, label+" (saved from "+slot+" when "+why+")")
 	if err != nil || saved == nil {
@@ -299,7 +299,7 @@ func saveHeldEdits(slot string, i holdInfo, why string) (*SavedEdits, error) {
 		diag.Logf("pool: %s", saved.Hint()) // no state to record it in
 		return saved, nil
 	}
-	// Recorded under the task's lock, so no sy runs the task meanwhile.
+	// Recorded under the task's lock, so no rw runs the task meanwhile.
 	// Whatever goes wrong here, the branch is dropped again and the
 	// worktree stays held: the edits are still there.
 	unlock, ok := lockRetry(filepath.Join(stateDir(), task+".lock"))
@@ -349,7 +349,7 @@ func saveSlotWork(slot, base, name, msg string) (*SavedEdits, error) {
 	if base != "" && base != head && !wg.isAncestor(base, head) {
 		base = "" // not where this slot came from: unknown
 	}
-	sc, err := wg.commitWork(head, "switchyard: "+msg)
+	sc, err := wg.commitWork(head, "relayweft: "+msg)
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +385,7 @@ func dropRef(slot, name string) {
 }
 
 // lockRetry takes a lock file, trying for a moment while someone else has
-// it (another sy looking at it, or recording saved edits).
+// it (another rw looking at it, or recording saved edits).
 func lockRetry(path string) (unlock func(), ok bool) {
 	for i := 0; ; i++ {
 		if unlock, ok = proc.TryLock(path); ok || i == 40 {
@@ -403,7 +403,7 @@ func ownHold(slot string, h slotHold) error {
 	case err != nil:
 		return err
 	case !ok:
-		return fmt.Errorf("%s is no longer held for this task (sy clean, or another task used it)", slot)
+		return fmt.Errorf("%s is no longer held for this task (rw clean, or another task used it)", slot)
 	case got.Task != h.Task || got.Step != h.Step || (h.Token != "" && got.Token != h.Token):
 		return fmt.Errorf("%s was used by another run since", slot)
 	}
@@ -411,8 +411,8 @@ func ownHold(slot string, h slotHold) error {
 }
 
 // releaseHolds forgets the running steps of the tasks recorded under undo
-// key (sy undo reverted them) and removes their hold marks, so their pool
-// worktrees are free again. A task that a sy is running now is left alone.
+// key (rw undo reverted them) and removes their hold marks, so their pool
+// worktrees are free again. A task that a rw is running now is left alone.
 func releaseHolds(key string) {
 	if key == "" {
 		return

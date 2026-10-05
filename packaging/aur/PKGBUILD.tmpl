@@ -1,27 +1,27 @@
 # Template: packaging/render-manifests.sh renders it to packaging/aur/PKGBUILD.
 # Maintainer: Sparkz400 <62327601+Sparkz400@users.noreply.github.com>
-pkgname=switchyard-cli-bin
+pkgname=relayweft-cli-bin
 pkgver={{VERSION}}
 pkgrel=1
-pkgdesc='Terminal app that routes coding work between the Codex CLI and Claude Code (sy)'
+pkgdesc='Terminal app that routes coding work between the Codex CLI and Claude Code (rw)'
 arch=('x86_64' 'aarch64')
-url='https://github.com/sparkz400/switchyard'
+url='https://github.com/sparkz400/relayweft'
 license=('MIT')
 depends=('git')
-provides=('sy')
-conflicts=('sy')
+provides=('rw')
+conflicts=('rw')
 options=('!strip' '!debug')
-source=("LICENSE-$pkgver::https://raw.githubusercontent.com/sparkz400/switchyard/v$pkgver/LICENSE"
-        "README-$pkgver.md::https://raw.githubusercontent.com/sparkz400/switchyard/v$pkgver/README.md")
-source_x86_64=("sy-$pkgver-x86_64::https://github.com/sparkz400/switchyard/releases/download/v$pkgver/sy-linux-amd64")
-source_aarch64=("sy-$pkgver-aarch64::https://github.com/sparkz400/switchyard/releases/download/v$pkgver/sy-linux-arm64")
+source=("LICENSE-$pkgver::https://raw.githubusercontent.com/sparkz400/relayweft/v$pkgver/LICENSE"
+        "README-$pkgver.md::https://raw.githubusercontent.com/sparkz400/relayweft/v$pkgver/README.md")
+source_x86_64=("rw-$pkgver-x86_64::https://github.com/sparkz400/relayweft/releases/download/v$pkgver/rw-linux-amd64")
+source_aarch64=("rw-$pkgver-aarch64::https://github.com/sparkz400/relayweft/releases/download/v$pkgver/rw-linux-arm64")
 sha256sums=('{{SHA256_LICENSE}}'
             '{{SHA256_README}}')
 sha256sums_x86_64=('{{SHA256_LINUX_AMD64}}')
 sha256sums_aarch64=('{{SHA256_LINUX_ARM64}}')
 
 package() {
-  install -Dm755 "sy-$pkgver-$CARCH" "$pkgdir/usr/bin/sy"
+  install -Dm755 "rw-$pkgver-$CARCH" "$pkgdir/usr/bin/rw"
   install -Dm644 "LICENSE-$pkgver" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 "README-$pkgver.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
 }

@@ -25,14 +25,14 @@ func isProcessInJob(p, j windows.Handle, in *bool) error {
 	return nil
 }
 
-// A browser sy opens must not join sy's kill-on-close job: found on a real
-// desktop, where `sy app` started Edge, the user opened another Edge window
-// (it lives in the same process) and it was killed when sy exited. Agents
+// A browser rw opens must not join rw's kill-on-close job: found on a real
+// desktop, where `rw app` started Edge, the user opened another Edge window
+// (it lives in the same process) and it was killed when rw exited. Agents
 // (no Breakaway) must stay in the job.
 func TestBreakawayLeavesGuardJob(t *testing.T) {
 	if job == 0 {
 		// An outer job (CI runner, terminal) that forbids breakaway makes
-		// CREATE_BREAKAWAY_FROM_JOB fail whatever sy's own job allows.
+		// CREATE_BREAKAWAY_FROM_JOB fail whatever rw's own job allows.
 		var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 		var inJob bool
 		isProcessInJob(windows.CurrentProcess(), 0, &inJob)
@@ -72,10 +72,10 @@ func TestBreakawayLeavesGuardJob(t *testing.T) {
 		return in
 	}
 	if inGuardJob(start(true)) {
-		t.Error("a Breakaway child is in sy's kill-on-close job; it would die with sy")
+		t.Error("a Breakaway child is in rw's kill-on-close job; it would die with rw")
 	}
 	if !inGuardJob(start(false)) {
-		t.Error("an ordinary child left sy's job; it would outlive sy")
+		t.Error("an ordinary child left rw's job; it would outlive rw")
 	}
 }
 

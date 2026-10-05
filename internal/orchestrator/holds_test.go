@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
-// A cancelled task keeps c's Running entry (so `sy resume --force`
+// A cancelled task keeps c's Running entry (so `rw resume --force`
 // can continue it), and its worktree stays held: the next task in the same
-// repo leaves it alone, and sy resume --force continues c there.
+// repo leaves it alone, and rw resume --force continues c there.
 func TestCancelledTaskKeepsItsWorktree(t *testing.T) {
 	dir := gitRepo(t)
 	started := make(chan struct{})
@@ -225,7 +225,7 @@ func TestHoldStateFailsSafe(t *testing.T) {
 	}
 }
 
-// sy undo of an interrupted task frees the worktrees it held.
+// rw undo of an interrupted task frees the worktrees it held.
 func TestUndoReleasesHolds(t *testing.T) {
 	dir := gitRepo(t)
 	st, _ := interruptStep(t, dir, nil, longTask, "c", midstepPlan, func(s runner.Spec) {
@@ -240,7 +240,7 @@ func TestUndoReleasesHolds(t *testing.T) {
 		t.Fatalf("undo: %v", err)
 	}
 	if slotHeld(held) {
-		t.Error("the worktree is still held after sy undo")
+		t.Error("the worktree is still held after rw undo")
 	}
 	if after, _ := LoadTask(st.ID); len(after.Running) != 0 {
 		t.Errorf("the undone task still records running steps: %+v", after.Running)

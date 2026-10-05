@@ -12,11 +12,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 func TestPlanDependencyPicker(t *testing.T) {
@@ -245,7 +245,7 @@ func (g *gate) Run(ctx context.Context, s runner.Spec, emit func(event.Event)) r
 func newModelRunner(t *testing.T, dir string, r runner.Runner) (*Model, *orchestrator.Orchestrator, chan event.Event) {
 	t.Helper()
 	ch := make(chan event.Event, 4096)
-	store := config.NewStore(config.Default(), filepath.Join(t.TempDir(), "switchyard.yaml"))
+	store := config.NewStore(config.Default(), filepath.Join(t.TempDir(), "relayweft.yaml"))
 	set := runner.Set{event.Codex: r, event.Claude: r}
 	orc := orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: func(*config.Config) runner.Set { return set },
@@ -314,7 +314,7 @@ func TestAgentsListSurvivesRestart(t *testing.T) {
 	if res := orc.Run(context.Background(), "add a test"); !res.OK {
 		t.Fatalf("%+v", res)
 	}
-	// Age the saved sessions by two days, as if sy ran the day before
+	// Age the saved sessions by two days, as if rw ran the day before
 	// yesterday.
 	var files []string
 	filepath.WalkDir(os.Getenv("HOME"), func(p string, d fs.DirEntry, err error) error {
@@ -339,7 +339,7 @@ func TestAgentsListSurvivesRestart(t *testing.T) {
 	data, _ = json.Marshal(ss)
 	os.WriteFile(files[0], data, 0o644)
 
-	// A new sy in the same folder.
+	// A new rw in the same folder.
 	m2, _, _ := newModelRunner(t, dir, g)
 	m2.command("/agents")
 	all := strings.Join(logTexts(m2), "\n")

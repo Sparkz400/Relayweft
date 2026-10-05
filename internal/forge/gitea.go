@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/gh"
+	"github.com/sparkz400/relayweft/internal/gh"
 )
 
 // gitea is the Gitea REST API v1, which Forgejo (Codeberg) serves too. Its

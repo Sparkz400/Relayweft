@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // repoRuns makes n agent_end records of a role on a route in repo dir cwd at

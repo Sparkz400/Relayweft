@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
 )
 
 func feed(t *testing.T, p lineParser, file string) []event.Event {
@@ -493,7 +493,7 @@ func TestCodexRealRecordings(t *testing.T) {
 }
 
 // Recorded from a real Claude Code 2.1.288 on Windows (4 Oct 2026) with
-// sy's exact argv: `claude -p --output-format stream-json --verbose --model
+// rw's exact argv: `claude -p --output-format stream-json --verbose --model
 // haiku --effort low --permission-mode acceptEdits` (prompt on stdin), then
 // the follow-up `... --resume <session> --permission-mode acceptEdits`.
 // The resumed turn keeps the session id and remembers the first turn (it
@@ -541,7 +541,7 @@ func TestClaudeRealRecordings(t *testing.T) {
 	}
 }
 
-// Recorded from a real codex-cli 0.160.0 on Windows (4 Oct 2026) with sy's
+// Recorded from a real codex-cli 0.160.0 on Windows (4 Oct 2026) with rw's
 // worker argv (`exec --json --color never --skip-git-repo-check -m
 // gpt-6.1-sol -c model_reasoning_effort=medium --sandbox workspace-write -`):
 // a file_change (absolute Windows path) and a PowerShell command_execution.
@@ -573,11 +573,11 @@ func TestCodexRealEditRecording(t *testing.T) {
 }
 
 // Recorded from a real Claude Code 2.1.288 on Windows (4 Oct 2026): with
-// sy's old allowedTools (only Bash(...) rules for verify commands) Claude
+// rw's old allowedTools (only Bash(...) rules for verify commands) Claude
 // ran `go test ./...` through its PowerShell tool and was refused. The
 // refusal must be visible, not hidden behind a successful run: Claude
 // reports it twice (a system permission_denied line, whose "message" is a
-// string, and the result's permission_denials), sy shows it once.
+// string, and the result's permission_denials), rw shows it once.
 func TestClaudeRealPermissionDenied(t *testing.T) {
 	p := &claudeParser{}
 	evs := feed(t, p, "claude_real_denied.jsonl")

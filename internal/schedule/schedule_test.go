@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 var loc = time.FixedZone("test", 2*3600)

@@ -1,4 +1,4 @@
-// Switchyard web UI: plain JavaScript, no build step, no external requests.
+// Relayweft web UI: plain JavaScript, no build step, no external requests.
 'use strict';
 (function () {
 
@@ -107,11 +107,11 @@ const PLAN_ROLES = ['', 'planner', 'worker', 'worker_high', 'explorer', 'researc
 const PLAN_KINDS = ['explore', 'research', 'edit'];
 
 // ---------- session ----------
-// The link sy prints carries a single-use bootstrap in the URL fragment
+// The link rw prints carries a single-use bootstrap in the URL fragment
 // (#b=...), which never reaches a server. The page trades it for a session
 // secret, kept in this tab's sessionStorage (it survives a reload of this
 // tab only). There are no cookies.
-const SESSION_KEY = 'sy-session';
+const SESSION_KEY = 'rw-session';
 let SESSION = null;
 const sess = {
   get() { try { return sessionStorage.getItem(SESSION_KEY); } catch (e) { return SESSION; } },
@@ -132,19 +132,19 @@ async function startSession() {
       lock(data.error || 'This link does not work any more.');
       return false;
     } catch (e) {
-      lock('sy is not reachable - is it still running?');
+      lock('rw is not reachable - is it still running?');
       return false;
     }
   }
   SESSION = sess.get();
   if (SESSION && await sessionWorks()) return true;
-  lock(SESSION ? 'This page\'s session ended (sy was restarted).' : null);
+  lock(SESSION ? 'This page\'s session ended (rw was restarted).' : null);
   return false;
 }
 async function sessionWorks() {
   SESSION = sess.get();
   try {
-    const r = await fetch('/api/state', { headers: { 'X-Switchyard-Session': SESSION } });
+    const r = await fetch('/api/state', { headers: { 'X-Relayweft-Session': SESSION } });
     return r.ok;
   } catch (e) { return false; }
 }
@@ -157,7 +157,7 @@ function lock(why) {
 
 // ---------- API ----------
 async function api(method, path, body) {
-  const opt = { method, headers: { 'X-Switchyard-Session': SESSION || '' } };
+  const opt = { method, headers: { 'X-Relayweft-Session': SESSION || '' } };
   if (body !== undefined) {
     opt.headers['Content-Type'] = 'application/json';
     opt.body = JSON.stringify(body);
@@ -166,11 +166,11 @@ async function api(method, path, body) {
   try {
     res = await fetch(path, opt);
   } catch (e) {
-    throw new Error('sy is not reachable - is it still running?');
+    throw new Error('rw is not reachable - is it still running?');
   }
   let data = null;
   try { data = await res.json(); } catch (e) { /* not JSON */ }
-  if (res.status === 401) { lock('This page\'s session ended (sy was restarted).'); throw new Error('no session'); }
+  if (res.status === 401) { lock('This page\'s session ended (rw was restarted).'); throw new Error('no session'); }
   if (!res.ok) throw new Error((data && data.error) || res.status + ' ' + res.statusText);
   return data;
 }
@@ -207,7 +207,7 @@ const S = {
   decisions: [],
   log: [],
   taskStartTs: null,
-  filter: store.get('sy-filter') || 'all',
+  filter: store.get('rw-filter') || 'all',
   agentFilter: null,
   search: '',
   selected: null,
@@ -292,7 +292,7 @@ function fold(e) {
       addLog({ ts, kind: k, text: e.text || '', ok: !!e.ok, cost: e.cost, tokens: e.tokens, took: S.taskStartTs ? ts - S.taskStartTs : 0 });
       if (!S.replaying) {
         const took = S.taskStartTs ? ts - S.taskStartTs : 0;
-        if (took > 8000) notify(e.ok ? 'Switchyard: done' : 'Switchyard: failed', oneLine(e.text, 180));
+        if (took > 8000) notify(e.ok ? 'Relayweft: done' : 'Relayweft: failed', oneLine(e.text, 180));
       }
       return;
     }
@@ -306,7 +306,7 @@ function fold(e) {
       return;
     case 'provider':
       addLog({ ts, kind: 'limit', prov: e.provider, text: e.text });
-      if (!S.replaying && e.until && Date.parse(e.until) > Date.now()) notify('Switchyard: ' + e.provider + ' hit its limit', e.text);
+      if (!S.replaying && e.until && Date.parse(e.until) > Date.now()) notify('Relayweft: ' + e.provider + ' hit its limit', e.text);
       return;
     case 'route': {
       const d = e.decision;
@@ -420,12 +420,12 @@ function reviewerEvent(e, ts) {
 // ---------- SSE ----------
 let es = null;
 
-// sy app exits soon after its window closes instead of waiting 30s; a
+// rw app exits soon after its window closes instead of waiting 30s; a
 // reload says goodbye too but reconnects in time.
 window.addEventListener('pagehide', (e) => {
   if (e.persisted || !SESSION) return;
   try {
-    fetch('/api/bye', { method: 'POST', keepalive: true, headers: { 'X-Switchyard-Session': SESSION, 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+    fetch('/api/bye', { method: 'POST', keepalive: true, headers: { 'X-Relayweft-Session': SESSION, 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
   } catch (err) { /* best effort */ }
 });
 function connect() {
@@ -462,13 +462,13 @@ function connect() {
     S.connected = false;
     renderBanner();
     // EventSource hides the status: ask whether the session still works
-    // (sy restarted = 401 = lock; sy gone = keep retrying).
+    // (rw restarted = 401 = lock; rw gone = keep retrying).
     clearTimeout(S.probe);
     S.probe = setTimeout(async () => {
       try {
-        const r = await fetch('/api/state', { headers: { 'X-Switchyard-Session': SESSION || '' } });
-        if (r.status === 401) lock('This page\'s session ended (sy was restarted).');
-      } catch (e) { /* sy is down; EventSource retries */ }
+        const r = await fetch('/api/state', { headers: { 'X-Relayweft-Session': SESSION || '' } });
+        if (r.status === 401) lock('This page\'s session ended (rw was restarted).');
+      } catch (e) { /* rw is down; EventSource retries */ }
     }, 1000);
   };
 }
@@ -490,7 +490,7 @@ function applySnap(s) {
     if (!p.value) { p.value = s.demo_task; autosize(); }
   }
   if (!prev) {
-    document.title = (s.project ? s.project + ' · ' : '') + 'Switchyard';
+    document.title = (s.project ? s.project + ' · ' : '') + 'Relayweft';
   }
 }
 
@@ -625,7 +625,7 @@ function renderBanner() {
   const s = S.snap;
   if (S.everConnected && !S.connected) {
     b.classList.add('info');
-    b.append(h('span', { class: 'dot' }), h('div', { class: 'grow' }, 'Lost the connection to sy - reconnecting… (if you closed sy, run `sy web` again)'));
+    b.append(h('span', { class: 'dot' }), h('div', { class: 'grow' }, 'Lost the connection to rw - reconnecting… (if you closed rw, run `rw web` again)'));
     b.hidden = false;
     return;
   }
@@ -872,7 +872,7 @@ function rowEl(e, animate) {
   if (e.ok === true) cls.push('ok');
   if (e.ok === false) cls.push('bad');
   if (animate) cls.push('new');
-  const who = h('span', { class: 'who ' + (e.prov || ''), title: e.agent ? 'Show only ' + e.agent : '' }, e.agent || 'sy');
+  const who = h('span', { class: 'who ' + (e.prov || ''), title: e.agent ? 'Show only ' + e.agent : '' }, e.agent || 'rw');
   if (e.prov && e.prov !== 'codex' && e.prov !== 'claude') who.style.color = provColor(e.prov);
   if (e.agent) who.addEventListener('click', () => selectAgent(e.agent));
   let ic = KIND_ICON[e.kind] || 'dot';
@@ -921,7 +921,7 @@ function emptyLog() {
 }
 function setFilter(f) {
   S.filter = f;
-  store.set('sy-filter', f);
+  store.set('rw-filter', f);
   $$('#filters .chip').forEach((c) => c.classList.toggle('on', c.dataset.filter === f));
   renderLog();
 }
@@ -1001,7 +1001,7 @@ function syncApprovals() {
   for (const a of list) {
     if (!S.seenApprovals.has(a.id)) {
       S.seenApprovals.add(a.id);
-      notify('Switchyard needs you', a.type === 'plan' ? 'Approve the plan: ' + oneLine(a.task, 120) : a.type === 'budget' ? 'Budget reached: ' + a.budget.text : 'Review the changes of ' + a.changes.step_id);
+      notify('Relayweft needs you', a.type === 'plan' ? 'Approve the plan: ' + oneLine(a.task, 120) : a.type === 'budget' ? 'Budget reached: ' + a.budget.text : 'Review the changes of ' + a.changes.step_id);
       if (!S.openApproval && !$('#modal').dataset.busy) openApproval(a);
     }
   }
@@ -1512,7 +1512,7 @@ async function drawModels(body) {
       h('div', { class: 'muted small', style: 'display:grid;gap:6px' },
         h('div', null, h('b', null, 'prefer'), ': a provider = that one · other = not the planner\'s (good for review) · auto = whichever has used fewer tokens this session.'),
         h('div', null, 'At a usage limit the role\'s route on the next provider (routing.provider_order) is used automatically.'),
-        h('div', null, 'Tip: ', h('code', null, 'sy models --refresh'), ' reads the current Codex catalog from ', h('code', null, 'codex debug models'), '.')));
+        h('div', null, 'Tip: ', h('code', null, 'rw models --refresh'), ' reads the current Codex catalog from ', h('code', null, 'codex debug models'), '.')));
   }
   function modelSel(v, r, prov) {
     const cur = ((r.routes || r)[prov] || {}).model || '';
@@ -1580,13 +1580,13 @@ function drawQueue(body) {
 }
 
 async function drawHistory(body) {
-  const all = store.get('sy-hist-all') === '1';
+  const all = store.get('rw-hist-all') === '1';
   let rows;
   try { rows = await api('GET', '/api/history' + (all ? '?all=1' : '')); } catch (e) { body.textContent = e.message; return; }
   body.textContent = '';
   body.append(h('div', { class: 'toolbar' },
     h('div', { class: 'grow muted small' }, 'Every task saves its plan and finished steps, so an interrupted one can continue where it stopped.'),
-    h('label', { class: 'small muted', style: 'display:flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: all, onchange: (e) => { store.set('sy-hist-all', e.target.checked ? '1' : '0'); drawHistory(body); } }), 'all projects')));
+    h('label', { class: 'small muted', style: 'display:flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: all, onchange: (e) => { store.set('rw-hist-all', e.target.checked ? '1' : '0'); drawHistory(body); } }), 'all projects')));
   if (!rows.length) { body.append(h('div', { class: 'empty-list' }, S.snap && S.snap.demo ? 'Demo runs keep no history.' : 'No tasks recorded for this folder yet.')); return; }
   const running = S.snap && S.snap.running;
   const list = h('div', { class: 'list' });
@@ -1605,15 +1605,15 @@ async function drawHistory(body) {
 }
 
 async function drawStats(body) {
-  const here = store.get('sy-stats-here') === '1';
-  const since = store.get('sy-stats-since') || '7d';
+  const here = store.get('rw-stats-here') === '1';
+  const since = store.get('rw-stats-since') || '7d';
   let v;
   try { v = await api('GET', `/api/stats?since=${encodeURIComponent(since)}${here ? '&here=1' : ''}`); } catch (e) { body.textContent = e.message; return; }
   body.textContent = '';
   body.append(h('div', { class: 'toolbar' },
-    h('div', { class: 'grow' }, h('select', { class: 'sel-in', onchange: (e) => { store.set('sy-stats-since', e.target.value); drawStats(body); } },
+    h('div', { class: 'grow' }, h('select', { class: 'sel-in', onchange: (e) => { store.set('rw-stats-since', e.target.value); drawStats(body); } },
       [['24h', 'last 24 hours'], ['7d', 'last 7 days'], ['30d', 'last 30 days'], ['all', 'all time']].map(([k, l]) => h('option', { value: k, selected: since === k }, l)))),
-    h('label', { class: 'small muted', style: 'display:flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: here, onchange: (e) => { store.set('sy-stats-here', e.target.checked ? '1' : '0'); drawStats(body); } }), 'this project only')));
+    h('label', { class: 'small muted', style: 'display:flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: here, onchange: (e) => { store.set('rw-stats-here', e.target.checked ? '1' : '0'); drawStats(body); } }), 'this project only')));
   const st = v.stats;
   let ok = 0;
   (st.Modes || []).forEach((m) => { ok += m.OK; });
@@ -1668,7 +1668,7 @@ async function drawStats(body) {
     }
     body.append(tbl);
   }
-  body.append(h('details', null, h('summary', null, 'Full report (sy stats)'), h('pre', { class: 'raw' }, v.text)),
+  body.append(h('details', null, h('summary', null, 'Full report (rw stats)'), h('pre', { class: 'raw' }, v.text)),
     h('div', { class: 'muted small', style: 'margin-top:10px' }, 'logs: ', h('code', null, v.log_dir)));
   function kpi(val, label) { return h('div', { class: 'kpi' }, h('div', { class: 'v' }, String(val)), h('div', { class: 'l' }, label)); }
 }
@@ -1717,10 +1717,10 @@ async function drawHealth(body) {
   if (l.cpu >= 0) rows.push(['CPU peak', `${l.cpu}%`, at(l.cpu_at), l.samples ? `${l.hot_samples} of ${l.samples} five-minute readings at 95% or more` : '']);
   if (l.mem_free_mb >= 0) rows.push(['RAM low point', `${gb(l.mem_free_mb)} free`, at(l.mem_at),
     (l.mem_total_mb ? `of ${gb(l.mem_total_mb)}` : '') + (l.low_mem_samples ? ` · ${l.low_mem_samples} reading${l.low_mem_samples === 1 ? '' : 's'} under 10% free` : '')]);
-  if (l.sy_mem_mb > 0) rows.push(['sy memory', gb(l.sy_mem_mb), at(l.sy_mem_at), `peak of one process · ${l.goroutines} goroutines at most`]);
-  if (n(v.pauses)) rows.push(['Pauses', String(n(v.pauses)), at(v.pauses[n(v.pauses) - 1].time), 'sleep or a frozen machine while sy ran']);
+  if (l.rw_mem_mb > 0) rows.push(['rw memory', gb(l.rw_mem_mb), at(l.rw_mem_at), `peak of one process · ${l.goroutines} goroutines at most`]);
+  if (n(v.pauses)) rows.push(['Pauses', String(n(v.pauses)), at(v.pauses[n(v.pauses) - 1].time), 'sleep or a frozen machine while rw ran']);
   body.append(h('h3', null, 'Load'));
-  if (!rows.length) body.append(h('div', { class: 'empty-list' }, 'No load readings yet: they start with this version of sy.'));
+  if (!rows.length) body.append(h('div', { class: 'empty-list' }, 'No load readings yet: they start with this version of rw.'));
   else body.append(h('table', { class: 'tbl' }, rows.map(([k, val, when, note]) => h('tr', null,
     h('td', null, k), h('td', { class: 'num' }, h('b', null, val)), h('td', { class: 'muted small' }, when), h('td', { class: 'muted small' }, note)))));
   // Leftovers and running processes.
@@ -1730,7 +1730,7 @@ async function drawHealth(body) {
   else body.append(h('div', { class: 'list' }, v.leftovers.map((x) => h('div', { class: 'sug medium' },
     h('div', { class: 't' }, x.detail + (x.bytes ? ` · ${human(x.bytes)}B` : '')), h('div', { class: 'd mono small' }, x.path)))));
   if (n(v.running)) body.append(h('div', { class: 'muted small', style: 'margin-top:8px' },
-    'Running now: ' + v.running.map((s) => `sy ${s.cmd || '(TUI)'} (pid ${s.pid}, since ${at(s.start)})`).join(', ')));
+    'Running now: ' + v.running.map((s) => `rw ${s.cmd || '(TUI)'} (pid ${s.pid}, since ${at(s.start)})`).join(', ')));
   // Incidents, newest first.
   const all = [...(v.crashes || []), ...(v.hangs || []), ...(v.unclean || []), ...(v.agent_timeouts || []), ...(v.leftover_events || [])]
     .sort((a, b) => new Date(b.time) - new Date(a.time));
@@ -1740,12 +1740,12 @@ async function drawHealth(body) {
     const sev = { crash: 'high', fatal: 'high', hang: 'high', unclean: 'medium', leftover: 'medium' };
     body.append(h('div', { class: 'list' }, all.slice(0, 50).map((x) => h('div', { class: 'sug ' + (sev[x.kind] || 'info') },
       h('div', { class: 't' }, h('span', { class: 'mono muted small' }, at(x.time) + '  '), x.kind,
-        x.pid ? h('span', { class: 'muted small' }, `  sy ${x.cmd || '(TUI)'} · pid ${x.pid}`) : ''),
+        x.pid ? h('span', { class: 'muted small' }, `  rw ${x.cmd || '(TUI)'} · pid ${x.pid}`) : ''),
       x.detail ? h('div', { class: 'd' }, x.detail) : '', x.log ? h('div', { class: 'd mono small muted' }, x.log) : ''))));
   }
   const since = [v.debug_since, v.health_since].filter(set).sort()[0];
   body.append(h('div', { class: 'muted small', style: 'margin-top:10px' }, since ? `records since ${at(since)} · ` : '',
-    'logs: ', h('code', null, v.dir), ' · the same report on the terminal: ', h('code', null, 'sy health')));
+    'logs: ', h('code', null, v.dir), ' · the same report on the terminal: ', h('code', null, 'rw health')));
   function localDay(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 }
 // ---------- dashboard ----------
@@ -1907,9 +1907,9 @@ const known = (table, k) => (Object.prototype.hasOwnProperty.call(table, k) ? ta
 const SEV_LABEL = { high: 'act', medium: 'consider', info: 'hint' };
 
 async function drawDashboard(body, fresh) {
-  let days = Number(store.get('sy-dash-days'));
+  let days = Number(store.get('rw-dash-days'));
   if (!DASH_RANGES.includes(days)) days = 7;
-  const here = store.get('sy-dash-here') === '1';
+  const here = store.get('rw-dash-here') === '1';
   if (!body.firstChild) body.append(h('div', { class: 'muted small' }, 'Loading…'));
   const seq = S.dashSeq = (S.dashSeq || 0) + 1; // a slower, older answer must not win
   let v;
@@ -1933,9 +1933,9 @@ function renderDashboard(body, v) {
   // Range and scope.
   body.append(h('div', { class: 'toolbar' },
     h('div', { class: 'seg', role: 'group', 'aria-label': 'Range' }, DASH_RANGES.map((n) => h('button', { class: 'chip' + (n === ndays ? ' on' : ''), 'aria-pressed': n === ndays ? 'true' : 'false',
-      onclick: () => { store.set('sy-dash-days', String(n)); reload(); } }, n + ' days'))),
+      onclick: () => { store.set('rw-dash-days', String(n)); reload(); } }, n + ' days'))),
     h('label', { class: 'small muted', style: 'display:flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: v.here,
-      onchange: (e) => { store.set('sy-dash-here', e.target.checked ? '1' : '0'); reload(); } }), 'this project only'),
+      onchange: (e) => { store.set('rw-dash-here', e.target.checked ? '1' : '0'); reload(); } }), 'this project only'),
     h('div', { class: 'grow' }),
     h('span', { class: 'muted small', title: `built in ${v.elapsed_ms} ms` }, `${dayLabel(v.from)} – ${dayLabel(v.to)}`),
     h('button', { class: 'btn sm ghost', onclick: () => drawDashboard(body, true), title: v.cached ? `Read the logs again (these numbers are from ${clock(v.generated)})` : 'Read the logs again' }, 'Refresh')));
@@ -2016,7 +2016,7 @@ function renderDashboard(body, v) {
   if (!routes.length) rc.append(h('div', { class: 'empty-list' }, 'No agent runs in this range yet.'));
   else {
     const flags = v.decision_flags || [];
-    const tbl = h('table', { class: 'tbl routes' }, h('tr', null, ['Route', 'Runs', 'Success', 'Avg tokens', 'Avg $', 'Avg time', 'Escalated', 'Final review', 'Decisions', 'Limit hits', 'sy tune']
+    const tbl = h('table', { class: 'tbl routes' }, h('tr', null, ['Route', 'Runs', 'Success', 'Avg tokens', 'Avg $', 'Avg time', 'Escalated', 'Final review', 'Decisions', 'Limit hits', 'rw tune']
       .map((x, i) => h('th', { class: i && i < 8 || i === 9 ? 'num' : '' }, x))));
     let role = null;
     for (const r of routes) {
@@ -2043,7 +2043,7 @@ function renderDashboard(body, v) {
     }
     rc.append(h('div', { class: 'tbl-wrap' }, tbl));
   }
-  rc.append(h('div', { class: 'dash-sub muted small' }, 'What sy tune suggests for this range'));
+  rc.append(h('div', { class: 'dash-sub muted small' }, 'What rw tune suggests for this range'));
   if (!sugs.length) {
     rc.append(h('div', { class: 'empty-list' }, t.tasks < v.min_tasks ? `Only ${t.tasks} task(s) here - suggestions need about ${v.min_tasks}.` : `No suggestions from ${t.tasks} tasks: the routing looks fine.`));
   } else {
@@ -2064,9 +2064,9 @@ function renderDashboard(body, v) {
       L.routes.map((r) => h('tr', null, h('td', null, String(r.role).replace('_', ' ')), h('td', null, h('code', null, r.route)), h('td', { class: 'mono small' }, when(r.since)),
         h('td', null, h('div', null, r.why), (r.evidence || []).length ? h('div', { class: 'muted small' }, r.evidence.map((e) => `${e.route}: ${e.samples} runs, ${pct(e.success)} ok, ${human(e.tokens)} tok/run`).join(' · ')) : ''),
         h('td', null, h('span', { class: 'pill' + (r.in_use ? ' done' : '') }, r.in_use ? 'in use' : 'not used')))))));
-  } else if (!L.note) lc.append(h('div', { class: 'muted small' }, 'No learned routes for this repo yet: ', h('code', null, 'sy tune --apply'), ' learns them from its logs on clear evidence only.'));
+  } else if (!L.note) lc.append(h('div', { class: 'muted small' }, 'No learned routes for this repo yet: ', h('code', null, 'rw tune --apply'), ' learns them from its logs on clear evidence only.'));
   if (L.pending.length) {
-    lc.append(h('div', { class: 'dash-sub muted small' }, h('code', null, 'sy tune --apply'), ' would change'),
+    lc.append(h('div', { class: 'dash-sub muted small' }, h('code', null, 'rw tune --apply'), ' would change'),
       h('div', { class: 'list' }, L.pending.map((p) => h('div', { class: 'sug info' }, h('div', { class: 't' }, `${String(p.role).replace('_', ' ')}: ${p.from} → ${p.to}${p.remove ? ' (back to the configured route)' : ''}`), h('div', { class: 'd' }, p.why)))));
   }
   lc.append(h('div', { class: 'dash-sub muted small' }, 'Changes seen in the decisions of this range'));
@@ -2133,7 +2133,7 @@ function renderDashboard(body, v) {
       h('button', { class: 'btn sm', style: 'margin-top:10px', onclick: () => openDrawer('health') }, 'Open the Reliability report'));
   }
   body.append(h('div', { class: 'dash-grid' }, lm, hc));
-  body.append(h('div', { class: 'muted small', style: 'margin-top:12px' }, 'logs: ', h('code', null, v.log_dir), ' · the same numbers on the terminal: ', h('code', null, 'sy stats'), ', ', h('code', null, 'sy tune'), ', ', h('code', null, 'sy health')));
+  body.append(h('div', { class: 'muted small', style: 'margin-top:12px' }, 'logs: ', h('code', null, v.log_dir), ' · the same numbers on the terminal: ', h('code', null, 'rw stats'), ', ', h('code', null, 'rw tune'), ', ', h('code', null, 'rw health')));
   body.scrollTop = st;
 }
 
@@ -2206,15 +2206,15 @@ function drawSettings(body) {
   };
   const saveV = () => act('POST', '/api/settings', { verify: cmds });
   renderV();
-  body.append(h('h3', null, 'Verify commands'), h('div', { class: 'muted small', style: 'margin-bottom:8px' }, 'Your repo\'s checks: agents may run them, and sy runs them before the final review.'), vbox);
+  body.append(h('h3', null, 'Verify commands'), h('div', { class: 'muted small', style: 'margin-bottom:8px' }, 'Your repo\'s checks: agents may run them, and rw runs them before the final review.'), vbox);
   // Notifications & look.
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   body.append(h('h3', null, 'Notifications & look'),
-    h('div', { class: 'setting' }, h('div', { class: 'txt' }, h('b', null, 'Browser notifications'), h('span', null, perm === 'granted' ? 'On: you are told when sy needs you or a task ends while this tab is in the background.' : perm === 'denied' ? 'Blocked in the browser settings for this page.' : 'Get told when sy needs an approval or a task ends.')),
+    h('div', { class: 'setting' }, h('div', { class: 'txt' }, h('b', null, 'Browser notifications'), h('span', null, perm === 'granted' ? 'On: you are told when rw needs you or a task ends while this tab is in the background.' : perm === 'denied' ? 'Blocked in the browser settings for this page.' : 'Get told when rw needs an approval or a task ends.')),
       perm === 'default' ? h('button', { class: 'btn sm', onclick: () => Notification.requestPermission().then(() => drawSettings(body)) }, icon('bell'), 'Enable') : h('span', { class: 'muted small' }, perm)),
-    toggle('notify', 'Desktop notifications when no page is open', 'sy itself notifies (Windows toast, macOS, notify-send) when it needs you or a long task ends.'),
+    toggle('notify', 'Desktop notifications when no page is open', 'rw itself notifies (Windows toast, macOS, notify-send) when it needs you or a long task ends.'),
     h('div', { class: 'setting' }, h('div', { class: 'txt' }, h('b', null, 'Theme')),
-      h('select', { class: 'sel-in', onchange: (e) => setTheme(e.target.value) }, ['system', 'dark', 'light'].map((t) => h('option', { value: t, selected: (store.get('sy-theme') || 'system') === t }, t)))));
+      h('select', { class: 'sel-in', onchange: (e) => setTheme(e.target.value) }, ['system', 'dark', 'light'].map((t) => h('option', { value: t, selected: (store.get('rw-theme') || 'system') === t }, t)))));
   // Providers.
   body.append(h('h3', null, 'Providers'));
   for (const p of provOrder(s.providers)) {
@@ -2239,7 +2239,7 @@ function drawSettings(body) {
 
 // ---------- theme & notifications ----------
 function setTheme(t) {
-  store.set('sy-theme', t === 'system' ? '' : t);
+  store.set('rw-theme', t === 'system' ? '' : t);
   if (t === 'system') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', t);
 }
@@ -2249,15 +2249,15 @@ function currentTheme() {
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 function askNotifyPermission() {
-  if (!('Notification' in window) || Notification.permission !== 'default' || store.get('sy-notify-asked')) return;
-  store.set('sy-notify-asked', '1');
+  if (!('Notification' in window) || Notification.permission !== 'default' || store.get('rw-notify-asked')) return;
+  store.set('rw-notify-asked', '1');
   try { Notification.requestPermission(); } catch (e) { /* old browsers */ }
 }
 function notify(title, body) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   if (!document.hidden && document.hasFocus()) return;
   try {
-    const n = new Notification(title, { body, tag: 'switchyard-' + title });
+    const n = new Notification(title, { body, tag: 'relayweft-' + title });
     n.onclick = () => { window.focus(); n.close(); };
   } catch (e) { /* ignore */ }
 }

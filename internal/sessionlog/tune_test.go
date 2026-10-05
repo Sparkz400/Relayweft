@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 var t0 = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)

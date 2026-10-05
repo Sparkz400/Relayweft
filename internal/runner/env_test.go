@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // The agent process itself must not see the tokens, while an MCP secret
@@ -36,7 +36,7 @@ func TestExecAgentEnv(t *testing.T) {
 	pc.Command = cli
 	r := NewClaude(pc, nil)
 	var c collector
-	spec := Spec{AgentID: "a1", Role: "worker", Prompt: "p", Dir: dir, MCP: &MCPRun{ChildEnv: []string{"SY_MCP_GH=mcp_explicit"}}}
+	spec := Spec{AgentID: "a1", Role: "worker", Prompt: "p", Dir: dir, MCP: &MCPRun{ChildEnv: []string{"RW_MCP_GH=mcp_explicit"}}}
 	if res := r.Run(context.Background(), spec, c.emit); !res.OK() {
 		t.Fatalf("result = %+v", res)
 	}
@@ -48,7 +48,7 @@ func TestExecAgentEnv(t *testing.T) {
 	if strings.Contains(s, "ghs_secret") || strings.Contains(s, "glpat_secret") {
 		t.Errorf("forge token reached the agent:\n%s", s)
 	}
-	if !strings.Contains(s, "ANTHROPIC_API_KEY=sk-keep") || !strings.Contains(s, "SY_MCP_GH=mcp_explicit") {
+	if !strings.Contains(s, "ANTHROPIC_API_KEY=sk-keep") || !strings.Contains(s, "RW_MCP_GH=mcp_explicit") {
 		t.Errorf("model key or MCP env missing:\n%s", s)
 	}
 }

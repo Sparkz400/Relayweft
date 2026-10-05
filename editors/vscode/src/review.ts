@@ -9,14 +9,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { SyApi } from './api';
+import type { RwApi } from './api';
 import {
   decisionBody, fileOn, hunkCount, hunkOn, selectAll, selectionSummary, setFile, setHunk, type Selection,
 } from './decision';
 import { hunkAt, reconstruct, type Reconstructed } from './patch';
 import type { ApprovalRequest, ChangeView, FileView } from './types';
 
-export const SCHEME = 'switchyard-review';
+export const SCHEME = 'relayweft-review';
 
 type Side = 'before' | 'after';
 
@@ -33,7 +33,7 @@ interface Target {
   side: Side;
 }
 
-/** switchyard-review:/<id>/<file index>/<side>/<path> (the path gives the language). */
+/** relayweft-review:/<id>/<file index>/<side>/<path> (the path gives the language). */
 export function reviewUri(id: string, file: number, side: Side, filePath: string): vscode.Uri {
   const clean = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
   return vscode.Uri.from({ scheme: SCHEME, path: `/${encodeURIComponent(id)}/${file}/${side}/${clean}` });
@@ -67,7 +67,7 @@ export class ReviewItem extends vscode.TreeItem {
 
 export class ReviewController implements vscode.TextDocumentContentProvider, vscode.CodeLensProvider, vscode.TreeDataProvider<ReviewItem> {
   private reviews = new Map<string, Review>();
-  private api: SyApi | undefined;
+  private api: RwApi | undefined;
   private folder: string | undefined;
 
   private readonly docChanged = new vscode.EventEmitter<vscode.Uri>();
@@ -100,7 +100,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
     }
   }
 
-  attach(api: SyApi | undefined, folder: string | undefined): void {
+  attach(api: RwApi | undefined, folder: string | undefined): void {
     this.api = api;
     this.folder = folder && path.resolve(folder);
     if (!api) {
@@ -136,7 +136,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
     this.ended(gone);
     if (fresh.length || gone.length) {
       this.refresh();
-      void vscode.commands.executeCommand('setContext', 'switchyard.reviewPending', this.reviews.size > 0);
+      void vscode.commands.executeCommand('setContext', 'relayweft.reviewPending', this.reviews.size > 0);
     }
     return fresh;
   }
@@ -228,11 +228,11 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
     const on = fileOn(files, r.sel, t.file);
     out.push(new vscode.CodeLens(top, {
       title: on ? '$(check) file applied' : '$(close) file not applied',
-      command: on ? 'switchyard.review.rejectFile' : 'switchyard.review.acceptFile',
+      command: on ? 'relayweft.review.rejectFile' : 'relayweft.review.acceptFile',
       arguments: [{ id: t.id, file: t.file }],
       tooltip: on ? 'Reject this whole file' : 'Accept this whole file',
     }));
-    out.push(new vscode.CodeLens(top, { title: `$(git-commit) apply: ${selectionSummary(files, r.sel)}`, command: 'switchyard.review.submit', arguments: [t.id] }));
+    out.push(new vscode.CodeLens(top, { title: `$(git-commit) apply: ${selectionSummary(files, r.sel)}`, command: 'relayweft.review.submit', arguments: [t.id] }));
     if (f.splittable) {
       const ranges = t.side === 'after' ? d.ranges : d.beforeRanges;
       const n = hunkCount(f);
@@ -244,7 +244,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
         const hOn = hunkOn(files, r.sel, t.file, j);
         out.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
           title: hOn ? `$(check) hunk ${j + 1}/${n} accepted · reject` : `$(close) hunk ${j + 1}/${n} rejected · accept`,
-          command: 'switchyard.review.toggleHunk',
+          command: 'relayweft.review.toggleHunk',
           arguments: [{ id: t.id, file: t.file, hunk: j }],
         }));
       });
@@ -308,7 +308,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
         it.checkboxState = fileOn(r.cv.files, r.sel, i) ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
         it.resourceUri = vscode.Uri.file(f.path);
         it.contextValue = 'reviewFile';
-        it.command = { command: 'switchyard.review.openFile', title: 'Open Diff', arguments: [{ id: e.id, file: i }] };
+        it.command = { command: 'relayweft.review.openFile', title: 'Open Diff', arguments: [{ id: e.id, file: i }] };
         return it;
       });
     }
@@ -321,7 +321,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
         it.tooltip = new vscode.MarkdownString('```diff\n' + h.slice(0, 4000) + '\n```');
         it.checkboxState = hunkOn(r.cv.files, r.sel, e.file, j) ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
         it.contextValue = 'reviewHunk';
-        it.command = { command: 'switchyard.review.openFile', title: 'Open Diff', arguments: [{ id: e.id, file: e.file, hunk: j }] };
+        it.command = { command: 'relayweft.review.openFile', title: 'Open Diff', arguments: [{ id: e.id, file: e.file, hunk: j }] };
         return it;
       });
     }
@@ -361,7 +361,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
     const ids = this.pendingIds;
     if (ids.length <= 1) {
       if (!ids.length) {
-        void vscode.window.showInformationMessage('Switchyard: no changes are waiting for review.');
+        void vscode.window.showInformationMessage('Relayweft: no changes are waiting for review.');
       }
       return ids[0];
     }
@@ -388,7 +388,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
     if (!rid || !r) {
       return;
     }
-    await vscode.commands.executeCommand('switchyard.review.focus');
+    await vscode.commands.executeCommand('relayweft.review.focus');
     if (r.cv.files.length === 1) {
       await this.openFile({ id: rid, file: 0 });
       return;
@@ -426,7 +426,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
     const note = d.whole ? '' : ' (hunks only)';
     await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(f.path)} — ${r.cv.step_id} review${note}`, opts);
     if (!d.whole) {
-      void vscode.window.setStatusBarMessage('Switchyard: the file in your folder is not the agent\'s base (or the patch is truncated): showing the hunks only', 6000);
+      void vscode.window.setStatusBarMessage('Relayweft: the file in your folder is not the agent\'s base (or the patch is truncated): showing the hunks only', 6000);
     }
     this.decorate();
   }
@@ -449,14 +449,14 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
     const t = this.activeTarget();
     const r = t && this.reviews.get(t.id);
     if (!t || !r) {
-      void vscode.window.showInformationMessage('Switchyard: put the cursor in a review diff first (open one from the Review view).');
+      void vscode.window.showInformationMessage('Relayweft: put the cursor in a review diff first (open one from the Review view).');
       return;
     }
     const f = r.cv.files[t.file];
     const d = await this.docFor(r, t.file);
     if (!f.splittable) {
       this.change(() => setFile(r.cv.files, r.sel, t.file, on));
-      void vscode.window.setStatusBarMessage(`Switchyard: ${f.path} cannot be split into hunks: the whole file is ${on ? 'accepted' : 'rejected'}`, 5000);
+      void vscode.window.setStatusBarMessage(`Relayweft: ${f.path} cannot be split into hunks: the whole file is ${on ? 'accepted' : 'rejected'}`, 5000);
       return;
     }
     const j = hunkAt(t.side === 'after' ? d.ranges : d.beforeRanges, t.line);
@@ -464,7 +464,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
       return;
     }
     this.change(() => setHunk(r.cv.files, r.sel, t.file, j, on));
-    void vscode.window.setStatusBarMessage(`Switchyard: hunk ${j + 1} ${on ? 'accepted' : 'rejected'} · ${selectionSummary(r.cv.files, r.sel)}`, 4000);
+    void vscode.window.setStatusBarMessage(`Relayweft: hunk ${j + 1} ${on ? 'accepted' : 'rejected'} · ${selectionSummary(r.cv.files, r.sel)}`, 4000);
   }
 
   setWholeFile(arg: { id: string; file: number } | ReviewItem | undefined, on: boolean): void {
@@ -527,19 +527,19 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
 
   private async post(id: string, body: unknown): Promise<void> {
     if (!this.api) {
-      void vscode.window.showErrorMessage('Switchyard is not running.');
+      void vscode.window.showErrorMessage('Relayweft is not running.');
       return;
     }
     try {
       const res = await this.api.call<{ message: string }>('POST', `/api/approvals/${encodeURIComponent(id)}/changes`, body);
-      void vscode.window.showInformationMessage('Switchyard: ' + res.message);
+      void vscode.window.showInformationMessage('Relayweft: ' + res.message);
       this.reviews.delete(id);
       this.ended([id]);
       this.refresh();
       await this.closeTabs(id).catch(() => undefined);
-      void vscode.commands.executeCommand('setContext', 'switchyard.reviewPending', this.reviews.size > 0);
+      void vscode.commands.executeCommand('setContext', 'relayweft.reviewPending', this.reviews.size > 0);
     } catch (e) {
-      void vscode.window.showErrorMessage('Switchyard: ' + (e as Error).message);
+      void vscode.window.showErrorMessage('Relayweft: ' + (e as Error).message);
     }
   }
 }

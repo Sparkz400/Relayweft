@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Client talks to one GitHub API host.
@@ -116,7 +116,7 @@ func (c *Client) send(method, path, accept string, in any) (*http.Response, erro
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "switchyard")
+	req.Header.Set("User-Agent", "relayweft")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

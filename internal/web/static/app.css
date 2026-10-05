@@ -1,4 +1,4 @@
-/* Switchyard web UI. Plain CSS, no build step. */
+/* Relayweft web UI. Plain CSS, no build step. */
 
 :root {
   --codex: #10A37F;
@@ -544,7 +544,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin:
 .locked-card p { margin: 8px 0 0; color: var(--text-2); }
 .locked-card p.muted { color: var(--muted); font-size: 13px; }
 
-/* Reliability drawer (sy health) */
+/* Reliability drawer (rw health) */
 .hverdict { padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-2); display: grid; gap: 8px; border-left: 3px solid var(--faint); }
 .hverdict.met { border-left-color: var(--ok); } .hverdict.open { border-left-color: var(--warn); }
 .hverdict .hv-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }

@@ -1,8 +1,8 @@
-// The parts of sy web's JSON API the extension uses (internal/web).
+// The parts of rw web's JSON API the extension uses (internal/web).
 
-/** The line `sy web --client` prints first (web.ClientHello). */
+/** The line `rw web --client` prints first (web.ClientHello). */
 export interface ClientHello {
-  switchyard: 'web-client';
+  relayweft: 'web-client';
   protocol: number;
   version: string;
   url: string;
@@ -34,7 +34,7 @@ export interface Decision {
 }
 
 /** event.Event as JSON; kind is the event kind's name. */
-export interface SyEvent {
+export interface RwEvent {
   agent_id?: string;
   parent_id?: string;
   provider?: string;

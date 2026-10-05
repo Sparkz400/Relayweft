@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Submodules. The container cannot write the repository's git folder, but
@@ -23,7 +23,7 @@ import (
 // submodules are not checked out) lies in the work tree. An agent that
 // wrote one could point it at a folder of its own with a git config that
 // runs commands, and git on this machine would act on it the next time it
-// looks into that submodule. Besides proc.GitGuard on sy's own git, the
+// looks into that submodule. Besides proc.GitGuard on rw's own git, the
 // sandbox mounts each existing submodule .git read-only, and after the run
 // checks every submodule's .git against what it was before: one that
 // appeared or changed is removed or put back, and the run fails.
@@ -125,12 +125,12 @@ func (b *Box) Check() error {
 	if b == nil || len(b.links) == 0 {
 		return nil
 	}
-	var bad []string // what changed, and what sy did about it
+	var bad []string // what changed, and what rw did about it
 	for rel, before := range b.links {
 		if link := symlinkIn(b.dir, rel); link != "" {
 			name := filepath.ToSlash(strings.TrimPrefix(link, b.dir+string(filepath.Separator)))
 			if err := os.Remove(link); err != nil { // the link itself, never what it points to
-				bad = append(bad, name+" is a symlink, which sy could not remove ("+err.Error()+"): remove it before you run git there")
+				bad = append(bad, name+" is a symlink, which rw could not remove ("+err.Error()+"): remove it before you run git there")
 			} else {
 				bad = append(bad, name+" was a symlink: removed")
 			}
@@ -164,21 +164,21 @@ func undoLink(p string, before, now linkState) string {
 				return "was removed: the original was put back"
 			}
 		}
-		return "was removed (sy cannot restore a .git folder; git takes the submodule as not checked out)"
+		return "was removed (rw cannot restore a .git folder; git takes the submodule as not checked out)"
 	}
 	if before.kind == "dir" || before.kind == "other" {
-		aside := fmt.Sprintf("%s.sy-quarantine-%d", p, time.Now().UnixNano())
+		aside := fmt.Sprintf("%s.rw-quarantine-%d", p, time.Now().UnixNano())
 		if err := os.Rename(p, aside); err != nil {
-			return "changed; sy could not move it aside (" + err.Error() + "): look at it before you run git there"
+			return "changed; rw could not move it aside (" + err.Error() + "): look at it before you run git there"
 		}
 		return "changed: moved to " + filepath.Base(aside) + " (it may hold the submodule's history; look at it before you put it back)"
 	}
 	if err := os.RemoveAll(p); err != nil {
-		return "changed; sy could not remove it (" + err.Error() + "): remove it before you run git there"
+		return "changed; rw could not remove it (" + err.Error() + "): remove it before you run git there"
 	}
 	if before.kind == "file" {
 		if err := os.WriteFile(p, before.data, 0o644); err != nil {
-			return "changed: removed, but sy could not put the original back (" + err.Error() + ")"
+			return "changed: removed, but rw could not put the original back (" + err.Error() + ")"
 		}
 		return "changed: the original was put back"
 	}
@@ -219,7 +219,7 @@ func safeRel(rel string) bool {
 }
 
 // homeResets are files in a sandbox home that make a CLI or shell run
-// commands, and that sy never puts there: an agent may have left them for
+// commands, and that rw never puts there: an agent may have left them for
 // the next agent's CLI. They are removed before every run (unless a mount
 // of yours goes there).
 var homeResets = []string{
@@ -276,7 +276,7 @@ func pinProjectConfigs(dir, base, runDir string) ([]Mount, []string, error) {
 	var pinned []string
 	for i, rel := range projectConfigs {
 		if link := symlinkOnPath(dir, strings.Split(rel, "/")); link != "" {
-			return nil, nil, fmt.Errorf("%s in the work tree is a symlink: sy will not run an agent with it (remove it)", filepath.ToSlash(strings.TrimPrefix(link, dir+string(filepath.Separator))))
+			return nil, nil, fmt.Errorf("%s in the work tree is a symlink: rw will not run an agent with it (remove it)", filepath.ToSlash(strings.TrimPrefix(link, dir+string(filepath.Separator))))
 		}
 		p := filepath.Join(dir, filepath.FromSlash(rel))
 		st, err := os.Lstat(p)

@@ -9,7 +9,7 @@ import (
 )
 
 // DetectVerify guesses a repo's own checks from its build files, for
-// `sy init`. It returns nil when it finds nothing it is sure about.
+// `rw init`. It returns nil when it finds nothing it is sure about.
 func DetectVerify(dir string) []string {
 	has := func(name string) bool {
 		_, err := os.Stat(filepath.Join(dir, name))
@@ -119,6 +119,6 @@ func WithVerify(yamlText []byte, cmds []string) []byte {
 	if end < 0 {
 		end = len(s) - i
 	}
-	line := "  commands: [" + strings.Join(q, ", ") + "]   # detected by sy init"
+	line := "  commands: [" + strings.Join(q, ", ") + "]   # detected by rw init"
 	return []byte(s[:i] + line + s[i+end:])
 }

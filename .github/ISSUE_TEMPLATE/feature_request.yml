@@ -1,5 +1,5 @@
 name: Feature request
-description: An idea to make sy more useful
+description: An idea to make rw more useful
 labels: [enhancement]
 body:
   - type: textarea
@@ -12,4 +12,4 @@ body:
   - type: textarea
     id: idea
     attributes:
-      label: How could sy help?
+      label: How could rw help?

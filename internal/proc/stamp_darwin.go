@@ -16,7 +16,7 @@ const szomb = 5
 // from sysctl kern.proc.pid, in microseconds), so a recorded pid that was
 // reused by another program is not mistaken for a leftover agent. "" when
 // the process is gone or a zombie. macOS has no /proc; without this a
-// killed sy's agent could not be told from a program that got its pid
+// killed rw's agent could not be told from a program that got its pid
 // since, and was never stopped.
 func procStamp(pid int) string {
 	if pid <= 0 {

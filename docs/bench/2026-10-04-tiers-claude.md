@@ -1,14 +1,14 @@
-# sy bench: cost-aware model tiers, Claude (4 Oct 2026)
+# rw bench: cost-aware model tiers, Claude (4 Oct 2026)
 
-`sy bench --starter` with `--provider claude`, run once without and once
+`rw bench --starter` with `--provider claude`, run once without and once
 with `--tiers` (`routing.tiers: auto`), plus a single Claude Opus agent at
-high effort as the baseline. Switchyard was at main 9f39356 (v0.2.0 plus
+high effort as the baseline. Relayweft was at main 9f39356 (v0.2.0 plus
 the resume work), Claude Code 2.1.288, on Windows 11. A small extra run
 used Codex (codex-cli 0.160.0) with `--tiers`.
 
 The plan was 25 Claude runs. The bench stopped itself at 19, when Claude's
 5-hour limit reached 67% (the quota guard was 66%). Each tiers run and
-each plain routed run went to its own `sy bench --only <task>` call, so
+each plain routed run went to its own `rw bench --only <task>` call, so
 the two modes alternate in time.
 
 ## What it shows
@@ -45,14 +45,14 @@ the two modes alternate in time.
     only for a step without a title). A prompt that mentions the readme
     or "keep the comments" in passing no longer moves a step down. Hard
     words still count anywhere: moving up is the safe mistake.
-  - `sy bench` printed "cancelling the bench... (Ctrl+C again to force
+  - `rw bench` printed "cancelling the bench... (Ctrl+C again to force
     quit)" at the end of every normal run. Fixed.
 - **Still open:** tiers can only pay off where steps differ: real
   multi-file tasks with routine and hard steps mixed. The starter set
-  cannot show that. The next measurement is `sy bench --from-history` on
+  cannot show that. The next measurement is `rw bench --from-history` on
   this repo or yours, with and without `--tiers`.
 
-Starter repo commit d8c9ea7 (the `sy bench --starter` files of main
+Starter repo commit d8c9ea7 (the `rw bench --starter` files of main
 9f39356).
 
 ## Runs
@@ -112,13 +112,13 @@ Claude's 5-hour limit went from 46% to 67% (7-day: 27% to 30%) over the
 sessions on the same account ran at the same time, so this cannot be split
 per mode, and the "how quickly the limits are reached" measure stays open.
 
-## What it means for `sy tune`
+## What it means for `rw tune`
 
 Across this bench, the earlier one and the logs on this PC, about 120
 agent runs failed 0 times, and 1 of about 30 final reviews asked for
 changes.
 No step escalated, no provider switched at its limit and the judge never
-ran. So `sy tune`'s rates rest on almost no failures. Its thresholds now
+ran. So `rw tune`'s rates rest on almost no failures. Its thresholds now
 depend on the number of runs: a rate counts only when the lower end of
 its 90% confidence interval is above the threshold. 2 failures in 5 runs
 no longer flag a route; 3 do. A provider must run out twice, at least

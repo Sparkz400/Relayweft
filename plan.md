@@ -1,9 +1,9 @@
-# Switchyard — Project Plan
+# Relayweft — Project Plan
 
 > A Windows-first, animated terminal app that routes coding work between ChatGPT (Codex CLI) and Claude (Claude Code) subscriptions — picking the right model for each step, running agents in parallel, and only calling the expensive model when it matters.
 
-**Name:** Switchyard (a rail yard where trains get routed onto the right track)
-**Command:** `sy`
+**Name:** Relayweft (a rail yard where trains get routed onto the right track)
+**Command:** `rw`
 **Language:** Go
 **Auth:** subscriptions only — no API keys, no token extraction
 
@@ -20,7 +20,7 @@
 ### Non-goals (for now)
 
 - No direct API calls or API keys.
-- No custom model client. Switchyard only drives the official `codex` and `claude` CLIs.
+- No custom model client. Relayweft only drives the official `codex` and `claude` CLIs.
 - No cross-platform polish beyond Windows (macOS/Linux should mostly work, but aren't tested).
 
 ---
@@ -187,8 +187,8 @@ Parallel agents editing one working tree will collide. Each writing agent gets i
 ## 7. Project structure
 
 ```
-switchyard/
-├── cmd/sy/main.go
+relayweft/
+├── cmd/rw/main.go
 ├── internal/
 │   ├── config/        # YAML config: models, routes, limits, theme
 │   ├── event/         # Event types
@@ -200,7 +200,7 @@ switchyard/
 │   ├── orchestrator/  # lifecycle, worktrees, checkpoints
 │   ├── sessionlog/    # JSONL writer + stats
 │   └── tui/           # Bubble Tea models, views, styles
-├── switchyard.yaml    # default config
+├── relayweft.yaml    # default config
 ├── PLAN.md
 └── README.md
 ```
@@ -211,27 +211,27 @@ switchyard/
 
 | # | Milestone | Done when |
 |---|---|---|
-| **M0** | **Demo mode** | `sy --demo` shows the full animated tree driven by fake agents. The look is nailed down. |
+| **M0** | **Demo mode** | `rw --demo` shows the full animated tree driven by fake agents. The look is nailed down. |
 | **M1** | Single runner | One real Codex agent runs a task; its events animate the tree. |
 | **M2** | Both providers | Claude runner added; manual provider choice via flag. |
 | **M3** | Rule router | Routing rules pick provider/model per step; decisions logged. |
 | **M4** | Parallel agents | Worker/explorer/researcher run concurrently in worktrees; results merged. |
 | **M5** | Review checkpoints | Reviewer runs before plan, on repeated errors, before done. |
 | **M6** | Limit fallback | Usage-limit detection and automatic provider switch. |
-| **M7** | Stats + tuning | `sy stats` shows usage per model and route; compare against single-agent baseline. |
+| **M7** | Stats + tuning | `rw stats` shows usage per model and route; compare against single-agent baseline. |
 | **M8** | LLM judge (optional) | Judge added for the cases where rules underperform. |
 
 ---
 
 ## 9. Measuring success
 
-Run the same set of ~10 real tasks two ways: plain single-agent CLI vs Switchyard. Compare:
+Run the same set of ~10 real tasks two ways: plain single-agent CLI vs Relayweft. Compare:
 
 - tasks completed correctly,
 - wall-clock time,
 - how quickly each subscription's limit is reached.
 
-If Switchyard isn't clearly better on at least two of three, tune the router before adding features.
+If Relayweft isn't clearly better on at least two of three, tune the router before adding features.
 
 ---
 
@@ -253,13 +253,13 @@ All milestones M0–M8 are implemented. The README covers usage. The open questi
 
 | Question | Decision |
 |---|---|
-| Model choice | Every role has a route on **both** providers plus `prefer: codex/claude/other/auto`. It can be changed live in the TUI (model picker `m`, `/route`, `/prefer`), with flags (`--route`, `--prefer`, `--provider`), or in `switchyard.yaml`. The Codex catalog is read from `codex debug models` (`sy models --refresh`). |
+| Model choice | Every role has a route on **both** providers plus `prefer: codex/claude/other/auto`. It can be changed live in the TUI (model picker `m`, `/route`, `/prefer`), with flags (`--route`, `--prefer`, `--provider`), or in `relayweft.yaml`. The Codex catalog is read from `codex debug models` (`rw models --refresh`). |
 | Prompt delivery | Prompts go to both CLIs via stdin, which avoids `cmd.exe` quoting of multi-line prompts through npm `.cmd` shims. |
-| Worktree merge strategy | Snapshot the working tree as a commit using a temporary index (the user's index, HEAD and branch are untouched). Run a detached worktree per writing agent at the current integration commit. Merge with `git merge-tree --write-tree` (git ≥ 2.38). Write changed files back with `git restore --source` (CRLF-safe); files the user edited meanwhile are 3-way merged with `git merge-file`. On a conflict, keep the agent's commit on `sy/<session>/<step>` and tell the reviewer. |
+| Worktree merge strategy | Snapshot the working tree as a commit using a temporary index (the user's index, HEAD and branch are untouched). Run a detached worktree per writing agent at the current integration commit. Merge with `git merge-tree --write-tree` (git ≥ 2.38). Write changed files back with `git restore --source` (CRLF-safe); files the user edited meanwhile are 3-way merged with `git merge-file`. On a conflict, keep the agent's commit on `rw/<session>/<step>` and tell the reviewer. |
 | Usage-limit detection | Claude's `rate_limit_event` (status `rejected`), regex `limit_patterns` on error text, stderr and exit codes. The reset time is parsed from the message, else `limit_cooldown`. The header shows Claude's live quota utilization. |
 | Legacy conhost | Detected when no `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI`, ... is set on Windows; the ASCII theme is used. `--ascii`/`--unicode` override it. |
-| Killing agent trees | Unix: process groups. Windows: `taskkill /T /F` per agent, plus a kill-on-close job object around `sy` itself so nothing outlives it. |
+| Killing agent trees | Unix: process groups. Windows: `taskkill /T /F` per agent, plus a kill-on-close job object around `rw` itself so nothing outlives it. |
 | Pause | Holds dispatching of new agents. Running agents finish (suspending a CLI mid-request risks API timeouts). |
 | Small tasks | Fewer than `small_task_words` (12) words skips the planner and parallelism. |
 | Read-only safety | Codex `--sandbox read-only`. Claude `--permission-mode dontAsk --tools Read,Grep,Glob,WebSearch,WebFetch`. |
-| Token accounting | "Tokens" in the UI and stats are fresh tokens (uncached input + output). Cached reads are shown separately in `sy stats`. |
+| Token accounting | "Tokens" in the UI and stats are fresh tokens (uncached input + output). Cached reads are shown separately in `rw stats`. |

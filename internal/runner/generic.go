@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
 )
 
 // NewGeneric returns a runner for a CLI described in the config
@@ -84,7 +84,7 @@ func genericPrecheck(name string, cfg config.ProviderCfg) func(Spec) error {
 		}
 		switch {
 		case s.ReadOnly && !cfg.CanReadOnly(name):
-			return fmt.Errorf("providers.%s.generic has no read_only_args and is not no_tools, so sy cannot keep it read-only; route read-only work elsewhere", name)
+			return fmt.Errorf("providers.%s.generic has no read_only_args and is not no_tools, so rw cannot keep it read-only; route read-only work elsewhere", name)
 		case !s.ReadOnly && !cfg.CanWrite(name):
 			return fmt.Errorf("providers.%s takes read-only work only (no generic.write_args); route writing work elsewhere", name)
 		}
@@ -414,7 +414,7 @@ func clipStr(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// sessionID reports a session only for a CLI sy can resume.
+// sessionID reports a session only for a CLI rw can resume.
 func (p *jsonRuleParser) sessionID() string {
 	if len(p.g.ResumeArgs) > 0 && sessionID.MatchString(p.session) {
 		return p.session

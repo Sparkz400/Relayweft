@@ -50,7 +50,7 @@ func (f *fakeGitLab) handler(t *testing.T) http.Handler {
 		case r.Method == "GET" && p == "":
 			write(`{"default_branch":"trunk"}`)
 		case r.Method == "GET" && p == "/issues/4":
-			write(`{"iid":4,"title":"Crash","description":"Steps","state":"opened","web_url":"https://gitlab.com/g/sub/p/-/issues/4","labels":["bug","sy"],"author":{"username":"ann"}}`)
+			write(`{"iid":4,"title":"Crash","description":"Steps","state":"opened","web_url":"https://gitlab.com/g/sub/p/-/issues/4","labels":["bug","rw"],"author":{"username":"ann"}}`)
 		case r.Method == "GET" && p == "/issues/4/notes":
 			if q.Get("sort") != "asc" {
 				t.Errorf("notes not oldest first: %s", r.URL.RawQuery)
@@ -62,7 +62,7 @@ func (f *fakeGitLab) handler(t *testing.T) http.Handler {
 			f.notes = append(f.notes, "edit issues/4/notes/2: "+in.Body)
 			write(`{}`)
 		case r.Method == "GET" && p == "/issues":
-			if q.Get("state") != "opened" || q.Get("labels") != "sy" || q.Get("sort") != "asc" {
+			if q.Get("state") != "opened" || q.Get("labels") != "rw" || q.Get("sort") != "asc" {
 				t.Errorf("issue query %s", r.URL.RawQuery)
 			}
 			if page == "1" {
@@ -93,7 +93,7 @@ func (f *fakeGitLab) handler(t *testing.T) http.Handler {
 			w.WriteHeader(201)
 			write(`{"id":99}`)
 		case r.Method == "GET" && p == "/merge_requests/7":
-			write(`{"iid":7,"title":"Fix","description":"d","state":"merged","web_url":"https://gitlab.com/g/sub/p/-/merge_requests/7","source_branch":"sy/x","target_branch":"main","sha":"abc","source_project_id":1,"target_project_id":1,"diff_refs":{"base_sha":"b0","head_sha":"abc","start_sha":"s0"}}`)
+			write(`{"iid":7,"title":"Fix","description":"d","state":"merged","web_url":"https://gitlab.com/g/sub/p/-/merge_requests/7","source_branch":"rw/x","target_branch":"main","sha":"abc","source_project_id":1,"target_project_id":1,"diff_refs":{"base_sha":"b0","head_sha":"abc","start_sha":"s0"}}`)
 		case r.Method == "GET" && p == "/merge_requests/7/diffs":
 			if f.noDiffs {
 				w.WriteHeader(404)
@@ -107,7 +107,7 @@ func (f *fakeGitLab) handler(t *testing.T) http.Handler {
 				t.Errorf("pipelines for %s", q.Get("sha"))
 			}
 			// 10 is older than 12 on the same ref: only 12 counts.
-			write(`[{"id":10,"ref":"sy/x"},{"id":12,"ref":"sy/x"},{"id":11,"ref":"refs/merge-requests/7/head"}]`)
+			write(`[{"id":10,"ref":"rw/x"},{"id":12,"ref":"rw/x"},{"id":11,"ref":"refs/merge-requests/7/head"}]`)
 		case r.Method == "GET" && p == "/pipelines/12/jobs":
 			if q.Get("scope[]") != "failed" {
 				t.Errorf("jobs query %s", r.URL.RawQuery)
@@ -196,18 +196,18 @@ func TestGitLabIssuesAndMergeRequests(t *testing.T) {
 		t.Fatal("kind or token")
 	}
 	is, err := c.Issue(glRepo, 4)
-	if err != nil || is.Title != "Crash" || is.Body != "Steps" || is.State != "open" || strings.Join(is.Labels, ",") != "bug,sy" || is.IsPull {
+	if err != nil || is.Title != "Crash" || is.Body != "Steps" || is.State != "open" || strings.Join(is.Labels, ",") != "bug,rw" || is.IsPull {
 		t.Fatalf("%+v %v", is, err)
 	}
 	cs, err := c.Comments(glRepo, 4)
 	if err != nil || len(cs) != 1 || cs[0].Author != "bob" {
 		t.Fatalf("system notes must be left out: %+v %v", cs, err)
 	}
-	open, err := c.OpenIssues(glRepo, "sy", 0)
+	open, err := c.OpenIssues(glRepo, "rw", 0)
 	if err != nil || len(open) != 101 || open[100].Number != 101 {
 		t.Fatalf("paged issues: %d %v", len(open), err)
 	}
-	if open, _ := c.OpenIssues(glRepo, "sy", 3); len(open) != 3 {
+	if open, _ := c.OpenIssues(glRepo, "rw", 3); len(open) != 3 {
 		t.Fatalf("max: %d", len(open))
 	}
 	ps, err := c.OpenPulls(glRepo)
@@ -217,11 +217,11 @@ func TestGitLabIssuesAndMergeRequests(t *testing.T) {
 	if b, err := c.DefaultBranch(glRepo); err != nil || b != "trunk" {
 		t.Fatalf("%q %v", b, err)
 	}
-	pr, err := c.CreatePull(glRepo, NewPull{Title: "Fix it", Head: "sy/fix", Base: "main", Body: "Closes #4", Draft: true})
+	pr, err := c.CreatePull(glRepo, NewPull{Title: "Fix it", Head: "rw/fix", Base: "main", Body: "Closes #4", Draft: true})
 	if err != nil || pr.Number != 8 || pr.URL != "https://gitlab.com/g/sub/p/-/merge_requests/8" || pr.HeadRepo != "g/sub/p" {
 		t.Fatalf("%+v %v", pr, err)
 	}
-	if got := f.created[0]; got["title"] != "Draft: Fix it" || got["source_branch"] != "sy/fix" || got["target_branch"] != "main" || got["description"] != "Closes #4" {
+	if got := f.created[0]; got["title"] != "Draft: Fix it" || got["source_branch"] != "rw/fix" || got["target_branch"] != "main" || got["description"] != "Closes #4" {
 		t.Fatalf("sent %v", got)
 	}
 	if _, err := c.CreatePull(glRepo, NewPull{Title: "Draft: already", Head: "b", Base: "main", Draft: true}); err != nil || f.created[1]["title"] != "Draft: already" {
@@ -257,7 +257,7 @@ func TestGitLabWatchAndReview(t *testing.T) {
 	f, api := gitlabServer(t)
 	c := New(GitLab, api, "good", nil)
 	p, err := c.Pull(glRepo, 7)
-	if err != nil || !p.Merged || p.State != "closed" || p.HeadRef != "sy/x" || p.HeadSHA != "abc" || p.HeadRepo != "g/sub/p" || p.BaseRef != "main" {
+	if err != nil || !p.Merged || p.State != "closed" || p.HeadRef != "rw/x" || p.HeadSHA != "abc" || p.HeadRepo != "g/sub/p" || p.BaseRef != "main" {
 		t.Fatalf("%+v %v", p, err)
 	}
 	diff, err := c.PullDiff(glRepo, 7, 1<<20)
@@ -301,7 +301,7 @@ func TestGitLabWatchAndReview(t *testing.T) {
 		t.Fatalf("%q %v", v, err)
 	}
 
-	url, err := c.CommentReview(glRepo, 7, "abc", "### review\n<!-- switchyard -->\n",
+	url, err := c.CommentReview(glRepo, 7, "abc", "### review\n<!-- relayweft -->\n",
 		[]InlineComment{{Path: "a.go", Line: 2, OldLine: 2, Body: "context"}, {Path: "a.go", Line: 1, Body: "added"}, {Path: "a.go", Line: 40, Body: "elsewhere"}})
 	if err != nil || url != "https://gitlab.com/g/sub/p/-/merge_requests/7#note_99" {
 		t.Fatalf("%q %v", url, err)
@@ -328,7 +328,7 @@ func TestGitLabWatchAndReview(t *testing.T) {
 // A real GitLab Runner 19 job log: every line starts with a timestamp and
 // a stream marker, and sections are framed by section_start/section_end
 // markers. Found on GitLab CE 19.4 with Runner 19.4: the prefixes took
-// about half of the log tail sy watch passes to the agents.
+// about half of the log tail rw watch passes to the agents.
 func TestGitLabTraceTimestampsAndSections(t *testing.T) {
 	f, api := gitlabServer(t)
 	var b strings.Builder

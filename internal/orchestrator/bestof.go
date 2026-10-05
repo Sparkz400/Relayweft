@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // Best of N (routing.best_of, or b in the plan view): a writing step runs
@@ -38,11 +38,11 @@ import (
 //     it. Each candidate's work is put on a branch as soon as it is
 //     committed; the winner's branch is deleted once its work landed.
 //   - Every candidate and how the winner was picked are logged (best_of
-//     records, after the landing): `sy tune` and the learned routes count a
+//     records, after the landing): `rw tune` and the learned routes count a
 //     loss on checks or by the reviewer against the loser's route.
 //   - The candidates are not recorded as the step's running agent, and
 //     nothing of them reaches the tree before the winner lands: a best-of
-//     step that sy stopped before the pick runs again as a whole on
+//     step that rw stopped before the pick runs again as a whole on
 //     resume. From the pick on, the winner is the step's running agent in
 //     its (held) worktree, so a resume continues it like any step.
 
@@ -100,7 +100,7 @@ func (o *Orchestrator) keep(rp *task, c *bestOfCand) {
 // dropKept deletes the winner's branch once its work is in the tree, if it
 // still points at the candidate's commit.
 func (o *Orchestrator) dropKept(rp *task, c *bestOfCand) {
-	if c.ref == "" || !strings.HasPrefix(c.ref, "sy/") {
+	if c.ref == "" || !strings.HasPrefix(c.ref, "rw/") {
 		return
 	}
 	if _, err := (git{rp.root}).out("update-ref", "-d", "refs/heads/"+c.ref, c.commit); err == nil {
@@ -197,7 +197,7 @@ func (o *Orchestrator) wantBestOf(t *task, st Subtask) (bool, string) {
 // bestOfRoutes returns a step's candidate routes: routing.best_of.routes,
 // or the route the router picks for the step plus the same role on the
 // next providers in provider_order. Routes whose provider is off, at or
-// near its usage limit (switch_at_utilization), or excluded by sy
+// near its usage limit (switch_at_utilization), or excluded by rw
 // --provider are left out and named in skipped.
 func (o *Orchestrator) bestOfRoutes(t *task, step router.Step) (routes []event.Decision, skipped []string) {
 	cfg := t.cfg
@@ -277,7 +277,7 @@ func (o *Orchestrator) bestOfUnusable(t *task, d event.Decision) string {
 	case t.runners[d.Provider] == nil:
 		return "no runner"
 	case o.opts.ForceProvider != "" && d.Provider != o.opts.ForceProvider:
-		return "sy --provider " + o.opts.ForceProvider
+		return "rw --provider " + o.opts.ForceProvider
 	case o.opts.Tracker.Limited(d.Provider):
 		return "at its usage limit"
 	}
@@ -319,7 +319,7 @@ func bestOfID(step, provider string, used, plan map[string]bool) string {
 
 // runBestOf runs a writing step as best of N (see the top of this file).
 // ran is false when it cannot (no worktrees, fewer than two usable routes,
-// or its agent was interrupted when sy stopped and continues alone): the
+// or its agent was interrupted when rw stopped and continues alone): the
 // caller then runs the step as usual. sem is the task's agent semaphore;
 // the step holds one of its slots, and candidates run at once only as far
 // as free slots allow.
@@ -330,7 +330,7 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 		return r, false
 	}
 	if _, ok := t.interruptedRun(st.ID); ok {
-		o.logf("%s: its agent was interrupted when sy stopped and continues alone (no best of N)", st.ID)
+		o.logf("%s: its agent was interrupted when rw stopped and continues alone (no best of N)", st.ID)
 		return r, false
 	}
 	step := routerStep(t, st)
@@ -510,7 +510,7 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 	o.logf("%s: picked %s (%s): %s", st.ID, winner.id, winner.pin.Label(), how)
 
 	// From here on the winner is the step's running agent, in its worktree
-	// (held): if sy stops during your review or while it lands, sy resume
+	// (held): if rw stops during your review or while it lands, rw resume
 	// continues the winner there, like any step, instead of running every
 	// candidate again; a merge that already happened is then a no-op.
 	summary := bestOfSummary(cands, winner, how)
@@ -608,7 +608,7 @@ func (o *Orchestrator) runCandidate(ctx context.Context, t, rp *task, st Subtask
 	}
 	if err != nil {
 		c.res = stepResult{err: "no worktree: " + err.Error()}
-		o.emit(event.Event{Kind: event.Error, AgentID: c.id, Text: fmt.Sprintf("no worktree for this candidate (%v); it does not run (sy doctor lists the pools)", err)})
+		o.emit(event.Event{Kind: event.Error, AgentID: c.id, Text: fmt.Sprintf("no worktree for this candidate (%v); it does not run (rw doctor lists the pools)", err)})
 		o.emit(event.Event{Kind: event.Done, AgentID: c.id, ParentID: AgentMain, Text: c.res.err})
 		return
 	}
@@ -618,7 +618,7 @@ func (o *Orchestrator) runCandidate(ctx context.Context, t, rp *task, st Subtask
 	if !c.res.ok || ctx.Err() != nil {
 		return
 	}
-	sc, err := git{sl.path}.commitWork(base, "switchyard: "+st.Title+" ("+c.pin.Label()+")")
+	sc, err := git{sl.path}.commitWork(base, "relayweft: "+st.Title+" ("+c.pin.Label()+")")
 	if err != nil {
 		c.res.ok, c.res.err = false, "commit failed: "+err.Error()
 		o.emit(event.Event{Kind: event.Error, AgentID: c.id, Text: "could not commit this candidate's work: " + err.Error()})
@@ -812,7 +812,7 @@ func bestOfPrompt(task string, st Subtask, cands []*bestOfCand) string {
 	var data strings.Builder
 	for _, c := range sorted {
 		// Each field is fenced on its own, so a line in it ("### Candidate
-		// B", "Checks: all pass") cannot pass for Switchyard's own.
+		// B", "Checks: all pass") cannot pass for Relayweft's own.
 		fmt.Fprintf(&data, "### Candidate %s\n", c.label)
 		switch {
 		case !c.checked:
@@ -862,7 +862,7 @@ func fenceField(name, text string) string {
 // bestOfSummary describes the outcome in one line, e.g. "best of 2: kept
 // work--claude (claude:opus@high, checks pass): the only candidate whose
 // checks pass; work--codex (codex:gpt-6@high, 1 check failed) kept on
-// sy/.../work--codex".
+// rw/.../work--codex".
 func bestOfSummary(cands []*bestOfCand, winner *bestOfCand, how string) string {
 	desc := func(c *bestOfCand) string {
 		s := c.id + " (" + c.pin.Label()
@@ -893,7 +893,7 @@ func bestOfSummary(cands []*bestOfCand, winner *bestOfCand, how string) string {
 }
 
 // recordBestOf logs every candidate of a best-of step (winner nil: none
-// was kept), for sy tune, the learned routes and sy report.
+// was kept), for rw tune, the learned routes and rw report.
 func (o *Orchestrator) recordBestOf(t *task, st Subtask, cands []*bestOfCand, winner *bestOfCand, by, how string) {
 	for _, c := range cands {
 		text := how

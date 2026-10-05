@@ -159,7 +159,7 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 		return nil, err
 	}
 	req.Header.Set("Accept", accept)
-	req.Header.Set("User-Agent", "switchyard")
+	req.Header.Set("User-Agent", "relayweft")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

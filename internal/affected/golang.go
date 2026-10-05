@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // goShape returns the index of the single "./..." in `go test|vet ...
@@ -168,7 +168,7 @@ type goSel struct {
 
 // goAffected finds the packages of the changed files and every package
 // that imports them (tests included), or says why it cannot: go.mod,
-// go.sum, test data another package reads and files sy cannot place. f is the verify command,
+// go.sum, test data another package reads and files rw cannot place. f is the verify command,
 // for its build tags.
 func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 	for _, file := range c.files {
@@ -266,11 +266,11 @@ func goAffected(ctx context.Context, f []string, c *change) (*goSel, string) {
 			mentioned = append(mentioned, file)
 		case isDoc(file):
 		default:
-			return nil, fmt.Sprintf("%s is neither Go code nor named by any package, so sy cannot tell which tests read it", file)
+			return nil, fmt.Sprintf("%s is neither Go code nor named by any package, so rw cannot tell which tests read it", file)
 		}
 	}
 	// Another package reaching into a testdata folder ("../x/testdata")
-	// shares it: sy cannot tell which files it reads.
+	// shares it: rw cannot tell which files it reads.
 	if len(dataOwners) > 0 {
 		for ip, p := range pkgs {
 			if slices.Contains(dataOwners, ip) {

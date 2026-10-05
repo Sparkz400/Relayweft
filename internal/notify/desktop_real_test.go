@@ -13,17 +13,17 @@ import (
 // TestRealDesktopToast shows real toasts on this machine and, on Windows,
 // reads them back from the notification history to prove they were
 // delivered (a toast with an unregistered AppUserModelID is dropped
-// without any error). It is opt-in: SY_REAL_DESKTOP=1 go test -run RealDesktop
+// without any error). It is opt-in: RW_REAL_DESKTOP=1 go test -run RealDesktop
 func TestRealDesktopToast(t *testing.T) {
-	if os.Getenv("SY_REAL_DESKTOP") != "1" {
-		t.Skip("set SY_REAL_DESKTOP=1 to show real desktop notifications")
+	if os.Getenv("RW_REAL_DESKTOP") != "1" {
+		t.Skip("set RW_REAL_DESKTOP=1 to show real desktop notifications")
 	}
 	marker := fmt.Sprintf("sytest%d", time.Now().UnixNano())
 	// Printed so a script can look the toasts up where only the OS can
 	// (the macOS Notification Center database, a Linux notification daemon).
 	t.Logf("marker %s", marker)
 	cases := []struct{ name, title, body string }{
-		{"plain", "Switchyard: done", "plain body " + marker},
+		{"plain", "Relayweft: done", "plain body " + marker},
 		{"quotes", `He said "hi" & it's 'ok' ` + "`$x` $(calc) “curly” ‘single’", "quotes " + marker},
 		{"xml", "<b>bold</b> & <!-- c --> ]]>", "xml " + marker + " <toast/> &amp;"},
 		{"unicode", "Grüße ä ö ü ß 日本語 🚀", "unicode " + marker + " Ελληνικά"},

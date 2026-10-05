@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/runner"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/runner"
 )
 
 // ctxRunner is a test runner that sees the agent's context (a hanging
@@ -82,7 +82,7 @@ func finishC(dir string) {
 
 // interruptStep runs task until step's agent works (start does the first
 // half of its work and may report a session), then stops it the way a dead
-// sy does: the task state on disk is put back to what it was while the
+// rw does: the task state on disk is put back to what it was while the
 // agent worked (status running, the agent recorded), and every lock is
 // free. It returns that state and the agent's spec.
 func interruptStep(t *testing.T, dir string, edit func(*config.Config), task, step string, plan func(runner.Spec) (runner.Result, bool), start func(s runner.Spec)) (*TaskState, runner.Spec) {
@@ -124,7 +124,7 @@ func interruptStep(t *testing.T, dir string, edit func(*config.Config), task, st
 	}
 	cancel()
 	<-done
-	// sy died: nothing after this point was saved.
+	// rw died: nothing after this point was saved.
 	if err := os.WriteFile(statePath(id), saved, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func interruptStep(t *testing.T, dir string, edit func(*config.Config), task, st
 // A task killed while a step's agent works in a pool worktree is resumed
 // by continuing that agent's session in the same worktree, which still
 // holds its half-done edit; every edit lands exactly once, even though the
-// tree changed while sy was down.
+// tree changed while rw was down.
 func TestResumeContinuesInterruptedSessionInPoolWorktree(t *testing.T) {
 	dir := gitRepo(t)
 	st, first := interruptStep(t, dir, nil, longTask, "c", midstepPlan, func(s runner.Spec) {
@@ -162,7 +162,7 @@ func TestResumeContinuesInterruptedSessionInPoolWorktree(t *testing.T) {
 	if got := read(t, filepath.Join(dir, "shared.txt")); got != "base\na\n" {
 		t.Fatalf("a was not merged before the interruption: %q", got)
 	}
-	// While sy was down, the person changed the line a added. (Merged
+	// While rw was down, the person changed the line a added. (Merged
 	// against git's own merge base, c's work would conflict with it.)
 	os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("base\nA\n"), 0o644)
 
@@ -213,7 +213,7 @@ func TestResumeFallsBackToFreshAgent(t *testing.T) {
 		name string
 		// noSession: the agent died before its CLI reported a session.
 		noSession bool
-		// before changes things while sy is down; it returns the
+		// before changes things while rw is down; it returns the
 		// provider the fresh agent must not use ("" = any).
 		before func(t *testing.T, dir string, st *TaskState) (edit func(*config.Config))
 		// sessionFails: the CLI does not know the session any more.
@@ -361,7 +361,7 @@ func TestResumeContinuesMainTreeAndReadOnlySteps(t *testing.T) {
 }
 
 // A task cancelled while a step's agent worked keeps that agent on record:
-// sy resume --force continues its session.
+// rw resume --force continues its session.
 func TestCancelledStepKeepsItsSession(t *testing.T) {
 	dir := gitRepo(t)
 	started := make(chan struct{})
@@ -470,7 +470,7 @@ func TestClaimSlot(t *testing.T) {
 	if _, err := claimSlot(dir, path, base, &run); err == nil {
 		t.Fatal("a slot in use was claimed")
 	}
-	s.release() // the sy using it died
+	s.release() // the rw using it died
 
 	kept, err := claimSlot(dir, path, base, &run)
 	if err != nil {
@@ -514,10 +514,10 @@ func TestClaimSlot(t *testing.T) {
 		}
 		fs.release()
 		if i == 0 {
-			removeSlot(g.commonDir(), path) // sy clean
+			removeSlot(g.commonDir(), path) // rw clean
 		}
 	}
-	// Taken by a running sy: refused.
+	// Taken by a running rw: refused.
 	unlock, ok := proc.TryLock(path + ".lock")
 	if !ok {
 		t.Fatal("lock")
@@ -529,7 +529,7 @@ func TestClaimSlot(t *testing.T) {
 }
 
 // A slot that another task moved to a descendant of the interrupted run's
-// base (the person merged a kept sy branch, and that task's agent worked on
+// base (the person merged a kept rw branch, and that task's agent worked on
 // top of it) passes the commit check; its hold mark tells it apart.
 func TestClaimSlotRejectsReuseAtDescendant(t *testing.T) {
 	dir := gitRepo(t)
@@ -702,7 +702,7 @@ func TestFollowUpResumesInPoolWorktree(t *testing.T) {
 	}
 }
 
-// The pool worktree of a step that sy stopped in the middle of is kept for
+// The pool worktree of a step that rw stopped in the middle of is kept for
 // the resume: another task in the same repo uses other worktrees, so the
 // half-done edit is still there when the task is resumed.
 func TestInterruptedWorktreeIsKeptForResume(t *testing.T) {

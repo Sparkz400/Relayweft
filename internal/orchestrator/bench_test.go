@@ -171,7 +171,7 @@ func TestBenchRestoreFilesCopiesOnlyThose(t *testing.T) {
 	}
 }
 
-// The workspace of an older sy, a worktree of the repo, is replaced by a
+// The workspace of an older rw, a worktree of the repo, is replaced by a
 // standalone repository and its worktree record removed.
 func TestBenchWorkspaceReplacesOldWorktree(t *testing.T) {
 	dir := gitRepo(t)

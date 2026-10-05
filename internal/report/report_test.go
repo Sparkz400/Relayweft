@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
-	"github.com/sparkz400/switchyard/internal/sysload"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/sysload"
 )
 
 const hostile = "<script>alert(1)</script> \"quoted\" & 'single' <img src=x onerror=alert(2)> ``` | --> ]]> </details></pre>"
@@ -43,7 +43,7 @@ func hostileData() *Data {
 			CostUSD: 0.42, QuotaBefore: map[string]float64{"claude": 0.61}, QuotaAfter: map[string]float64{"claude": 0.64}},
 		Diff: &Diff{Before: "aaa", After: "bbb", Add: 1, Del: 1, Files: []FileDiff{{Path: "x<y>.go", Status: "M", Add: 1, Del: 1, Lang: "c",
 			Lines: []Line{diffLine("@@ -1 +1 @@", "c"), diffLine(`-	s := "</div><script>alert(3)</script>"`, "c"), diffLine("+	return `<!--` // ```", "c")}}}},
-		UndoCmd: `sy undo --dir "C:\Users\Nico Schu\repo" k`,
+		UndoCmd: `rw undo --dir "C:\Users\Nico Schu\repo" k`,
 	}
 }
 
@@ -115,7 +115,7 @@ func TestMarkdownEscapes(t *testing.T) {
 	if !strings.Contains(md, "````text\n"+hostile+"\n````") {
 		t.Errorf("task fence:\n%s", md)
 	}
-	for _, want := range []string{"## Routing decisions", `| w1 | a \#2 |`, "rule\" onmouseover=\"x", "## Cost", "| claude | 13k |", "61%", "```diff\n@@ -1 +1 @@", "sy undo --dir"} {
+	for _, want := range []string{"## Routing decisions", `| w1 | a \#2 |`, "rule\" onmouseover=\"x", "## Cost", "| claude | 13k |", "61%", "```diff\n@@ -1 +1 @@", "rw undo --dir"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("markdown lacks %q", want)
 		}
@@ -197,7 +197,7 @@ func gitRepo(t *testing.T) string {
 func TestBuildFromRealTask(t *testing.T) {
 	isolate(t)
 	dir := gitRepo(t)
-	t.Setenv("SY_REPORT_TEST_SECRET", "do-not-leak-me")
+	t.Setenv("RW_REPORT_TEST_SECRET", "do-not-leak-me")
 	task := "Add a greeting <script>alert(1)</script> to main.go and a notes file, with tests and documentation for everything please"
 	fn := func(s runner.Spec) runner.Result {
 		switch {
@@ -231,7 +231,7 @@ func TestBuildFromRealTask(t *testing.T) {
 		}
 	}()
 	o := orchestrator.New(orchestrator.Options{
-		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "sy.yaml")), Mode: "routed",
+		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "rw.yaml")), Mode: "routed",
 		Runners: func(*config.Config) runner.Set { return set }, Tracker: limits.NewTracker(),
 		Log: log, Events: ch, Load: func() sysload.Sample { return sysload.Sample{} },
 	})
@@ -281,7 +281,7 @@ func TestBuildFromRealTask(t *testing.T) {
 	if d.Diff == nil || len(d.Diff.Files) != 2 || d.Diff.Files[0].Path != "main.go" || d.Diff.Files[1].Status != "A" || d.Diff.Add == 0 {
 		t.Fatalf("diff = %+v", d.Diff)
 	}
-	if !strings.Contains(d.UndoCmd, "sy undo --dir ") || !strings.HasSuffix(d.UndoCmd, st.UndoKey) {
+	if !strings.Contains(d.UndoCmd, "rw undo --dir ") || !strings.HasSuffix(d.UndoCmd, st.UndoKey) {
 		t.Errorf("undo = %q", d.UndoCmd)
 	}
 	var page, md bytes.Buffer
@@ -342,7 +342,7 @@ func TestBuildMultiRepoTask(t *testing.T) {
 		}
 	}()
 	o := orchestrator.New(orchestrator.Options{
-		Dir: api, Store: config.NewStore(config.Default(), filepath.Join(t.TempDir(), "sy.yaml")), Mode: "routed",
+		Dir: api, Store: config.NewStore(config.Default(), filepath.Join(t.TempDir(), "rw.yaml")), Mode: "routed",
 		Runners: func(*config.Config) runner.Set { return set }, Tracker: limits.NewTracker(),
 		Events: ch, Load: func() sysload.Sample { return sysload.Sample{} },
 		Repos: []orchestrator.Repo{{Name: "web", Dir: web}},
@@ -399,7 +399,7 @@ func TestBuildBestOfTask(t *testing.T) {
 		}
 	}()
 	o := orchestrator.New(orchestrator.Options{
-		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "sy.yaml")), Mode: "routed",
+		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "rw.yaml")), Mode: "routed",
 		Runners: func(*config.Config) runner.Set { return set }, Tracker: limits.NewTracker(),
 		Log: log, Events: ch, Load: func() sysload.Sample { return sysload.Sample{} },
 	})

@@ -9,7 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // RouteStats aggregates agent runs per provider:model.
@@ -301,10 +301,10 @@ func samePath(a, b string) bool {
 // Print writes a human-readable report.
 func (s Stats) Print(w io.Writer) {
 	if s.Sessions == 0 {
-		fmt.Fprintln(w, "No sessions logged yet. Run a task with `sy` or `sy run \"...\"` first.")
+		fmt.Fprintln(w, "No sessions logged yet. Run a task with `rw` or `rw run \"...\"` first.")
 		return
 	}
-	fmt.Fprintf(w, "Switchyard stats - %d session(s) since %s\n\n", s.Sessions, s.Since.Format("2006-01-02 15:04"))
+	fmt.Fprintf(w, "Relayweft stats - %d session(s) since %s\n\n", s.Sessions, s.Since.Format("2006-01-02 15:04"))
 
 	fmt.Fprintln(w, "Usage per model")
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
@@ -334,7 +334,7 @@ func (s Stats) Print(w io.Writer) {
 		s.Fallbacks, s.Reviews, s.Approved, s.Merges, s.MergeFail)
 
 	if len(s.Modes) > 0 {
-		fmt.Fprintln(w, "\nTasks: Switchyard (routed) vs single-agent baseline (`sy run --single ...`)")
+		fmt.Fprintln(w, "\nTasks: Relayweft (routed) vs single-agent baseline (`rw run --single ...`)")
 		tw = tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 		cols := s.provColumns()
 		fmt.Fprintln(tw, "  MODE\tTASKS\tOK\tSUCCESS\tAVG WALL\t"+provHead(cols, " FRESH TOK/TASK"))

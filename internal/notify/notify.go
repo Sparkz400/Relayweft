@@ -22,7 +22,7 @@ const timeout = 10 * time.Second
 
 // powerShellAppID is the AppUserModelID Windows registers for PowerShell.
 // Toasts need a registered AppID; borrowing PowerShell's avoids having to
-// install a Start-menu shortcut for sy.
+// install a Start-menu shortcut for rw.
 const powerShellAppID = `{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`
 
 // Bell returns the terminal bell, the fallback that works everywhere.
@@ -66,7 +66,7 @@ func command(goos, title, body string, lookPath func(string) (string, error)) (s
 			return "", nil, ErrUnsupported
 		}
 		// "--" so a title starting with "-" is not read as an option.
-		return p, []string{"--app-name=Switchyard", "--", argText(title), markupText(argText(body))}, nil
+		return p, []string{"--app-name=Relayweft", "--", argText(title), markupText(argText(body))}, nil
 	}
 	return "", nil, ErrUnsupported
 }

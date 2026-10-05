@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/affected"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/affected"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // verifyScope is how much of the checks a verify run covers.
@@ -28,7 +28,7 @@ const (
 	verifyAffected
 )
 
-// Scopes as the session log and `sy report` show them.
+// Scopes as the session log and `rw report` show them.
 const (
 	scopeFull     = "full"
 	scopeAffected = "affected"
@@ -86,7 +86,7 @@ func (o *Orchestrator) verifyIn(ctx context.Context, t, r *task, scope verifySco
 
 // verifyAt runs the checks vc at site. In verifyAffected scope each
 // command is first narrowed to the tests the changes since site.base
-// affect (package affected); a command sy cannot narrow reliably runs in
+// affect (package affected); a command rw cannot narrow reliably runs in
 // full. When every narrowed run passes, the narrowed commands run once
 // more in full. failed counts the configured commands that fail in the
 // run that decides (a narrowed command with several runs, one per dotnet
@@ -159,7 +159,7 @@ type checkRun struct {
 	cmd   string
 	of    string // the configured command it stands for
 	scope string // scopeFull or scopeAffected
-	why   string // which tests and why, for the log and `sy report`
+	why   string // which tests and why, for the log and `rw report`
 	skip  bool   // nothing is affected: nothing to run
 }
 
@@ -178,14 +178,14 @@ func (o *Orchestrator) changedFiles(site checkSite, vc config.VerifyCfg) ([]stri
 	case vc.Affected == affected.Off:
 		return nil, "verify.affected is off"
 	case site.root == "" || site.base == "":
-		return nil, "not in a git repo, so sy cannot tell what changed"
+		return nil, "not in a git repo, so rw cannot tell what changed"
 	}
 	files, skipped, err := git{site.root}.changedSince(site.base)
 	switch {
 	case err != nil:
 		return nil, "could not list the changed files: " + clip(err.Error(), 200)
 	case len(skipped) > 0:
-		return nil, fmt.Sprintf("%d untracked file(s) over the snapshot size limit, which sy cannot compare", len(skipped))
+		return nil, fmt.Sprintf("%d untracked file(s) over the snapshot size limit, which rw cannot compare", len(skipped))
 	}
 	return files, ""
 }
@@ -262,7 +262,7 @@ func (o *Orchestrator) runChecks(ctx context.Context, t *task, vc config.VerifyC
 
 // verifyAllowed is what a writing agent in dir may run without asking: the
 // checks, and their narrowed forms (package affected), so an agent can
-// run the tests its change affects like sy does.
+// run the tests its change affects like rw does.
 func verifyAllowed(vc config.VerifyCfg, dir string) []string {
 	out := append([]string(nil), vc.Commands...)
 	if vc.Affected == affected.Off {

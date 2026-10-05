@@ -22,7 +22,7 @@ const (
 	Generic = "generic"
 )
 
-// Kinds lists every CLI protocol sy can drive.
+// Kinds lists every CLI protocol rw can drive.
 var Kinds = []string{Codex, Claude, Gemini, Qwen, Generic}
 
 // ProvidersOf returns the provider keys of a per-provider map in display

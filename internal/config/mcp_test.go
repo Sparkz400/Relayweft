@@ -80,7 +80,7 @@ func TestMCPExpandEnv(t *testing.T) {
 	}
 }
 
-// A repo's MCP servers run commands: they apply only after sy trust, and
+// A repo's MCP servers run commands: they apply only after rw trust, and
 // trusted ones merge with the user's servers.
 func TestRepoMCPNeedsTrust(t *testing.T) {
 	isolateTrust(t)
@@ -108,7 +108,7 @@ mcp:
 	}
 	cmds, err := CommandSettings(repo)
 	if err != nil || len(cmds) != 1 || !strings.Contains(cmds[0], "evil") {
-		t.Fatalf("sy trust shows %q %v", cmds, err)
+		t.Fatalf("rw trust shows %q %v", cmds, err)
 	}
 	if err := Trust(repo); err != nil {
 		t.Fatal(err)

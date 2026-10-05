@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
-	"github.com/sparkz400/switchyard/internal/sysload"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/sysload"
 )
 
 type recorder struct {
@@ -73,7 +73,7 @@ func newOrc(t *testing.T, dir string, set runner.Set, edit func(*config.Config))
 	}
 	t.Cleanup(func() { log.Close() })
 	o := New(Options{
-		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "sy.yaml")),
+		Dir: dir, Store: config.NewStore(cfg, filepath.Join(t.TempDir(), "rw.yaml")),
 		Runners: func(*config.Config) runner.Set { return set }, Tracker: limits.NewTracker(),
 		Log: log, Events: ch, NoGit: dir == "",
 		// Tests must not depend on how busy the machine running them is.
@@ -267,7 +267,7 @@ func TestWorktreesMergeIntoWorkingTree(t *testing.T) {
 		t.Error("user's uncommitted work was changed")
 	}
 	if headOf(t, dir) != head {
-		t.Error("HEAD moved: switchyard must not commit on the user's branch")
+		t.Error("HEAD moved: relayweft must not commit on the user's branch")
 	}
 	slots := map[string]bool{}
 	for id, d := range dirs {
@@ -311,7 +311,7 @@ func TestWorktreeConflictKeepsBranch(t *testing.T) {
 				map[string]any{"id": "x", "title": "edit shared one way", "kind": "edit", "prompt": "change shared", "files": []string{"shared.txt"}},
 				map[string]any{"id": "y", "title": "edit shared another way", "kind": "edit", "prompt": "change shared", "files": []string{"shared.txt"}},
 			)}
-		case strings.Contains(s.Prompt, "[SY:"+"PLAN-REVIEW]"), strings.Contains(s.Prompt, runner.MarkerFinalReview):
+		case strings.Contains(s.Prompt, "[RW:"+"PLAN-REVIEW]"), strings.Contains(s.Prompt, runner.MarkerFinalReview):
 			return approve()
 		}
 		os.WriteFile(filepath.Join(s.Dir, "shared.txt"), []byte("changed by "+s.StepID+"\n"), 0o644)
@@ -322,7 +322,7 @@ func TestWorktreeConflictKeepsBranch(t *testing.T) {
 	if res.OK {
 		t.Fatal("a conflict must not report success")
 	}
-	if len(res.Kept) != 1 || !strings.HasPrefix(res.Kept[0], "sy/") {
+	if len(res.Kept) != 1 || !strings.HasPrefix(res.Kept[0], "rw/") {
 		t.Fatalf("kept = %v", res.Kept)
 	}
 	if _, err := (git{dir}).out("rev-parse", "--verify", res.Kept[0]); err != nil {
@@ -355,7 +355,7 @@ func TestRepeatErrorEscalatesAndReviews(t *testing.T) {
 			return runner.Result{Final: planJSON(map[string]any{"id": "w", "title": "fix bug", "kind": "edit", "prompt": "fix the bug"})}
 		case strings.Contains(s.Prompt, runner.MarkerErrorReview):
 			return runner.Result{Final: `{"approve": false, "advice": "use the other index"}`}
-		case strings.Contains(s.Prompt, "[SY:"):
+		case strings.Contains(s.Prompt, "[RW:"):
 			if strings.Contains(s.Prompt, runner.MarkerStep) {
 				break
 			}
@@ -627,7 +627,7 @@ func (c cancelRunner) Run(ctx context.Context, s runner.Spec, emit func(event.Ev
 			map[string]any{"id": "d", "kind": "edit", "prompt": "d"},
 		)}
 	}
-	if s.Prompt == "" || strings.Contains(s.Prompt, "[SY:STEP]") || strings.Contains(s.Prompt, "fix it") {
+	if s.Prompt == "" || strings.Contains(s.Prompt, "[RW:STEP]") || strings.Contains(s.Prompt, "fix it") {
 		c.onStart(s)
 		<-ctx.Done()
 		return runner.Result{Err: ctx.Err(), Killed: true}

@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/sandbox"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/sandbox"
 )
 
-// sy's verify commands follow the top-level sandbox: with it on and no
+// rw's verify commands follow the top-level sandbox: with it on and no
 // runtime they fail with what to do, and never run on this machine.
 func TestCheckCmdSandbox(t *testing.T) {
 	cfg := config.Default()

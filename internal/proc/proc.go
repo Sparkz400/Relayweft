@@ -20,8 +20,8 @@ func Resolve(name string) (string, error) { return exec.LookPath(name) }
 // `C:\Program Files\PowerShell\7"`. Go's filepath.SplitList treats a quote as
 // the start of a quoted section, so one stray quote swallows every entry after
 // it and git, codex and claude all go "missing" although the shell finds them.
-// It updates sy's own environment (children inherit the fixed PATH) and
-// returns the broken entries so `sy doctor` can report them.
+// It updates rw's own environment (children inherit the fixed PATH) and
+// returns the broken entries so `rw doctor` can report them.
 func FixPath() []string {
 	if runtime.GOOS != "windows" {
 		return nil
@@ -64,11 +64,11 @@ func cleanPathList(s string) (string, []string) {
 }
 
 // TryLock takes an exclusive lock on the file at path without waiting. The
-// lock is held until unlock is called or the process exits, so a crashed sy
+// lock is held until unlock is called or the process exits, so a crashed rw
 // never leaves a stale lock behind. Two TryLock calls on the same path fail
 // even within one process.
 //
-// A lock file may be deleted while it is held (sy clean does that). A lock
+// A lock file may be deleted while it is held (rw clean does that). A lock
 // taken on a file that is no longer at path is worthless, so TryLock checks
 // that the locked file is still the one at path and retries otherwise.
 func TryLock(path string) (unlock func(), ok bool) {
@@ -90,10 +90,10 @@ func TryLock(path string) (unlock func(), ok bool) {
 }
 
 // Locked reports whether someone holds TryLock's exclusive lock on path. It
-// probes with a shared lock: probes never block each other, so two sy
+// probes with a shared lock: probes never block each other, so two rw
 // looking at the same lock at once both see it free. (A probe that took
 // the exclusive lock and released it made a concurrent probe see it held:
-// a stopped task looked like one a sy was running.) A real TryLock that
+// a stopped task looked like one a rw was running.) A real TryLock that
 // meets a probe fails for that moment; callers that must get the lock
 // retry.
 func Locked(path string) bool {
@@ -149,10 +149,10 @@ func Started(cmd *exec.Cmd) {
 // their own process group and are killed explicitly.
 func Guard() error { return guard() }
 
-// Breakaway configures cmd to start outside Guard's job, so it outlives sy:
-// for the user's own programs sy merely launches (a browser), never for
-// agents. On Windows, Start then fails if an outer job (one sy itself was
+// Breakaway configures cmd to start outside Guard's job, so it outlives rw:
+// for the user's own programs rw merely launches (a browser), never for
+// agents. On Windows, Start then fails if an outer job (one rw itself was
 // started in) forbids breakaway: start a fresh command without it then.
 // Elsewhere it starts cmd in its own session, out of reach of the
-// terminal's Ctrl+C and hangup that end sy.
+// terminal's Ctrl+C and hangup that end rw.
 func Breakaway(cmd *exec.Cmd) { breakaway(cmd) }

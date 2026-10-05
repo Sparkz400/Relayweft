@@ -1,22 +1,22 @@
-# Switchyard in Forgejo or Gitea Actions: copy this file to
-# .forgejo/workflows/switchyard.yml (Gitea: .gitea/workflows/switchyard.yml)
+# Relayweft in Forgejo or Gitea Actions: copy this file to
+# .forgejo/workflows/relayweft.yml (Gitea: .gitea/workflows/relayweft.yml)
 # in your repository. Setup, runner labels and the security model:
 # docs/ci.md.
 #
-#   - Label an issue "sy": a job runs it and opens a pull request ("Closes #N").
-#   - Every night at 02:30 UTC: the open issues labelled "sy" that no open
+#   - Label an issue "rw": a job runs it and opens a pull request ("Closes #N").
+#   - Every night at 02:30 UTC: the open issues labelled "rw" that no open
 #     pull request closes yet, at most 5.
-#   - Actions > switchyard > Run workflow: one issue by number, or the batch.
+#   - Actions > relayweft > Run workflow: one issue by number, or the batch.
 #
 # Secrets (Settings > Actions > Secrets):
 #   CLAUDE_CODE_OAUTH_TOKEN  and/or ANTHROPIC_API_KEY: Claude Code
 #   OPENAI_API_KEY           and/or CODEX_AUTH_JSON: Codex
-#   SWITCHYARD_TOKEN         optional: an access token used instead of the
+#   RELAYWEFT_TOKEN         optional: an access token used instead of the
 #                            job's own, so the pull requests start your CI
 #
 # Every value reaches the shell through env, never through an expression
 # inside a script.
-name: switchyard
+name: relayweft
 
 on:
   issues:
@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       issue:
-        description: Issue number (empty runs every open issue labelled sy)
+        description: Issue number (empty runs every open issue labelled rw)
         required: false
 
 # The job pushes a branch, opens a pull request and comments on the issue;
@@ -37,10 +37,10 @@ permissions:
   issues: write
 
 jobs:
-  switchyard:
-    # Only the "sy" label starts a run. Adding a label needs write access to
+  relayweft:
+    # Only the "rw" label starts a run. Adding a label needs write access to
     # the issues, so someone you trust decides which issue the agents read.
-    if: github.event_name != 'issues' || github.event.label.name == 'sy'
+    if: github.event_name != 'issues' || github.event.label.name == 'rw'
     # A label of your runner (forgejo-runner register --labels ...) that runs
     # jobs in Docker: the job brings its own image. On Gitea's act_runner the
     # default labels are ubuntu-latest and the like.
@@ -50,47 +50,47 @@ jobs:
     timeout-minutes: 120
     # One run per issue at a time; the nightly batch waits for the others.
     concurrency:
-      group: switchyard-${{ github.event.issue.number || github.event.inputs.issue || 'batch' }}
+      group: relayweft-${{ github.event.issue.number || github.event.inputs.issue || 'batch' }}
       cancel-in-progress: false
     env:
-      SY_VERSION: latest          # vX.Y.Z or latest
-      # Where sy's release binaries and checksums.txt are: GitHub, or a
+      RW_VERSION: latest          # vX.Y.Z or latest
+      # Where rw's release binaries and checksums.txt are: GitHub, or a
       # mirror with the same layout (<base>/download/<version>/<file>).
-      SY_RELEASES: https://github.com/Sparkz400/switchyard/releases
-      SY_ISSUE: ${{ github.event.issue.number || github.event.inputs.issue }}
-      SY_ISSUES_LABEL: sy
-      SY_LIMIT: "5"
-      SY_PROVIDER: ""             # codex or claude; default: the one with credentials
-      SY_BUDGET_TASK_USD: "10"    # stop a task at this API-equivalent $ (0 = no limit)
-      SY_DRAFT: "false"
-      SY_BASE: ""                 # default: the repository's default branch
-      SY_ARGS: ""                 # more sy run flags
-      SY_TRUST_REPO_CONFIG: "true"
+      RW_RELEASES: https://github.com/Sparkz400/relayweft/releases
+      RW_ISSUE: ${{ github.event.issue.number || github.event.inputs.issue }}
+      RW_ISSUES_LABEL: rw
+      RW_LIMIT: "5"
+      RW_PROVIDER: ""             # codex or claude; default: the one with credentials
+      RW_BUDGET_TASK_USD: "10"    # stop a task at this API-equivalent $ (0 = no limit)
+      RW_DRAFT: "false"
+      RW_BASE: ""                 # default: the repository's default branch
+      RW_ARGS: ""                 # more rw run flags
+      RW_TRUST_REPO_CONFIG: "true"
       # npm package specs of the agent CLIs (a version, or a tarball URL).
       CLAUDE_CODE_PACKAGE: "@anthropic-ai/claude-code@latest"
       CODEX_PACKAGE: "@openai/codex@latest"
     steps:
-      - name: install sy
+      - name: install rw
         run: |
           set -euo pipefail
           case "$(uname -m)" in
             x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;;
-            *) echo "no sy build for $(uname -m)"; exit 1 ;;
+            *) echo "no rw build for $(uname -m)"; exit 1 ;;
           esac
-          asset="sy-linux-$arch"
-          if [ "$SY_VERSION" = latest ]; then
-            base="$SY_RELEASES/latest/download"
+          asset="rw-linux-$arch"
+          if [ "$RW_VERSION" = latest ]; then
+            base="$RW_RELEASES/latest/download"
           else
-            base="$SY_RELEASES/download/$SY_VERSION"
+            base="$RW_RELEASES/download/$RW_VERSION"
           fi
-          bin="$RUNNER_TEMP/switchyard-bin"
+          bin="$RUNNER_TEMP/relayweft-bin"
           mkdir -p "$bin"
           curl -fsSL --retry 3 -o "$bin/$asset" "$base/$asset"
           curl -fsSL --retry 3 -o "$bin/checksums.txt" "$base/checksums.txt"
           (cd "$bin" && grep " \*\?$asset\$" checksums.txt | sha256sum -c -)
-          mv "$bin/$asset" "$bin/sy" && chmod +x "$bin/sy"
+          mv "$bin/$asset" "$bin/rw" && chmod +x "$bin/rw"
           echo "$bin" >> "$GITHUB_PATH"
-          "$bin/sy" version
+          "$bin/rw" version
 
       - name: install agent CLIs
         env:
@@ -109,11 +109,11 @@ jobs:
             echo "no agent credentials: set the secret CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY (Claude Code), and/or OPENAI_API_KEY or CODEX_AUTH_JSON (Codex)"
             exit 1
           fi
-          provider="$SY_PROVIDER"
+          provider="$RW_PROVIDER"
           if [ -z "$provider" ] && [ "$claude" != "$codex" ]; then
             if [ "$claude" = true ]; then provider=claude; else provider=codex; fi
           fi
-          echo "SY_PROVIDER=$provider" >> "$GITHUB_ENV"
+          echo "RW_PROVIDER=$provider" >> "$GITHUB_ENV"
           pkgs=()
           if [ "$claude" = true ]; then pkgs+=("$CLAUDE_CODE_PACKAGE"); fi
           if [ "$codex" = true ]; then pkgs+=("$CODEX_PACKAGE"); fi
@@ -121,7 +121,7 @@ jobs:
           if [ "$claude" = true ]; then claude --version; fi
           if [ "$codex" = true ]; then
             codex --version
-            home="$RUNNER_TEMP/switchyard-codex-home"
+            home="$RUNNER_TEMP/relayweft-codex-home"
             mkdir -p "$home" && chmod 700 "$home"
             echo "CODEX_HOME=$home" >> "$GITHUB_ENV"
             export CODEX_HOME="$home"
@@ -134,86 +134,86 @@ jobs:
 
       - name: check out
         env:
-          FORGEJO_TOKEN: ${{ secrets.SWITCHYARD_TOKEN || secrets.GITHUB_TOKEN }}
+          FORGEJO_TOKEN: ${{ secrets.RELAYWEFT_TOKEN || secrets.GITHUB_TOKEN }}
           SERVER: ${{ github.server_url }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           git init -q .
           git remote add origin "$SERVER/$REPO.git"
-          # git fetches and sy pushes with a credential helper that reads
+          # git fetches and rw pushes with a credential helper that reads
           # the token from the environment, so it is not in .git/config.
-          # Agents and the commands sy runs for them get an environment
+          # Agents and the commands rw runs for them get an environment
           # without it, so a push of theirs finds no credentials.
           git config --local "credential.$SERVER.helper" ""
           git config --local --add "credential.$SERVER.helper" '!f() { test "$1" = get && test -n "$FORGEJO_TOKEN" || exit 0; echo username=x-access-token; echo "password=$FORGEJO_TOKEN"; }; f'
-          base="$SY_BASE"
+          base="$RW_BASE"
           if [ -z "$base" ]; then
             base=$(git ls-remote --symref origin HEAD | sed -n 's|^ref: refs/heads/\(.*\)\tHEAD$|\1|p')
           fi
           git fetch -q --depth=50 origin "+refs/heads/$base:refs/remotes/origin/$base"
           git checkout -q -B "$base" "refs/remotes/origin/$base"
-          git config user.name "Switchyard"
-          git config user.email "switchyard@noreply.${SERVER#*://}"
-          if [ "$SY_TRUST_REPO_CONFIG" = true ] && [ -f .switchyard.yaml ]; then sy trust --yes; fi
+          git config user.name "Relayweft"
+          git config user.email "relayweft@noreply.${SERVER#*://}"
+          if [ "$RW_TRUST_REPO_CONFIG" = true ] && [ -f .relayweft.yaml ]; then rw trust --yes; fi
           git log --oneline -1
 
-      - name: sy run
+      - name: rw run
         env:
-          # sy reads issues, pushes and opens pull requests with this token,
-          # and sends it only to this server. (sy after v0.2.0 also finds
+          # rw reads issues, pushes and opens pull requests with this token,
+          # and sends it only to this server. (rw after v0.2.0 also finds
           # the server without GITEA_HOST.)
           GITEA_HOST: ${{ github.server_url }}
-          FORGEJO_TOKEN: ${{ secrets.SWITCHYARD_TOKEN || secrets.GITHUB_TOKEN }}
-          GITEA_TOKEN: ${{ secrets.SWITCHYARD_TOKEN || secrets.GITHUB_TOKEN }}
+          FORGEJO_TOKEN: ${{ secrets.RELAYWEFT_TOKEN || secrets.GITHUB_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.RELAYWEFT_TOKEN || secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set +e -uo pipefail
-          out="$RUNNER_TEMP/switchyard-report"
+          out="$RUNNER_TEMP/relayweft-report"
           mkdir -p "$out"
           [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
           [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || unset CLAUDE_CODE_OAUTH_TOKEN
-          sy history --json -n 1000 > "$out/.before.json" 2>/dev/null || echo '[]' > "$out/.before.json"
+          rw history --json -n 1000 > "$out/.before.json" 2>/dev/null || echo '[]' > "$out/.before.json"
           args=(run)
-          if [ -n "$SY_ISSUE" ]; then
-            args+=(--issue "$SY_ISSUE" --pr)
+          if [ -n "$RW_ISSUE" ]; then
+            args+=(--issue "$RW_ISSUE" --pr)
           else
-            args+=(--issues "label:$SY_ISSUES_LABEL" --limit "$SY_LIMIT" --pr)
+            args+=(--issues "label:$RW_ISSUES_LABEL" --limit "$RW_LIMIT" --pr)
           fi
-          if [ "$SY_DRAFT" = true ]; then args+=(--draft); fi
-          if [ -n "$SY_BASE" ]; then args+=(--base "$SY_BASE"); fi
-          if [ -n "$SY_PROVIDER" ]; then args+=(--provider "$SY_PROVIDER"); fi
-          if [ -n "$SY_BUDGET_TASK_USD" ]; then args+=(--budget-task-usd "$SY_BUDGET_TASK_USD"); fi
-          if [ -n "$SY_ARGS" ]; then read -r -a extra <<< "$SY_ARGS"; args+=("${extra[@]}"); fi
-          echo "sy ${args[*]}"
-          sy "${args[@]}" 2>&1 | tee "$out/sy-run.log"
+          if [ "$RW_DRAFT" = true ]; then args+=(--draft); fi
+          if [ -n "$RW_BASE" ]; then args+=(--base "$RW_BASE"); fi
+          if [ -n "$RW_PROVIDER" ]; then args+=(--provider "$RW_PROVIDER"); fi
+          if [ -n "$RW_BUDGET_TASK_USD" ]; then args+=(--budget-task-usd "$RW_BUDGET_TASK_USD"); fi
+          if [ -n "$RW_ARGS" ]; then read -r -a extra <<< "$RW_ARGS"; args+=("${extra[@]}"); fi
+          echo "rw ${args[*]}"
+          rw "${args[@]}" 2>&1 | tee "$out/rw-run.log"
           rc=${PIPESTATUS[0]}
 
           echo "--- reports"
-          sy history --json -n 1000 > "$out/.after.json" 2>/dev/null || echo '[]' > "$out/.after.json"
+          rw history --json -n 1000 > "$out/.after.json" 2>/dev/null || echo '[]' > "$out/.after.json"
           ids=$(node -e '
             const fs = require("fs");
             const old = new Set(JSON.parse(fs.readFileSync(process.argv[1])).map(t => t.id));
             for (const t of JSON.parse(fs.readFileSync(process.argv[2])).reverse()) if (!old.has(t.id)) console.log(t.id);
           ' "$out/.before.json" "$out/.after.json" || true)
           for id in $ids; do
-            sy report "$id" --out "$out/$id.html" >/dev/null || true
-            if sy report "$id" --md --out "$out/$id.md" >/dev/null; then cat "$out/$id.md"; fi
+            rw report "$id" --out "$out/$id.html" >/dev/null || true
+            if rw report "$id" --md --out "$out/$id.md" >/dev/null; then cat "$out/$id.md"; fi
           done
           rm -f "$out/.before.json" "$out/.after.json"
-          grep -E '^opened (pull|merge) request [#!][0-9]+: ' "$out/sy-run.log" || true
+          grep -E '^opened (pull|merge) request [#!][0-9]+: ' "$out/rw-run.log" || true
           exit "$rc"
 
       # The reports (HTML and Markdown) and the run log are in
-      # $RUNNER_TEMP/switchyard-report. To keep them, upload them; on a
+      # $RUNNER_TEMP/relayweft-report. To keep them, upload them; on a
       # public repository anyone can download them:
       # - uses: actions/upload-artifact@v3
       #   if: always()
       #   with:
-      #     name: switchyard-report
-      #     path: ${{ runner.temp }}/switchyard-report
+      #     name: relayweft-report
+      #     path: ${{ runner.temp }}/relayweft-report
 
       - name: clean up
         if: always()
-        run: rm -rf "$RUNNER_TEMP/switchyard-codex-home"
+        run: rm -rf "$RUNNER_TEMP/relayweft-codex-home"

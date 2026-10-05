@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // FuzzParseJudge (ROADMAP 1.8): any judge reply maps to a known role or is

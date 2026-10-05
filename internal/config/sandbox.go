@@ -7,8 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Sandbox modes: the container runtime, or off.
@@ -19,13 +19,13 @@ const (
 )
 
 // DefaultSandboxImage is the image built from packaging/sandbox.
-const DefaultSandboxImage = "switchyard-sandbox"
+const DefaultSandboxImage = "relayweft-sandbox"
 
 // sandboxKey is the setting a repo file may tighten but not loosen
 // without trust.
 const sandboxKey = "sandbox"
 
-// SandboxCfg runs agents, and the verify commands sy runs, in a container
+// SandboxCfg runs agents, and the verify commands rw runs, in a container
 // with only the step's folder writable (docs/sandbox.md). It is off by
 // default. The top-level section applies to every provider; a provider's
 // own section (providers.<name>.sandbox) adds to it: its mode, image,
@@ -33,7 +33,7 @@ const sandboxKey = "sandbox"
 // mounts are added, and its roles replace the top-level roles.
 type SandboxCfg struct {
 	Mode    string `yaml:"mode,omitempty"`    // off (default), docker or podman
-	Image   string `yaml:"image,omitempty"`   // default switchyard-sandbox
+	Image   string `yaml:"image,omitempty"`   // default relayweft-sandbox
 	Network string `yaml:"network,omitempty"` // on (default) or off
 	// Env names variables passed from your environment into the container
 	// (only those that are set). Nothing else of your environment goes in.
@@ -119,7 +119,7 @@ func (s SandboxCfg) Covers(role string) bool {
 	return s.On() && (len(s.Roles) == 0 || slices.Contains(s.Roles, role))
 }
 
-// CheckSandbox is the sandbox for the commands sy runs on code agents
+// CheckSandbox is the sandbox for the commands rw runs on code agents
 // wrote (verify commands, after_merge and after_task hooks): the
 // top-level section when it is on, otherwise that of the first enabled
 // provider whose writing agents run in a sandbox, without that provider's
@@ -139,7 +139,7 @@ func (c *Config) CheckSandbox() (SandboxCfg, bool) {
 	return SandboxCfg{}, false
 }
 
-// SecretVars lists the ${NAME}s the MCP server uses that are sy's forge or
+// SecretVars lists the ${NAME}s the MCP server uses that are rw's forge or
 // CI tokens. In a sandbox the server runs in the container with the
 // values in its config file or environment, so the token would go in.
 func (s MCPServer) SecretVars() []string {
@@ -191,8 +191,8 @@ func (s SandboxCfg) validate(where string) []string {
 		case !envKey.MatchString(n):
 			bad("env name %q may use only letters, digits and _", n)
 		case proc.IsChildSecret(n):
-			// The forge and CI tokens stay with sy (docs/ci.md).
-			bad("%s is sy's forge or CI token and never goes into a sandbox", n)
+			// The forge and CI tokens stay with rw (docs/ci.md).
+			bad("%s is rw's forge or CI token and never goes into a sandbox", n)
 		}
 	}
 	for _, p := range s.Credentials {
@@ -208,7 +208,7 @@ func (s SandboxCfg) validate(where string) []string {
 			if !strings.HasPrefix(m.Target, "/") || strings.ContainsAny(m.Target, ",\"\r\n") {
 				bad("mounts[%d]: target %q must be an absolute path in the container", i, m.Target)
 			} else if t := path.Clean(m.Target); reservedTarget(t) {
-				bad("mounts[%d]: target %s is where sy mounts the step's folder or its own files", i, t)
+				bad("mounts[%d]: target %s is where rw mounts the step's folder or its own files", i, t)
 			}
 		}
 		if dockerSocket(m.Path) {
@@ -223,10 +223,10 @@ func (s SandboxCfg) validate(where string) []string {
 	return errs
 }
 
-// reservedTarget reports whether t (clean) is a container path sy uses
-// itself: the step's folder and sy's own mounts.
+// reservedTarget reports whether t (clean) is a container path rw uses
+// itself: the step's folder and rw's own mounts.
 func reservedTarget(t string) bool {
-	for _, r := range []string{"/work", "/sy"} {
+	for _, r := range []string{"/work", "/rw"} {
 		if t == r || strings.HasPrefix(t, r+"/") {
 			return true
 		}
@@ -254,12 +254,12 @@ func (c *Config) validateSandbox() []string {
 	return errs
 }
 
-// untrustedSandbox is what an untrusted file (a repo's .switchyard.yaml, a
-// ./switchyard.yaml that came with a clone) may do to your sandbox section
+// untrustedSandbox is what an untrusted file (a repo's .relayweft.yaml, a
+// ./relayweft.yaml that came with a clone) may do to your sandbox section
 // mine; file is the section after reading the file over it. It may turn
 // the sandbox on, cut its network and widen it to more roles. It may not
 // turn it off, pick its image, or pass more of your environment, files or
-// folders in: those make the sandbox weaker and need `sy trust`. changed
+// folders in: those make the sandbox weaker and need `rw trust`. changed
 // reports that something the file set was dropped.
 func untrustedSandbox(mine, file SandboxCfg) (out SandboxCfg, changed bool) {
 	out = mine

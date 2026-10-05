@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
-// Fake is a scripted runner for `sy --demo` and tests. It understands the
+// Fake is a scripted runner for `rw --demo` and tests. It understands the
 // orchestrator's prompt markers, so it drives the full real pipeline:
 // planning, plan review, parallel agents, a repeated error, a usage-limit
 // fallback and the final review.
@@ -42,19 +42,19 @@ func NewFakeSet(speed float64) Set {
 
 // Prompt markers the orchestrator writes and the fake recognises.
 const (
-	MarkerPlan        = "[SY:PLAN]"
-	MarkerPlanReview  = "[SY:PLAN-REVIEW]"
-	MarkerFinalReview = "[SY:FINAL-REVIEW]"
-	MarkerErrorReview = "[SY:ERROR-REVIEW]"
-	MarkerJudge       = "[SY:JUDGE]"
-	MarkerStep        = "[SY:STEP]"
-	MarkerFix         = "[SY:FIX]"
+	MarkerPlan        = "[RW:PLAN]"
+	MarkerPlanReview  = "[RW:PLAN-REVIEW]"
+	MarkerFinalReview = "[RW:FINAL-REVIEW]"
+	MarkerErrorReview = "[RW:ERROR-REVIEW]"
+	MarkerJudge       = "[RW:JUDGE]"
+	MarkerStep        = "[RW:STEP]"
+	MarkerFix         = "[RW:FIX]"
 	// MarkerResume starts the message that continues a step's session
-	// after sy stopped in the middle of it.
-	MarkerResume = "[SY:RESUME]"
+	// after rw stopped in the middle of it.
+	MarkerResume = "[RW:RESUME]"
 	// MarkerBestOf starts the reviewer's prompt that picks one of a
 	// best-of step's candidates.
-	MarkerBestOf = "[SY:BEST-OF]"
+	MarkerBestOf = "[RW:BEST-OF]"
 )
 
 func (f *Fake) sleep(ctx context.Context, min, max time.Duration) bool {

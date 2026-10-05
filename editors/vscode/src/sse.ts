@@ -1,4 +1,4 @@
-// A minimal server-sent events parser (the subset sy web sends: event,
+// A minimal server-sent events parser (the subset rw web sends: event,
 // data, retry and comments), fed with decoded text chunks of any size.
 
 export interface SseMessage {

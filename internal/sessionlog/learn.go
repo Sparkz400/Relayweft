@@ -6,9 +6,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/canon"
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/canon"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // Learned routes (config/learned.go) come from these rules. They are
@@ -80,7 +80,7 @@ type LearnResult struct {
 	Routes  map[string]config.LearnedRoute // the new learned routes
 	Changes []RouteChange
 	// Evidence lists every route of a role with runs here, the most
-	// reliable first (for `sy tune --learned` and the dry run).
+	// reliable first (for `rw tune --learned` and the dry run).
 	Evidence map[string][]config.RouteEvidence
 }
 

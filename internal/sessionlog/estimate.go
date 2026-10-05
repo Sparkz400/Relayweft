@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // Dry-run estimates: what a planned step will likely use, from past runs

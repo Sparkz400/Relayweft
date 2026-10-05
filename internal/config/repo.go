@@ -12,14 +12,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/notify"
+	"github.com/sparkz400/relayweft/internal/notify"
 	"gopkg.in/yaml.v3"
 )
 
-// Per-repo settings: a .switchyard.yaml committed in the repository root
+// Per-repo settings: a .relayweft.yaml committed in the repository root
 // (or the project folder) is layered on top of the user's config:
 //
-//	built-in defaults < user config (switchyard.yaml) < learned routes
+//	built-in defaults < user config (relayweft.yaml) < learned routes
 //	  < repo file < flags
 //
 // (learned routes: see learned.go). It holds only what it sets; maps
@@ -29,13 +29,13 @@ import (
 // A repo file comes from whoever pushed to the repo, so the parts that run
 // commands on your machine (verify commands, hooks, provider commands and
 // arguments, the log directory, MCP servers) apply only after you trust that exact
-// content with `sy trust`, and so do budget.team.dir (where sy writes its
-// usage file) and notify.webhooks (where sy sends what your tasks did).
+// content with `rw trust`, and so do budget.team.dir (where rw writes its
+// usage file) and notify.webhooks (where rw sends what your tasks did).
 // Routes, preferences and toggles always apply. The sandbox section may
 // make the sandbox stricter without trust, never weaker (sandbox.go).
 
 // RepoFileName is the per-repo settings file.
-const RepoFileName = ".switchyard.yaml"
+const RepoFileName = ".relayweft.yaml"
 
 // commandKeys are the top-level keys that need trust.
 // workspace is here too: its repos are folders agents may write to, and
@@ -50,7 +50,7 @@ type RepoInfo struct {
 	Ignored []string // keys skipped because the file is not trusted
 }
 
-// FindRepoFile returns the .switchyard.yaml for dir: in dir or the nearest
+// FindRepoFile returns the .relayweft.yaml for dir: in dir or the nearest
 // parent that is a git repository root ("" if none).
 func FindRepoFile(dir string) string {
 	d, err := filepath.Abs(dir)
@@ -140,7 +140,7 @@ func ApplyRepo(c *Config, dir string) (RepoInfo, error) {
 	}
 	// A repo file may tighten your budget, never loosen it (trusted or not).
 	c.Budget = stricterBudget(guarded.Budget, c.Budget)
-	// Likewise the follow-up rounds sy watch may run unattended.
+	// Likewise the follow-up rounds rw watch may run unattended.
 	if c.Watch.MaxRounds > guarded.Watch.MaxRounds || c.Watch.MaxRounds < 0 {
 		c.Watch.MaxRounds = guarded.Watch.MaxRounds
 	}
@@ -172,8 +172,8 @@ func restoreCommandSettings(c, before *Config) []string {
 	if !reflect.DeepEqual(c.Workspace, before.Workspace) {
 		changed = append(changed, "workspace")
 	}
-	// The team folder is where sy writes its usage file: like log_dir, a
-	// path nobody reviewed must not decide where sy writes.
+	// The team folder is where rw writes its usage file: like log_dir, a
+	// path nobody reviewed must not decide where rw writes.
 	if c.Budget.Team.Dir != before.Budget.Team.Dir {
 		changed = append(changed, teamDirKey)
 	}
@@ -299,7 +299,7 @@ func trustPath() string {
 	if err != nil {
 		d = os.TempDir()
 	}
-	return filepath.Join(d, "switchyard", "trusted.json")
+	return filepath.Join(d, "relayweft", "trusted.json")
 }
 
 func loadTrust() map[string]string {
@@ -328,7 +328,7 @@ func trustKey(path string) string {
 	return strings.ToLower(filepath.ToSlash(abs))
 }
 
-// trustSubset is what a local config file (./switchyard.yaml) sets among
+// trustSubset is what a local config file (./relayweft.yaml) sets among
 // the settings that need trust, keyed like CommandSettings' lines.
 func trustSubset(data []byte) (map[string]any, error) {
 	var raw map[string]any
@@ -415,7 +415,7 @@ func IsTrusted(path string, data []byte) bool {
 }
 
 // Trust records the current content of a repo file as trusted (any later
-// change needs a new `sy trust`).
+// change needs a new `rw trust`).
 func Trust(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -446,7 +446,7 @@ func writeTrust(m map[string]string) error {
 	return os.Rename(tmp, p)
 }
 
-// CommandSettings lists what the repo file would run, for `sy trust` to
+// CommandSettings lists what the repo file would run, for `rw trust` to
 // show before trusting.
 func CommandSettings(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
@@ -467,7 +467,7 @@ func CommandSettings(path string) ([]string, error) {
 	if b, ok := raw["budget"].(map[string]any); ok {
 		if t, ok := b["team"].(map[string]any); ok {
 			if d, ok := t["dir"]; ok {
-				out = append(out, fmt.Sprintf("%s: %v (sy writes this machine's usage file there)", teamDirKey, d))
+				out = append(out, fmt.Sprintf("%s: %v (rw writes this machine's usage file there)", teamDirKey, d))
 			}
 		}
 	}
@@ -483,7 +483,7 @@ func CommandSettings(path string) ([]string, error) {
 					where = append(where, w.Name())
 				}
 			}
-			out = append(out, fmt.Sprintf("%s: %s (sy sends task results there)", webhooksKey, strings.Join(where, ", ")))
+			out = append(out, fmt.Sprintf("%s: %s (rw sends task results there)", webhooksKey, strings.Join(where, ", ")))
 		}
 	}
 	if sb, ok := raw[sandboxKey]; ok {
@@ -527,7 +527,7 @@ func SaveRepo(c *Config, path string) error {
 	if err != nil {
 		return err
 	}
-	header := "# Switchyard settings for this repository (sy merges them over your own config).\n# Commands here (verify, hooks) run only after each person runs `sy trust`.\n"
+	header := "# Relayweft settings for this repository (rw merges them over your own config).\n# Commands here (verify, hooks) run only after each person runs `rw trust`.\n"
 	if err := os.WriteFile(path, append([]byte(header), data...), 0o644); err != nil {
 		return err
 	}

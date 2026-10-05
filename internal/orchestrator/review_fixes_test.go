@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 func gitIn(t *testing.T, dir string, args ...string) string {
@@ -67,7 +67,7 @@ func exists(p string) bool {
 func TestUndoPrimaryWhenExtraLostItsRecord(t *testing.T) {
 	isolateUserConfig(t)
 	api, web, res := runTwoRepo(t)
-	for _, r := range strings.Fields(gitIn(t, web, "for-each-ref", "--format=%(refname)", "refs/switchyard/")) {
+	for _, r := range strings.Fields(gitIn(t, web, "for-each-ref", "--format=%(refname)", "refs/relayweft/")) {
 		gitIn(t, web, "update-ref", "-d", r)
 	}
 	plan, err := Undo(api, "", false, false)
@@ -98,7 +98,7 @@ func TestTrimUndoKeepsWorkspacePartWhilePrimaryHasIt(t *testing.T) {
 	apiRoot, _ := repoRoot(api)
 	tree := gitIn(t, web, "rev-parse", "HEAD^{tree}")
 	for i := 0; i <= undoKeep; i++ { // newer tasks of web's own
-		cmd := exec.Command("git", "commit-tree", tree, "-m", "switchyard before: own task")
+		cmd := exec.Command("git", "commit-tree", tree, "-m", "relayweft before: own task")
 		cmd.Dir = web
 		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
 			fmt.Sprintf("GIT_COMMITTER_DATE=2030-01-01T00:00:%02d", i))
@@ -300,7 +300,7 @@ func TestBudgetStopDuringReviewKeepsBranch(t *testing.T) {
 	if exists(filepath.Join(dir, "a.txt")) || exists(filepath.Join(dir, "c.txt")) {
 		t.Error("a or c landed")
 	}
-	branches := gitIn(t, dir, "branch", "--list", "sy/*")
+	branches := gitIn(t, dir, "branch", "--list", "rw/*")
 	var aBranch string
 	for _, b := range strings.Fields(strings.ReplaceAll(branches, "*", "")) {
 		if strings.HasSuffix(b, "/a") {
@@ -315,7 +315,7 @@ func TestBudgetStopDuringReviewKeepsBranch(t *testing.T) {
 	}
 }
 
-// writeDayLog records a finished task of another sy in o's log directory.
+// writeDayLog records a finished task of another rw in o's log directory.
 func writeDayLog(t *testing.T, o *Orchestrator, usd float64) {
 	t.Helper()
 	other, err := sessionlog.Open(filepath.Dir(o.opts.Log.Path()), "/elsewhere")
@@ -327,7 +327,7 @@ func writeDayLog(t *testing.T, o *Orchestrator, usd float64) {
 }
 
 // Today's total is re-read at budget checks (not only at task start): a
-// task another sy window finished meanwhile counts.
+// task another rw window finished meanwhile counts.
 func TestBudgetDayTotalRefreshedAtCheck(t *testing.T) {
 	old := dayMaxAge
 	dayMaxAge = time.Nanosecond
@@ -514,7 +514,7 @@ func TestPlannerUnknownRepoRetriesCapped(t *testing.T) {
 				return runner.Result{Final: twoRepoPlan("web")}
 			}
 			return runner.Result{Final: twoRepoPlan(fmt.Sprintf("nope%d", n))}
-		case strings.Contains(s.Prompt, "[SY:") && !strings.Contains(s.Prompt, runner.MarkerStep):
+		case strings.Contains(s.Prompt, "[RW:") && !strings.Contains(s.Prompt, runner.MarkerStep):
 			return approve()
 		}
 		return runner.Result{Final: "done"}

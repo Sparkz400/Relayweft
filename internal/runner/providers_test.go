@@ -11,23 +11,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
 )
 
 // runFakeCLI is the test binary acting as an agent CLI (TestMain runs it
-// when SY_FAKE_CLI is set): it records its arguments, stdin and the
-// SY_FAKE_SEEN_* variables to SY_FAKE_DUMP, prints the fixture
-// SY_FAKE_CLI, writes SY_FAKE_STDERR (or the file after an @) to stderr and
-// exits SY_FAKE_CODE.
+// when RW_FAKE_CLI is set): it records its arguments, stdin and the
+// RW_FAKE_SEEN_* variables to RW_FAKE_DUMP, prints the fixture
+// RW_FAKE_CLI, writes RW_FAKE_STDERR (or the file after an @) to stderr and
+// exits RW_FAKE_CODE.
 // It works on every OS, unlike a shell script.
 func runFakeCLI() int {
 	stdin, _ := io.ReadAll(os.Stdin)
-	if dump := os.Getenv("SY_FAKE_DUMP"); dump != "" {
+	if dump := os.Getenv("RW_FAKE_DUMP"); dump != "" {
 		seen := map[string]string{}
 		for _, kv := range os.Environ() {
-			if k, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SY_FAKE_SEEN_") {
+			if k, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "RW_FAKE_SEEN_") {
 				seen[k] = v
 			}
 		}
@@ -35,21 +35,21 @@ func runFakeCLI() int {
 		data, _ := json.Marshal(map[string]any{"args": os.Args[1:], "stdin": string(stdin), "env": seen, "cwd": cwd})
 		os.WriteFile(dump, data, 0o600)
 	}
-	if fx := os.Getenv("SY_FAKE_CLI"); fx != "-" {
+	if fx := os.Getenv("RW_FAKE_CLI"); fx != "-" {
 		data, _ := os.ReadFile(fx)
 		os.Stdout.Write(data)
 	}
-	if s := os.Getenv("SY_FAKE_STDERR"); strings.HasPrefix(s, "@") {
+	if s := os.Getenv("RW_FAKE_STDERR"); strings.HasPrefix(s, "@") {
 		data, _ := os.ReadFile(s[1:]) // a recorded stderr
 		os.Stderr.Write(data)
 	} else if s != "" {
 		os.Stderr.WriteString(s + "\n")
 	}
-	if ms, _ := strconv.Atoi(os.Getenv("SY_FAKE_SLEEP")); ms > 0 {
+	if ms, _ := strconv.Atoi(os.Getenv("RW_FAKE_SLEEP")); ms > 0 {
 		// An agent still working after its first lines (until killed).
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
-	code, _ := strconv.Atoi(os.Getenv("SY_FAKE_CODE"))
+	code, _ := strconv.Atoi(os.Getenv("RW_FAKE_CODE"))
 	return code
 }
 
@@ -76,7 +76,7 @@ func fakeExe(t *testing.T, pc *config.ProviderCfg, fixture string, code int, std
 	}
 	dump = filepath.Join(t.TempDir(), "dump.json")
 	pc.Command = exe
-	env := map[string]string{"SY_FAKE_CLI": fx, "SY_FAKE_DUMP": dump, "SY_FAKE_CODE": strconv.Itoa(code), "SY_FAKE_STDERR": stderr}
+	env := map[string]string{"RW_FAKE_CLI": fx, "RW_FAKE_DUMP": dump, "RW_FAKE_CODE": strconv.Itoa(code), "RW_FAKE_STDERR": stderr}
 	for k, v := range pc.Env {
 		env[k] = v
 	}
@@ -246,7 +246,7 @@ func TestGeminiRepoEnvAndOwnTrust(t *testing.T) {
 	if geminiPrecheck(pc)(Spec{Dir: sub}) == nil {
 		t.Fatal("writer allowed in a repo with a .env")
 	}
-	// Trusted by you in Gemini: allowed (Gemini trusts it without sy's flag).
+	// Trusted by you in Gemini: allowed (Gemini trusts it without rw's flag).
 	os.MkdirAll(filepath.Join(home, ".gemini"), 0o755)
 	os.WriteFile(filepath.Join(home, ".gemini", "trustedFolders.json"), []byte(`{"`+strings.ReplaceAll(proj, `\`, `\\`)+`": "TRUST_FOLDER"}`), 0o600)
 	if err := geminiPrecheck(pc)(Spec{Dir: sub}); err != nil {
@@ -414,12 +414,12 @@ func TestNewBuildsEveryProvider(t *testing.T) {
 
 func TestExecPassesProviderEnv(t *testing.T) {
 	pc, det := providerCfg(t, "deepseek")
-	pc.Env = map[string]string{"SY_FAKE_SEEN_TOKEN": "${SY_TEST_SECRET}", "SY_FAKE_SEEN_URL": "https://api.example.test/anthropic"}
+	pc.Env = map[string]string{"RW_FAKE_SEEN_TOKEN": "${RW_TEST_SECRET}", "RW_FAKE_SEEN_URL": "https://api.example.test/anthropic"}
 	dump := fakeExe(t, &pc, "claude_stream.jsonl", 0, "")
 	x := NewClaude(pc, det)
 	x.Provider = "deepseek"
 	x.LookupEnv = func(k string) (string, bool) {
-		if k == "SY_TEST_SECRET" {
+		if k == "RW_TEST_SECRET" {
 			return "s3cret", true
 		}
 		return os.LookupEnv(k)
@@ -430,7 +430,7 @@ func TestExecPassesProviderEnv(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	d := readDump(t, dump)
-	if d.Env["SY_FAKE_SEEN_TOKEN"] != "s3cret" || d.Env["SY_FAKE_SEEN_URL"] != "https://api.example.test/anthropic" || d.Stdin != "hi" {
+	if d.Env["RW_FAKE_SEEN_TOKEN"] != "s3cret" || d.Env["RW_FAKE_SEEN_URL"] != "https://api.example.test/anthropic" || d.Stdin != "hi" {
 		t.Errorf("the CLI got env %v stdin %q", d.Env, d.Stdin)
 	}
 	if strings.Contains(strings.Join(d.Args, " "), "s3cret") {
@@ -445,14 +445,14 @@ func TestExecPassesProviderEnv(t *testing.T) {
 
 func TestExecMissingEnvVarStopsBeforeStart(t *testing.T) {
 	pc, det := providerCfg(t, "deepseek")
-	pc.Env = map[string]string{"ANTHROPIC_AUTH_TOKEN": "${SY_TEST_SURELY_UNSET_KEY}"}
+	pc.Env = map[string]string{"ANTHROPIC_AUTH_TOKEN": "${RW_TEST_SURELY_UNSET_KEY}"}
 	dump := fakeExe(t, &pc, "claude_stream.jsonl", 0, "")
 	x := NewClaude(pc, det)
 	x.Provider = "deepseek"
 	x.LookupEnv = func(string) (string, bool) { return "", false }
 	var c collector
 	res := x.Run(context.Background(), Spec{AgentID: "d", Dir: t.TempDir()}, c.emit)
-	if res.Err == nil || !strings.Contains(res.Err.Error(), "SY_TEST_SURELY_UNSET_KEY") || !strings.Contains(res.Err.Error(), "deepseek") {
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "RW_TEST_SURELY_UNSET_KEY") || !strings.Contains(res.Err.Error(), "deepseek") {
 		t.Fatalf("err = %v", res.Err)
 	}
 	if _, err := os.Stat(dump); err == nil {

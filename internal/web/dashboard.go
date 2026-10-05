@@ -11,21 +11,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/health"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/health"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // The Dashboard panel: GET /api/dashboard?days=7|30|90[&here=1]. The
-// session-log part is sessionlog.BuildDashboard (the counting of `sy stats`
-// and `sy tune`); this adds what lives elsewhere: the budget, the team
+// session-log part is sessionlog.BuildDashboard (the counting of `rw stats`
+// and `rw tune`); this adds what lives elsewhere: the budget, the team
 // folder, the current quota, this repo's learned routes and the health
 // streak. Fields only ever get added (the JetBrains client reads it too).
 
 // dashMaxDays caps the range; dashLearnDays is how far back the dry run of
-// `sy tune --apply` looks (older runs weigh 1/8 or less there anyway).
+// `rw tune --apply` looks (older runs weigh 1/8 or less there anyway).
 const (
 	dashMaxDays   = 366
 	dashLearnDays = 90
@@ -38,7 +38,7 @@ type dashboardView struct {
 	Here          bool                 `json:"here"`
 	Dir           string               `json:"dir"`
 	LogDir        string               `json:"log_dir"`
-	MinTasks      int                  `json:"min_tasks"` // below it suggestions are hints (sy tune)
+	MinTasks      int                  `json:"min_tasks"` // below it suggestions are hints (rw tune)
 	Budget        dashBudget           `json:"budget"`
 	Quota         map[string]dashQuota `json:"quota"` // current use of each provider's limit
 	LearnedRoutes *dashLearned         `json:"learned"`
@@ -56,7 +56,7 @@ type dashBudget struct {
 	Team          bool    `json:"team"` // a team folder is set
 	// TeamMachines is how many other machines have a file in the team
 	// folder; TeamDays are their totals per date of the range. A machine's
-	// file holds only its last days (7 when sy writes it), so for older
+	// file holds only its last days (7 when rw writes it), so for older
 	// days it has no data.
 	TeamMachines int                `json:"team_machines,omitempty"`
 	TeamDays     map[string]teamDay `json:"team_days,omitempty"`
@@ -70,7 +70,7 @@ type teamDay struct {
 }
 
 type dashQuota struct {
-	Source       string             `json:"source"` // live (this sy) or log (the newest logged reading)
+	Source       string             `json:"source"` // live (this rw) or log (the newest logged reading)
 	Seen         time.Time          `json:"seen"`
 	Utilization  float64            `json:"utilization"`
 	Window       string             `json:"window,omitempty"`
@@ -85,7 +85,7 @@ type dashLearned struct {
 	Mode    string           `json:"mode"` // routing.learn
 	Updated *time.Time       `json:"updated,omitempty"`
 	Routes  []learnedRow     `json:"routes"`
-	Pending []learnedPending `json:"pending"` // what `sy tune --apply` would change
+	Pending []learnedPending `json:"pending"` // what `rw tune --apply` would change
 	Note    string           `json:"note,omitempty"`
 }
 
@@ -291,7 +291,7 @@ func (s *Server) dashBudget(cfg *config.Config, now time.Time, v *dashboardView)
 	return b
 }
 
-// quota fills the current use of each provider's limit: this sy's live
+// quota fills the current use of each provider's limit: this rw's live
 // reading, else the newest logged one whose window has not reset yet.
 func (v *dashboardView) quota(s *Server, cfg *config.Config, now time.Time) {
 	tr := s.orc.Tracker()
@@ -332,7 +332,7 @@ func quotaView(q event.QuotaInfo, source string, seen time.Time) dashQuota {
 	return dq
 }
 
-// dashLearned is this repo's learned routes and what `sy tune --apply`
+// dashLearned is this repo's learned routes and what `rw tune --apply`
 // would change now.
 func (s *Server) dashLearned(cfg *config.Config, recs []sessionlog.Record, now time.Time) *dashLearned {
 	l := &dashLearned{Mode: cfg.LearnMode(), Routes: []learnedRow{}, Pending: []learnedPending{}}
@@ -364,7 +364,7 @@ func (s *Server) dashLearned(cfg *config.Config, recs []sessionlog.Record, now t
 	sort.Slice(l.Routes, func(i, j int) bool { return l.Routes[i].Role < l.Routes[j].Role })
 	rep, err := orchestrator.UpdateLearned(s.opt.Dir, s.store.Unlearned(), recs, now, true)
 	if err != nil {
-		l.Note = "sy tune --apply dry run: " + err.Error()
+		l.Note = "rw tune --apply dry run: " + err.Error()
 		return l
 	}
 	for _, c := range rep.Result.Changes {
@@ -373,7 +373,7 @@ func (s *Server) dashLearned(cfg *config.Config, recs []sessionlog.Record, now t
 	return l
 }
 
-// dashHealth is the clean streak of `sy health`. The scan for leftovers is
+// dashHealth is the clean streak of `rw health`. The scan for leftovers is
 // skipped: it walks the worktree pools, and the Health panel has it.
 func (s *Server) dashHealth(v *dashboardView) *dashHealth {
 	o := healthOptions

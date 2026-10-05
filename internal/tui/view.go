@@ -10,11 +10,11 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/orchestrator"
-	"github.com/sparkz400/switchyard/internal/schedule"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/schedule"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // ellipsis is "…" or "..." for the ASCII theme (set by New).
@@ -106,7 +106,7 @@ func (m *Model) View() string {
 
 func (m *Model) view() string {
 	if m.width == 0 {
-		return "starting switchyard…"
+		return "starting relayweft…"
 	}
 	W, H := m.width, m.height
 	header := m.viewHeader(W)
@@ -170,7 +170,7 @@ func (m *Model) viewPanel(W, H int) string {
 
 func (m *Model) viewHeader(W int) string {
 	th := m.th
-	left := th.bold(th.Main).Render(" "+th.G.Logo+" SWITCHYARD") + th.fg(th.Muted).Render(" · "+m.projectLabel(filepath.Base(m.opt.Dir)))
+	left := th.bold(th.Main).Render(" "+th.G.Logo+" RELAYWEFT") + th.fg(th.Muted).Render(" · "+m.projectLabel(filepath.Base(m.opt.Dir)))
 	phase := m.phase
 	if m.running {
 		phase += " · " + dur(time.Since(m.taskStart))
@@ -839,7 +839,7 @@ func (m *Model) fmtLog(l logLine) string {
 		}
 		tag = th.fg(c).Render(fit(l.agent, 9))
 	} else {
-		tag = th.fg(th.Router).Render(fit("sy", 9))
+		tag = th.fg(th.Router).Render(fit("rw", 9))
 	}
 	kind := ""
 	tc := th.Text

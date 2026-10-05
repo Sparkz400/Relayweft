@@ -1,6 +1,6 @@
 name: packaging
 
-# Installs sy the way users do: the Homebrew formula from this repo as a
+# Installs rw the way users do: the Homebrew formula from this repo as a
 # tap (macOS and Linux), the .deb, .rpm and .apk packages built from this
 # branch in Ubuntu, Fedora and Alpine containers, and the AUR PKGBUILD in
 # an Arch Linux container. It also checks that the committed manifests are
@@ -12,7 +12,7 @@ on:
       - "Formula/**"
       - ".github/workflows/release.yml"
       - ".github/workflows/packaging.yml"
-      - "cmd/sy/update*.go"
+      - "cmd/rw/update*.go"
       - "go.mod"
   workflow_dispatch:
 
@@ -32,13 +32,13 @@ jobs:
           # manifests); reading is all it needs.
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="$(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' Formula/switchyard.rb | head -n 1)"
+          version="$(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' Formula/relayweft.rb | head -n 1)"
           echo "formula version: $version"
           [ -n "$version" ]
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/checksums.txt" \
-            "https://github.com/sparkz400/switchyard/releases/download/v$version/checksums.txt"
+            "https://github.com/sparkz400/relayweft/releases/download/v$version/checksums.txt"
           sh packaging/render-manifests.sh "$version" "$RUNNER_TEMP/checksums.txt" "$RUNNER_TEMP/winget"
-          grep ReleaseDate "$RUNNER_TEMP/winget/Sparkz400.Switchyard.installer.yaml"
+          grep ReleaseDate "$RUNNER_TEMP/winget/Sparkz400.Relayweft.installer.yaml"
           if ! git diff --exit-code; then
             echo "::error::the committed manifests differ from the rendered ones; run packaging/render-manifests.sh $version and commit"
             exit 1
@@ -68,38 +68,38 @@ jobs:
             echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
           fi
           # The tap is a clone of this checkout, as `brew tap` makes of
-          # https://github.com/Sparkz400/Switchyard.
-          brew tap sparkz400/switchyard "$GITHUB_WORKSPACE"
-          brew install sparkz400/switchyard/switchyard
-          brew test sparkz400/switchyard/switchyard
-          brew style sparkz400/switchyard/switchyard
-          brew audit --strict --formula sparkz400/switchyard/switchyard
-          sy="$(brew --prefix)/bin/sy"
-          "$sy" version
-          want="switchyard $(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' Formula/switchyard.rb | head -n 1)"
-          [ "$("$sy" version)" = "$want" ]
-          echo "sy=$sy" >> "$GITHUB_ENV"
+          # https://github.com/Sparkz400/Relayweft.
+          brew tap sparkz400/relayweft "$GITHUB_WORKSPACE"
+          brew install sparkz400/relayweft/relayweft
+          brew test sparkz400/relayweft/relayweft
+          brew style sparkz400/relayweft/relayweft
+          brew audit --strict --formula sparkz400/relayweft/relayweft
+          rw="$(brew --prefix)/bin/rw"
+          "$rw" version
+          want="relayweft $(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' Formula/relayweft.rb | head -n 1)"
+          [ "$("$rw" version)" = "$want" ]
+          echo "rw=$rw" >> "$GITHUB_ENV"
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: sy update leaves Homebrew's sy alone
+      - name: rw update leaves Homebrew's rw alone
         env:
           GH_TOKEN: ${{ github.token }}
-        # This branch's sy, as an old version, in place of the formula's.
+        # This branch's rw, as an old version, in place of the formula's.
         run: |
-          real="$(cd "$(dirname "$sy")" && cd "$(dirname "$(readlink "$sy")")" && pwd -P)/sy"
+          real="$(cd "$(dirname "$rw")" && cd "$(dirname "$(readlink "$rw")")" && pwd -P)/rw"
           echo "real binary: $real"
           rm -f "$real"
-          go build -ldflags "-X main.version=0.0.1" -o "$real" ./cmd/sy
-          "$sy" update --check | tee "$RUNNER_TEMP/check.txt"
-          grep -q 'brew upgrade switchyard' "$RUNNER_TEMP/check.txt"
-          if "$sy" update --yes; then
-            echo "::error::sy update replaced Homebrew's binary"
+          go build -ldflags "-X main.version=0.0.1" -o "$real" ./cmd/rw
+          "$rw" update --check | tee "$RUNNER_TEMP/check.txt"
+          grep -q 'brew upgrade relayweft' "$RUNNER_TEMP/check.txt"
+          if "$rw" update --yes; then
+            echo "::error::rw update replaced Homebrew's binary"
             exit 1
           fi
-          [ "$("$sy" version)" = "switchyard 0.0.1" ]
-          brew uninstall switchyard
-          [ ! -e "$sy" ]
+          [ "$("$rw" version)" = "relayweft 0.0.1" ]
+          brew uninstall relayweft
+          [ ! -e "$rw" ]
 
   linux-packages:
     runs-on: ubuntu-latest
@@ -111,20 +111,20 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: build sy and the packages
+      - name: build rw and the packages
         env:
           CGO_ENABLED: "0"
-        # An old version, so `sy update` sees a newer release and must
+        # An old version, so `rw update` sees a newer release and must
         # leave the package's binary alone.
         run: |
           mkdir -p dist
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=0.0.1" -o dist/sy-linux-amd64 ./cmd/sy
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=0.0.1" -o dist/rw-linux-amd64 ./cmd/rw
           sh packaging/linux-packages.sh 0.0.1 dist amd64
           ls -l dist
       - name: install in containers
         env:
           # Read-only token against the GitHub API's rate limit for the
-          # `sy update` checks.
+          # `rw update` checks.
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
@@ -132,7 +132,7 @@ jobs:
             set -- $t
             echo "::group::$1"
             docker run --rm -e GH_TOKEN -v "$PWD:/src:ro" -w /src "$1" \
-              sh packaging/test-install.sh "$2" "dist/switchyard-linux-amd64.$2" 0.0.1
+              sh packaging/test-install.sh "$2" "dist/relayweft-linux-amd64.$2" 0.0.1
             echo "::endgroup::"
           done
 

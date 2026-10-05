@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// Usage exports (`sy stats --json`) let a team add up what several
+// Usage exports (`rw stats --json`) let a team add up what several
 // machines used, and carry the team budget (budget.team):
 //
 //   - An export holds per-day totals of one machine: finished tasks, fresh
@@ -34,16 +34,16 @@ import (
 
 // Export format identifiers.
 const (
-	ExportFormat  = "switchyard-stats"
+	ExportFormat  = "relayweft-stats"
 	ExportVersion = "1.0"
 	exportMajor   = "1"
 )
 
-// Export is one machine's usage, the `sy stats --json` file.
+// Export is one machine's usage, the `rw stats --json` file.
 type Export struct {
-	Format    string    `json:"format"`  // always "switchyard-stats"
+	Format    string    `json:"format"`  // always "relayweft-stats"
 	Version   string    `json:"version"` // "major.minor", see ExportVersion
-	Machine   string    `json:"machine"` // random id of this sy installation (MachineID)
+	Machine   string    `json:"machine"` // random id of this rw installation (MachineID)
 	Name      string    `json:"name,omitempty"`
 	Generated time.Time `json:"generated"`
 	// Since is where the export starts (zero: every log there was).
@@ -225,17 +225,17 @@ func ParseExport(data []byte) (Export, error) {
 		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(data, &head); err != nil {
-		return Export{}, fmt.Errorf("not a Switchyard stats export: %w", err)
+		return Export{}, fmt.Errorf("not a Relayweft stats export: %w", err)
 	}
 	if head.Format != ExportFormat {
-		return Export{}, fmt.Errorf("not a Switchyard stats export (format %q)", head.Format)
+		return Export{}, fmt.Errorf("not a Relayweft stats export (format %q)", head.Format)
 	}
 	if major, _, _ := strings.Cut(head.Version, "."); major != exportMajor {
-		return Export{}, fmt.Errorf("export version %q is not supported: this sy reads version %s.x (a newer sy wrote it? update with sy update)", head.Version, exportMajor)
+		return Export{}, fmt.Errorf("export version %q is not supported: this rw reads version %s.x (a newer rw wrote it? update with rw update)", head.Version, exportMajor)
 	}
 	var e Export
 	if err := json.Unmarshal(data, &e); err != nil {
-		return Export{}, fmt.Errorf("broken Switchyard stats export: %w", err)
+		return Export{}, fmt.Errorf("broken Relayweft stats export: %w", err)
 	}
 	if !reMachine.MatchString(e.Machine) {
 		return Export{}, fmt.Errorf("export has no valid machine id (%q)", e.Machine)
@@ -379,9 +379,9 @@ func (e Export) DayTotal(date string) (tokens int64, usd float64) {
 // point it elsewhere).
 var MachineIDFile = func() string {
 	if d, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(d, "switchyard", "machine-id")
+		return filepath.Join(d, "relayweft", "machine-id")
 	}
-	return filepath.Join(os.TempDir(), "switchyard-machine-id")
+	return filepath.Join(os.TempDir(), "relayweft-machine-id")
 }
 
 // MachineID returns this installation's random id, created on first use.
@@ -405,7 +405,7 @@ func MachineID() (string, error) {
 	id := hex.EncodeToString(b[:])
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if errors.Is(err, os.ErrExist) {
-		// Another sy created it just now: use theirs.
+		// Another rw created it just now: use theirs.
 		data, rerr := os.ReadFile(p)
 		if id := strings.TrimSpace(string(data)); rerr == nil && reMachine.MatchString(id) {
 			return id, nil
@@ -593,7 +593,7 @@ func PrintMerged(w io.Writer, exps []Export, dayUSD float64, dayTokens int64) {
 	if first != "" {
 		span = first + " to " + last
 	}
-	fmt.Fprintf(w, "Switchyard team stats - %d machine(s), %s\n\n", len(exps), span)
+	fmt.Fprintf(w, "Relayweft team stats - %d machine(s), %s\n\n", len(exps), span)
 
 	// Usage per model over every machine and day.
 	type route struct {

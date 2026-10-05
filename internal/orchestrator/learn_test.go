@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // seedRoutes writes this repo's worker history: the configured route
@@ -98,7 +98,7 @@ func TestAutoLearnAtTaskStart(t *testing.T) {
 	}
 }
 
-// NoAutoLearn (a temporary checkout, sy watch) never learns.
+// NoAutoLearn (a temporary checkout, rw watch) never learns.
 func TestNoAutoLearn(t *testing.T) {
 	isolateUserConfig(t)
 	dir := gitRepo(t)
@@ -133,7 +133,7 @@ func TestApplyLearnedFollowsTheMode(t *testing.T) {
 	seedRoutes(t, logDir, dir)
 	recs, _ := sessionlog.ReadDir(logDir)
 	cfg := config.Default()
-	// A dry run (plain `sy tune`) saves nothing.
+	// A dry run (plain `rw tune`) saves nothing.
 	rep, err := UpdateLearned(dir, cfg, recs, time.Now(), true)
 	if err != nil || len(rep.Result.Changes) != 1 {
 		t.Fatalf("dry run: %+v %v", rep.Result.Changes, err)

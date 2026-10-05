@@ -51,7 +51,7 @@ func (f *fakeGitea) handler(t *testing.T) http.Handler {
 			f.comments = append(f.comments, "edit 31: "+in.Body)
 			write(`{}`)
 		case r.Method == "GET" && p == "/repos/o/r/issues":
-			if q.Get("type") != "issues" || q.Get("labels") != "sy" || q.Get("limit") != "50" {
+			if q.Get("type") != "issues" || q.Get("labels") != "rw" || q.Get("limit") != "50" {
 				t.Errorf("issue query %s", r.URL.RawQuery)
 			}
 			// Newest first, as Gitea lists them.
@@ -62,7 +62,7 @@ func (f *fakeGitea) handler(t *testing.T) http.Handler {
 			var in map[string]string
 			json.NewDecoder(r.Body).Decode(&in)
 			f.created = append(f.created, in)
-			write(`{"number":8,"html_url":"https://codeberg.org/o/r/pulls/8","head":{"ref":"sy/fix","repo":{"full_name":"o/r"}}}`)
+			write(`{"number":8,"html_url":"https://codeberg.org/o/r/pulls/8","head":{"ref":"rw/fix","repo":{"full_name":"o/r"}}}`)
 		case r.Method == "POST" && strings.HasPrefix(p, "/repos/o/r/issues/") && strings.HasSuffix(p, "/comments"):
 			var in struct{ Body string }
 			json.NewDecoder(r.Body).Decode(&in)
@@ -70,7 +70,7 @@ func (f *fakeGitea) handler(t *testing.T) http.Handler {
 			w.WriteHeader(201)
 			write(`{}`)
 		case r.Method == "GET" && p == "/repos/o/r/pulls/7":
-			write(`{"number":7,"title":"Fix","state":"closed","merged":true,"head":{"ref":"sy/x","sha":"abc","repo":{"full_name":"o/r"}},"base":{"ref":"main"}}`)
+			write(`{"number":7,"title":"Fix","state":"closed","merged":true,"head":{"ref":"rw/x","sha":"abc","repo":{"full_name":"o/r"}},"base":{"ref":"main"}}`)
 		case r.Method == "GET" && p == "/repos/o/r/pulls/7.diff":
 			write("diff --git a/a.go b/a.go\n")
 		case r.Method == "GET" && p == "/repos/o/r/commits/abc/status":
@@ -155,7 +155,7 @@ func TestGiteaIssuesAndPulls(t *testing.T) {
 		t.Fatalf("%v %v", err, f.comments)
 	}
 	f.comments = nil
-	open, err := c.OpenIssues(gtTestRepo, "sy", 2)
+	open, err := c.OpenIssues(gtTestRepo, "rw", 2)
 	if err != nil || len(open) != 2 || open[0].Number != 3 || open[1].Number != 5 {
 		t.Fatalf("oldest first, at most 2: %+v %v", open, err)
 	}
@@ -166,11 +166,11 @@ func TestGiteaIssuesAndPulls(t *testing.T) {
 	if b, err := c.DefaultBranch(gtTestRepo); err != nil || b != "trunk" {
 		t.Fatalf("%q %v", b, err)
 	}
-	pr, err := c.CreatePull(gtTestRepo, NewPull{Title: "Fix it", Head: "sy/fix", Base: "main", Body: "Closes #4", Draft: true})
+	pr, err := c.CreatePull(gtTestRepo, NewPull{Title: "Fix it", Head: "rw/fix", Base: "main", Body: "Closes #4", Draft: true})
 	if err != nil || pr.Number != 8 || pr.URL != "https://codeberg.org/o/r/pulls/8" {
 		t.Fatalf("%+v %v", pr, err)
 	}
-	if got := f.created[0]; got["title"] != "WIP: Fix it" || got["head"] != "sy/fix" || got["base"] != "main" || got["body"] != "Closes #4" {
+	if got := f.created[0]; got["title"] != "WIP: Fix it" || got["head"] != "rw/fix" || got["base"] != "main" || got["body"] != "Closes #4" {
 		t.Fatalf("sent %v", got)
 	}
 	if err := c.CommentIssue(gtTestRepo, 4, "see #8"); err != nil || len(f.comments) != 1 || f.comments[0] != "4: see #8" {
@@ -186,7 +186,7 @@ func TestGiteaWatchAndReview(t *testing.T) {
 	f, api := giteaServer(t)
 	c := New(Gitea, api, "good", nil)
 	p, err := c.Pull(gtTestRepo, 7)
-	if err != nil || !p.Merged || p.HeadRef != "sy/x" || p.HeadSHA != "abc" || p.HeadRepo != "o/r" || p.BaseRef != "main" {
+	if err != nil || !p.Merged || p.HeadRef != "rw/x" || p.HeadSHA != "abc" || p.HeadRepo != "o/r" || p.BaseRef != "main" {
 		t.Fatalf("%+v %v", p, err)
 	}
 	if d, err := c.PullDiff(gtTestRepo, 7, 1<<20); err != nil || d != "diff --git a/a.go b/a.go\n" {

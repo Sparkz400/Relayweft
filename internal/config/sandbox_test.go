@@ -17,8 +17,8 @@ func TestSandboxValidate(t *testing.T) {
 		"sandbox: {mode: docker, env: [CI_JOB_TOKEN]}":                                    "never goes into a sandbox",
 		"sandbox: {mode: docker, env: [\"A-B\"]}":                                         "may use only letters",
 		"sandbox: {mode: docker, image: \"--privileged\"}":                                "is not an image name",
-		"sandbox: {mode: docker, mounts: [{path: /x, target: /work/x}]}":                  "where sy mounts",
-		"sandbox: {mode: docker, mounts: [{path: /x, target: /sy}]}":                      "where sy mounts",
+		"sandbox: {mode: docker, mounts: [{path: /x, target: /work/x}]}":                  "where rw mounts",
+		"sandbox: {mode: docker, mounts: [{path: /x, target: /rw}]}":                      "where rw mounts",
 		"sandbox: {mode: docker, mounts: [{path: /x, target: rel}]}":                      "absolute path",
 		"sandbox: {mode: docker, mounts: [{path: /var/run/docker.sock, target: /d}]}":     "control of the container runtime",
 		"sandbox: {mode: docker, mounts: [{path: '//./pipe/docker_engine', target: /d}]}": "control of the container runtime",
@@ -81,7 +81,7 @@ providers:
 	}
 }
 
-// The commands sy runs on agents' code use the top-level sandbox, else
+// The commands rw runs on agents' code use the top-level sandbox, else
 // that of a provider whose writers are sandboxed, without its sign-in.
 func TestCheckSandbox(t *testing.T) {
 	if _, on := Default().CheckSandbox(); on {
@@ -174,13 +174,13 @@ func TestRepoFileSandboxNeedsTrustToLoosen(t *testing.T) {
 	if _, err := ApplyRepo(c, root); err != nil || c.Sandbox.On() {
 		t.Errorf("a trusted repo file could not turn it off: %v %+v", err, c.Sandbox)
 	}
-	// sy trust shows it.
+	// rw trust shows it.
 	if lines, _ := CommandSettings(repo); len(lines) != 1 || !strings.Contains(lines[0], "sandbox") {
 		t.Errorf("CommandSettings = %q", lines)
 	}
 }
 
-// A ./switchyard.yaml that came with a clone is guarded the same way.
+// A ./relayweft.yaml that came with a clone is guarded the same way.
 func TestUntrustedLocalConfigSandbox(t *testing.T) {
 	isolateTrust(t)
 	writeUserConfig(t, "sandbox: {mode: docker}\n")

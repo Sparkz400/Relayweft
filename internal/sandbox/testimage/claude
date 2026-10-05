@@ -1,6 +1,6 @@
 #!/bin/sh
 # A scripted stand-in for `claude -p --output-format stream-json`, for
-# `sy selftest` and the sandbox tests: no model, no quota. It checks the
+# `rw selftest` and the sandbox tests: no model, no quota. It checks the
 # sandbox from the inside (its folder, git, a read-only git folder, no
 # forge token) and fails the step when something is wrong.
 #
@@ -26,7 +26,7 @@ fail() {
 	say "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"sandbox check failed: $(clean "$1")\",\"session_id\":\"$sid\"}"
 	exit 1
 }
-wrote() { # tell sy about an edit, with the path as the agent sees it
+wrote() { # tell rw about an edit, with the path as the agent sees it
 	say "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$(pwd)/$(clean "$1")\"}}]}}"
 }
 
@@ -36,11 +36,11 @@ plan='```json\n{\"summary\": \"Look around, write two files in parallel, then co
 hangplan='```json\n{\"summary\": \"Wait.\", \"subtasks\": [{\"id\": \"h\", \"title\": \"wait to be stopped\", \"kind\": \"edit\", \"prompt\": \"hang <<forever>>\", \"files\": [\"h.txt\"]}]}\n```'
 
 case "$prompt" in
-*"[SY:PLAN-REVIEW]"* | *"[SY:FINAL-REVIEW]"* | *"[SY:ERROR-REVIEW]"*)
+*"[RW:PLAN-REVIEW]"* | *"[RW:FINAL-REVIEW]"* | *"[RW:ERROR-REVIEW]"*)
 	raw '{\"approve\": true, \"advice\": \"ok\", \"issues\": []}' ;;
-*"[SY:JUDGE]"*)
+*"[RW:JUDGE]"*)
 	result A ;;
-*"[SY:PLAN]"*)
+*"[RW:PLAN]"*)
 	case "$prompt" in
 	*SANDBOX-HANG*) raw "$hangplan" ;;
 	*) raw "$plan" ;;
@@ -50,28 +50,28 @@ esac
 # Checks every working step makes from inside the sandbox.
 [ "$(pwd)" = /work ] || fail "the working folder is $(pwd), not /work"
 [ -z "$GITHUB_TOKEN$GH_TOKEN$GITLAB_TOKEN$GITEA_TOKEN" ] || fail "a forge token reached the sandbox"
-[ "$HOME" = /sy/home ] || fail "HOME is $HOME"
+[ "$HOME" = /rw/home ] || fail "HOME is $HOME"
 echo "$sid" >>"$HOME/sessions.log" 2>/dev/null || fail "the session store in HOME is not writable"
 st=$(git status --porcelain 2>&1) || fail "git status: $st"
 gd=$(git rev-parse --absolute-git-dir 2>&1) || fail "git rev-parse: $gd"
 cd_=$(git rev-parse --path-format=absolute --git-common-dir 2>&1) || fail "git rev-parse: $cd_"
 echo "$gd" >>"$HOME/gitdirs.log"
 for d in "$gd" "$cd_"; do
-	if mkdir "$d/sy-sandbox-probe" 2>/dev/null; then
-		rmdir "$d/sy-sandbox-probe"
+	if mkdir "$d/rw-sandbox-probe" 2>/dev/null; then
+		rmdir "$d/rw-sandbox-probe"
 		fail "the git folder $d is writable"
 	fi
 done
 if grep -qi 'url\|extraheader\|helper' "$cd_/config" 2>/dev/null; then
 	fail "the repository's remotes or credentials reached the sandbox"
 fi
-if [ -n "$ro" ] && touch /work/.sy-probe 2>/dev/null; then
-	rm -f /work/.sy-probe
+if [ -n "$ro" ] && touch /work/.rw-probe 2>/dev/null; then
+	rm -f /work/.rw-probe
 	fail "a read-only agent can write to /work"
 fi
 
 case "$prompt" in
-*SANDBOX-SUBMODULE*) # write a submodule's .git: sy must undo it and fail the run
+*SANDBOX-SUBMODULE*) # write a submodule's .git: rw must undo it and fail the run
 	mkdir -p vendor/lib && printf 'gitdir: ../../elsewhere\n' >vendor/lib/.git || fail "cannot write vendor/lib/.git"
 	result "wrote vendor/lib/.git" ;;
 *"hang <<forever>>"* | *SANDBOX-HANG*) # a planned step, or a task small enough to skip planning

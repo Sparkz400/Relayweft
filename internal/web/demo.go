@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/sparkz400/switchyard/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
 )
 
 // Demo runs have no git repo, so the orchestrator never asks for a change

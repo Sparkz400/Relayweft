@@ -10,12 +10,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // Fuzz targets for the CLI stream parsers (ROADMAP 1.8): odd model or CLI
-// output must never crash sy, never leave it stuck and never produce a
+// output must never crash rw, never leave it stuck and never produce a
 // Result that hides an error.
 //
 //	go test -run='^$' -fuzz=FuzzCodexParser -fuzztime=60s ./internal/runner

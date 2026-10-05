@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/health"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/health"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // dashLog writes a session log with two tasks today, one of them carrying
@@ -50,7 +50,7 @@ func TestDashboardEndpoint(t *testing.T) {
 	defer func(f func() string) { sessionlog.MachineIDFile = f }(sessionlog.MachineIDFile)
 	sessionlog.MachineIDFile = func() string { return idFile }
 	// Two other machines in the team folder: one writing now (its file
-	// holds the last 7 days, as sy writes it), one that stopped 20 days ago.
+	// holds the last 7 days, as rw writes it), one that stopped 20 days ago.
 	day := func(ago int) string { return time.Now().AddDate(0, 0, -ago).Format("2006-01-02") }
 	other := sessionlog.Export{Format: sessionlog.ExportFormat, Version: sessionlog.ExportVersion, Machine: "othermachine", Generated: time.Now(),
 		Since: sessionlog.DayStart(time.Now()).AddDate(0, 0, -6), Days: []sessionlog.ExportDay{{Date: day(0), Tasks: 3, FreshTokens: 9000, USD: 2}}}
@@ -263,7 +263,7 @@ func TestDashCache(t *testing.T) {
 	}
 }
 
-// /api/stats suggests what sy tune and the dashboard suggest: with the
+// /api/stats suggests what rw tune and the dashboard suggest: with the
 // models of your config, not the built-in defaults.
 func TestStatsSuggestionsUseConfig(t *testing.T) {
 	logs := t.TempDir()

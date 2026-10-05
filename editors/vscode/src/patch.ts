@@ -1,4 +1,4 @@
-// Unified diffs as sy web sends them (one file's `git diff` output, the
+// Unified diffs as rw web sends them (one file's `git diff` output, the
 // hunks numbered like the server's SplitHunks), and the before/after
 // documents the diff editor shows.
 
@@ -21,7 +21,7 @@ export interface Hunk {
 
 export interface ParsedPatch {
   hunks: Hunk[];
-  /** sy cut the patch short (huge file): the hunks are incomplete. */
+  /** rw cut the patch short (huge file): the hunks are incomplete. */
   truncated: boolean;
 }
 
@@ -246,7 +246,7 @@ export function fragments(hunks: Hunk[], truncated: boolean): Reconstructed {
     ranges.push({ start, end: a.length });
     next = first + h.oldLines;
   }
-  const tail = truncated ? '⋯ the rest of the diff was too large to show; see the patch in sy web ⋯' : '⋯ rest of the file not shown ⋯';
+  const tail = truncated ? '⋯ the rest of the diff was too large to show; see the patch in rw web ⋯' : '⋯ rest of the file not shown ⋯';
   if (hunks.length === 0 || truncated || next > 1) {
     b.push(tail);
     a.push(tail);

@@ -27,7 +27,7 @@ type Input struct {
 	Root  string   // the git repo's top folder
 	Dir   string   // the folder the checks run in (Root or below)
 	Files []string // changed files, slash paths relative to Root (deleted ones too)
-	// Exec runs a tool sy uses to select tests (go list, cargo metadata)
+	// Exec runs a tool rw uses to select tests (go list, cargo metadata)
 	// in dir and returns its standard output. nil runs it here. With the
 	// sandbox on it runs in the container: the folder holds the agents'
 	// code and configs.
@@ -63,7 +63,7 @@ func Select(ctx context.Context, cmd, template string, in Input) Plan {
 		return selectTemplate(ctx, cmd, template, c)
 	}
 	if hasShellSyntax(cmd) {
-		return full(cmd, "sy narrows only a single test command (set verify.affected_commands for this one)")
+		return full(cmd, "rw narrows only a single test command (set verify.affected_commands for this one)")
 	}
 	f := strings.Fields(cmd)
 	switch {
@@ -82,7 +82,7 @@ func Select(ctx context.Context, cmd, template string, in Input) Plan {
 	case gradleShape(f) >= 0:
 		return selectGradle(cmd, f, c)
 	}
-	return full(cmd, "sy does not know how to narrow it (set verify.affected_commands for this one)")
+	return full(cmd, "rw does not know how to narrow it (set verify.affected_commands for this one)")
 }
 
 // Allowed lists the command prefixes an agent needs, besides cmd itself,
@@ -155,8 +155,8 @@ func Allowed(dir, cmd, template string) (prefixes []string, hint string) {
 type change struct {
 	root, dir string
 	exec      func(ctx context.Context, dir string, argv []string) ([]byte, error) // Input.Exec
-	files     []string // changed files under dir, slash paths relative to dir
-	outside   []string // changed files outside dir, relative to root
+	files     []string                                                             // changed files under dir, slash paths relative to dir
+	outside   []string                                                             // changed files outside dir, relative to root
 }
 
 func prepare(in Input) (*change, string) {
@@ -267,7 +267,7 @@ func isTestFile(p string) bool {
 }
 
 // hasShellSyntax reports a command line that is more than one plain
-// command with arguments: sy then cannot tell where to add the tests.
+// command with arguments: rw then cannot tell where to add the tests.
 func hasShellSyntax(cmd string) bool {
 	return strings.ContainsAny(cmd, "&|;<>()$`\"'%!^*?[]{}~\n\r")
 }
@@ -333,7 +333,7 @@ func quoteAll(args []string) (string, string) {
 
 // unsafeWhy is the reason for a full run when a name cannot be passed on.
 func unsafeWhy(name string) string {
-	return fmt.Sprintf("%q has characters sy does not pass to a shell", name)
+	return fmt.Sprintf("%q has characters rw does not pass to a shell", name)
 }
 
 // dotSlash makes a dir-relative path start with "./" (or be "."), so a

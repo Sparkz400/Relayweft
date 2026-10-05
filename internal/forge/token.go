@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/gh"
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/gh"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 // Token finds a token for a host of kind k; source says where it came

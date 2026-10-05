@@ -5,15 +5,15 @@ import (
 	"strings"
 )
 
-// childSecrets are variables that agents and the commands sy runs for
-// them (verify commands, hooks, bench checks) never get, though sy itself
-// has them: the forge tokens sy uses to read issues and open pull requests,
+// childSecrets are variables that agents and the commands rw runs for
+// them (verify commands, hooks, bench checks) never get, though rw itself
+// has them: the forge tokens rw uses to read issues and open pull requests,
 // and the CI runner's own tokens. In CI (docs/ci.md) the job holds a token
 // that can push and comment, while the agents read untrusted issue text and
 // the verify commands run code the agents wrote; both need only the model's
 // key. This keeps the tokens out of their environment, transcripts and
 // test runs. It is not a sandbox: a process of the same user can still read
-// sy's own environment on some systems, so the token's permissions and the
+// rw's own environment on some systems, so the token's permissions and the
 // agents' sandboxes (Claude's allowed tools, Codex's sandbox) still matter.
 //
 // An MCP server that needs one names it explicitly (${GITHUB_TOKEN}); the
@@ -50,7 +50,7 @@ func WithoutSecrets(env []string) []string {
 	return out
 }
 
-// IsChildSecret reports whether name is one of sy's forge or CI tokens,
+// IsChildSecret reports whether name is one of rw's forge or CI tokens,
 // which no agent gets.
 func IsChildSecret(name string) bool {
 	for _, s := range childSecrets {

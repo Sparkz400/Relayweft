@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/notify"
+	"github.com/sparkz400/relayweft/internal/notify"
 )
 
 func isolateTrust(t *testing.T) {
@@ -150,7 +150,7 @@ func TestRepoFileBudgetOnlyStricterAndWorkspaceNeedsTrust(t *testing.T) {
 	}
 }
 
-// A repo file may lower sy watch's round cap, never raise it.
+// A repo file may lower rw watch's round cap, never raise it.
 func TestRepoFileWatchRoundsOnlyLower(t *testing.T) {
 	isolateTrust(t)
 	for repo, want := range map[string]int{"watch: {max_rounds: 99}\n": 3, "watch: {max_rounds: 1}\n": 1, "watch: {max_rounds: 0}\n": 0} {
@@ -190,7 +190,7 @@ func TestTrustThroughSymlink(t *testing.T) {
 	}
 }
 
-// budget.team.dir decides where sy writes: from a repo file it needs trust,
+// budget.team.dir decides where rw writes: from a repo file it needs trust,
 // whatever YAML reaches it, while the file's team limits may only tighten.
 func TestRepoFileTeamDirNeedsTrust(t *testing.T) {
 	isolateTrust(t)
@@ -229,7 +229,7 @@ func TestRepoFileTeamDirNeedsTrust(t *testing.T) {
 	repo := filepath.Join(root, RepoFileName)
 	os.WriteFile(repo, []byte("budget: {team: {dir: /team/share, day_usd: 50}}\n"), 0o644)
 	if cmds, _ := CommandSettings(repo); len(cmds) != 1 || !strings.Contains(cmds[0], "/team/share") {
-		t.Fatalf("sy trust must show the team dir: %v", cmds)
+		t.Fatalf("rw trust must show the team dir: %v", cmds)
 	}
 	if err := Trust(repo); err != nil {
 		t.Fatal(err)
@@ -283,7 +283,7 @@ func TestRepoFileWebhooksNeedTrust(t *testing.T) {
 	os.WriteFile(repo, []byte("notify: {webhooks: [{url: 'https://hooks.slack.com/services/T/B/secret'}]}\n"), 0o644)
 	cmds, _ := CommandSettings(repo)
 	if len(cmds) != 1 || !strings.Contains(cmds[0], "notify.webhooks: slack hooks.slack.com") || strings.Contains(cmds[0], "secret") {
-		t.Fatalf("sy trust must show where the webhooks go, without the secret: %v", cmds)
+		t.Fatalf("rw trust must show where the webhooks go, without the secret: %v", cmds)
 	}
 	if err := Trust(repo); err != nil {
 		t.Fatal(err)
@@ -324,10 +324,10 @@ func TestWebhooksValidateAndRedact(t *testing.T) {
 }
 
 func TestTeamFolder(t *testing.T) {
-	t.Setenv("SY_TEAM_TEST", filepath.Join(t.TempDir(), "share"))
-	for _, d := range []string{"$SY_TEAM_TEST/x", "%SY_TEAM_TEST%/x", "${SY_TEAM_TEST}/x"} {
+	t.Setenv("RW_TEAM_TEST", filepath.Join(t.TempDir(), "share"))
+	for _, d := range []string{"$RW_TEAM_TEST/x", "%RW_TEAM_TEST%/x", "${RW_TEAM_TEST}/x"} {
 		got, err := TeamBudgetCfg{Dir: d}.Folder()
-		if err != nil || got != filepath.Join(os.Getenv("SY_TEAM_TEST"), "x") {
+		if err != nil || got != filepath.Join(os.Getenv("RW_TEAM_TEST"), "x") {
 			t.Errorf("%s -> %q %v", d, got, err)
 		}
 	}

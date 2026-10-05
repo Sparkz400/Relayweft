@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sparkz400/switchyard/internal/diag"
+	"github.com/sparkz400/relayweft/internal/diag"
 )
 
 // TestFatalCrashIsReported runs a process that dies of an unrecovered panic
 // in a goroutine (nothing can recover that): the fatal-error file holds the
 // runtime's report, and the health report counts it as a crash.
 func TestFatalCrashIsReported(t *testing.T) {
-	if dir := os.Getenv("SY_HEALTH_FATAL_DIR"); dir != "" {
+	if dir := os.Getenv("RW_HEALTH_FATAL_DIR"); dir != "" {
 		diag.Init(dir)
 		diag.Start("run")
 		go func() { panic("unrecoverable test crash") }()
@@ -21,7 +21,7 @@ func TestFatalCrashIsReported(t *testing.T) {
 	}
 	dir := t.TempDir()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestFatalCrashIsReported$")
-	cmd.Env = append(os.Environ(), "SY_HEALTH_FATAL_DIR="+dir)
+	cmd.Env = append(os.Environ(), "RW_HEALTH_FATAL_DIR="+dir)
 	if out, err := cmd.CombinedOutput(); err == nil {
 		t.Fatalf("the child did not crash: %s", out)
 	}

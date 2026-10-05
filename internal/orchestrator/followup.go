@@ -14,12 +14,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/diag"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/proc"
-	"github.com/sparkz400/switchyard/internal/router"
-	"github.com/sparkz400/switchyard/internal/runner"
-	"github.com/sparkz400/switchyard/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/diag"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/runner"
+	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
 // AgentSession is a finished agent whose CLI conversation can be continued
@@ -48,7 +48,7 @@ type AgentSession struct {
 // maxSessions bounds the remembered agents (oldest are forgotten).
 const maxSessions = 50
 
-// sessionsPath keeps a project's follow-up targets across sy restarts.
+// sessionsPath keeps a project's follow-up targets across rw restarts.
 func sessionsPath(dir string) string {
 	h := sha1.Sum([]byte(canonPath(dir)))
 	return filepath.Join(stateDir(), "sessions", hex.EncodeToString(h[:6])+".json")
@@ -210,7 +210,7 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 		o.mu.Unlock()
 		if r != nil {
 			path := diag.Crash("follow-up", r, debug.Stack())
-			result = TaskResult{Summary: "internal error, Switchyard bug: details in " + path + " (sy bugreport)"}
+			result = TaskResult{Summary: "internal error, Relayweft bug: details in " + path + " (rw bugreport)"}
 			if !finished {
 				o.emit(event.Event{Kind: event.Phase, Text: "done"})
 				o.emit(event.Event{Kind: event.TaskDone, Text: result.Summary})
@@ -395,7 +395,7 @@ func (o *Orchestrator) followUpSlot(t *task, s AgentSession) (sl *slot, loc step
 // keepFollowUpWork keeps what a follow-up that did not finish changed in
 // its pool worktree (loc): on a branch, like a step's half-done edits, and
 // says where. If it cannot be saved, the worktree is held instead, and the
-// next sy that looks at it saves it (the hold names no task state, so it
+// next rw that looks at it saves it (the hold names no task state, so it
 // is given up only after saving). It returns the branch, or "".
 func (o *Orchestrator) keepFollowUpWork(t *task, s AgentSession, loc stepLoc, res runner.Result, cancelled bool) string {
 	why := errText(res.Err)
@@ -407,7 +407,7 @@ func (o *Orchestrator) keepFollowUpWork(t *task, s AgentSession, loc stepLoc, re
 	case why == "":
 		why = "failed"
 	}
-	saved, err := saveSlotWork(loc.slot, loc.base, "sy/"+refPart(t.key)+"/followup-unfinished", "unfinished follow-up to "+s.AgentID)
+	saved, err := saveSlotWork(loc.slot, loc.base, "rw/"+refPart(t.key)+"/followup-unfinished", "unfinished follow-up to "+s.AgentID)
 	if err != nil {
 		holdSlot(loc.slot, slotHold{Task: t.key, Step: "followup", Base: loc.base})
 		msg := fmt.Sprintf("the follow-up to %s stopped (%s); what it changed in %s could not be saved on a branch (%v), so that worktree is kept as it is: copy what you need from it", s.AgentID, clip(why, 120), loc.slot, err)

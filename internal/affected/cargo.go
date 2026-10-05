@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/sparkz400/switchyard/internal/proc"
+	"github.com/sparkz400/relayweft/internal/proc"
 )
 
 var cargoValues = map[string]bool{"--features": true, "-F": true, "-j": true, "--jobs": true, "--target": true, "--profile": true,

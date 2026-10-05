@@ -151,7 +151,7 @@ func selectJS(cmd string, f []string, c *change) Plan {
 			files = append(files, dotSlash(file))
 		case isDoc(file):
 		default:
-			return full(cmd, file+" is not JavaScript or TypeScript, so sy cannot tell which tests use it")
+			return full(cmd, file+" is not JavaScript or TypeScript, so rw cannot tell which tests use it")
 		}
 	}
 	if len(files) == 0 {

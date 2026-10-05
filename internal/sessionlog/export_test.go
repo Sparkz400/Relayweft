@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // exportRecs is a day of work in a secret project, and one the day before.
@@ -91,10 +91,10 @@ func TestExportVersions(t *testing.T) {
 			t.Errorf("version %q: unclear error %v", v, err)
 		}
 	}
-	if _, err := ParseExport([]byte(`{"format":"something-else","version":"1.0"}`)); err == nil || !strings.Contains(err.Error(), "not a Switchyard stats export") {
+	if _, err := ParseExport([]byte(`{"format":"something-else","version":"1.0"}`)); err == nil || !strings.Contains(err.Error(), "not a Relayweft stats export") {
 		t.Errorf("foreign file: %v", err)
 	}
-	if _, err := ParseExport([]byte(`{"format":"switchyard-stats","version":"1.0","machine":"../../evil"}`)); err == nil {
+	if _, err := ParseExport([]byte(`{"format":"relayweft-stats","version":"1.0","machine":"../../evil"}`)); err == nil {
 		t.Error("a machine id with a path was accepted")
 	}
 }
@@ -148,8 +148,8 @@ func TestTeamDir(t *testing.T) {
 	if err := WriteTeamFile(dir, BuildExport(recs, ExportOptions{Machine: other, Now: now})); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(dir, "3333333333333333.json"), []byte(`{"format":"switchyard-stats","version":"1.0","machine":`), 0o644)
-	os.WriteFile(filepath.Join(dir, "4444444444444444.json"), []byte(`{"format":"switchyard-stats","version":"9.0","machine":"4444444444444444"}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "3333333333333333.json"), []byte(`{"format":"relayweft-stats","version":"1.0","machine":`), 0o644)
+	os.WriteFile(filepath.Join(dir, "4444444444444444.json"), []byte(`{"format":"relayweft-stats","version":"9.0","machine":"4444444444444444"}`), 0o644)
 	stale := BuildExport(recs, ExportOptions{Machine: "5555555555555555", Now: now.Add(-30 * 24 * time.Hour)})
 	WriteTeamFile(dir, stale)
 	liar := BuildExport(recs, ExportOptions{Machine: other, Now: now})

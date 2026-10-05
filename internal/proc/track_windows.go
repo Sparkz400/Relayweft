@@ -31,8 +31,8 @@ func procStamp(pid int) string {
 	return strconv.FormatInt(created.Nanoseconds(), 10)
 }
 
-// reap only reports whether a recorded agent is still running: sy's job
-// object kills agents with sy, so a live one is rare, and the directory is
+// reap only reports whether a recorded agent is still running: rw's job
+// object kills agents with rw, so a live one is rare, and the directory is
 // skipped rather than killing a process tree from the outside.
 func reap(pid int, stamp string, own bool) bool {
 	cur := procStamp(pid)

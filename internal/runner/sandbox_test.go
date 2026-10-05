@@ -13,20 +13,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/config"
-	"github.com/sparkz400/switchyard/internal/event"
-	"github.com/sparkz400/switchyard/internal/limits"
-	"github.com/sparkz400/switchyard/internal/sandbox"
+	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/limits"
+	"github.com/sparkz400/relayweft/internal/sandbox"
 )
 
-// runFakeDocker is the test binary acting as docker (SY_FAKE_DOCKER = the
+// runFakeDocker is the test binary acting as docker (RW_FAKE_DOCKER = the
 // dump file). `run` records its arguments, a few variables of its
 // environment and the container's standard input file, then acts as
-// SY_FAKE_DOCKER_MODE says: ok (a Claude run that writes /work/sub/x.txt),
+// RW_FAKE_DOCKER_MODE says: ok (a Claude run that writes /work/sub/x.txt),
 // noimage (the runtime's error), hang (until killed). Other commands are
 // appended to <dump>.calls.
 func runFakeDocker() int {
-	dump := os.Getenv("SY_FAKE_DOCKER")
+	dump := os.Getenv("RW_FAKE_DOCKER")
 	args := os.Args[1:]
 	if len(args) == 0 || args[0] != "run" {
 		f, _ := os.OpenFile(dump+".calls", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -36,21 +36,21 @@ func runFakeDocker() int {
 	}
 	stdin := ""
 	for _, a := range args {
-		if strings.HasPrefix(a, "type=bind,source=") && strings.HasSuffix(a, ",target=/sy/run,readonly") {
-			src := strings.TrimSuffix(strings.TrimPrefix(a, "type=bind,source="), ",target=/sy/run,readonly")
+		if strings.HasPrefix(a, "type=bind,source=") && strings.HasSuffix(a, ",target=/rw/run,readonly") {
+			src := strings.TrimSuffix(strings.TrimPrefix(a, "type=bind,source="), ",target=/rw/run,readonly")
 			b, _ := os.ReadFile(filepath.Join(src, "stdin"))
 			stdin = string(b)
 		}
 	}
 	env := map[string]string{}
-	for _, n := range []string{"ANTHROPIC_API_KEY", "GITHUB_TOKEN", "SY_TEST_PASS", "SY_TEST_NOT_NAMED"} {
+	for _, n := range []string{"ANTHROPIC_API_KEY", "GITHUB_TOKEN", "RW_TEST_PASS", "RW_TEST_NOT_NAMED"} {
 		if v, ok := os.LookupEnv(n); ok {
 			env[n] = v
 		}
 	}
 	data, _ := json.Marshal(map[string]any{"args": args, "env": env, "stdin": stdin})
 	os.WriteFile(dump, data, 0o600)
-	switch os.Getenv("SY_FAKE_DOCKER_MODE") {
+	switch os.Getenv("RW_FAKE_DOCKER_MODE") {
 	case "tamper":
 		// Write a submodule's .git in /work, as an agent could.
 		for _, a := range args {
@@ -61,12 +61,12 @@ func runFakeDocker() int {
 			}
 		}
 	case "noimage":
-		fmt.Fprintln(os.Stderr, "Unable to find image 'switchyard-sandbox:latest' locally")
-		fmt.Fprintln(os.Stderr, "docker: Error response from daemon: pull access denied for switchyard-sandbox, repository does not exist or may require 'docker login'")
+		fmt.Fprintln(os.Stderr, "Unable to find image 'relayweft-sandbox:latest' locally")
+		fmt.Fprintln(os.Stderr, "docker: Error response from daemon: pull access denied for relayweft-sandbox, repository does not exist or may require 'docker login'")
 		return 125
 	case "hang":
 		fmt.Println(`{"type":"system","subtype":"init","session_id":"s-hang","model":"m"}`)
-		io.Copy(io.Discard, os.Stdin) // sy keeps it open: until killed
+		io.Copy(io.Discard, os.Stdin) // rw keeps it open: until killed
 		time.Sleep(time.Minute)
 		return 1
 	}
@@ -93,14 +93,14 @@ func sandboxedClaude(t *testing.T, mode string) (*Exec, string) {
 	old := sandbox.LookPath
 	sandbox.LookPath = func(string) (string, error) { return exe, nil }
 	t.Cleanup(func() { sandbox.LookPath = old })
-	cache := t.TempDir() // sy's sandbox state goes here, not into your cache
+	cache := t.TempDir() // rw's sandbox state goes here, not into your cache
 	t.Setenv("LOCALAPPDATA", cache)
 	t.Setenv("XDG_CACHE_HOME", cache)
 	dump := filepath.Join(t.TempDir(), "dump.json")
-	t.Setenv("SY_FAKE_DOCKER", dump)
-	t.Setenv("SY_FAKE_DOCKER_MODE", mode)
+	t.Setenv("RW_FAKE_DOCKER", dump)
+	t.Setenv("RW_FAKE_DOCKER_MODE", mode)
 	cfg := config.Default()
-	cfg.Sandbox = config.SandboxCfg{Mode: "docker", Env: []string{"SY_TEST_PASS"}}
+	cfg.Sandbox = config.SandboxCfg{Mode: "docker", Env: []string{"RW_TEST_PASS"}}
 	pc := cfg.Providers[event.Claude]
 	// Not installed here: in a sandbox the CLI comes from the image.
 	pc.Command = `C:\nowhere\claude-not-installed.cmd`
@@ -128,8 +128,8 @@ func readDockerDump(t *testing.T, path string) dockerDump {
 func TestExecSandboxed(t *testing.T) {
 	x, dump := sandboxedClaude(t, "ok")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-1")
-	t.Setenv("SY_TEST_PASS", "pass-1")
-	t.Setenv("SY_TEST_NOT_NAMED", "nope")
+	t.Setenv("RW_TEST_PASS", "pass-1")
+	t.Setenv("RW_TEST_NOT_NAMED", "nope")
 	t.Setenv("GITHUB_TOKEN", "ghs_secret")
 	dir := t.TempDir()
 	var c collector
@@ -155,17 +155,17 @@ func TestExecSandboxed(t *testing.T) {
 		t.Errorf("prompt = %q", d.Stdin)
 	}
 	joined := strings.Join(d.Args, " ")
-	for _, w := range []string{"--entrypoint sh", "-e SY_TEST_PASS", "-e ANTHROPIC_API_KEY", "sy-sandbox /sy/run/stdin claude-not-installed -p --output-format stream-json", "target=/work"} {
+	for _, w := range []string{"--entrypoint sh", "-e RW_TEST_PASS", "-e ANTHROPIC_API_KEY", "rw-sandbox /rw/run/stdin claude-not-installed -p --output-format stream-json", "target=/work"} {
 		if !strings.Contains(joined, w) {
 			t.Errorf("args lack %q: %s", w, joined)
 		}
 	}
-	for _, bad := range []string{"sk-ant-1", "pass-1", "ghs_secret", "GITHUB_TOKEN", "SY_TEST_NOT_NAMED", "target=/work,readonly"} {
+	for _, bad := range []string{"sk-ant-1", "pass-1", "ghs_secret", "GITHUB_TOKEN", "RW_TEST_NOT_NAMED", "target=/work,readonly"} {
 		if strings.Contains(joined, bad) {
 			t.Errorf("args have %q: %s", bad, joined)
 		}
 	}
-	if d.Env["SY_TEST_PASS"] != "pass-1" || d.Env["ANTHROPIC_API_KEY"] != "sk-ant-1" {
+	if d.Env["RW_TEST_PASS"] != "pass-1" || d.Env["ANTHROPIC_API_KEY"] != "sk-ant-1" {
 		t.Errorf("named variables did not reach the runtime: %v", d.Env)
 	}
 	if _, ok := d.Env["GITHUB_TOKEN"]; ok {
@@ -234,7 +234,7 @@ func TestExecSandboxCancel(t *testing.T) {
 		t.Errorf("result = %+v", res)
 	}
 	calls, _ := os.ReadFile(dump + ".calls")
-	if !strings.Contains(string(calls), "kill sy-") || !strings.Contains(string(calls), "rm -f sy-") {
+	if !strings.Contains(string(calls), "kill rw-") || !strings.Contains(string(calls), "rm -f rw-") {
 		t.Errorf("no docker kill and rm on cancel: %q", calls)
 	}
 
@@ -244,7 +244,7 @@ func TestExecSandboxCancel(t *testing.T) {
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "timed out") {
 		t.Errorf("timeout: %+v", res)
 	}
-	if calls, _ := os.ReadFile(dump + ".calls"); !strings.Contains(string(calls), "kill sy-") {
+	if calls, _ := os.ReadFile(dump + ".calls"); !strings.Contains(string(calls), "kill rw-") {
 		t.Errorf("no docker kill on timeout: %q", calls)
 	}
 }
@@ -259,7 +259,7 @@ func TestExecSandboxMCP(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	d := readDockerDump(t, dump)
-	if !hasSeq(d.Args, "--mcp-config", sandbox.MCPDir+"/mcp.json") || !slices.ContainsFunc(d.Args, func(a string) bool { return strings.HasSuffix(a, ",target=/sy/mcp,readonly") }) {
+	if !hasSeq(d.Args, "--mcp-config", sandbox.MCPDir+"/mcp.json") || !slices.ContainsFunc(d.Args, func(a string) bool { return strings.HasSuffix(a, ",target=/rw/mcp,readonly") }) {
 		t.Errorf("MCP config not in the container: %q", d.Args)
 	}
 }
@@ -303,7 +303,7 @@ func TestExecSandboxSubmoduleTamperFails(t *testing.T) {
 	}
 }
 
-// An MCP server that names sy's forge token would take it into the
+// An MCP server that names rw's forge token would take it into the
 // container (in its config file or environment): refused there.
 func TestExecSandboxRefusesMCPForgeToken(t *testing.T) {
 	x, dump := sandboxedClaude(t, "ok")
@@ -319,7 +319,7 @@ func TestExecSandboxRefusesMCPForgeToken(t *testing.T) {
 	}
 }
 
-// In sy's sandbox Codex's own sandbox is off: it needs kernel features
+// In rw's sandbox Codex's own sandbox is off: it needs kernel features
 // containers block, and the container is the sandbox.
 func TestCodexArgsSandboxed(t *testing.T) {
 	pc := config.Default().Providers[event.Codex]
@@ -334,6 +334,6 @@ func TestCodexArgsSandboxed(t *testing.T) {
 		}
 	}
 	if args := CodexArgs(pc, Spec{ReadOnly: true}); !hasSeq(args, "--sandbox", "read-only") {
-		t.Errorf("without sy's sandbox: %q", args)
+		t.Errorf("without rw's sandbox: %q", args)
 	}
 }

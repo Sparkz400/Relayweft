@@ -1,4 +1,4 @@
-module github.com/sparkz400/switchyard
+module github.com/sparkz400/relayweft
 
 go 1.26.0
 

@@ -1,0 +1,32 @@
+{
+    "version": "0.2.0",
+    "description": "Windows-first terminal app that routes coding work between the Codex CLI and Claude Code.",
+    "homepage": "https://github.com/sparkz400/relayweft",
+    "license": "MIT",
+    "notes": "Run `rw doctor` to check the codex and claude CLIs. Update with `scoop update rw`.",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/sparkz400/relayweft/releases/download/v0.2.0/rw-windows-amd64.exe#/rw.exe",
+            "hash": "4c30f8e44fa47bdd5f37a72fbcce2f8af66d0edcccf1e5b8f342725cff06b293"
+        },
+        "arm64": {
+            "url": "https://github.com/sparkz400/relayweft/releases/download/v0.2.0/rw-windows-arm64.exe#/rw.exe",
+            "hash": "5b6c1c24b4a8252310054bcb966da7f7ddef77f6bae297473884c5219e070221"
+        }
+    },
+    "bin": "rw.exe",
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/sparkz400/relayweft/releases/download/v$version/rw-windows-amd64.exe#/rw.exe"
+            },
+            "arm64": {
+                "url": "https://github.com/sparkz400/relayweft/releases/download/v$version/rw-windows-arm64.exe#/rw.exe"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/checksums.txt"
+        }
+    }
+}

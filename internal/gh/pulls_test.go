@@ -26,7 +26,7 @@ func pullsAPI(t *testing.T) (*httptest.Server, *[]map[string]any) {
 		case r.Method == "GET" && p == "/repos/o/r/pulls/7" && r.Header.Get("Accept") == "application/vnd.github.diff":
 			io.WriteString(w, "diff --git a/x b/x\n")
 		case r.Method == "GET" && p == "/repos/o/r/pulls/7":
-			io.WriteString(w, `{"number":7,"state":"closed","merged":true,"user":{"login":"me"},"head":{"ref":"sy/x","sha":"abc","repo":{"full_name":"o/r"}},"base":{"ref":"main","sha":"def"}}`)
+			io.WriteString(w, `{"number":7,"state":"closed","merged":true,"user":{"login":"me"},"head":{"ref":"rw/x","sha":"abc","repo":{"full_name":"o/r"}},"base":{"ref":"main","sha":"def"}}`)
 		case r.Method == "GET" && p == "/repos/o/r/commits/abc/check-runs":
 			page := r.URL.Query().Get("page")
 			var runs []string

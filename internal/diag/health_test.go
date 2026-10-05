@@ -86,8 +86,8 @@ func TestHangDetected(t *testing.T) {
 
 func TestPeaks(t *testing.T) {
 	var p Peaks
-	p.merge(Peaks{CPU: 0.5, CPUOK: true, MemFree: 4 << 30, MemTotal: 16 << 30, MemOK: true, SyMem: 50 << 20, Goroutines: 10})
-	p.merge(Peaks{CPU: 0.9, CPUOK: true, MemFree: 8 << 30, MemTotal: 16 << 30, MemOK: true, SyMem: 40 << 20, Goroutines: 30})
+	p.merge(Peaks{CPU: 0.5, CPUOK: true, MemFree: 4 << 30, MemTotal: 16 << 30, MemOK: true, RwMem: 50 << 20, Goroutines: 10})
+	p.merge(Peaks{CPU: 0.9, CPUOK: true, MemFree: 8 << 30, MemTotal: 16 << 30, MemOK: true, RwMem: 40 << 20, Goroutines: 30})
 	kv := p.kv()
 	want := []any{"cpu", 90, "memfree_mb", uint64(4096), "memtotal_mb", uint64(16384), "symem_mb", uint64(50), "goroutines", 30}
 	if len(kv) != len(want) {

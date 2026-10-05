@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparkz400/switchyard/internal/canon"
-	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/relayweft/internal/canon"
+	"github.com/sparkz400/relayweft/internal/event"
 )
 
 // A Codex follow-up or interrupted step resumed in a pool worktree:
@@ -46,13 +46,13 @@ func TestCodexResumeRunsInItsFolder(t *testing.T) {
 // Recorded from a real Claude Code 2.1.288 on Windows (4 Oct 2026), haiku
 // at low effort, in a git worktree: the agent was asked to write a.txt,
 // b.txt and c.txt one at a time and was killed (taskkill /F /T) right after
-// it wrote a.txt, as when sy dies mid-step. claude_real_midstep_resume is
+// it wrote a.txt, as when rw dies mid-step. claude_real_midstep_resume is
 // `claude -p ... --resume <that session>` started in the same worktree
-// with sy's interrupted-step prompt: it read a.txt instead of writing it
+// with rw's interrupted-step prompt: it read a.txt instead of writing it
 // again, then wrote b.txt and c.txt. (A resume started from the main
 // worktree of the same repo also found the session in this version, but
 // with the main tree as its folder while its history names the worktree's
-// absolute paths: sy resumes in the folder the agent ran in.) The init
+// absolute paths: rw resumes in the folder the agent ran in.) The init
 // lines are trimmed of the recording machine's tools and paths.
 func TestClaudeRealKilledAndResumed(t *testing.T) {
 	const session = "9c70a986-7bea-482d-8acd-5e50dff8f86b"
@@ -87,12 +87,12 @@ func TestClaudeRealKilledAndResumed(t *testing.T) {
 }
 
 // Exec reports the session id through Spec.OnSession as soon as the CLI
-// prints it, while the agent still works: sy saves it in the task state,
-// so a resume after sy died mid-step can continue the session.
+// prints it, while the agent still works: rw saves it in the task state,
+// so a resume after rw died mid-step can continue the session.
 func TestExecReportsSessionEarly(t *testing.T) {
 	pc, det := providerCfg(t, event.Claude)
 	fakeExe(t, &pc, "claude_real_killed.jsonl", 0, "")
-	pc.Env["SY_FAKE_SLEEP"] = "60000" // still working after its first lines
+	pc.Env["RW_FAKE_SLEEP"] = "60000" // still working after its first lines
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var mu sync.Mutex
