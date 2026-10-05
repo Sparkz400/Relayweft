@@ -41,10 +41,10 @@ the two modes alternate in time.
   25s and 16k fresh tokens (≈$0.21) per task, against about 50s and 27k
   routed.
 - **Changes made from this:**
-  - Routine words now count only in the step's title or in a short
-    prompt (under 25 words). A long prompt that mentions the readme in
-    passing no longer moves a step down. Hard words still count anywhere:
-    moving up is the safe mistake.
+  - Routine words now count only in the step's title (in the prompt
+    only for a step without a title). A prompt that mentions the readme
+    or "keep the comments" in passing no longer moves a step down. Hard
+    words still count anywhere: moving up is the safe mistake.
   - `sy bench` printed "cancelling the bench... (Ctrl+C again to force
     quit)" at the end of every normal run. Fixed.
 - **Still open:** tiers can only pay off where steps differ: real
@@ -121,8 +121,10 @@ No step escalated, no provider switched at its limit and the judge never
 ran. So `sy tune`'s rates rest on almost no failures. Its thresholds now
 depend on the number of runs: a rate counts only when the lower end of
 its 90% confidence interval is above the threshold. 2 failures in 5 runs
-no longer flag a route; 3 do. A provider must run out on 2 days, not in
-one afternoon.
+no longer flag a route; 3 do. A provider must run out twice, at least
+12 hours apart, not in one afternoon or one evening past midnight.
+Escalations keep their plain rate: their minimum of 3 already guards
+small samples.
 
 ## Caveats
 

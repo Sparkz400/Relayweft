@@ -2,6 +2,7 @@ package sessionlog
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,53 @@ func TestClearlyAbove(t *testing.T) {
 	}
 	if got := wilsonLower(0, 10); got != 0 {
 		t.Errorf("wilsonLower(0, 10) = %v", got)
+	}
+	// More hits than samples (records that do not match their total)
+	// count as n of n, never as NaN (found in review).
+	if got, want := wilsonLower(7, 5), wilsonLower(5, 5); got != want || math.IsNaN(got) {
+		t.Errorf("wilsonLower(7, 5) = %v, want %v", got, want)
+	}
+	if !clearlyAbove(7, 5, failFloor) {
+		t.Error("7 of 5 is not clearly above")
+	}
+	if got := wilsonUpper(5, 5); got != 1 {
+		t.Errorf("wilsonUpper(5, 5) = %v", got)
+	}
+}
+
+// stepDecision is one decision of a step attempt.
+func stepDecision(step, role string, attempt int, reason string) Record {
+	return Record{Type: TypeDecision, TS: t0, Session: "s", TaskID: "t", Step: step, Attempt: attempt,
+		Role: role, Provider: "codex", Model: "gpt", Rule: "default", Reason: reason}
+}
+
+// Escalations count steps, not records, and a step that started on
+// another role counts in the role it escalated from (found in review).
+func TestEscalationsCountSteps(t *testing.T) {
+	esc := "same error twice: worker -> worker_high"
+	var recs []Record
+	for i := 0; i < 10; i++ {
+		recs = append(recs, stepDecision(fmt.Sprint("s", i), "worker", 1, "default worker route"))
+	}
+	for a := 2; a <= 4; a++ {
+		recs = append(recs, stepDecision("s0", "worker_high", a, esc))
+	}
+	if got := titles(escalations(recs)); got != "" {
+		t.Errorf("one step repeating its error three times: %q", got)
+	}
+
+	recs = nil
+	for i := 0; i < 5; i++ {
+		recs = append(recs, stepDecision(fmt.Sprint("w", i), "worker", 1, "default worker route"))
+	}
+	for i := 0; i < 5; i++ {
+		s := fmt.Sprint("h", i)
+		recs = append(recs, stepDecision(s, "worker_high", 1, "touches 9 files"),
+			stepDecision(s, "planner", 2, "same error twice: worker -> planner"))
+	}
+	got := escalations(recs)
+	if len(got) != 1 || !strings.Contains(got[0].Detail, "5 of 10 worker steps") {
+		t.Errorf("escalations from worker_high starts: %+v", got)
 	}
 }
 
@@ -161,6 +209,14 @@ func TestFinalReviews(t *testing.T) {
 	}
 }
 
+// atTimes puts the records at from, from+step, from+2*step, ...
+func atTimes(recs []Record, from time.Time, step time.Duration) []Record {
+	for i := range recs {
+		recs[i].TS = from.Add(time.Duration(i) * step)
+	}
+	return recs
+}
+
 // nextDay moves the first n records a day later.
 func nextDay(recs []Record, n int) []Record {
 	for i := 0; i < n; i++ {
@@ -181,6 +237,11 @@ func TestLimitPressure(t *testing.T) {
 			"claude keeps running out of quota /prefer explorer codex,/prefer judge codex"},
 		{"quota-preempt counts", append(append([]Record{}, cheap...), nextDay(decisions(5, "quota-preempt", "worker", "codex", ""), 1)...), "claude keeps running"},
 		{"one bad afternoon", append(append([]Record{}, cheap...), decisions(20, "limit-fallback", "worker", "codex", "")...), ""},
+		// One evening past midnight is one episode, not two days (found in review).
+		{"one evening past midnight", append(append([]Record{}, cheap...), atTimes(decisions(6, "limit-fallback", "worker", "codex", ""),
+			time.Date(2026, 9, 1, 23, 0, 0, 0, time.Local), 30*time.Minute)...), ""},
+		{"13 hours apart", append(append([]Record{}, cheap...), atTimes(decisions(6, "limit-fallback", "worker", "codex", ""),
+			time.Date(2026, 9, 1, 20, 0, 0, 0, time.Local), 13*time.Hour)...), "claude keeps running"},
 		{"too few", append(append([]Record{}, cheap...), nextDay(decisions(4, "limit-fallback", "worker", "codex", ""), 2)...), ""},
 		{"cheap roles already elsewhere", nextDay(decisions(5, "limit-fallback", "worker", "claude", ""), 2), ""},
 	} {
@@ -293,10 +354,16 @@ func TestRoutedVsSingle(t *testing.T) {
 		recs []Record
 		want string
 	}{
-		{"routed worse", append(tasks("routed", 5, 3, false), tasks("single", 5, 5, false)...), "high: routed tasks succeed less often"},
-		{"mode from task_start", append(tasks("routed", 5, 3, true), tasks("single", 5, 5, true)...), "high: routed"},
+		{"routed worse", append(tasks("routed", 10, 2, false), tasks("single", 10, 10, false)...), "high: routed tasks succeed less often"},
+		{"mode from task_start", append(tasks("routed", 10, 2, true), tasks("single", 10, 10, true)...), "high: routed"},
+		{"15 vs 20 of 20", append(tasks("routed", 20, 15, false), tasks("single", 20, 20, false)...), "high: routed"},
 		{"one run apart is noise", append(tasks("routed", 5, 3, false), tasks("single", 5, 4, false)...), ""},
-		{"16 vs 18 of 20", append(tasks("routed", 20, 16, false), tasks("single", 20, 18, false)...), "high: routed"},
+		// single is a sample too: a perfect baseline does not make one
+		// routed failure an alarm (found in review).
+		{"4 vs 5 of 5", append(tasks("routed", 5, 4, false), tasks("single", 5, 5, false)...), ""},
+		{"9 vs 10 of 10", append(tasks("routed", 10, 9, false), tasks("single", 10, 10, false)...), ""},
+		{"19 of 20 vs 5 of 5", append(tasks("routed", 20, 19, false), tasks("single", 5, 5, false)...), ""},
+		{"16 vs 18 of 20", append(tasks("routed", 20, 16, false), tasks("single", 20, 18, false)...), ""},
 		{"routed equal", append(tasks("routed", 5, 4, false), tasks("single", 5, 4, false)...), ""},
 		{"too few single", append(tasks("routed", 5, 0, false), tasks("single", 4, 4, false)...), ""},
 	} {
@@ -309,8 +376,8 @@ func TestRoutedVsSingle(t *testing.T) {
 
 func TestSuggestFilterAndOrder(t *testing.T) {
 	recs := append(runs("explorer", "claude", "opus", "", 5, 0), runs("worker", "codex", "gpt", "medium", 10, 4)...)
-	recs = append(recs, tasks("routed", 5, 3, false)...)
-	recs = append(recs, tasks("single", 5, 5, false)...)
+	recs = append(recs, tasks("routed", 10, 2, false)...)
+	recs = append(recs, tasks("single", 10, 10, false)...)
 	got := Suggest(recs, Filter{})
 	if len(got) != 3 || got[0].Severity != SevHigh || got[1].Severity != SevMedium || got[2].Severity != SevInfo {
 		t.Fatalf("order:\n%s", titles(got))

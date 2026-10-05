@@ -46,6 +46,9 @@ func TestTiersByDifficulty(t *testing.T) {
 			Prompt: "parse_line in inventory/csvparse.py drops trailing empty fields. Change the split so that \"a,b,,\" gives four fields. " +
 				"Do not rename the function and keep its docstring. Add a unit test in tests/test_csvparse.py for the case.", Files: []string{"inventory/csvparse.py"}},
 			event.RoleWorker, TierStandard, event.RoleWorker},
+		{"routine word in a short prompt stays standard", Step{Kind: KindEdit, Title: "Fix off-by-one in pagination",
+			Prompt: "The last page repeats one item. Fix the loop bound in paginate, keep the comments."},
+			event.RoleWorker, TierStandard, event.RoleWorker},
 		{"routine title goes fast", Step{Kind: KindEdit, Title: "Fix the typos in the README",
 			Prompt: "The README has several spelling mistakes in the install and usage sections. Correct them without changing the meaning, " +
 				"the headings or the code blocks, and keep the line breaks as they are.", Files: []string{"README.md"}},

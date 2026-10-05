@@ -97,14 +97,14 @@ func Difficulty(s Step, role string) (float64, []string) {
 		add(math.Min(0.05*float64(n-2), 0.15), fmt.Sprintf("%d files", n))
 	}
 	text := s.Title + " " + s.Prompt
-	// A routine word moves a step down only when the step is about it: in
-	// the title, or in a short prompt. Planners write long prompts that
-	// mention the readme or the docstrings in passing (the tiers bench).
+	// A routine word moves a step down only when the step is about it,
+	// that is in its title (the prompt only for a step without one).
+	// Prompts mention the readme or "keep the comments" in passing, even
+	// short ones (the tiers bench sent a logic fix to the fast tier).
 	routine := s.Title
 	switch w := len(strings.Fields(text)); {
 	case w < 25:
 		add(-0.1, "short")
-		routine = text
 	case w > 250:
 		add(0.1, fmt.Sprintf("long (%d words)", w))
 	}
