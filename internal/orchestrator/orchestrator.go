@@ -589,6 +589,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
 	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
+	poolCap.Store(int64(poolSize(cfg)))
 	snapshotMaxFile.Store(int64(max(0, cfg.Orchestrator.SnapshotMaxFileMB)) << 20)
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
@@ -771,6 +772,10 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		plan = *t.state.Plan
 		o.logf("%s", t.state.resumeSummary())
 		for _, s := range t.state.UnfinishedSaved() {
+			if r, ok := t.state.runningStep(s.Step); ok && r.Kept != "" {
+				o.logf("%s; the step lands its best-of winner's kept work", s.Hint())
+				continue
+			}
 			o.logf("%s; the step starts over from your tree", s.Hint())
 		}
 		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
@@ -1347,9 +1352,33 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 	loc := stepLoc{dir: slotWorkDir(s.path, rp.root, mainDir), slot: s.path, base: base}
 	r := o.runStep(ctx, t, st, deps, loc, prompt)
 	if !r.ok {
+		if ctx.Err() != nil {
+			o.dropCleanHold(t, st.ID, loc)
+		}
 		return r
 	}
 	return o.landSlot(ctx, t, rp, st, deps, loc, r, true)
+}
+
+// dropCleanHold: a step cancelled while its agent worked stays on record as
+// running, and its worktree held, so sy resume --force can continue it
+// there with its edits. When the agent changed nothing there, nothing is
+// worth a held full checkout: the step is forgotten as running and the
+// worktree is free again (a resume starts the step over). Every cancelled
+// task kept a worktree before, and the pool grew by one per cancel.
+func (o *Orchestrator) dropCleanHold(t *task, id string, loc stepLoc) {
+	r, ok := t.state.runningStep(id)
+	if !ok || loc.slot == "" || !samePath(r.Slot, loc.slot) || r.Kept != "" {
+		return
+	}
+	wg := git{loc.slot}
+	if head, err := wg.out("rev-parse", "-q", "--verify", "HEAD"); err != nil || head != loc.base {
+		return // it committed, or cannot tell: keep it
+	}
+	if st, err := wg.out("status", "--porcelain", "--untracked-files=all"); err != nil || strings.TrimSpace(st) != "" {
+		return
+	}
+	t.state.dropRunning(id, loc.slot)
 }
 
 // slotNotes passes on what finding a pool worktree did (slot.notes): to

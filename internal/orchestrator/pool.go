@@ -4,16 +4,19 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/sparkz400/switchyard/internal/canon"
+	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/sysload"
@@ -131,8 +134,24 @@ func acquireSlot(root, commit string) (*slot, error) {
 	}
 	var firstErr error
 	var notes []string
+	evicted := false
 	for i := 0; i < maxPoolSlots; i++ {
 		path := filepath.Join(dir, strconv.Itoa(i))
+		if cap := int(poolCap.Load()); cap > 0 && !evicted && !slotExists(path) && countSlots(dir) >= cap {
+			// The pool is at its size and every slot is busy or held:
+			// before it grows by another full checkout, the oldest held
+			// worktree no sy is using is given up, its edits saved first.
+			evicted = true
+			s, held := evictHeld(root, dir, commit, &notes)
+			if s != nil {
+				return s, nil
+			}
+			if held > 0 {
+				msg := fmt.Sprintf("the worktree pool of this repo is at its size (%d), and %d worktree(s) holding interrupted tasks' edits cannot be given up now (their tasks are running, or their edits could not be saved): adding another one. sy history lists the interrupted tasks; sy resume finishes them, sy clean frees them", cap, held)
+				diag.Logf("pool: %s", msg)
+				notes = append(notes, msg)
+			}
+		}
 		if held, _ := holdState(path); held {
 			// It holds an interrupted step's edits. Checked before
 			// locking too: a resume claiming it must not find it locked.
@@ -169,6 +188,107 @@ func acquireSlot(root, commit string) (*slot, error) {
 		return nil, fmt.Errorf("no usable pool worktree: %w%s", firstErr, also)
 	}
 	return nil, fmt.Errorf("all %d pool worktrees are in use%s", maxPoolSlots, also)
+}
+
+// poolCap is the pool size up to which acquireSlot creates new worktrees
+// before it gives up a held one (orchestrator.max_threads + 1, set per
+// task; 0 = no cap). Each slot is a full checkout, and every task that is
+// interrupted or cancelled while an agent works keeps its worktree held:
+// without a cap the pool grew by one checkout per such task.
+var poolCap atomic.Int64
+
+// poolSize is the pool size a task with cfg works with: one worktree per
+// thread and one more (the stress test's bound). Best-of candidates keep
+// their worktrees until the pick, so with best-of on each thread may need
+// n of them.
+func poolSize(cfg *config.Config) int {
+	threads := max(1, cfg.Orchestrator.MaxThreads)
+	if b := cfg.Routing.BestOf; b.When != "" && b.When != config.BestOfOff {
+		return threads*max(2, min(b.N, config.MaxBestOf)) + 1
+	}
+	return threads + 1
+}
+
+func slotExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
+}
+
+// countSlots counts the slot directories in a pool.
+func countSlots(dir string) int {
+	n := 0
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err == nil && e.IsDir() {
+			n++
+		}
+	}
+	return n
+}
+
+// evictHeld gives up the oldest held worktree of the pool in dir that no
+// sy is using and reuses it at commit: like an expired hold, its half-done
+// edits are saved on a branch first (saveHeldEdits), and the task's state
+// and sy history say where. A worktree whose task a sy is running, or
+// whose edits cannot be saved, is left as it is. held is how many held
+// worktrees there were.
+func evictHeld(root, dir, commit string, notes *[]string) (s *slot, held int) {
+	type cand struct {
+		path string
+		at   time.Time
+	}
+	var cands []cand
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil || !e.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		i := checkHold(path)
+		if !i.held {
+			continue
+		}
+		held++
+		at := i.run.Started
+		if at.IsZero() {
+			if st, err := os.Stat(holdPath(path)); err == nil {
+				at = st.ModTime()
+			}
+		}
+		cands = append(cands, cand{path, at})
+	}
+	sort.Slice(cands, func(a, b int) bool { return cands[a].at.Before(cands[b].at) })
+	for _, c := range cands {
+		unlock, ok := lockSlot(c.path)
+		if !ok {
+			continue // in use (a resume claiming it, a leftover agent)
+		}
+		i := checkHold(c.path) // again, under the slot lock
+		if !i.held {
+			unlock()
+			continue
+		}
+		saved, err := saveHeldEdits(c.path, i, "another task needed its worktree (the pool is full)")
+		if err != nil {
+			if !errors.Is(err, errTaskRunning) {
+				diag.Logf("pool: %s not given up: its edits could not be saved: %v", c.path, err)
+			}
+			unlock()
+			continue
+		}
+		os.Remove(holdPath(c.path))
+		if saved != nil {
+			*notes = append(*notes, saved.Hint())
+		}
+		if err := prepareSlot(root, c.path, commit); err != nil {
+			unlock()
+			diag.Logf("pool: slot %s unusable: %v", c.path, err)
+			continue
+		}
+		touch(c.path)
+		return &slot{path: c.path, unlock: unlock, untrack: proc.TrackDir(c.path, pidFile(c.path)), notes: *notes}, held
+	}
+	return nil, held
 }
 
 // prepareSlot makes path a clean worktree at commit, reusing it when it is

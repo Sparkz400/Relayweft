@@ -32,8 +32,13 @@ import (
 //     a slot would delete the edits.
 //   - A resume claims the worktree only if the mark is still its own run's
 //     (same token): any other use of the worktree replaces or removes it.
+//   - The pool does not grow past its size (poolSize) for holds: when it
+//     is full, the oldest held worktree whose task no sy runs is given up
+//     (evictHeld). A step cancelled before its agent changed anything
+//     holds nothing (dropCleanHold).
 //   - Before a hold that expired (or whose task's state is gone) is
-//     released, and before sy clean removes a held worktree, the half-done
+//     released, before a full pool gives one up, and before sy clean
+//     removes a held worktree, the half-done
 //     edits in it are saved on a branch (sy/<task>/<step>-unfinished, like
 //     rejected work) and recorded in the task's state (Saved), so sy history
 //     and sy resume can say where they are. Only a new branch is created:
@@ -304,7 +309,12 @@ func saveHeldEdits(slot string, i holdInfo, why string) (*SavedEdits, error) {
 		stateMu.Lock()
 		st.Saved = append(st.Saved, *saved)
 		if r, ok := st.Running[step]; ok && samePath(r.Slot, slot) {
-			delete(st.Running, step) // its edits are on the branch now
+			// A best-of winner stays on record: its work is kept as a
+			// commit, and a resume that cannot claim the worktree lands
+			// that instead (landKept).
+			if r.Kept == "" {
+				delete(st.Running, step) // its edits are on the branch now
+			}
 		}
 		stateMu.Unlock()
 		err = st.saveErr()
