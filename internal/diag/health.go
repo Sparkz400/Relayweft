@@ -60,7 +60,7 @@ func openHealth(d string) {
 	}
 	path := filepath.Join(d, healthFile)
 	if st, err := os.Stat(path); err == nil && st.Size() > healthMaxSize {
-		os.Rename(path, path+".1") // fails on Windows while another rw has it open: keep appending
+		_ = os.Rename(path, path+".1") // fails on Windows while another rw has it open: keep appending
 	}
 	if file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 		hf = file
@@ -82,7 +82,7 @@ func Health(kind string, kv ...any) {
 	mu.Lock()
 	defer mu.Unlock()
 	if hf != nil {
-		hf.WriteString(line)
+		_, _ = hf.WriteString(line)
 	}
 }
 
@@ -139,7 +139,7 @@ func End(err error) {
 	}
 	Health("end", kv...)
 	if path != "" {
-		debug.SetCrashOutput(nil, debug.CrashOptions{})
+		_ = debug.SetCrashOutput(nil, debug.CrashOptions{})
 		os.Remove(path)
 	}
 	Sync()
@@ -389,7 +389,7 @@ func ParseRecord(line string) (Record, bool) {
 		if !ok || key == "" || strings.ContainsAny(key, " \"") {
 			break
 		}
-		val := after
+		var val string
 		if strings.HasPrefix(after, `"`) {
 			q, err := strconv.QuotedPrefix(after)
 			if err != nil {

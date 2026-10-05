@@ -70,7 +70,7 @@ func (o *Orchestrator) loadSessions() {
 		return
 	}
 	if data, err := os.ReadFile(sessionsPath(o.opts.Dir)); err == nil {
-		json.Unmarshal(data, &o.sessions)
+		_ = json.Unmarshal(data, &o.sessions) // unreadable: no sessions to resume, start afresh
 	}
 }
 
@@ -80,14 +80,14 @@ func (o *Orchestrator) saveSessions() {
 		return
 	}
 	p := sessionsPath(o.opts.Dir)
-	os.MkdirAll(filepath.Dir(p), 0o755)
+	_ = os.MkdirAll(filepath.Dir(p), 0o755) // WriteFile below fails then
 	data, err := json.MarshalIndent(o.sessions, "", "  ")
 	if err != nil {
 		return
 	}
 	tmp := fmt.Sprintf("%s.%d.tmp", p, os.Getpid())
 	if os.WriteFile(tmp, data, 0o644) == nil {
-		os.Rename(tmp, p)
+		_ = os.Rename(tmp, p)
 	}
 }
 

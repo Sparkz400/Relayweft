@@ -27,7 +27,7 @@ func TestSessionIDsAreUnique(t *testing.T) {
 		t.Errorf("session id %q does not match %s", a.Session(), re)
 	}
 	var w *Writer
-	if w.Session() != w.Session() {
+	if first, second := w.Session(), w.Session(); first != second {
 		t.Error("nil writer's session id changes between calls")
 	}
 }

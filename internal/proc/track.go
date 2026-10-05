@@ -182,7 +182,7 @@ func ForgetContainer(dir, runtime, name string) {
 		os.Remove(file)
 		return
 	}
-	os.WriteFile(file, []byte(strings.Join(keep, "\n")+"\n"), 0o644)
+	_ = os.WriteFile(file, []byte(strings.Join(keep, "\n")+"\n"), 0o644) // a stale line only costs a needless rm -f later
 }
 
 // validContainer accepts only the runtimes rw runs and the names it gives
@@ -227,7 +227,7 @@ func RemoveContainer(runtime, name string) bool {
 	cmd.Env = WithoutSecrets(os.Environ())
 	// "No such container" and "cannot connect to the daemon" both mean it
 	// is not running.
-	cmd.Run()
+	_ = cmd.Run()
 	return ctx.Err() == nil
 }
 

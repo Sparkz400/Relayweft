@@ -43,13 +43,6 @@ type checkSite struct {
 	label string // "repo: " before an extra repo's commands
 }
 
-// verify runs the repo's checks (verify.commands) in the working tree and
-// returns whether all passed plus a report for the reviewer and the fix
-// agent (tail of each failing command's output).
-func (o *Orchestrator) verify(ctx context.Context, t *task) (bool, string) {
-	return o.verifyIn(ctx, t, t, verifyFull)
-}
-
 // verifyRepos runs the checks of every repo of the task, each in its own
 // repo, and also returns the names of the repos whose checks fail ("" is
 // the primary).
@@ -71,7 +64,9 @@ func (o *Orchestrator) verifyRepos(ctx context.Context, t *task, scope verifySco
 	return allOK, b.String(), failing
 }
 
-// verifyIn runs repo r's checks in r (the project folder for the primary).
+// verifyIn runs repo r's checks (verify.commands) in r (the project folder
+// for the primary) and returns whether all passed plus a report for the
+// reviewer and the fix agent (tail of each failing command's output).
 func (o *Orchestrator) verifyIn(ctx context.Context, t, r *task, scope verifyScope) (bool, string) {
 	site := checkSite{dir: o.opts.Dir}
 	if r != t {

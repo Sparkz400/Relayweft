@@ -36,6 +36,22 @@ tar -xzf "$tmp/$tarball" -C "$tmp" nfpm
 nfpm="$tmp/nfpm"
 
 mkdir -p build
+# The shell completion scripts (nfpm.yaml installs them) are the same for
+# every arch: print them with the binary this machine can run.
+case "$(uname -m)" in
+  x86_64 | amd64) host=amd64 ;;
+  aarch64 | arm64) host=arm64 ;;
+  *) host="" ;;
+esac
+if [ -z "$host" ] || [ ! -f "$dist/rw-linux-$host" ]; then
+  echo "the completion scripts need $dist/rw-linux-<this machine's arch> ($(uname -m))" >&2
+  exit 1
+fi
+mkdir -p build/completions
+for shell in bash zsh fish; do
+  "$dist/rw-linux-$host" completion "$shell" > "build/completions/rw.$shell"
+done
+
 for arch in $arches; do
   bin="$dist/rw-linux-$arch"
   if [ ! -f "$bin" ]; then
@@ -50,4 +66,4 @@ for arch in $arches; do
       -f packaging/nfpm.yaml -p "$format" -t "$out"
   done
 done
-rm -f build/rw
+rm -rf build/rw build/completions

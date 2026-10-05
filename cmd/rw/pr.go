@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,8 +126,8 @@ An opened pull request is followed up by rw watch (failed checks, reviews).
 	}
 	var id string
 	rest := args
-	for len(rest) > 0 {
-		fs.Parse(rest)
+	for { // parse at least once, also without arguments
+		parseFlags(fs, rest)
 		if fs.NArg() == 0 {
 			break
 		}
@@ -468,8 +469,10 @@ func aheadCount(root, base string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("no origin/%s to compare HEAD with (git fetch origin)", base)
 	}
-	var n int
-	fmt.Sscanf(strings.TrimSpace(s), "%d", &n)
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list --count: %w", err)
+	}
 	return n, nil
 }
 

@@ -170,7 +170,7 @@ func nulList(paths []string) []byte {
 // checkouts are plumbing. The hooks path is an empty directory.
 func noHooks() []string {
 	dir := filepath.Join(worktreesBase(), "no-hooks")
-	os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0o755) // a missing hooks path runs no hooks either
 	return []string{"-c", "core.hooksPath=" + dir}
 }
 
@@ -269,11 +269,11 @@ func (g git) snapshotSkipping(msg string) (commit string, skipped []string, err 
 	if err != nil {
 		return "", nil, err
 	}
-	args := []string{"commit-tree", strings.TrimSpace(tree), "-m", msg}
+	var parents []string
 	if headErr == nil && head != "" {
-		args = append(args, "-p", head)
+		parents = []string{head}
 	}
-	commit, err = g.commitTree(args...)
+	commit, err = g.commitTree(strings.TrimSpace(tree), parents, msg)
 	return commit, skipped, err
 }
 
@@ -323,15 +323,33 @@ func (g git) copyIndex(dst string) bool {
 	return true
 }
 
-// commitTree runs `git commit-tree` as Relayweft, never signing (commit-tree
-// honours commit.gpgSign, which would prompt or fail): these commits are
-// internal plumbing, never pushed.
-func (g git) commitTree(args ...string) (string, error) {
+// commitTree commits tree with parents and message msg as Relayweft, never
+// signing (commit-tree honours commit.gpgSign, which would prompt or fail):
+// these commits are internal plumbing, never pushed.
+//
+// The message goes in on stdin (-F -), not as an argument: a task text can
+// be longer than Windows allows a command line to be, and nothing in it can
+// be read as an option. It ends with a newline as `-m` would add, so the
+// commit is the same as one made with -m.
+func (g git) commitTree(tree string, parents []string, msg string) (string, error) {
+	args := []string{"commit-tree", tree}
+	for _, p := range parents {
+		args = append(args, "-p", p)
+	}
+	args = append(args, "-F", "-")
+	if msg != "" && !strings.HasSuffix(msg, "\n") {
+		msg += "\n"
+	}
+	return g.asRelayweft([]byte(msg), args...)
+}
+
+// asRelayweft runs a git command that commits, as Relayweft and unsigned.
+func (g git) asRelayweft(stdin []byte, args ...string) (string, error) {
 	env := []string{
 		"GIT_AUTHOR_NAME=Relayweft", "GIT_AUTHOR_EMAIL=relayweft@localhost",
 		"GIT_COMMITTER_NAME=Relayweft", "GIT_COMMITTER_EMAIL=relayweft@localhost",
 	}
-	s, err := g.run(env, nil, append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+	s, err := g.run(env, stdin, append([]string{"-c", "commit.gpgsign=false"}, args...)...)
 	return strings.TrimSpace(s), err
 }
 
@@ -475,7 +493,7 @@ func (g git) commitWork(base, msg string) (slotCommit, error) {
 	res.Changed = tree != baseTree
 	res.Commit = base
 	if res.Changed {
-		if res.Commit, err = g.commitTree("commit-tree", tree, "-p", base, "-m", msg); err != nil {
+		if res.Commit, err = g.commitTree(tree, []string{base}, msg); err != nil {
 			return res, err
 		}
 	}
@@ -588,7 +606,7 @@ func (g git) mergeTreeBase(base, ours, theirs string) (tree string, clean bool, 
 	if err != nil {
 		return "", false, "", err
 	}
-	o2, err := g.commitTree("commit-tree", ot, "-p", base, "-m", "relayweft: tree on top of the step's base")
+	o2, err := g.commitTree(ot, []string{base}, "relayweft: tree on top of the step's base")
 	if err != nil {
 		return "", false, "", err
 	}

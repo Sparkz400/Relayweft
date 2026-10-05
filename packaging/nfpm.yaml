@@ -1,7 +1,8 @@
 # nfpm config for the .deb, .rpm and .apk packages (release.yml builds
 # them). Run it from the repo root with VERSION and ARCH (amd64 or arm64)
-# set and the linux binary for ARCH copied to build/rw (nfpm does not
-# expand variables in file paths):
+# set, the linux binary for ARCH copied to build/rw (nfpm does not
+# expand variables in file paths) and the completion scripts in
+# build/completions (linux-packages.sh does all of this):
 #
 #   cp dist/rw-linux-amd64 build/rw
 #   VERSION=1.2.3 ARCH=amd64 nfpm package -f packaging/nfpm.yaml -p deb \
@@ -28,6 +29,31 @@ contents:
     dst: /usr/bin/rw
     file_info:
       mode: 0755
+  # Shell completion, printed by linux-packages.sh with `rw completion`.
+  # zsh: Debian's fpath has vendor-completions, the others site-functions.
+  - src: build/completions/rw.bash
+    dst: /usr/share/bash-completion/completions/rw
+    file_info:
+      mode: 0644
+  - src: build/completions/rw.zsh
+    dst: /usr/share/zsh/vendor-completions/_rw
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: build/completions/rw.zsh
+    dst: /usr/share/zsh/site-functions/_rw
+    packager: rpm
+    file_info:
+      mode: 0644
+  - src: build/completions/rw.zsh
+    dst: /usr/share/zsh/site-functions/_rw
+    packager: apk
+    file_info:
+      mode: 0644
+  - src: build/completions/rw.fish
+    dst: /usr/share/fish/vendor_completions.d/rw.fish
+    file_info:
+      mode: 0644
   - src: README.md
     dst: /usr/share/doc/relayweft/README.md
     file_info:

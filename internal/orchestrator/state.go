@@ -206,7 +206,7 @@ func (s *TaskState) saveErr() error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 	s.Updated = time.Now()
-	os.MkdirAll(stateDir(), 0o755)
+	_ = os.MkdirAll(stateDir(), 0o755) // writeFileAtomic reports it
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -264,7 +264,10 @@ func (s *TaskState) dropRunning(id, slot string) {
 // the task (checking a hold, recording saved edits), so it is retried
 // briefly.
 func (s *TaskState) lock() (unlock func(), ok bool) {
-	os.MkdirAll(stateDir(), 0o755)
+	if err := os.MkdirAll(stateDir(), 0o755); err != nil {
+		// The lock below fails then and reads as "another rw has it".
+		diag.Logf("task state: %v", err)
+	}
 	return lockRetry(filepath.Join(stateDir(), s.ID+".lock"))
 }
 
@@ -320,6 +323,48 @@ func History(dir string, limit int) []TaskState {
 		}
 		var s TaskState
 		if json.Unmarshal(data, &s) != nil {
+			continue
+		}
+		if dir != "" && !samePath(s.Dir, dir) {
+			continue
+		}
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// recentReads caps the state files Recent reads.
+const recentReads = 40
+
+// Recent is History for shell completion, which runs on every Tab: it
+// reads only the recentReads newest state files (by modification time),
+// so it stays quick however many there are. dir filters by project
+// ("" = all); at most limit states, newest first.
+func Recent(dir string, limit int) []TaskState {
+	files, _ := filepath.Glob(filepath.Join(stateDir(), "*.json"))
+	type file struct {
+		path string
+		mod  time.Time
+	}
+	var fs []file
+	for _, f := range files {
+		if st, err := os.Stat(f); err == nil {
+			fs = append(fs, file{f, st.ModTime()})
+		}
+	}
+	sort.Slice(fs, func(i, j int) bool { return fs[i].mod.After(fs[j].mod) })
+	var out []TaskState
+	for _, f := range fs[:min(len(fs), recentReads)] {
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			continue
+		}
+		var s TaskState
+		if json.Unmarshal(data, &s) != nil || s.ID == "" {
 			continue
 		}
 		if dir != "" && !samePath(s.Dir, dir) {

@@ -440,7 +440,7 @@ the checks and runs the task. An existing config is kept unless you agree
 to replace it (or pass --force); it is backed up first.
 `)
 	}
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
@@ -850,7 +850,9 @@ func writeSetupConfig(path string, on map[string]bool) (backup string, err error
 	if _, _, err := config.Load(path); err != nil {
 		// Put back what was there.
 		if old, rerr := os.ReadFile(backup); backup != "" && rerr == nil {
-			os.WriteFile(path, old, mode)
+			if werr := os.WriteFile(path, old, mode); werr != nil {
+				return backup, fmt.Errorf("the new config does not load (%v), and putting back the old one failed (%v): copy %s over %s; please report this with `rw bugreport`", err, werr, backup, path)
+			}
 		} else if backup == "" {
 			os.Remove(path)
 		}

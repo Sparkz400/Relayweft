@@ -28,9 +28,9 @@ func startAwake() func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		defer close(done)
-		procSetThreadExecutionState.Call(uintptr(esContinuous | esSystemRequired))
+		_, _, _ = procSetThreadExecutionState.Call(uintptr(esContinuous | esSystemRequired))
 		<-stop
-		procSetThreadExecutionState.Call(uintptr(esContinuous))
+		_, _, _ = procSetThreadExecutionState.Call(uintptr(esContinuous))
 	}()
 	return func() {
 		close(stop)

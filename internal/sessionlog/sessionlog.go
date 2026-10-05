@@ -157,7 +157,7 @@ func (w *Writer) Write(r Record) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.f.Write(append(b, '\n'))
+	_, _ = w.f.Write(append(b, '\n')) // a failed log write has nowhere to go
 }
 
 // Close closes the file.

@@ -75,9 +75,10 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **Release v0.2.0** (4 Oct 2026, as Switchyard/`sy`): more providers, `sy health`, model tiers, CI and team mode, self-hosted forges, webhooks, `sy selftest` and the fixes from real use. `sy update` from v0.1.0 to v0.2.0 was run for real (checksum verified). Scoop manifest updated; winget manifests rendered.
   - The repository is public: release downloads, `rw update` (then `sy update`) and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
-- **Release v0.3.0** (not released yet). The first tag run on 5 Oct 2026 failed on a flaky test, which #43 fixed, and that tag points at a commit from before the rename. v0.3.0 brings:
+- **Release v0.3.0** (5 Oct 2026), built with Go 1.26.8. v0.3.0 brings:
   - the **rename to Relayweft (`rw`)**. On its first start, rw copies the Switchyard user folder once. `sy update` cannot install v0.3.0, so v0.2.0 users reinstall once (README, "Upgrading from Switchyard").
   - `rw setup`, best of N, affected tests in fix rounds, the container sandbox, the dashboard, the JetBrains plugin, Homebrew/`.deb`/`.rpm`/`.apk`/AUR packaging, Codex follow-ups in pool worktrees, saved half-done edits, macOS orphan cleanup, and `rw tune` thresholds that account for sample size. Every change had an independent adversarial review before merge, and the 30-minute stress test passes on Ubuntu and Windows.
+- **Next: v0.4.0** (prepared): `rw completion` for bash, zsh, fish and PowerShell; a generated config reference (`docs/config.md`); release provenance, SBOMs and a signed `checksums.txt`; gofmt, golangci-lint and govulncheck in CI; CHANGELOG, CONTRIBUTING, a PR template and a Code of Conduct.
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
@@ -125,7 +126,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - Codex: a usage-limit hit and a logged-out CLI.
 - Real daily use on your Windows PC.
 - Behaviour under heavy load: a big repo, three agents in parallel, hours of use.
-- A ~10-task comparison against a single agent on real, multi-file tasks (`plan.md` §9). The starter set is too small to show it: on its one-file tasks a single agent is faster.
+- A ~10-task comparison against a single agent on real, multi-file tasks ([docs/plan.md §9](docs/plan.md#9-measuring-success)). The starter set is too small to show it: on its one-file tasks a single agent is faster.
 - A macOS notification banner on screen: the runners' screenshots never show one (Notification Center logs it "as banner", but the runner's screen is shared, which may hide banners). Delivery itself is verified.
 - `rw app` in Edge on macOS and Linux (Chrome only), and on a real Linux desktop (GNOME/KDE) rather than Xvfb with fluxbox and dunst.
 - Webhooks to real Slack and Discord (payloads checked against their current docs only).
@@ -177,7 +178,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 2.5 | ✅ **Task history and resume**: the state of every task is saved after each step. `rw history` / `/history` list tasks; `rw resume` / `/resume` continue an interrupted one, skipping finished steps. Diffs per task come from `rw undo --list`. | Closing the window or a reboot no longer loses progress. |
 | 2.6 | ✅ **Task queue**: submitting while a task runs queues it in the TUI (`/queue`). `rw run --file tasks.txt` runs a list overnight. Queued tasks run unattended. | Uses quota while you're away. |
 | 2.7 | ✅ **Notifications**: a desktop notification when a task finishes or fails, a limit is hit, or `rw` waits for you (Windows toast, macOS, notify-send). | You don't have to watch the terminal. |
-| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, a Homebrew tap in this repo (`brew install relayweft`), `.deb`, `.rpm` and `.apk` packages on each release (from v0.3.0), an AUR PKGBUILD (`relayweft-bin`), and `rw update` (checksum-verified, swaps the running .exe safely on Windows, and points to the package manager that installed `rw` instead of replacing its binary). Code signing needs a certificate: see `packaging/README.md`. | Installing no longer needs Go or a build. |
+| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, a Homebrew tap in this repo (`brew install relayweft`), `.deb`, `.rpm` and `.apk` packages on each release (from v0.3.0), an AUR PKGBUILD (`relayweft-bin`), and `rw update` (checksum-verified, swaps the running .exe safely on Windows, and points to the package manager that installed `rw` instead of replacing its binary). Code signing needs a certificate: see `packaging/README.md`. Releases carry build provenance, SBOMs and a Sigstore-signed `checksums.txt` (from v0.4.0). | Installing no longer needs Go or a build. |
 
 **Gaps closed since:**
 - Dependencies can be edited in the plan view (`x`).
@@ -200,9 +201,10 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **2.3 Affected tests:** only the Go selection was run for real (on this repo). The jest/vitest, pytest, cargo, dotnet, Maven and Gradle selections are tested on file trees, not yet on real projects.
 - **2.5 Resume:** on Linux and macOS the agent of a killed `rw` keeps running (and spending) until the next `rw` takes its worktree.
 - **2.8 Distribution:**
-  - Code signing needs a certificate.
-  - The Scoop, winget, Homebrew and AUR manifests must be rendered (and the AUR one pushed) after each release.
-  - The Linux packages are unsigned, and there is no apt or dnf repository.
+  - Code signing of the Windows and macOS binaries needs a certificate (Authenticode, Apple notarization). Release integrity does not: from v0.4.0 every asset has GitHub build provenance, each binary a CycloneDX SBOM (attested), and `checksums.txt` a keyless Sigstore signature (`packaging/README.md`, "Verifying a release"). Not yet seen on a real release until v0.4.0 is cut; a dry run passed.
+  - `rw update` checks only the SHA-256; it prints the `gh attestation verify` command instead of verifying the signature itself (that would need sigstore-go and a fresh trust root).
+  - The Scoop, winget, Homebrew and AUR manifests must be rendered (and the AUR one pushed) after each release. Once they name v0.4.0 or later, drop the `version >= 0.4.0` completion guards in the Homebrew and AUR templates.
+  - The Linux packages have no GPG/apk signature (provenance and the signed checksums cover them), and there is no apt or dnf repository.
 
 **Exit criteria:**
 - You reach for `rw` before plain `codex` or `claude` for multi-step work.
@@ -216,7 +218,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 | # | Item | Why |
 |---|---|---|
-| 3.1 | ✅ **Benchmark command**: `rw bench` with `bench.yaml`, check commands, routed vs single, saved results, `rw bench --starter` (five Python tasks with check scripts), and `rw bench --from-history` (real tasks from past multi-file commits, checked by the repo's tests with the commit's test files in place, each validated to fail before and pass after). Every run starts in a fresh repository with only the starting commit's files, so agents cannot find a solution in the history. `--own-tests` (or `{tests}`/`{test_dirs}` in the check) runs only the commit's tests. | This is the success measure from `plan.md` §9, automated. |
+| 3.1 | ✅ **Benchmark command**: `rw bench` with `bench.yaml`, check commands, routed vs single, saved results, `rw bench --starter` (five Python tasks with check scripts), and `rw bench --from-history` (real tasks from past multi-file commits, checked by the repo's tests with the commit's test files in place, each validated to fail before and pass after). Every run starts in a fresh repository with only the starting commit's files, so agents cannot find a solution in the history. `--own-tests` (or `{tests}`/`{test_dirs}` in the check) runs only the commit's tests. | This is the success measure from [docs/plan.md §9](docs/plan.md#9-measuring-success), automated. |
 | 3.2 | ✅ **Quota-aware scheduling** (done early, Claude; Codex as soon as its CLI reports `rate_limits`): `quota-preempt` at `switch_at_utilization`, and the planner and reviewer retry on the other provider. Was planned as: use Claude's live 5-hour and 7-day utilization (already received) and Codex limits to move work to the other provider *before* hitting the limit, not after. | Avoids stalls entirely. |
 | 3.3 | ✅ **Rule tuning from stats**: `rw tune` flags failing routes, frequent escalations, rejected reviews, quota pressure and over-sized read-only models, and prints the `/route` / `/prefer` command for each. | Routing improves from your own data. |
 | 3.4 | ✅ **Judge model** (measurement): decisions record whether the judge ran, and `rw tune` compares judged with rule-routed steps to suggest `/judge on` or `/judge off`. | Spend quota only where it pays. |
@@ -290,12 +292,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 ## Standing quality rules (all phases)
 
-- **A bug fix needs a test.** Every fixed bug gets a regression test that fails without the fix. This has been the practice so far.
-- **Windows first.** Every PR passes CI on Windows, Linux and macOS. Anything touching processes, paths or the console also gets a Windows-specific test.
-- **No silent failure.** Every error reaches the TUI log and the session log with a next step, such as "run `rw doctor`" or "/limit reset".
-- **Safe by default.** Never commit to your branch, never touch your index, never overwrite your concurrent edits, and keep the option to undo.
-- **Pin and record CLI versions.** When Codex or Claude Code updates, record new output fixtures before raising the tested version in `rw doctor`.
-- **Adversarial review before merge.** Changes to the orchestrator, git, process or runner code get a second review pass focused on concurrency, Windows and failure paths.
+The rules every change follows are in [CONTRIBUTING.md](CONTRIBUTING.md#rules): a test for every bug fix, Windows first, no silent failure, safe by default, pinned CLI versions and an adversarial review before merge.
 
 ---
 

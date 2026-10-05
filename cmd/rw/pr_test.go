@@ -445,7 +445,7 @@ func TestDefuseRefs(t *testing.T) {
 		if reCloseRef.MatchString(out) || reMention.MatchString(out) {
 			t.Errorf("%q -> %q still live", in, out)
 		}
-		if strings.ReplaceAll(out, "⁠", "") != in {
+		if strings.ReplaceAll(out, "\u2060", "") != in {
 			t.Errorf("%q -> %q changed the visible text", in, out)
 		}
 	}
