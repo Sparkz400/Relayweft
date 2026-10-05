@@ -635,7 +635,10 @@ func cmdClean(args []string) error {
 		fmt.Printf("removed %d idle pooled worktree(s), freed %s\n", n, orchestrator.HumanBytes(freed))
 		return nil
 	}
-	n, err := orchestrator.CleanPool(*dir)
+	n, saved, err := orchestrator.CleanPoolSaved(*dir)
+	for _, s := range saved {
+		fmt.Println(s.Hint())
+	}
 	if err != nil {
 		return err
 	}

@@ -395,6 +395,8 @@ type historyEntry struct {
 	Summary string    `json:"summary,omitempty"`
 	Cost    string    `json:"cost,omitempty"`
 	Dir     string    `json:"dir"`
+	// Saved are half-done edits of unfinished steps kept on a branch.
+	Saved []orchestrator.SavedEdits `json:"saved,omitempty"`
 }
 
 func printHistoryJSON(w io.Writer, hist []orchestrator.TaskState) error {
@@ -404,7 +406,8 @@ func printHistoryJSON(w io.Writer, hist []orchestrator.TaskState) error {
 		if s.Interrupted() {
 			status = "interrupted"
 		}
-		out = append(out, historyEntry{ID: s.ID, Created: s.Created, Updated: s.Updated, Status: status, Task: s.Task, Summary: s.Summary, Cost: s.CostLine, Dir: s.Dir})
+		out = append(out, historyEntry{ID: s.ID, Created: s.Created, Updated: s.Updated, Status: status, Task: s.Task, Summary: s.Summary, Cost: s.CostLine, Dir: s.Dir,
+			Saved: s.UnfinishedSaved()})
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -444,6 +447,11 @@ func printHistory(w io.Writer, hist []orchestrator.TaskState, withDir bool) {
 		if s.Interrupted() {
 			fmt.Printf("\n%s was interrupted: `sy resume %s` continues it.\n", s.ID, s.ID)
 			break
+		}
+	}
+	for _, s := range hist {
+		for _, sv := range s.UnfinishedSaved() {
+			fmt.Fprintf(w, "\n%s\n", sv.Hint())
 		}
 	}
 }

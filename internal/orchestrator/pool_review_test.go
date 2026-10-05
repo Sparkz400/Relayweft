@@ -579,8 +579,8 @@ func TestPoolClearsUnfinishedGitOperations(t *testing.T) {
 // Finding 13: an agent left running by a sy that was killed is stopped
 // before the slot is used again.
 func TestPoolKillsOrphanAgents(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("killing leftover agents is implemented for Linux")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("killing leftover agents is implemented for Linux and macOS (Windows: the job object kills them with sy)")
 	}
 	dir := gitRepo(t)
 	snap, _ := git{dir}.snapshot("s")
