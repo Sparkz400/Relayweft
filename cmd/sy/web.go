@@ -125,6 +125,11 @@ func runWeb(name string, args []string, app bool) error {
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q (type tasks in the page)", fs.Arg(0))
 	}
+	if !*demo && !client {
+		if err := firstRun(c.configPath, c.dir, false); err != nil {
+			return err
+		}
+	}
 	w, err := startWeb(&c, *port, *demo, *speed)
 	if err != nil {
 		return err

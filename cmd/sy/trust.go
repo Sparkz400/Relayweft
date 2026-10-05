@@ -78,6 +78,21 @@ func cmdTrust(args []string) error {
 	return nil
 }
 
+// writeRepoFile writes root's .switchyard.yaml with these checks and trusts
+// it (you wrote it through sy).
+func writeRepoFile(root string, checks []string) (string, error) {
+	path := root + string(os.PathSeparator) + config.RepoFileName
+	q := make([]string, len(checks))
+	for i, c := range checks {
+		q[i] = fmt.Sprintf("%q", c)
+	}
+	body := strings.Replace(repoTemplate, "VERIFY", "["+strings.Join(q, ", ")+"]", 1)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		return path, err
+	}
+	return path, config.Trust(path)
+}
+
 const repoTemplate = `# Switchyard settings for this repository. sy layers them over each
 # person's own config (flags win over both). Only set what this repo needs;
 # everything else stays as each person has it.
@@ -115,15 +130,7 @@ func initRepo(force bool) error {
 		return fmt.Errorf("%s exists (use --force to overwrite)", path)
 	}
 	checks := config.DetectVerify(root)
-	q := make([]string, len(checks))
-	for i, c := range checks {
-		q[i] = fmt.Sprintf("%q", c)
-	}
-	body := strings.Replace(repoTemplate, "VERIFY", "["+strings.Join(q, ", ")+"]", 1)
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		return err
-	}
-	if err := config.Trust(path); err != nil {
+	if _, err := writeRepoFile(root, checks); err != nil {
 		return err
 	}
 	fmt.Println("wrote", path, "(trusted for you; commit it to share)")

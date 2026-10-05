@@ -29,6 +29,8 @@ jobs:
         if: matrix.os != 'windows-latest'
       - run: go test ./...
         if: matrix.os == 'windows-latest'
+      - name: onboarding timing (guided setup to first task, scripted agents)
+        run: go test -run '^TestOnboarding$' -v -count=1 ./cmd/sy
 
   build:
     runs-on: ubuntu-latest
