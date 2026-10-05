@@ -64,7 +64,7 @@ inputs:
     description: Token rw uses to read the issue, push the branch, open the pull request and comment. The agents never get it.
     default: ${{ github.token }}
   version:
-    description: rw version to install (v0.2.0, latest or source). Default the release named by the action's ref (Sparkz400/relayweft@v0.2.0), else a build from the action's source.
+    description: rw version to install (v0.3.0, latest or source). Default the release named by the action's ref (Sparkz400/relayweft@v0.3.0), else a build from the action's source.
     default: ""
   claude-code-version:
     description: npm version of @anthropic-ai/claude-code.

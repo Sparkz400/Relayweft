@@ -410,7 +410,7 @@ func firstRunWith(in *bufio.Reader, out io.Writer, dir string, tui bool) {
 		_, err = runSetup(setupOpts{in: in, out: out, interactive: true, path: path, dir: dir, auto: true})
 	}
 	if err != nil {
-		fmt.Fprintf(out, "\nSetup stopped: %v\nsy goes on with the built-in defaults. Run `rw setup` any time. "+
+		fmt.Fprintf(out, "\nSetup stopped: %v\nrw goes on with the built-in defaults. Run `rw setup` any time. "+
 			"`rw init --global` writes the default config, so this setup is not offered again (or set %s=1).\n", err, envNoSetup)
 	}
 	if tui {

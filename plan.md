@@ -2,8 +2,8 @@
 
 > A Windows-first, animated terminal app that routes coding work between ChatGPT (Codex CLI) and Claude (Claude Code) subscriptions — picking the right model for each step, running agents in parallel, and only calling the expensive model when it matters.
 
-**Name:** Relayweft (a rail yard where trains get routed onto the right track)
-**Command:** `rw`
+**Name:** Relayweft (until v0.2.0: Switchyard, a rail yard where trains get routed onto the right track; renamed because that name was taken on the VS Code Marketplace)
+**Command:** `rw` (until v0.2.0: `sy`)
 **Language:** Go
 **Auth:** subscriptions only — no API keys, no token extraction
 

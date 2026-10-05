@@ -161,7 +161,7 @@ jobs:
       - name: rw run
         env:
           # rw reads issues, pushes and opens pull requests with this token,
-          # and sends it only to this server. (rw after v0.2.0 also finds
+          # and sends it only to this server. (rw also finds
           # the server without GITEA_HOST.)
           GITEA_HOST: ${{ github.server_url }}
           FORGEJO_TOKEN: ${{ secrets.RELAYWEFT_TOKEN || secrets.GITHUB_TOKEN }}

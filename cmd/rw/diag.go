@@ -45,7 +45,7 @@ func crashGuard() {
 	if r := recover(); r != nil {
 		path := diag.Crash("main", r, debug.Stack())
 		diag.End(fmt.Errorf("crash: %v", r))
-		fmt.Fprintf(os.Stderr, "\nsy crashed: %v\ncrash log: %s\nplease run `rw bugreport` and send the zip it creates\n", r, path)
+		fmt.Fprintf(os.Stderr, "\nrw crashed:%v\ncrash log: %s\nplease run `rw bugreport` and send the zip it creates\n", r, path)
 		os.Exit(3)
 	}
 }

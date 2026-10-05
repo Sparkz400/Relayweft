@@ -6,6 +6,8 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 > **Note (October 2026):** Phases 2 to 4 were built ahead of Phase 1's exit criteria, at your request. Their code is tested but has not been used for real. Phase 1's open items (1.1, 1.6) and its exit criteria still come first. Until they are met, treat Phase 2 to 4 features as a beta.
 
+> **Renamed (October 2026):** up to v0.2.0 the project was called Switchyard and its command was `sy`. From v0.3.0 it is Relayweft and the command is `rw`, because "Switchyard" was taken on the VS Code Marketplace. The history below says `sy` wherever `sy` was what ran.
+
 ---
 
 ## Where we are (October 2026)
@@ -69,11 +71,13 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - a dashboard in `rw web`
   - a JetBrains plugin
   - a container sandbox for agents (docker or podman)
-- **Release v0.1.0** (3 Oct 2026): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
-- **Release v0.2.0** (4 Oct 2026): more providers, `rw health`, model tiers, CI and team mode, self-hosted forges, webhooks, `rw selftest` and the fixes from real use. `rw update` from v0.1.0 to v0.2.0 was run for real (checksum verified). Scoop manifest updated; winget manifests rendered.
-  - The repository is public: release downloads, `rw update` and the Scoop install need no login.
+- **Release v0.1.0** (3 Oct 2026, as Switchyard/`sy`): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
+- **Release v0.2.0** (4 Oct 2026, as Switchyard/`sy`): more providers, `sy health`, model tiers, CI and team mode, self-hosted forges, webhooks, `sy selftest` and the fixes from real use. `sy update` from v0.1.0 to v0.2.0 was run for real (checksum verified). Scoop manifest updated; winget manifests rendered.
+  - The repository is public: release downloads, `rw update` (then `sy update`) and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
-- **Release v0.3.0** (5 Oct 2026): `rw setup`, best of N, affected tests in fix rounds, the container sandbox, the dashboard, the JetBrains plugin, Homebrew/`.deb`/`.rpm`/`.apk`/AUR packaging, Codex follow-ups in pool worktrees, saved half-done edits, macOS orphan cleanup, and `rw tune` thresholds that account for sample size. Every change had an independent adversarial review before merge, and the 30-minute stress test passes on Ubuntu and Windows.
+- **Release v0.3.0** (not released yet). The first tag run on 5 Oct 2026 failed on a flaky test, which #43 fixed, and that tag points at a commit from before the rename. v0.3.0 brings:
+  - the **rename to Relayweft (`rw`)**. On its first start, rw copies the Switchyard user folder once. `sy update` cannot install v0.3.0, so v0.2.0 users reinstall once (README, "Upgrading from Switchyard").
+  - `rw setup`, best of N, affected tests in fix rounds, the container sandbox, the dashboard, the JetBrains plugin, Homebrew/`.deb`/`.rpm`/`.apk`/AUR packaging, Codex follow-ups in pool worktrees, saved half-done edits, macOS orphan cleanup, and `rw tune` thresholds that account for sample size. Every change had an independent adversarial review before merge, and the 30-minute stress test passes on Ubuntu and Windows.
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
@@ -96,7 +100,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **Follow-ups:** `claude --resume` (Claude Code 2.1.288) and `codex exec resume` (codex-cli 0.160.0) through `rw web`, with the same session and the agent remembering; the pool-worktree fallback to a fresh agent. Recorded as fixtures, with a real Codex edit run.
 - **Mid-step resume:** a Claude Code agent killed after the first of three edits in a git worktree, then resumed there with rw's prompt: it checked the first file and wrote the other two. Recorded as fixtures.
 - **Claude verify through `allowedTools`:** a failing check fed the fix round. Found and fixed: Claude's PowerShell tool on Windows was refused (only `Bash(...)` was allowed), and refused tool calls were invisible.
-- **`rw update`** against the real v0.1.0 release: asset, checksum, swap while running, `.old` cleanup. Fixed: a second update while the first update's `.old` still runs.
+- **`sy update`** against the real v0.1.0 release: asset, checksum, swap while running, `.old` cleanup. Fixed: a second update while the first update's `.old` still runs.
 - **Windows toasts** (delivered, read back from the notification history) and **ntfy.sh** (every event, escaping, non-ASCII). Fixed: a non-ASCII click URL in a header.
 - **`rw app` in Edge:** fixed a serious bug (closing rw killed the user's other Edge windows: the browser was in rw's kill-on-exit job), and rw now exits ~5s after its window closes instead of 30s; a reload keeps it.
 - **The VS Code extension** in real VS Code 1.140 and 1.90 (`npm run test:integration`). Fixed: CRLF checkouts showed only hunks, and answered reviews stayed open.
@@ -108,13 +112,13 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 **Verified for real on 4 Oct 2026 (macOS and Linux, on GitHub Actions runners):** with `.github/workflows/macos-real.yml` (manual; no secrets, fake agents only), on macOS 26.6.2 and 14.8.9 (Apple silicon) and 15.7.9 (Apple silicon and Intel) with Chrome 151 and 152, and Ubuntu 24.04 under Xvfb with fluxbox, dunst 1.9.2 and Chrome 154.
 - **macOS notifications:** all seven test notifications (quotes, XML, non-ASCII, newlines, 2,000 characters, control characters) are in the Notification Center database with the right text, from Script Editor (`osascript`); on macOS 26 and 15 usernoted also logs each delivery. macOS stores a shortened body for very long ones.
 - **notify-send:** seven Notify calls on the session bus, all held by dunst, shown on screen with the right text. Fixed: a NUL byte made the notification fail (`exec` rejects it), and the body was read as markup, so `<toast/>` vanished and `&amp;` showed as `&`.
-- **`rw app` in Chrome:** opens a window titled Relayweft, exits 5-6s after that window is closed, and leaves the other Chrome windows open; on macOS `open -n` hands the window to the running Chrome. Fixed on Linux: Ctrl+C or closing the terminal killed Chrome with all its windows when `rw app` or `rw web` had started it (it was in rw's process group).
+- **`rw app` in Chrome:** opens a window titled Switchyard (now Relayweft), exits 5-6s after that window is closed, and leaves the other Chrome windows open; on macOS `open -n` hands the window to the running Chrome. Fixed on Linux: Ctrl+C or closing the terminal killed Chrome with all its windows when `rw app` or `rw web` had started it (it was in rw's process group).
 - **Keep-awake on macOS:** a waiting `rw run --in` holds a `caffeinate -i -w <rw pid>` sleep assertion (seen in `pmset -g assertions`). It ends after Ctrl+C, and on its own when rw is killed. `--allow-sleep` takes none.
-- **`rw update` on macOS:** a 0.0.1 build updated itself to release 0.2.0, which starts.
+- **`sy update` on macOS:** a 0.0.1 build updated itself to release 0.2.0, which starts.
 
 **Verified for real on 5 Oct 2026 (Windows 11, and Linux in Docker):**
-- **First run:** from the v0.2.0 download to a finished first task (Claude haiku explaining a small repo) in a fresh profile: 13 seconds of machine time and three answers.
-- **Linux packages and Homebrew:** the `.deb` (Ubuntu), `.rpm` (Fedora), `.apk` (Alpine) and the AUR PKGBUILD (Arch, makepkg and pacman) installed in Docker, and `rw update` named the package manager and changed nothing; the formula installed with Homebrew on Linux, and passed `brew test`, `style` and `audit --strict`.
+- **First run:** from the v0.2.0 download (`sy`) to a finished first task (Claude haiku explaining a small repo) in a fresh profile: 13 seconds of machine time and three answers.
+- **Linux packages and Homebrew:** the `.deb` (Ubuntu), `.rpm` (Fedora), `.apk` (Alpine) and the AUR PKGBUILD (Arch, makepkg and pacman) installed in Docker, and `sy update` named the package manager and changed nothing; the formula (then `switchyard`) installed with Homebrew on Linux, and passed `brew test`, `style` and `audit --strict`.
 - **Affected tests on this repo:** 11 recent commits; with 5 fixes undone, the narrowed runs failed the same tests as the full suite.
 
 **Not verified yet:**
@@ -173,7 +177,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 2.5 | ✅ **Task history and resume**: the state of every task is saved after each step. `rw history` / `/history` list tasks; `rw resume` / `/resume` continue an interrupted one, skipping finished steps. Diffs per task come from `rw undo --list`. | Closing the window or a reboot no longer loses progress. |
 | 2.6 | ✅ **Task queue**: submitting while a task runs queues it in the TUI (`/queue`). `rw run --file tasks.txt` runs a list overnight. Queued tasks run unattended. | Uses quota while you're away. |
 | 2.7 | ✅ **Notifications**: a desktop notification when a task finishes or fails, a limit is hit, or `rw` waits for you (Windows toast, macOS, notify-send). | You don't have to watch the terminal. |
-| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, a Homebrew tap in this repo (`brew install relayweft`), `.deb`, `.rpm` and `.apk` packages on each release (from v0.3.0), an AUR PKGBUILD (`relayweft-cli-bin`), and `rw update` (checksum-verified, swaps the running .exe safely on Windows, and points to the package manager that installed `rw` instead of replacing its binary). Code signing needs a certificate: see `packaging/README.md`. | Installing no longer needs Go or a build. |
+| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, a Homebrew tap in this repo (`brew install relayweft`), `.deb`, `.rpm` and `.apk` packages on each release (from v0.3.0), an AUR PKGBUILD (`relayweft-bin`), and `rw update` (checksum-verified, swaps the running .exe safely on Windows, and points to the package manager that installed `rw` instead of replacing its binary). Code signing needs a certificate: see `packaging/README.md`. | Installing no longer needs Go or a build. |
 
 **Gaps closed since:**
 - Dependencies can be edited in the plan view (`x`).
@@ -309,9 +313,13 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
    Send the files; they become test fixtures.
 3. **Run `rw bench` on ~10 real, multi-file tasks from your own repos, with Codex.** This decides the Phase 3 exit criterion. In each repo, `rw bench --from-history` writes the tasks (it runs your tests on each candidate commit, which costs no quota). Read and reword the prompts, then run `rw bench --file bench-history.yaml`. After a week of use, run `rw tune`.
 4. **Releases:**
+   - Before you release v0.3.0:
+     1. Delete the old `v0.3.0` tag on GitHub: `git push origin :refs/tags/v0.3.0`. It points at e8ea295, from before the rename.
+     2. Tag the merged rename.
+     3. After the release, render the manifests for 0.3.0. The `packaging` checks skip until you do.
    - Submit the rendered winget manifests to microsoft/winget-pkgs (needs a fork of winget-pkgs on your account).
    - After each release, render the manifests (`packaging/render-manifests.sh X.Y.Z`) and commit `packaging/scoop/rw.json`, `Formula/relayweft.rb`, `packaging/aur/PKGBUILD` and `packaging/aur/.SRCINFO`.
-  - Publish `relayweft-cli-bin` to the AUR (needs an AUR account; steps in `packaging/README.md`), then push the rendered PKGBUILD and .SRCINFO after each release.
+  - Publish `relayweft-bin` to the AUR (needs an AUR account; steps in `packaging/README.md`), then push the rendered PKGBUILD and .SRCINFO after each release.
   - Install a `.deb`/`.rpm` from a release once, and `brew install relayweft` on a real Mac.
    - For signed binaries, buy a code-signing certificate (see `packaging/README.md`).
 5. **Open Phase 4 items:**

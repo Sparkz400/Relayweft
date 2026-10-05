@@ -63,7 +63,7 @@ GitHub does not start workflows for a pull request opened with the job's own `GI
 
 **Outputs:** `pull-requests` (URLs, one per line), `task-ids` and `report-dir`.
 
-**Which `rw`:** with `uses: Sparkz400/relayweft@v0.2.0` the action installs that release's binary and checks it against the release's `checksums.txt`. With a branch or a commit SHA (`@main`) it builds `rw` from that source with Go. `version` overrides both.
+**Which `rw`:** with `uses: Sparkz400/relayweft@v0.3.0` the action installs that release's binary and checks it against the release's `checksums.txt`. With a branch or a commit SHA (`@main`) it builds `rw` from that source with Go. `version` overrides both.
 
 The action works on Linux, macOS and Windows runners. It needs `jq` for the reports, which GitHub's hosted runners have.
 
@@ -111,7 +111,7 @@ Then, as on GitHub:
 - **Every night at 02:30 UTC:** the open issues labelled `rw` that no open pull request closes yet, at most 5 (`RW_LIMIT`).
 - **Actions > relayweft > Run workflow:** one issue by number, or the whole batch.
 
-The job's own token reads the issue, pushes the branch, opens the pull request and comments, and goes to the job's own server only (the workflow sets `GITEA_HOST` to it; rw after v0.2.0 finds it by itself). A secret `RELAYWEFT_TOKEN` (an access token with the scopes `write:repository` and `write:issue`) is used instead when set. You need it:
+The job's own token reads the issue, pushes the branch, opens the pull request and comments, and goes to the job's own server only (the workflow sets `GITEA_HOST` to it, though rw also finds it by itself). A secret `RELAYWEFT_TOKEN` (an access token with the scopes `write:repository` and `write:issue`) is used instead when set. You need it:
 
 - **on a private repository:** Forgejo 16 does not let the job's token open a pull request there (`404 Can't read pulls or can't read UnitTypeCode`; the branch is pushed);
 - **for your CI on the pull requests:** like GitHub, Forgejo starts no workflows for a pull request the job's token opened.
