@@ -15,14 +15,22 @@ import (
 	"github.com/sparkz400/switchyard/internal/proc"
 )
 
-// goShape returns the index of the single "./..." in `go test|vet|build
-// ... ./...`, or -1.
+// goShape returns the index of the single "./..." in `go test|vet ...
+// ./...`, or -1. go build is not narrowed: it is quick with the build
+// cache, and "go build <pattern>" would let agents pass -toolexec or -o.
+// -C, -modfile and -mod change which module the packages come from, so
+// those run in full.
 func goShape(f []string) int {
-	if len(f) < 3 || f[0] != "go" || (f[1] != "test" && f[1] != "vet" && f[1] != "build") {
+	if len(f) < 3 || f[0] != "go" || (f[1] != "test" && f[1] != "vet") {
 		return -1
 	}
 	at := -1
 	for i, a := range f[2:] {
+		for _, flag := range []string{"-C", "-modfile", "-mod"} {
+			if a == flag || strings.HasPrefix(a, flag+"=") {
+				return -1
+			}
+		}
 		if a == "./..." {
 			if at >= 0 {
 				return -1

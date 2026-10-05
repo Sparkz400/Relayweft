@@ -35,6 +35,65 @@ func verifyLines(rec *recorder) []string {
 	return out
 }
 
+// The last round's checks decide the task, so they run in full: with the
+// default max_fix_rounds 1, a narrowed false failure (or a narrowed pass
+// paid twice) must not happen.
+func TestLastFixRoundRunsFull(t *testing.T) {
+	dir := gitRepo(t)
+	full := fileCheck("ok.txt")
+	set := both(func(s runner.Spec) runner.Result {
+		switch {
+		case strings.Contains(s.Prompt, runner.MarkerPlan):
+			return runner.Result{Final: planJSON(map[string]any{"id": "w", "title": "work", "kind": "edit", "prompt": "work"})}
+		case strings.Contains(s.Prompt, runner.MarkerPlanReview), strings.Contains(s.Prompt, runner.MarkerFinalReview):
+			return approve()
+		case strings.Contains(s.Prompt, runner.MarkerFix):
+			os.WriteFile(filepath.Join(s.Dir, "ok.txt"), []byte("ok\n"), 0o644)
+		}
+		return runner.Result{Final: "done"}
+	})
+	o, rec := newOrc(t, dir, set, func(c *config.Config) {
+		c.Verify.Commands = []string{full}
+		// A narrowed run would fail: never.txt is never written.
+		c.Verify.AffectedCommands = map[string]string{full: narrowedCheck("never.txt")}
+		c.Orchestrator.MaxFixRounds = 1
+	})
+	if res := o.Run(context.Background(), longTask); !res.OK {
+		t.Fatalf("task: %+v\n%s", res, strings.Join(verifyLines(rec), "\n"))
+	}
+	for _, l := range verifyLines(rec) {
+		if strings.Contains(l, "never.txt") {
+			t.Errorf("the last round was narrowed: %s", l)
+		}
+	}
+}
+
+// verifyAt counts the configured commands that fail (best-of-N ranks
+// candidates by it).
+func TestVerifyAtCountsFailedCommands(t *testing.T) {
+	dir := gitRepo(t)
+	o, _ := newOrc(t, dir, both(func(s runner.Spec) runner.Result { return runner.Result{Final: "done"} }), nil)
+	vc := config.VerifyCfg{Commands: []string{fileCheck("a.txt"), fileCheck("README.md"), fileCheck("b.txt")}}
+	ok, rep, failed := o.verifyAt(context.Background(), &task{id: "t"}, vc, checkSite{dir: dir}, verifyFull)
+	if ok || failed != 2 || !strings.Contains(rep, "missing a.txt") || !strings.Contains(rep, "missing b.txt") {
+		t.Errorf("ok=%v failed=%d\n%s", ok, failed, rep)
+	}
+	if ok, _, failed := o.verifyAt(context.Background(), &task{id: "t"}, config.VerifyCfg{Commands: []string{fileCheck("README.md")}}, checkSite{dir: dir}, verifyFull); !ok || failed != 0 {
+		t.Errorf("pass: ok=%v failed=%d", ok, failed)
+	}
+}
+
+// A comma in an allow rule would split Claude's comma-joined
+// --allowedTools into other rules.
+func TestVerifyAllowedDropsCommas(t *testing.T) {
+	vc := config.VerifyCfg{Commands: []string{"make check"}, AffectedCommands: map[string]string{"make check": "run a,b {files}"}}
+	for _, a := range verifyAllowed(vc, "") {
+		if strings.Contains(a, ",") {
+			t.Errorf("allowed %q", a)
+		}
+	}
+}
+
 // After a fix round only the affected tests run first. A narrowed failure
 // goes to the next fix round without a full run; once the narrowed run
 // passes, the full checks run before the final review.
@@ -68,7 +127,7 @@ func TestFixRoundRunsAffectedTestsFirst(t *testing.T) {
 	o, rec := newOrc(t, dir, set, func(c *config.Config) {
 		c.Verify.Commands = []string{full}
 		c.Verify.AffectedCommands = map[string]string{full: narrowedCheck("narrow.txt")}
-		c.Orchestrator.MaxFixRounds = 2
+		c.Orchestrator.MaxFixRounds = 3
 	})
 	res := o.Run(context.Background(), longTask)
 	if !res.OK || !strings.Contains(res.Summary, "checks pass") {
@@ -160,10 +219,14 @@ func TestWorkersMayRunNarrowedChecks(t *testing.T) {
 		c.Orchestrator.MaxFixRounds = 0
 	})
 	o.Run(context.Background(), longTask)
-	for _, c := range []string{"go build ./...", "go test -race ./...", "go build", "go test -race"} {
+	for _, c := range []string{"go build ./...", "go test -race ./...", "go test -race"} {
 		if !slices.Contains(work.AllowedCommands, c) {
 			t.Errorf("%q not allowed: %q", c, work.AllowedCommands)
 		}
+	}
+	// "go build <anything>" would allow -toolexec and -o.
+	if slices.Contains(work.AllowedCommands, "go build") {
+		t.Errorf("go build allowed with any arguments: %q", work.AllowedCommands)
 	}
 	if !strings.Contains(work.Prompt, "go test -race <packages>") {
 		t.Errorf("prompt does not name the narrowed form:\n%s", work.Prompt)
@@ -207,7 +270,7 @@ func TestNarrowedVerifyCancelled(t *testing.T) {
 	vc := config.VerifyCfg{Commands: []string{full}, AffectedCommands: map[string]string{full: narrowedCheck("ok.txt")}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	ok, rep := o.verifyAt(ctx, &task{id: "t"}, vc, checkSite{dir: dir, root: dir, base: base}, verifyAffected)
+	ok, rep, _ := o.verifyAt(ctx, &task{id: "t"}, vc, checkSite{dir: dir, root: dir, base: base}, verifyAffected)
 	if ok || rep != "cancelled" {
 		t.Errorf("got %v %q", ok, rep)
 	}

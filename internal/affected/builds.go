@@ -48,6 +48,12 @@ func selectDotnet(cmd string, f []string, c *change) Plan {
 	if !ok || len(projs) == 0 {
 		return full(cmd, "could not find the projects")
 	}
+	// Plain `dotnet test` runs the solution in the folder: only its test
+	// projects count, never one it leaves out.
+	inSln, why := solutionProjects(c.dir)
+	if why != "" {
+		return full(cmd, why)
+	}
 	deps := map[string][]string{}
 	isTest := map[string]bool{}
 	byDir := map[string][]string{}
@@ -90,7 +96,7 @@ func selectDotnet(cmd string, f []string, c *change) Plan {
 	set := reverseClosure(start, deps)
 	var tests, all []string
 	for _, p := range projs {
-		if isTest[p] {
+		if isTest[p] && inSln[foldKey(p)] {
 			all = append(all, p)
 			if set[p] {
 				tests = append(tests, p)
@@ -112,6 +118,46 @@ func selectDotnet(cmd string, f []string, c *change) Plan {
 		run = append(run, cmd+" "+quote(a))
 	}
 	return Plan{Command: cmd, Run: run, Why: fmt.Sprintf("%d of %d test projects, affected by the %s", len(tests), len(all), c.changedWhy())}
+}
+
+var (
+	reSlnProject  = regexp.MustCompile(`(?m)^Project\("[^"]*"\)\s*=\s*"[^"]*"\s*,\s*"([^"]+\.(?:cs|fs|vb)proj)"`)
+	reSlnxProject = regexp.MustCompile(`<Project\s+Path\s*=\s*"([^"]+\.(?:cs|fs|vb)proj)"`)
+)
+
+// solutionProjects reads the projects (folded slash paths relative to
+// dir) of the one solution file in dir, or says why it cannot.
+func solutionProjects(dir string) (map[string]bool, string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, "could not read the check folder"
+	}
+	var slns []string
+	for _, e := range entries {
+		switch strings.ToLower(path.Ext(e.Name())) {
+		case ".sln", ".slnx":
+			slns = append(slns, e.Name())
+		}
+	}
+	if len(slns) != 1 {
+		return nil, fmt.Sprintf("plain dotnet test runs what is in the folder, and sy narrows only one solution (found %d)", len(slns))
+	}
+	data, err := os.ReadFile(dir + "/" + slns[0])
+	if err != nil {
+		return nil, "could not read " + slns[0]
+	}
+	re := reSlnProject
+	if strings.EqualFold(path.Ext(slns[0]), ".slnx") {
+		re = reSlnxProject
+	}
+	out := map[string]bool{}
+	for _, m := range re.FindAllSubmatch(data, -1) {
+		out[foldKey(path.Clean(strings.ReplaceAll(string(m[1]), `\`, "/")))] = true
+	}
+	if len(out) == 0 {
+		return nil, slns[0] + " lists no projects sy can read"
+	}
+	return out, ""
 }
 
 func findFold(list []string, p string) string {
@@ -305,6 +351,11 @@ func gradleProjects(dir string) (map[string]string, string) {
 		}
 		for _, m := range reGradleQuoted.FindAllStringSubmatch(t, -1) {
 			p := ":" + strings.TrimPrefix(m[1], ":")
+			if !plainGradleName(p) {
+				// Task names become command arguments and allow rules
+				// (comma-joined for Claude): letters, digits, . _ - : only.
+				return nil, fmt.Sprintf("%s names project %q, which sy does not pass on", name, m[1])
+			}
 			projects[p] = strings.ReplaceAll(strings.TrimPrefix(p, ":"), ":", "/")
 		}
 	}
@@ -312,6 +363,15 @@ func gradleProjects(dir string) (map[string]string, string) {
 		return nil, "the project has no subprojects"
 	}
 	return projects, ""
+}
+
+func plainGradleName(p string) bool {
+	for _, r := range p {
+		if !(r < 0x80 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-:", r))) {
+			return false
+		}
+	}
+	return p != ":"
 }
 
 func gradleAllowed(f []string, dir string) ([]string, string) {

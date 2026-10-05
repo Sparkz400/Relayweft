@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/sparkz400/switchyard/internal/proc"
@@ -76,6 +77,7 @@ func selectCargo(ctx context.Context, cmd string, f []string, c *change) Plan {
 	}
 	var meta struct {
 		Packages []struct {
+			ID           string `json:"id"`
 			Name         string `json:"name"`
 			ManifestPath string `json:"manifest_path"`
 			Dependencies []struct {
@@ -83,6 +85,8 @@ func selectCargo(ctx context.Context, cmd string, f []string, c *change) Plan {
 				Path string `json:"path"`
 			} `json:"dependencies"`
 		} `json:"packages"`
+		// What plain `cargo test` tests in a workspace (cargo 1.71+).
+		DefaultMembers *[]string `json:"workspace_default_members"`
 	}
 	if err := json.Unmarshal(out, &meta); err != nil || len(meta.Packages) == 0 {
 		return full(cmd, "could not read cargo metadata")
@@ -123,8 +127,37 @@ func selectCargo(ctx context.Context, cmd string, f []string, c *change) Plan {
 	if len(start) == 0 {
 		return Plan{Command: cmd, Why: "no crate is affected by the " + c.changedWhy()}
 	}
-	set := reverseClosure(start, deps)
-	if len(set) >= len(meta.Packages) {
+	// Narrow within what the command tests: never run tests of a crate
+	// that the full command leaves out.
+	defaults := map[string]bool{}
+	switch {
+	case slices.Contains(f, "--workspace") || slices.Contains(f, "--all"):
+		for _, p := range meta.Packages {
+			defaults[p.Name] = true
+		}
+	case meta.DefaultMembers != nil:
+		for _, p := range meta.Packages {
+			if slices.Contains(*meta.DefaultMembers, p.ID) {
+				defaults[p.Name] = true
+			}
+		}
+	case byDir["."] != "":
+		return full(cmd, "plain cargo test tests only the root package, and this cargo does not list the default members")
+	default: // a virtual workspace tests every member
+		for _, p := range meta.Packages {
+			defaults[p.Name] = true
+		}
+	}
+	set := map[string]bool{}
+	for n := range reverseClosure(start, deps) {
+		if defaults[n] {
+			set[n] = true
+		}
+	}
+	if len(set) == 0 {
+		return Plan{Command: cmd, Why: "no crate the command tests is affected by the " + c.changedWhy()}
+	}
+	if len(set) >= len(defaults) {
 		return full(cmd, "every crate is affected by the "+c.changedWhy())
 	}
 	var args []string
@@ -138,5 +171,5 @@ func selectCargo(ctx context.Context, cmd string, f []string, c *change) Plan {
 	i := cargoArgsEnd(f)
 	narrowed := strings.Join(append(append(append([]string(nil), f[:i]...), args...), f[i:]...), " ")
 	return Plan{Command: cmd, Run: []string{narrowed},
-		Why: fmt.Sprintf("%d of %d crates, affected by the %s", len(set), len(meta.Packages), c.changedWhy())}
+		Why: fmt.Sprintf("%d of %d crates, affected by the %s", len(set), len(defaults), c.changedWhy())}
 }

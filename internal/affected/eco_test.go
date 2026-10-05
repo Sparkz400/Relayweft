@@ -3,6 +3,8 @@ package affected
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -111,6 +113,30 @@ func TestSelectCargo(t *testing.T) {
 	want(t, dir, "cargo test", sel(t, dir, "cargo test", "cli/src/main.rs"), "")
 }
 
+// Plain `cargo test` in a workspace whose root is a package tests only the
+// default members: a narrowed run must not test the others.
+func TestSelectCargoDefaultMembers(t *testing.T) {
+	dir := tree(t, map[string]string{"Cargo.toml": "[package]\n", "src/main.rs": "", "core/src/lib.rs": "", "web/src/lib.rs": "", "cli/src/lib.rs": ""})
+	pkg := func(name, rel, deps string) string {
+		return `{"id":"` + name + `-id","name":"` + name + `","manifest_path":"` + jsonPath(dir, rel+"Cargo.toml") + `","dependencies":[` + deps + `]}`
+	}
+	dep := func(rel string) string {
+		return `{"name":"x","path":"` + strings.TrimSuffix(jsonPath(dir, rel+"/"), `\\`) + `"}`
+	}
+	pkgs := `"packages":[` + pkg("app", "", dep("core")) + "," + pkg("core", "core/", "") + "," + pkg("web", "web/", dep("core")) + "," + pkg("cli", "cli/", "") + "]"
+	old := cargoMetadata
+	defer func() { cargoMetadata = old }()
+	meta := `{` + pkgs + `,"workspace_default_members":["app-id","core-id","cli-id"]}`
+	cargoMetadata = func(ctx context.Context, d string) ([]byte, error) { return []byte(meta), nil }
+	// web depends on core but is no default member: not tested.
+	want(t, dir, "cargo test", sel(t, dir, "cargo test", "core/src/lib.rs"), "cargo test -p app -p core")
+	want(t, dir, "cargo test", sel(t, dir, "cargo test", "web/src/lib.rs"), "-")
+	want(t, dir, "cargo test --workspace", sel(t, dir, "cargo test --workspace", "web/src/lib.rs"), "cargo test --workspace -p web")
+	// An older cargo does not list them: a root package means full.
+	meta = `{` + pkgs + `}`
+	want(t, dir, "cargo test", sel(t, dir, "cargo test", "cli/src/lib.rs"), "")
+}
+
 func jsonPath(dir, rel string) string {
 	p := dir + "/" + rel
 	if runtime.GOOS == "windows" {
@@ -123,7 +149,14 @@ func TestSelectDotnet(t *testing.T) {
 	testProj := `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17" />` +
 		`<ProjectReference Include="..\..\src\%s\%s.csproj" /></ItemGroup></Project>`
 	dir := tree(t, map[string]string{
-		"App.sln":                              "",
+		// Extra.Tests is not in the solution: plain dotnet test never runs it.
+		"App.sln": "Microsoft Visual Studio Solution File, Format Version 12.00\n" +
+			`Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Core", "src\Core\Core.csproj", "{1}"` + "\nEndProject\n" +
+			`Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Web", "src\Web\Web.csproj", "{2}"` + "\nEndProject\n" +
+			`Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Other", "src\Other\Other.csproj", "{3}"` + "\nEndProject\n" +
+			`Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Core.Tests", "tests\Core.Tests\Core.Tests.csproj", "{4}"` + "\nEndProject\n" +
+			`Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Web.Tests", "tests\Web.Tests\Web.Tests.csproj", "{5}"` + "\nEndProject\n" +
+			`Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Other.Tests", "tests\Other.Tests\Other.Tests.csproj", "{6}"` + "\nEndProject\n",
 		"src/Core/Core.csproj":                 `<Project Sdk="Microsoft.NET.Sdk"></Project>`,
 		"src/Core/A.cs":                        "",
 		"src/Web/Web.csproj":                   `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="..\Core\Core.csproj" /></ItemGroup></Project>`,
@@ -132,16 +165,26 @@ func TestSelectDotnet(t *testing.T) {
 		"tests/Core.Tests/Core.Tests.csproj":   strings.ReplaceAll(strings.Replace(testProj, "%s", "Core", 1), "%s", "Core"),
 		"tests/Web.Tests/Web.Tests.csproj":     strings.ReplaceAll(strings.Replace(testProj, "%s", "Web", 1), "%s", "Web"),
 		"tests/Other.Tests/Other.Tests.csproj": strings.ReplaceAll(strings.Replace(testProj, "%s", "Other", 1), "%s", "Other"),
+		"tests/Extra.Tests/Extra.Tests.csproj": strings.ReplaceAll(strings.Replace(testProj, "%s", "Web", 1), "%s", "Web"),
 		"Directory.Build.props":                "",
 	})
 	cmd := "dotnet test -c Release"
 	want(t, dir, cmd, sel(t, dir, cmd, "src/Web/W.cs"), cmd+" ./tests/Web.Tests/Web.Tests.csproj")
 	want(t, dir, cmd, sel(t, dir, cmd, "src/Core/A.cs"), cmd+" ./tests/Core.Tests/Core.Tests.csproj | "+cmd+" ./tests/Web.Tests/Web.Tests.csproj")
+	// Every test project of the solution is affected.
 	want(t, dir, cmd, sel(t, dir, cmd, "src/Core/A.cs", "src/Other/Other.csproj"), "")
 	for _, f := range []string{"App.sln", "Directory.Build.props", "global.json", "build/x.cs"} {
 		want(t, dir, cmd, sel(t, dir, cmd, f), "")
 	}
 	want(t, dir, "dotnet test App.sln", sel(t, dir, "dotnet test App.sln", "src/Web/W.cs"), "")
+	// No solution, or two: plain dotnet test runs what is in the folder.
+	os.WriteFile(filepath.Join(dir, "Second.slnx"), []byte(`<Solution><Project Path="src/Web/Web.csproj" /></Solution>`), 0o644)
+	want(t, dir, cmd, sel(t, dir, cmd, "src/Web/W.cs"), "")
+	os.Remove(filepath.Join(dir, "App.sln"))
+	os.WriteFile(filepath.Join(dir, "Second.slnx"), []byte(`<Solution><Project Path="src/Web/Web.csproj" /><Project Path="tests/Web.Tests/Web.Tests.csproj" /><Project Path="tests/Core.Tests/Core.Tests.csproj" /></Solution>`), 0o644)
+	want(t, dir, cmd, sel(t, dir, cmd, "src/Web/W.cs"), cmd+" ./tests/Web.Tests/Web.Tests.csproj")
+	os.Remove(filepath.Join(dir, "Second.slnx"))
+	want(t, dir, cmd, sel(t, dir, cmd, "src/Web/W.cs"), "")
 }
 
 func TestSelectMaven(t *testing.T) {
@@ -188,4 +231,13 @@ func TestSelectGradle(t *testing.T) {
 	want(t, dir, "./gradlew check", sel(t, dir, "./gradlew check", "web/src/W.java"), "")
 	odd := tree(t, map[string]string{"settings.gradle": "include 'a'\nproject(':a').projectDir = file('x')\n", "x/A.java": ""})
 	want(t, odd, "gradle test", sel(t, odd, "gradle test", "x/A.java"), "")
+	// A project name with a space or comma would split the task argument
+	// or the comma-joined allow rules.
+	for _, name := range []string{"a b", "a,b"} {
+		d := tree(t, map[string]string{"settings.gradle": "include 'core', '" + name + "'\n", "core/build.gradle": "", "core/A.java": ""})
+		want(t, d, "gradle test", sel(t, d, "gradle test", "core/A.java"), "")
+		if pre, _ := Allowed(d, "gradle test", ""); len(pre) != 0 {
+			t.Errorf("%q: allowed %q", name, pre)
+		}
+	}
 }

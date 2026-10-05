@@ -80,18 +80,24 @@ func (o *Orchestrator) verifyIn(ctx context.Context, t, r *task, scope verifySco
 	if r.useGit {
 		site.root, site.base = r.root, r.start
 	}
-	return o.verifyAt(ctx, t, r.cfg.Verify, site, scope)
+	ok, rep, _ := o.verifyAt(ctx, t, r.cfg.Verify, site, scope)
+	return ok, rep
 }
 
 // verifyAt runs the checks vc at site. In verifyAffected scope each
 // command is first narrowed to the tests the changes since site.base
 // affect (package affected); a command sy cannot narrow reliably runs in
 // full. When every narrowed run passes, the narrowed commands run once
-// more in full.
-func (o *Orchestrator) verifyAt(ctx context.Context, t *task, vc config.VerifyCfg, site checkSite, scope verifyScope) (bool, string) {
+// more in full. failed counts the configured commands that fail in the
+// run that decides (a narrowed command with several runs, one per dotnet
+// test project, counts once), for ranking best-of-N candidates.
+func (o *Orchestrator) verifyAt(ctx context.Context, t *task, vc config.VerifyCfg, site checkSite, scope verifyScope) (ok bool, report string, failed int) {
 	cmds := vc.Commands
 	if len(cmds) == 0 {
-		return true, ""
+		return true, "", 0
+	}
+	if ctx.Err() != nil {
+		return false, "cancelled", 0
 	}
 	if scope == verifyFull {
 		return o.runChecks(ctx, t, vc, site, fullRuns(cmds, "the full checks before the final review"))
@@ -111,26 +117,26 @@ func (o *Orchestrator) verifyAt(ctx context.Context, t *task, vc config.VerifyCf
 	for _, p := range plans {
 		switch {
 		case p.Full:
-			runs = append(runs, checkRun{cmd: p.Command, scope: scopeFull, why: p.Why})
+			runs = append(runs, checkRun{cmd: p.Command, of: p.Command, scope: scopeFull, why: p.Why})
 		case len(p.Run) == 0:
 			narrowed++
-			runs = append(runs, checkRun{cmd: p.Command, scope: scopeAffected, why: p.Why, skip: true})
+			runs = append(runs, checkRun{cmd: p.Command, of: p.Command, scope: scopeAffected, why: p.Why, skip: true})
 		default:
 			narrowed++
 			for _, c := range p.Run {
-				runs = append(runs, checkRun{cmd: c, scope: scopeAffected, why: p.Why})
+				runs = append(runs, checkRun{cmd: c, of: p.Command, scope: scopeAffected, why: p.Why})
 			}
 		}
 	}
 	if narrowed > 0 {
 		o.logf("verify: %sonly the tests affected by the changes first (%d changed files); the full checks run once they pass", site.label, len(files))
 	}
-	ok, rep := o.runChecks(ctx, t, vc, site, runs)
+	ok, rep, failed := o.runChecks(ctx, t, vc, site, runs)
 	if rep == "cancelled" || narrowed == 0 {
-		return ok, rep
+		return ok, rep, failed
 	}
 	if !ok {
-		return false, rep + "(Only the tests the changes affect ran; the full checks run once these pass.)\n"
+		return false, rep + "(Only the tests the changes affect ran; the full checks run once these pass.)\n", failed
 	}
 	// The final full run: a narrowed pass never stands in for it.
 	var again []string
@@ -139,16 +145,17 @@ func (o *Orchestrator) verifyAt(ctx context.Context, t *task, vc config.VerifyCf
 			again = append(again, p.Command)
 		}
 	}
-	ok2, rep2 := o.runChecks(ctx, t, vc, site, fullRuns(again, "the affected tests pass; the full checks before the final review"))
+	ok2, rep2, failed2 := o.runChecks(ctx, t, vc, site, fullRuns(again, "the affected tests pass; the full checks before the final review"))
 	if rep2 == "cancelled" {
-		return false, rep2
+		return false, rep2, failed2
 	}
-	return ok2, rep + rep2
+	return ok2, rep + rep2, failed2
 }
 
 // checkRun is one command of a verify run.
 type checkRun struct {
 	cmd   string
+	of    string // the configured command it stands for
 	scope string // scopeFull or scopeAffected
 	why   string // which tests and why, for the log and `sy report`
 	skip  bool   // nothing is affected: nothing to run
@@ -157,7 +164,7 @@ type checkRun struct {
 func fullRuns(cmds []string, why string) []checkRun {
 	out := make([]checkRun, len(cmds))
 	for i, c := range cmds {
-		out[i] = checkRun{cmd: c, scope: scopeFull, why: why}
+		out[i] = checkRun{cmd: c, of: c, scope: scopeFull, why: why}
 	}
 	return out
 }
@@ -182,8 +189,9 @@ func (o *Orchestrator) changedFiles(site checkSite, vc config.VerifyCfg) ([]stri
 }
 
 // runChecks runs commands in order and reports each. All run, also after
-// a failure, so the fix agent sees every failing check at once.
-func (o *Orchestrator) runChecks(ctx context.Context, t *task, vc config.VerifyCfg, site checkSite, runs []checkRun) (bool, string) {
+// a failure, so the fix agent sees every failing check at once. failed
+// counts the configured commands with a failing run.
+func (o *Orchestrator) runChecks(ctx context.Context, t *task, vc config.VerifyCfg, site checkSite, runs []checkRun) (bool, string, int) {
 	timeout := vc.Timeout.D()
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
@@ -191,9 +199,10 @@ func (o *Orchestrator) runChecks(ctx context.Context, t *task, vc config.VerifyC
 	label := site.label
 	allOK := true
 	var b strings.Builder
+	failed := map[string]bool{}
 	for _, r := range runs {
 		if ctx.Err() != nil {
-			return false, "cancelled"
+			return false, "cancelled", len(failed)
 		}
 		what := r.scope
 		if r.why != "" {
@@ -227,6 +236,7 @@ func (o *Orchestrator) runChecks(ctx context.Context, t *task, vc config.VerifyC
 			continue
 		}
 		allOK = false
+		failed[r.of] = true
 		why := lastLines(string(out), 40)
 		if timedOut {
 			why = fmt.Sprintf("timed out after %s\n%s", timeout, why)
@@ -234,7 +244,7 @@ func (o *Orchestrator) runChecks(ctx context.Context, t *task, vc config.VerifyC
 		o.emit(event.Event{Kind: event.Error, Text: fmt.Sprintf("verify ✗ %s%s (%s; %s): %s", label, r.cmd, took, clip(what, 200), clip(lastLines(string(out), 1), 200))})
 		fmt.Fprintf(&b, "FAILED: %s%s%s\n%s\n", label, r.cmd, note, why)
 	}
-	return allOK, b.String()
+	return allOK, b.String(), len(failed)
 }
 
 // verifyAllowed is what a writing agent in dir may run without asking: the
@@ -248,7 +258,9 @@ func verifyAllowed(vc config.VerifyCfg, dir string) []string {
 	for _, c := range vc.Commands {
 		pre, _ := affected.Allowed(dir, c, vc.AffectedCommands[c])
 		for _, p := range pre {
-			if !slices.Contains(out, p) {
+			// Claude's --allowedTools is comma-joined: a comma would
+			// split the rule into others.
+			if !strings.Contains(p, ",") && !slices.Contains(out, p) {
 				out = append(out, p)
 			}
 		}

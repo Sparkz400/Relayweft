@@ -102,6 +102,11 @@ func Allowed(dir, cmd, template string) (prefixes []string, hint string) {
 			pre = ""
 		}
 		pre = strings.TrimSpace(pre)
+		if hasShellSyntax(pre) {
+			// An open quote (sh -c "pytest {files}") would allow
+			// anything after it.
+			return nil, ""
+		}
 		if pre == "" || pre == cmd || strings.HasPrefix(cmd, pre+" ") {
 			// "" would allow any command; a prefix of cmd is allowed already.
 			if pre == "" {
@@ -263,7 +268,8 @@ func hasShellSyntax(cmd string) bool {
 
 // Quoting. Changed file names come from agents, so a name is passed to the
 // shell (sh -c, or cmd.exe /c on Windows) only when it cannot break out of
-// its quotes there: letters, digits, spaces and . _ - / + @ = , : only, and
+// its quotes there: letters, digits, spaces and . _ - / + @ = , : only
+// (ASCII only on Windows), and
 // never a leading "-" that a test runner would read as a flag. Anything
 // else makes the selection unsure, so the full command runs.
 
@@ -276,7 +282,10 @@ func safeArg(s string) bool {
 		switch {
 		case r < 0x80 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'):
 		case strings.ContainsRune(" ._-/+@=,:", r):
-		case r >= 0x80 && (unicode.IsLetter(r) || unicode.IsDigit(r)):
+		case r >= 0x80 && runtime.GOOS != "windows" && (unicode.IsLetter(r) || unicode.IsDigit(r)):
+			// Not on Windows: a child that parses its command line in the
+			// ANSI code page (the Java launcher behind mvn.cmd, gradlew.bat)
+			// maps some letters to ASCII, U+02BA to a double quote.
 		default:
 			return false
 		}

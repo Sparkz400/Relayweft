@@ -869,9 +869,10 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 			if verifying {
 				o.emit(event.Event{Kind: event.Phase, Text: "verify"})
 				// After a fix round, first only the tests the changes
-				// affect; the full checks follow when those pass.
+				// affect; the full checks follow when those pass. The
+				// last round's result decides the task, so it is full.
 				scope := verifyFull
-				if round > 0 {
+				if round > 0 && round < oc.MaxFixRounds {
 					scope = verifyAffected
 				}
 				verified, report, failing = o.verifyRepos(ctx, t, scope)

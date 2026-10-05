@@ -5,7 +5,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -25,9 +24,12 @@ func firstPlaceholder(t string) int {
 }
 
 // selectTemplate fills a template's placeholders: {files} the changed
-// files, {packages} the affected Go packages (else the changed files'
-// folders), {test_files} the affected test files (Go, pytest, else the
-// changed test files). All are relative to the check folder.
+// files, {packages} the affected Go packages for a go command (else the
+// changed files' folders), {test_files} the affected test files (Go for a
+// go command, pytest for a pytest one, else the changed test files and
+// the tests named after a changed file). All are relative to the check
+// folder. The template's own command picks the selection, not the files
+// in the repo, so a pytest template in a repo with a go.mod still works.
 func selectTemplate(ctx context.Context, cmd, tmpl string, c *change) Plan {
 	if firstPlaceholder(tmpl) < 0 {
 		return full(cmd, "its affected_commands entry has no {files}, {packages} or {test_files}")
@@ -37,7 +39,7 @@ func selectTemplate(ctx context.Context, cmd, tmpl string, c *change) Plan {
 		if !strings.Contains(tmpl, ph) {
 			continue
 		}
-		args, why := c.placeholder(ctx, ph)
+		args, why := c.placeholder(ctx, ph, tmpl)
 		if why != "" {
 			return full(cmd, why)
 		}
@@ -53,7 +55,10 @@ func selectTemplate(ctx context.Context, cmd, tmpl string, c *change) Plan {
 	return Plan{Command: cmd, Run: []string{out}, Why: "affected_commands, for the " + c.changedWhy()}
 }
 
-func (c *change) placeholder(ctx context.Context, ph string) ([]string, string) {
+func (c *change) placeholder(ctx context.Context, ph, tmpl string) ([]string, string) {
+	words := strings.Fields(tmpl)
+	isGo := len(words) > 0 && words[0] == "go" && c.goModule()
+	isPy := strings.Contains(tmpl, "pytest")
 	var out []string
 	switch ph {
 	case "{files}":
@@ -63,7 +68,7 @@ func (c *change) placeholder(ctx context.Context, ph string) ([]string, string) 
 			}
 		}
 	case "{packages}":
-		if c.goModule() {
+		if isGo {
 			sel, why := goAffected(ctx, []string{"go", "test", "./..."}, c)
 			if why != "" {
 				return nil, why
@@ -80,7 +85,7 @@ func (c *change) placeholder(ctx context.Context, ph string) ([]string, string) 
 		}
 	case "{test_files}":
 		switch {
-		case c.goModule():
+		case isGo:
 			sel, why := goAffected(ctx, []string{"go", "test", "./..."}, c)
 			if why != "" {
 				return nil, why
@@ -93,7 +98,7 @@ func (c *change) placeholder(ctx context.Context, ph string) ([]string, string) 
 					}
 				}
 			}
-		case slices.ContainsFunc(c.files, func(f string) bool { return strings.HasSuffix(f, ".py") }):
+		case isPy:
 			tests, why := pyAffected(c)
 			if why != "" {
 				return nil, why

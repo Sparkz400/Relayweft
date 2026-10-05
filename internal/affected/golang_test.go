@@ -77,8 +77,16 @@ func TestSelectGo(t *testing.T) {
 	if p := sel(t, dir, "go vet ./...", "c/c.go"); p.Full || p.Run[0] != "go vet ./c" {
 		t.Errorf("vet: %+v", p)
 	}
-	if p := sel(t, dir, "go build ./...", "g/g.go"); p.Full || p.Run[0] != "go build ./g" {
-		t.Errorf("build: %+v", p)
+	// go build is not narrowed: "go build <pattern>" in the allowlist would
+	// let agents pass -toolexec or -o. -C, -modfile and -mod change the
+	// module the packages come from.
+	for _, cmd := range []string{"go build ./...", "go test -C sub ./...", "go test -C=sub ./...", "go test -modfile=x.mod ./...", "go vet -mod=mod ./..."} {
+		if p := sel(t, dir, cmd, "c/c.go"); !p.Full {
+			t.Errorf("%s: %+v", cmd, p)
+		}
+		if pre, _ := Allowed(dir, cmd, ""); len(pre) != 0 {
+			t.Errorf("%s: allowed %q", cmd, pre)
+		}
 	}
 	if !strings.Contains(sel(t, dir, "go test ./...", "a/a.go").Why, "3 of 7 packages") {
 		t.Errorf("reason: %q", sel(t, dir, "go test ./...", "a/a.go").Why)
