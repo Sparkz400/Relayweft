@@ -32,7 +32,7 @@ jobs:
       - name: install vhs, ttyd and ffmpeg
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q ttyd ffmpeg
+          sudo apt-get install -y -q ttyd ffmpeg gifsicle
           curl -fsSL -o /tmp/vhs.tgz "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz"
           echo "${VHS_SHA256}  /tmp/vhs.tgz" | sha256sum -c -
           tar -xzf /tmp/vhs.tgz -C /tmp

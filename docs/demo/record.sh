@@ -7,7 +7,8 @@
 # Plan approval, the worktree pool, change review, the checks and undo are
 # rw's own.
 #
-# Needs Linux or macOS with Go, git, vhs, ttyd and ffmpeg. CI runs it in
+# Needs Linux or macOS with Go, git, vhs, ttyd and ffmpeg (and gifsicle,
+# if it is there, to shrink the GIF). CI runs it in
 # .github/workflows/demo.yml (Actions > demo > Run workflow). Run it from
 # the repo root:
 #
@@ -45,6 +46,9 @@ export PATH="$work/bin:\$PATH"
 export XDG_CONFIG_HOME="$work/config" XDG_CACHE_HOME="$work/cache" GOCACHE="$gocache"
 export GIT_AUTHOR_NAME=demo GIT_AUTHOR_EMAIL=demo@example.com GIT_COMMITTER_NAME=demo GIT_COMMITTER_EMAIL=demo@example.com
 export RW_NO_SETUP=1 RW_DEMO_SPEED=\${RW_DEMO_SPEED:-1}
+# The TUI's colours: termenv draws none when CI is set (as on Actions).
+unset CI
+export COLORTERM=truecolor
 export PS1='\[\e[1;36m\]~/inventory\[\e[0m\] \$ '
 cd "$work/inventory"
 EOF
@@ -60,4 +64,8 @@ EOF
 
 cd "$repo"
 PATH="$work/bin:$PATH" vhs docs/demo/demo.tape
+# Keep the GIF small for the README (about 3 MB at most).
+if command -v gifsicle >/dev/null; then
+  gifsicle -O3 --lossy=30 --colors 128 -b docs/demo/demo.gif
+fi
 ls -l docs/demo/demo.gif docs/demo/demo.webm

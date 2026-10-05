@@ -13,13 +13,13 @@ Require rw
 Require git
 
 Set Shell "bash"
-Set FontSize 15
-Set Width 1360
-Set Height 800
+Set FontSize 14
+Set Width 1280
+Set Height 740
 Set Padding 14
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 28ms
-Set Framerate 12
+Set Framerate 10
 Set CursorBlink false
 
 Hide
