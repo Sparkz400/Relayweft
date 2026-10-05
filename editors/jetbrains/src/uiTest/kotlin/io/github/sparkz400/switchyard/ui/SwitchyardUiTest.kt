@@ -155,7 +155,7 @@ class SwitchyardUiTest {
             // The diff of notes.txt, with the rejected hunk struck through.
             review.getAllTexts { it.text == "hunk 2" }.first().click()
             review.keyboard { enter() }
-            until("the diff of notes.txt") { x("//div[@class='IdeFrameImpl']").hasSubtext("${Fake.NOTES} — edit review") }
+            until("the diff of notes.txt") { frame.hasSubtext("${Fake.NOTES} — edit review") }
             Thread.sleep(2_000)
             shot(frame, "4-diff-review")
 
