@@ -30,6 +30,7 @@ type benchMode struct {
 	name, provider string       // provider set: a single-agent run
 	route          config.Route // the single agent's route
 	noHandoff      bool
+	bestOf         bool        // every writing step runs as best of N (routing.best_of.when: always)
 	routes         []roleRoute // route variant: these roles on these routes
 }
 
@@ -41,12 +42,13 @@ type roleRoute struct {
 
 func (r roleRoute) spec() string { return r.role + "=" + config.RouteSpec(r.provider, r.route) }
 
-// parseBenchMode reads routed, routed-nohandoff, routed:<role>=<route>[,...]
+// parseBenchMode reads routed, routed-nohandoff, routed-bestof,
+// routed:<role>=<route>[,...]
 // and single:<provider>:<model>[:effort].
 func parseBenchMode(m string) (benchMode, error) {
-	const want = "want routed, routed-nohandoff, routed:<role>=<provider>:<model>[:effort] or single:<provider>:<model>[:effort]"
-	if m == "routed" || m == "routed-nohandoff" {
-		return benchMode{name: m, noHandoff: m == "routed-nohandoff"}, nil
+	const want = "want routed, routed-nohandoff, routed-bestof, routed:<role>=<provider>:<model>[:effort] or single:<provider>:<model>[:effort]"
+	if m == "routed" || m == "routed-nohandoff" || m == "routed-bestof" {
+		return benchMode{name: m, noHandoff: m == "routed-nohandoff", bestOf: m == "routed-bestof"}, nil
 	}
 	if spec, ok := strings.CutPrefix(m, "routed:"); ok {
 		bm := benchMode{name: m}
@@ -92,15 +94,19 @@ func knownRole(role string) bool {
 }
 
 // store returns the config a run of this mode uses: base itself, or a copy
-// without the context hand-off or with the variant's routes (set the way
-// --route sets them, so a learned route of that role does not apply).
+// without the context hand-off, with best of N for every writing step, or
+// with the variant's routes (set the way --route sets them, so a learned
+// route of that role does not apply).
 func (m benchMode) store(base *config.Store) (*config.Store, error) {
-	if !m.noHandoff && len(m.routes) == 0 {
+	if !m.noHandoff && !m.bestOf && len(m.routes) == 0 {
 		return base, nil
 	}
 	cfg := base.Get()
 	if m.noHandoff {
 		cfg.Orchestrator.Handoff = false
+	}
+	if m.bestOf {
+		cfg.Routing.BestOf.When = config.BestOfAlways
 	}
 	st := config.NewStore(cfg, base.Path())
 	for _, r := range m.routes {

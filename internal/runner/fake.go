@@ -52,6 +52,9 @@ const (
 	// MarkerResume starts the message that continues a step's session
 	// after sy stopped in the middle of it.
 	MarkerResume = "[SY:RESUME]"
+	// MarkerBestOf starts the reviewer's prompt that picks one of a
+	// best-of step's candidates.
+	MarkerBestOf = "[SY:BEST-OF]"
 )
 
 func (f *Fake) sleep(ctx context.Context, min, max time.Duration) bool {
@@ -151,6 +154,9 @@ func (f *Fake) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	switch {
 	case strings.Contains(p, MarkerJudge):
 		res.Final = "B"
+	case strings.Contains(p, MarkerBestOf):
+		f.script(ctx, send, []string{"Read candidate diffs"}, nil)
+		res.Final = "```json\n{\"pick\": \"A\", \"why\": \"smaller change with the same effect\"}\n```"
 	case strings.Contains(p, MarkerPlanReview):
 		f.script(ctx, send, []string{"Read plan", "Grep TODO"}, nil)
 		if f.RejectPlan && !f.rejectedOnce("plan") {

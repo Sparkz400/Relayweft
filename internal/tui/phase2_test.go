@@ -114,6 +114,32 @@ func TestPlanApprovalEditDeleteMoveApprove(t *testing.T) {
 	}
 }
 
+// b turns best of N on or off for a writing step; a read-only step refuses.
+func TestPlanApprovalBestOfToggle(t *testing.T) {
+	ap := NewApprover()
+	m, _, _ := newModelWith(t, false, ap)
+	m.Update(tea.WindowSizeMsg{Width: 160, Height: 45})
+	res := askPlan(ap, context.Background())
+	nextApproval(t, m, ap)
+	m.Update(key("b")) // a is read-only
+	if v := checkView(t, m, 160, 45); !strings.Contains(v, "best of N is for steps that change files") {
+		t.Errorf("no refusal for a read-only step:\n%s", v)
+	}
+	m.Update(key("down"))
+	m.Update(key("b")) // b: on
+	if v := checkView(t, m, 160, 45); !strings.Contains(v, "best of N") {
+		t.Errorf("the plan does not show best of N:\n%s", v)
+	}
+	m.Update(key("down"))
+	m.Update(key("b"))
+	m.Update(key("b")) // c: on, then off
+	m.Update(key("enter"))
+	a := waitPlan(t, res)
+	if !a.ok || a.p.Subtasks[0].BestOf != "" || a.p.Subtasks[1].BestOf != orchestrator.BestOfOn || a.p.Subtasks[2].BestOf != orchestrator.BestOfOff {
+		t.Fatalf("answer = %+v", a.p.Subtasks)
+	}
+}
+
 func TestPlanApprovalEmptyPlanAndCancel(t *testing.T) {
 	ap := NewApprover()
 	m, _, _ := newModelWith(t, true, ap)

@@ -32,7 +32,16 @@ type Subtask struct {
 	// Repo is the workspace repo the subtask works in ("" = the project
 	// folder); see workspace.go.
 	Repo string `json:"repo,omitempty"`
+	// BestOf turns best of N (bestof.go) on or off for this step in plan
+	// approval: BestOfOn, BestOfOff, or "" for routing.best_of.
+	BestOf string `json:"best_of,omitempty"`
 }
+
+// Subtask.BestOf values.
+const (
+	BestOfOn  = "on"
+	BestOfOff = "off"
+)
 
 // Verdict is what the reviewer returns.
 type Verdict struct {
@@ -79,6 +88,11 @@ func parsePlanFor(reply string, repos []string) (Plan, error) {
 		return p, err
 	}
 	p.Repos = repos
+	for i := range p.Subtasks {
+		// Only a person turns best of N on for a step: it runs (and pays
+		// for) several agents.
+		p.Subtasks[i].BestOf = ""
+	}
 	return NormalizePlan(p)
 }
 
@@ -115,6 +129,9 @@ func NormalizePlan(p Plan) (Plan, error) {
 		}
 		if st.Prompt == "" {
 			st.Prompt = st.Title
+		}
+		if (st.BestOf != BestOfOn && st.BestOf != BestOfOff) || st.Kind.ReadOnly() {
+			st.BestOf = ""
 		}
 	}
 	// Drop dependencies on unknown ids and on itself.

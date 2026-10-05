@@ -42,6 +42,16 @@ func (d *Data) Markdown(w io.Writer) error {
 				md(strings.Join(s.DependsOn, ", ")), md(s.Result))
 		}
 		p("\n")
+		bestOf := false
+		for _, s := range d.Steps {
+			if s.BestOf != "" {
+				p("- %s: %s\n", md(s.ID), md(s.BestOf))
+				bestOf = true
+			}
+		}
+		if bestOf {
+			p("\n")
+		}
 		for _, s := range d.Steps {
 			if s.Final != "" || s.Err != "" {
 				p("<details><summary>%s: final answer</summary>\n\n%s\n%s\n</details>\n\n", htmlText(s.ID), fence(s.Final, "text"), fence(s.Err, "text"))

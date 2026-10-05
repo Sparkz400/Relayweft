@@ -90,6 +90,11 @@ type Orchestrator struct {
 	paused  bool
 	pauseCh chan struct{}                         // closed when unpaused
 	cancels map[string]map[int]context.CancelFunc // agent id -> run seq -> cancel
+
+	// bestOfStop stops a running best-of step (bestof.go): its candidates,
+	// also those still waiting to start, its pick and its landing.
+	bestOfStop map[string]context.CancelFunc
+
 	runSeq  int
 	active  int // agents past the load gate (guarded by mu)
 	running bool
@@ -184,6 +189,9 @@ func (o *Orchestrator) Kill(agentID string) bool {
 	for _, c := range o.cancels[agentID] {
 		fns = append(fns, c)
 	}
+	if stop, ok := o.bestOfStop[agentID]; ok {
+		fns = append(fns, stop)
+	}
 	o.mu.Unlock()
 	for _, c := range fns {
 		c()
@@ -255,7 +263,8 @@ type stepResult struct {
 	err    string
 	route  string
 	files  []string
-	tokens event.TokenUsage
+	tokens event.TokenUsage // of every attempt
+	bestOf string           // how a best-of step's winner was picked (bestof.go)
 }
 
 // task is the per-run state.
@@ -312,6 +321,12 @@ type task struct {
 	// running when sy stopped (resumeStep); guarded by resumeMu.
 	interrupted map[string]StepRun
 	resumeMu    sync.Mutex
+
+	// Best of N (bestof.go): bestOfAny is set when a step may run as best
+	// of N (writers then use pooled worktrees); bestOf are the plan's steps
+	// that do, with why (set by execute before any step starts).
+	bestOfAny bool
+	bestOf    map[string]string
 }
 
 // stepLoc is where a subtask's agent works.
@@ -319,6 +334,9 @@ type stepLoc struct {
 	dir  string // its working directory
 	slot string // the pool worktree dir is in ("" = the repo's own tree)
 	base string // the commit the slot was prepared at
+	// owner: the agent is its step's running agent although its id is not
+	// the step's (a best-of winner's feedback rerun, bestof.go).
+	owner bool
 }
 
 // interruptedRun returns the run of a subtask that sy stopped in the middle
@@ -403,8 +421,9 @@ func (o *Orchestrator) worktreesAllowedIn(t, r *task) bool {
 		o.tipped = true
 		o.logf("big repo (%d tracked files): for faster snapshots run in it: %s", files, strings.Join(tips, " && "))
 	}
-	// Reviewing changes needs every writer in a worktree, even one at a time.
-	if !o.reviewing(t) && (!oc.Worktrees || !oc.Parallel || oc.MaxThreads < 2) {
+	// Reviewing changes needs every writer in a worktree, even one at a time;
+	// so does best of N, unless worktrees are off.
+	if !o.reviewing(t) && (!oc.Worktrees || ((!oc.Parallel || oc.MaxThreads < 2) && !t.bestOfAny)) {
 		return false
 	}
 	if !SupportsMergeTree() {
@@ -726,6 +745,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 
 	// Git setup.
 	o.snapshotBefore(t)
+	t.bestOfAny = cfg.Routing.BestOf.On() || (t.resumed && t.state.Plan != nil && planBestOf(*t.state.Plan))
 	t.wtOK = o.worktreesAllowed(t)
 	if o.reviewing(t) && !t.wtOK {
 		why := "this folder is not a git repo"
@@ -835,6 +855,10 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		}
 		plan = np
 		o.logf("plan approved: %d subtasks", len(plan.Subtasks))
+		if planBestOf(plan) && !t.bestOfAny {
+			// Turned on for a step in the plan: writers need worktrees now.
+			o.allowBestOf(t)
+		}
 	}
 	if t.state != nil {
 		pl := plan
@@ -1037,12 +1061,18 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 		threads = 1
 	}
 	edits := 0
+	t.bestOf = map[string]string{}
 	for _, st := range p.Subtasks {
 		if !st.Kind.ReadOnly() {
 			edits++
 		}
+		if on, why := o.wantBestOf(t, st); on {
+			t.bestOf[st.ID] = why
+		}
 	}
-	useWT := t.wtOK && ((threads > 1 && edits > 1) || (o.reviewing(t) && edits > 0))
+	// A best-of step needs every writer in a worktree, like change review.
+	wantWT := (threads > 1 && edits > 1) || ((o.reviewing(t) || len(t.bestOf) > 0) && edits > 0)
+	useWT := t.wtOK && wantWT
 	if useWT {
 		if t.lfs {
 			o.logf("git lfs repo: worktrees keep LFS files as pointers")
@@ -1063,7 +1093,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 	// pool, and each has its own one-writer-at-a-time lock.
 	t.useWT = useWT
 	for _, r := range t.repos {
-		r.useWT = r.wtOK && ((threads > 1 && edits > 1) || (o.reviewing(t) && edits > 0))
+		r.useWT = r.wtOK && wantWT
 		if r.useWT {
 			r.pool = poolDir(r.root)
 		}
@@ -1208,7 +1238,12 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				// A step interrupted in a pool worktree continues there,
 				// where its half-done edits are.
 				prev, _ := t.interruptedRun(st.ID)
+				bestOf := false
+				if _, on := t.bestOf[st.ID]; on {
+					r, bestOf = o.runBestOf(ctx, t, st, deps, sem)
+				}
 				switch {
+				case bestOf:
 				case st.Kind.ReadOnly():
 					r = o.runStep(ctx, t, st, deps, stepLoc{dir: dir}, "")
 				case rp.useWT || prev.Slot != "":
@@ -1284,6 +1319,12 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		if err == nil {
 			s, base = cs, prev.Base
 			o.logf("%s: continuing in %s, which holds the edits its agent made before sy stopped", st.ID, prev.Slot)
+		} else if prev.Kept != "" && rp.useWT {
+			// A best-of winner: its work is kept as a commit (bestof.go).
+			t.takeInterrupted(st.ID)
+			if r, ok := o.landKept(ctx, t, rp, st, deps, prev, mainDir, err); ok {
+				return r
+			}
 		} else {
 			// Its session must not be continued elsewhere: it would
 			// think its edits are there.
@@ -1333,13 +1374,23 @@ func slotWorkDir(slot, root, mainDir string) string {
 // it into rp's tree: with the person's review of the changes first when
 // review is set and change review is on. The changes are against loc.base.
 func (o *Orchestrator) landSlot(ctx context.Context, t, rp *task, st Subtask, deps []string, loc stepLoc, r stepResult, review bool) stepResult {
+	return o.landSlotFrom(ctx, t, rp, st, deps, loc, r, review, nil)
+}
+
+// landSlotFrom is landSlot for a best-of step's winner c (nil: the step
+// itself): its work was committed already (c.commit, before its checks ran
+// in the slot), and a rerun for your feedback runs on its route.
+func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask, deps []string, loc stepLoc, r stepResult, review bool, c *bestOfCand) stepResult {
 	g := git{rp.root}
 	path, base := loc.slot, loc.base
 	wg := git{path}
 	var commit, agentHead string
 	for round := 1; ; round++ {
-		sc, err := wg.commitWork(base, "switchyard: "+st.Title)
-		if err != nil {
+		var sc slotCommit
+		var err error
+		if c != nil && round == 1 {
+			sc = slotCommit{Commit: c.commit, Changed: c.changed}
+		} else if sc, err = wg.commitWork(base, "switchyard: "+st.Title); err != nil {
 			o.mergeEvent(t, st.ID, false, "commit failed: "+err.Error())
 			r.ok, r.err = false, "commit failed: "+err.Error()
 			return r
@@ -1369,6 +1420,15 @@ func (o *Orchestrator) landSlot(ctx context.Context, t, rp *task, st Subtask, de
 				o.mergeEvent(t, st.ID, false, "stopped by budget during your review; the changes are kept on "+branch)
 				t.addNote(fmt.Sprintf("the budget stopped the task while %s was in review; its changes are on branch %s", st.ID, branch))
 				r.err = "stopped by budget during your review; the changes are kept on " + branch
+			} else if c != nil {
+				// A best-of winner: its candidate branch holds the first
+				// version; a version from a feedback round is kept as well.
+				branch := c.branch
+				if commit != c.commit {
+					branch = o.saveBranchIn(rp, c.id, commit)
+				}
+				o.logf("%s: stopped during your review; the kept candidate's work is on %s", st.ID, branch)
+				t.addNote(fmt.Sprintf("the task stopped while best-of step %s was in review; the kept candidate's work is on branch %s", st.ID, branch))
 			}
 			return r
 		}
@@ -1382,7 +1442,7 @@ func (o *Orchestrator) landSlot(ctx context.Context, t, rp *task, st Subtask, de
 			o.logf("%s: you asked for changes: %s", st.ID, clip(dec.Feedback, 200))
 			again := stepPrompt(t.text, st, deps, "", "", false) + "\nYou already changed files in this directory for this subtask. The user reviewed your changes and asks:\n" +
 				dec.Feedback + "\nUpdate your changes accordingly, then reply with a short summary.\n"
-			r = o.runStep(ctx, t, st, deps, loc, again)
+			r = o.runStepAs(ctx, t, st, deps, loc, again, c)
 			if !r.ok {
 				// Keep the last reviewed version; the slot is reset for the
 				// next agent.
@@ -1602,14 +1662,29 @@ func errorSignature(s string) string {
 // runStep runs one subtask with retries, limit fallback and the
 // "error repeats" escalation. prompt overrides the generated step prompt.
 func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []string, loc stepLoc, prompt string) stepResult {
+	return o.runStepAs(ctx, t, st, deps, loc, prompt, nil)
+}
+
+// runStepAs is runStep for a best-of candidate c (nil: the step itself):
+// its agent has the candidate's id and route, and a usage limit ends it
+// instead of moving it to another provider (the other candidates are
+// there already).
+func (o *Orchestrator) runStepAs(ctx context.Context, t *task, st Subtask, deps []string, loc stepLoc, prompt string, c *bestOfCand) stepResult {
 	oc := t.cfg.Orchestrator
 	dir := loc.dir
 	step := router.Step{ID: st.ID, Title: st.Title, Kind: st.Kind, Prompt: st.Prompt, Files: st.Files, MainProvider: t.mainProv, UserRole: st.Role}
+	agentID := st.ID
+	if c != nil {
+		pin := c.pin
+		step.Pin, agentID = &pin, c.id
+	}
 	var prevErr, advice, lastSig string
+	var used event.TokenUsage
 	failures, limitRetries := 0, 0
 	first := 1
-	if prev, ok := t.takeInterrupted(st.ID); ok {
+	if prev, ok := t.interruptedRun(st.ID); ok && c == nil {
 		// sy stopped while this step's agent worked: continue its session.
+		t.takeInterrupted(st.ID)
 		first = max(1, prev.Attempt)
 		if r, ran := o.resumeStep(ctx, t, step, st, loc, prev); ran {
 			if r.ok || r.killed || ctx.Err() != nil {
@@ -1633,12 +1708,17 @@ func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []
 		} else if advice != "" || prevErr != "" {
 			p += "\n\nPREVIOUS ATTEMPT FAILED WITH:\n" + clip(prevErr, 2000) + "\n\nREVIEWER ADVICE:\n" + advice
 		}
-		d, res := o.runAgentAt(ctx, t, step, st.ID, AgentMain, loc, p, attempt, nil)
-		r := stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: res.Tokens}
+		d, res := o.runAgentAt(ctx, t, step, agentID, AgentMain, loc, p, attempt, nil)
+		used = used.Add(res.Tokens)
+		r := stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: used}
 		if res.Err != nil {
 			r.err = res.Err.Error()
 		}
 		if r.ok || res.Killed || ctx.Err() != nil {
+			return r
+		}
+		if res.LimitHit && c != nil {
+			c.limit = true
 			return r
 		}
 		if res.LimitHit {
@@ -1655,9 +1735,13 @@ func (o *Orchestrator) runStep(ctx context.Context, t *task, st Subtask, deps []
 		}
 		sig := errorSignature(r.err)
 		if sig == lastSig {
-			step.RepeatError = true
-			step.Escalations++
-			o.logf("%s: same error twice -> escalating", st.ID)
+			if c == nil {
+				step.RepeatError = true
+				step.Escalations++
+				o.logf("%s: same error twice -> escalating", st.ID)
+			} else {
+				o.logf("%s: same error twice (a best-of candidate stays on %s)", c.id, c.pin.Label())
+			}
 			if oc.ReviewOnRepeatError {
 				if v, ok := o.review(ctx, t, "error:"+st.ID, errorReviewPrompt(t.text, st, r.err, failures)); ok {
 					advice = strings.TrimSpace(v.Advice + "\n" + strings.Join(v.Issues, "\n"))
@@ -1750,7 +1834,7 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	} else {
 		d = o.router.Route(step)
 	}
-	if resume == nil && o.router.NeedsJudge(d) && step.Kind != router.KindJudge {
+	if resume == nil && step.Pin == nil && o.router.NeedsJudge(d) && step.Kind != router.KindJudge {
 		jstep := router.Step{ID: step.ID + "-judge", Title: "judge " + step.Title, Kind: router.KindJudge}
 		_, jres := o.runAgent(ctx, t, jstep, AgentJudge, AgentMain, dir, router.JudgePrompt(step), 1)
 		if role, ok := router.ParseJudge(jres.Final); ok {
@@ -1810,14 +1894,26 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	if resume != nil {
 		spec.Resume = resume.Session
 	}
-	if t.state != nil && agentID == step.ID && t.planSteps[step.ID] {
+	if t.state != nil && (agentID == step.ID || loc.owner) && t.planSteps[step.ID] {
 		// A plan step: record where its agent works, and its session as
 		// soon as the CLI reports it, so a resume can continue it.
-		t.state.setRunning(step.ID, StepRun{Provider: d.Provider, Kind: t.cfg.Kind(d.Provider), Model: d.Model, Effort: d.Effort, Role: d.Role,
-			Session: spec.Resume, Dir: loc.dir, Slot: loc.slot, Base: loc.base, Attempt: attempt, Started: time.Now()})
+		run := StepRun{Provider: d.Provider, Kind: t.cfg.Kind(d.Provider), Model: d.Model, Effort: d.Effort, Role: d.Role,
+			Session: spec.Resume, Dir: loc.dir, Slot: loc.slot, Base: loc.base, Attempt: attempt, Started: time.Now()}
+		if prev, ok := t.state.runningStep(step.ID); ok {
+			// A best-of winner's kept work and outcome stay (bestof.go).
+			run.Kept, run.BestOf = prev.Kept, prev.BestOf
+			if loc.owner {
+				run.Attempt = max(attempt, prev.Attempt+1)
+			}
+		}
+		t.state.setRunning(step.ID, run)
 		spec.OnSession = func(id string) { t.state.noteSession(step.ID, id) }
 	}
 	res := rn.Run(actx, spec, o.emit)
+	if spec.OnSession != nil && res.SessionID != "" {
+		// Also when the CLI reported it only at the end.
+		t.state.noteSession(step.ID, res.SessionID)
+	}
 	res = o.deliverTold(actx, rn, spec, agentID, res)
 	if res.SessionID != "" {
 		o.rememberSession(agentID, AgentSession{Provider: d.Provider, Model: d.Model, Effort: d.Effort, Role: d.Role,
@@ -1827,7 +1923,7 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	t.addTokens(d.Provider, res.Tokens)
 	if !step.Kind.ReadOnly() {
 		t.noteFiles(dir, res.Files)
-		if res.OK() {
+		if res.OK() && step.Pin == nil { // a best-of step counts its winner only (bestof.go)
 			t.state.noteAuthor(d.Provider)
 		}
 	}
