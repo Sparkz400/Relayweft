@@ -195,9 +195,11 @@ needs an existing package.
 
 `sy update` replaces only a binary that no package manager owns. It tells
 them apart by the binary's real path (after symlinks): Homebrew's
-`Cellar`, Scoop's `scoop\apps`, winget's `WinGet\Packages`, and for a
-binary under `/usr/` the package database (`dpkg-query -S`, `rpm -qf`,
-`pacman -Qo`, `apk info --who-owns`). In those cases `sy update --check`
+`Cellar/switchyard/<version>/bin/sy`, Scoop's `apps\sy\<version>\` (in a
+`scoop` folder, `$SCOOP` or `$SCOOP_GLOBAL`), winget's
+`WinGet\Packages\Sparkz400.Switchyard_<source>\`, and for a binary under
+`/usr/` the package database (`dpkg-query -S`, `rpm -qf`, `pacman -Qo`,
+`apk info --who-owns`, run with `LC_ALL=C`). In those cases `sy update --check`
 names the package manager's command, and `sy update` prints it and
 changes nothing. `sy update --force` replaces the binary anyway.
 

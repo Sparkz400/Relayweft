@@ -291,6 +291,8 @@ func fakeOwners(t *testing.T, owners map[string]string) *[]string {
 
 func TestPackageManagerByPath(t *testing.T) {
 	asked := fakeOwners(t, nil)
+	t.Setenv("SCOOP", "")
+	t.Setenv("SCOOP_GLOBAL", "")
 	cases := []struct{ path, want string }{
 		{"/opt/homebrew/Cellar/switchyard/0.2.0/bin/sy", "Homebrew"},
 		{"/usr/local/Cellar/switchyard/0.2.0/bin/sy", "Homebrew"},
@@ -299,10 +301,23 @@ func TestPackageManagerByPath(t *testing.T) {
 		{`D:\Scoop\apps\sy\current\sy.exe`, "Scoop"},
 		{`C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\Sparkz400.Switchyard_Microsoft.Winget.Source_8wekyb3d8bbwe\sy.exe`, "winget"},
 		{`C:\Program Files\WinGet\Packages\Sparkz400.Switchyard_Microsoft.Winget.Source_8wekyb3d8bbwe\sy.exe`, "winget"},
+		{`C:\ProgramData\scoop\apps\sy\current\sy.exe`, "Scoop"},
 		{`C:\tools\sy.exe`, ""},
 		{"/home/me/bin/sy", ""},
 		{"/home/me/go/bin/sy", ""},
 		{"/usr/local/bin/sy", ""}, // asks the package databases, none owns it
+		// Only the package managers' own folders for sy count, not a
+		// hand-downloaded sy that happens to sit under a similar path.
+		{"/home/me/Cellar/bin/sy", ""},
+		{"/opt/homebrew/Cellar/other/1.0/bin/sy", ""},
+		{"/opt/homebrew/Cellar/switchyard/0.2.0/libexec/sy", ""},
+		{`C:\Users\me\scoop\apps\other\1.0\sy.exe`, ""},
+		{`C:\Users\me\scoop\apps\sy.exe`, ""},
+		{`C:\Users\me\scoop\apps\sy\1.0\bin\sy.exe`, ""},
+		{`C:\work\apps\sy\1.0\sy.exe`, ""}, // not a Scoop root
+		{`C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\Other.Tool_Microsoft.Winget.Source_8wekyb3d8bbwe\sy.exe`, ""},
+		{`C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\sy.exe`, ""},
+		{`C:\Users\me\AppData\Local\Microsoft\WinGet\Links\sy.exe`, ""},
 	}
 	for _, c := range cases {
 		pm, ok := packageManager(c.path, "amd64")
@@ -338,10 +353,47 @@ func TestPackageManagerByOwner(t *testing.T) {
 			t.Errorf("%s %q: got %+v, %v; want %q with %q", c.tool, c.out, pm, ok, c.wantName, c.wantHow)
 		}
 	}
-	// dpkg-query output with only diversion lines names no package.
-	fakeOwners(t, map[string]string{"dpkg-query": "diversion by foo from: /usr/bin/sy"})
-	if pm, ok := packageManager("/usr/bin/sy", "amd64"); ok {
-		t.Errorf("diversion only: got %+v", pm)
+	// Multi-arch names and files shared by several packages.
+	fakeOwners(t, map[string]string{"dpkg-query": "switchyard:amd64, other: /usr/bin/sy"})
+	if pm, ok := packageManager("/usr/bin/sy", "amd64"); !ok || pm.name != "a .deb package (switchyard:amd64, other)" {
+		t.Errorf("multi-owner: got %+v, %v", pm, ok)
+	}
+
+	// Output that names no package: diversions (also a local one, left
+	// behind after the package was removed), translated text, another path,
+	// and errors printed on stdout.
+	for _, c := range []struct{ tool, out string }{
+		{"dpkg-query", "diversion by foo from: /usr/bin/sy"},
+		{"dpkg-query", "local diversion from: /usr/bin/sy\nlocal diversion to: /usr/bin/sy.distrib"},
+		{"dpkg-query", "lokale Umleitung von: /usr/bin/sy\nlokale Umleitung zu: /usr/bin/sy.distrib"},
+		{"dpkg-query", "Umleitung durch foo von: /usr/bin/sy"},
+		{"dpkg-query", "switchyard: /usr/bin/sy-other"},
+		{"rpm", "file /usr/bin/sy is not owned by any package"},
+		{"pacman", "error: No package owns /usr/bin/sy"},
+		{"apk", "ERROR: /usr/bin/sy: Could not find owner package"},
+	} {
+		fakeOwners(t, map[string]string{c.tool: c.out})
+		if pm, ok := packageManager("/usr/bin/sy", "amd64"); ok {
+			t.Errorf("%s %q: got %+v, want no package manager", c.tool, c.out, pm)
+		}
+	}
+}
+
+// A Scoop installed to a custom root ($SCOOP, $SCOOP_GLOBAL).
+func TestPackageManagerScoopRoots(t *testing.T) {
+	fakeOwners(t, nil)
+	t.Setenv("SCOOP", `D:\Tools\Pkgs\`)
+	t.Setenv("SCOOP_GLOBAL", `E:/GlobalApps`)
+	for path, want := range map[string]bool{
+		`D:\Tools\Pkgs\apps\sy\current\sy.exe`: true,
+		`d:\tools\pkgs\apps\sy\0.2.0\sy.exe`:   true,
+		`E:\GlobalApps\apps\sy\0.2.0\sy.exe`:   true,
+		`D:\Tools\Other\apps\sy\0.2.0\sy.exe`:  false,
+		`D:\Tools\Pkgs\apps\other\1\sy.exe`:    false,
+	} {
+		if _, ok := packageManager(path, "amd64"); ok != want {
+			t.Errorf("packageManager(%q) = %v, want %v", path, ok, want)
+		}
 	}
 }
 

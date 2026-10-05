@@ -12,7 +12,8 @@ on:
       - "Formula/**"
       - ".github/workflows/release.yml"
       - ".github/workflows/packaging.yml"
-      - "cmd/sy/update.go"
+      - "cmd/sy/update*.go"
+      - "go.mod"
   workflow_dispatch:
 
 permissions:
@@ -26,6 +27,10 @@ jobs:
         with:
           persist-credentials: false
       - name: render for the formula's release and compare
+        env:
+          # For `gh release view` (the release date in the winget
+          # manifests); reading is all it needs.
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="$(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' Formula/switchyard.rb | head -n 1)"
           echo "formula version: $version"
@@ -33,6 +38,7 @@ jobs:
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/checksums.txt" \
             "https://github.com/sparkz400/switchyard/releases/download/v$version/checksums.txt"
           sh packaging/render-manifests.sh "$version" "$RUNNER_TEMP/checksums.txt" "$RUNNER_TEMP/winget"
+          grep ReleaseDate "$RUNNER_TEMP/winget/Sparkz400.Switchyard.installer.yaml"
           if ! git diff --exit-code; then
             echo "::error::the committed manifests differ from the rendered ones; run packaging/render-manifests.sh $version and commit"
             exit 1

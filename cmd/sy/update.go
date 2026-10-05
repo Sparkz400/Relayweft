@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -42,14 +43,17 @@ var (
 	updateOut io.Writer = os.Stdout
 	// updateOwnerQuery runs a package database query (dpkg-query, rpm,
 	// pacman, apk) and returns its output. It fails when the tool is not
-	// installed or the file belongs to no package.
+	// installed or the file belongs to no package. LC_ALL=C keeps the
+	// output untranslated, so it can be parsed.
 	updateOwnerQuery = func(name string, args ...string) (string, error) {
 		if _, err := exec.LookPath(name); err != nil {
 			return "", err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, name, args...).Output()
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Env = append(os.Environ(), "LC_ALL=C")
+		out, err := cmd.Output()
 		return strings.TrimSpace(string(out)), err
 	}
 )
@@ -194,21 +198,36 @@ type pkgManager struct {
 	how  string // what to do instead of `sy update`
 }
 
+var (
+	// Homebrew installs the formula as <prefix>/Cellar/switchyard/<version>/bin/sy.
+	brewPath = regexp.MustCompile(`/Cellar/switchyard/[^/]+/bin/sy$`)
+	// Scoop: <root>/apps/sy/<version or current>/<file>; the default roots
+	// are ~/scoop and C:\ProgramData\scoop. Lowercased paths.
+	scoopApp = regexp.MustCompile(`/apps/sy/[^/]+/[^/]+$`)
+	// winget portable: ...\WinGet\Packages\Sparkz400.Switchyard_<source>\<file>.
+	wingetPath = regexp.MustCompile(`/winget/packages/sparkz400\.switchyard_[^/]+/[^/]+$`)
+	// dpkg-query -S prints "pkg[, pkg...]: path"; diversion lines ("local
+	// diversion from: ...", "diversion by x to: ...") do not fit this.
+	debOwners = regexp.MustCompile(`^[a-z0-9][a-z0-9+.:-]*(, [a-z0-9][a-z0-9+.:-]*)*$`)
+	// An rpm, pacman or apk package name.
+	pkgName = regexp.MustCompile(`^[A-Za-z0-9@_+][A-Za-z0-9@._+-]*$`)
+)
+
 // packageManager reports whether a package manager installed the sy binary
 // at target (symlinks already resolved). Homebrew, Scoop and winget are told
-// by their folders. A binary under /usr/ is looked up in the system's
-// package database (dpkg, rpm, pacman, apk), since the .deb, .rpm, .apk and
-// AUR packages all install /usr/bin/sy.
+// by the folders they install sy to. A binary under /usr/ is looked up in
+// the system's package database (dpkg, rpm, pacman, apk), since the .deb,
+// .rpm, .apk and AUR packages all install /usr/bin/sy.
 func packageManager(target, goarch string) (pkgManager, bool) {
 	// Backslashes too: tests pass Windows paths on every OS.
 	p := strings.ReplaceAll(target, `\`, "/")
 	lower := strings.ToLower(p)
 	switch {
-	case strings.Contains(p, "/Cellar/"):
+	case brewPath.MatchString(p):
 		return pkgManager{"Homebrew", "run `brew upgrade switchyard`"}, true
-	case strings.Contains(lower, "/scoop/apps/"):
+	case isScoopApp(lower):
 		return pkgManager{"Scoop", "run `scoop update sy`"}, true
-	case strings.Contains(lower, "/winget/packages/"):
+	case wingetPath.MatchString(lower):
 		return pkgManager{"winget", "run `winget upgrade Sparkz400.Switchyard`"}, true
 	case !strings.HasPrefix(p, "/usr/"):
 		return pkgManager{}, false
@@ -216,28 +235,59 @@ func packageManager(target, goarch string) (pkgManager, bool) {
 	// The release's package assets are named switchyard-linux-<arch>.<ext>.
 	asset := func(ext string) string { return "switchyard-linux-" + goarch + "." + ext }
 	if out, err := updateOwnerQuery("dpkg-query", "-S", p); err == nil {
-		// "switchyard: /usr/bin/sy"; diversions add "diversion by ..." lines.
 		for _, line := range strings.Split(out, "\n") {
-			if pkg, _, ok := strings.Cut(line, ": "); ok && !strings.HasPrefix(line, "diversion ") {
+			pkg, path, ok := strings.Cut(strings.TrimSpace(line), ": ")
+			if ok && path == p && debOwners.MatchString(pkg) {
 				return pkgManager{"a .deb package (" + pkg + ")",
 					"download " + asset("deb") + " from the release and run `sudo apt install ./" + asset("deb") + "`"}, true
 			}
 		}
 	}
-	if out, err := updateOwnerQuery("rpm", "-qf", "--queryformat", "%{NAME}\n", p); err == nil && out != "" {
-		return pkgManager{"an .rpm package (" + firstLine(out) + ")",
+	if pkg, ok := ownerName("rpm", "-qf", "--queryformat", "%{NAME}\n", p); ok {
+		return pkgManager{"an .rpm package (" + pkg + ")",
 			"download " + asset("rpm") + " from the release and run `sudo dnf install ./" + asset("rpm") + "`"}, true
 	}
-	if out, err := updateOwnerQuery("pacman", "-Qqo", p); err == nil && out != "" {
-		pkg := firstLine(out)
+	if pkg, ok := ownerName("pacman", "-Qqo", p); ok {
 		return pkgManager{"pacman (" + pkg + ")",
 			"update the " + pkg + " package with your AUR helper (for example `yay -Syu`) or makepkg"}, true
 	}
-	if out, err := updateOwnerQuery("apk", "info", "-q", "--who-owns", p); err == nil && out != "" {
-		return pkgManager{"an .apk package (" + firstLine(out) + ")",
+	if pkg, ok := ownerName("apk", "info", "-q", "--who-owns", p); ok {
+		return pkgManager{"an .apk package (" + pkg + ")",
 			"download " + asset("apk") + " from the release and run `sudo apk add --allow-untrusted ./" + asset("apk") + "`"}, true
 	}
 	return pkgManager{}, false
+}
+
+// ownerName runs a query that prints only the owning package's name, and
+// accepts the answer only if it is one.
+func ownerName(name string, args ...string) (string, bool) {
+	out, err := updateOwnerQuery(name, args...)
+	if err != nil {
+		return "", false
+	}
+	pkg := firstLine(out)
+	return pkg, pkgName.MatchString(pkg)
+}
+
+// isScoopApp reports whether lower (a lowercased, slash-separated path) is
+// sy's own app folder in a Scoop root: the default ones (a "scoop" folder)
+// or $SCOOP and $SCOOP_GLOBAL.
+func isScoopApp(lower string) bool {
+	m := scoopApp.FindStringIndex(lower)
+	if m == nil {
+		return false
+	}
+	root := lower[:m[0]]
+	if strings.HasSuffix(root, "/scoop") {
+		return true
+	}
+	for _, env := range []string{"SCOOP", "SCOOP_GLOBAL"} {
+		r := strings.TrimRight(strings.ToLower(strings.ReplaceAll(os.Getenv(env), `\`, "/")), "/")
+		if r != "" && root == r {
+			return true
+		}
+	}
+	return false
 }
 
 func releaseURL(rel *ghRelease) string {
