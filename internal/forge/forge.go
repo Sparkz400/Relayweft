@@ -1,12 +1,12 @@
 // Package forge is what rw pr, issues as tasks, rw watch and rw review
 // need from a code host, for GitHub (and GitHub Enterprise), GitLab
-// (gitlab.com and self-managed) and Gitea or Forgejo (Codeberg and
-// self-hosted): read issues, open a pull request (a merge request on
+// (gitlab.com and self-managed), Gitea or Forgejo (Codeberg and
+// self-hosted) and Bitbucket Cloud (bitbucket.org): read issues, open a pull request (a merge request on
 // GitLab), comment, read a pull request's state, diff, failed CI jobs and
 // review comments, and post a comment-only review.
 //
-// The host of the origin remote decides the forge: github.com, gitlab.com
-// and codeberg.org are known; a self-hosted one is named in GH_HOST,
+// The host of the origin remote decides the forge: github.com, gitlab.com,
+// codeberg.org and bitbucket.org are known; a self-hosted one is named in GH_HOST,
 // GITLAB_HOST or GITEA_HOST (or by an explicit --api URL). A token is
 // only ever sent to a host of its own kind.
 //
@@ -39,6 +39,9 @@ const (
 	GitHub Kind = "github"
 	GitLab Kind = "gitlab"
 	Gitea  Kind = "gitea" // also Forgejo (Codeberg): the same API
+	// Bitbucket is Bitbucket Cloud (bitbucket.org). Bitbucket Data Center
+	// and Server have another API and are not supported.
+	Bitbucket Kind = "bitbucket"
 )
 
 // ParseKind reads a stored kind; "" (entries from before GitLab and Gitea
@@ -49,6 +52,8 @@ func ParseKind(s string) Kind {
 		return GitLab
 	case Gitea, "forgejo":
 		return Gitea
+	case Bitbucket:
+		return Bitbucket
 	}
 	return GitHub
 }
@@ -60,6 +65,8 @@ func (k Kind) Name() string {
 		return "GitLab"
 	case Gitea:
 		return "Gitea"
+	case Bitbucket:
+		return "Bitbucket"
 	}
 	return "GitHub"
 }
@@ -96,6 +103,8 @@ func (k Kind) TokenHint() string {
 		return "GITLAB_TOKEN, GITLAB_ACCESS_TOKEN or `glab auth login`"
 	case Gitea:
 		return "GITEA_TOKEN or FORGEJO_TOKEN"
+	case Bitbucket:
+		return "BITBUCKET_TOKEN: an access token, or <email>:<API token>"
 	}
 	return "GITHUB_TOKEN, GH_TOKEN or `gh auth login`"
 }
@@ -155,6 +164,8 @@ func (r Repo) CompareURL(base, branch string) string {
 		return r.WebURL() + "/-/merge_requests/new?" + q.Encode()
 	case Gitea:
 		return r.WebURL() + "/compare/" + escapeRef(base) + "..." + escapeRef(branch)
+	case Bitbucket:
+		return r.WebURL() + "/pull-requests/new?" + url.Values{"source": {branch}, "dest": {base}}.Encode()
 	}
 	if r.Web != "" {
 		return r.WebURL() + "/compare/" + escapeRef(base) + "..." + escapeRef(branch) + "?expand=1"
@@ -177,6 +188,11 @@ func (r Repo) APIBase() string {
 		return r.root() + "/api/v4"
 	case Gitea:
 		return r.root() + "/api/v1"
+	case Bitbucket:
+		if isBitbucketCloud(r.Host) {
+			return bitbucketAPI
+		}
+		return r.root() + "/2.0" // a host --api named as Bitbucket (tests)
 	}
 	if r.Web != "" {
 		return r.Web + "/api/v3" // GitHub Enterprise
@@ -187,13 +203,19 @@ func (r Repo) APIBase() string {
 func (r Repo) gh() gh.Repo { return gh.Repo{Host: r.Host, Owner: r.Owner, Name: r.Name} }
 
 // APIServes reports whether the API base URL api belongs to host: the
-// same host name (any port), or api.github.com for github.com. A token is
-// for one host, so a client for api only gets the token of a host it
-// serves.
-func APIServes(api, host string) bool { return gh.APIServes(api, host) }
+// same host name (any port), api.github.com for github.com, or
+// api.bitbucket.org for bitbucket.org. A token is for one host, so a
+// client for api only gets the token of a host it serves.
+func APIServes(api, host string) bool {
+	if isBitbucketCloud(host) {
+		u, err := url.Parse(api)
+		return err == nil && strings.EqualFold(u.Hostname(), "api.bitbucket.org")
+	}
+	return gh.APIServes(api, host)
+}
 
 // KindOfAPI guesses the forge from an API base URL: /api/v4 is GitLab,
-// /api/v1 Gitea, anything else GitHub.
+// /api/v1 Gitea, /2.0 Bitbucket, anything else GitHub.
 func KindOfAPI(api string) Kind {
 	u, err := url.Parse(api)
 	if err != nil {
@@ -205,6 +227,8 @@ func KindOfAPI(api string) Kind {
 		return GitLab
 	case strings.HasSuffix(p, "/api/v1"):
 		return Gitea
+	case strings.HasSuffix(p, "/2.0"):
+		return Bitbucket
 	}
 	return GitHub
 }
@@ -414,7 +438,7 @@ func (h Hosts) prefix(host string) string {
 func isDotComHost(host string) bool { return host == "github.com" || host == "www.github.com" }
 
 // Kind is the forge of host. github.com is always GitHub; then come the
-// configured hosts, then gitlab.com and codeberg.org.
+// configured hosts, then gitlab.com, codeberg.org and bitbucket.org.
 func (h Hosts) Kind(host string) (Kind, bool) {
 	host = hostName(host)
 	if isDotComHost(host) {
@@ -428,6 +452,8 @@ func (h Hosts) Kind(host string) (Kind, bool) {
 		return GitLab, true
 	case "codeberg.org":
 		return Gitea, true
+	case "bitbucket.org", "www.bitbucket.org":
+		return Bitbucket, true
 	}
 	return "", false
 }
@@ -467,8 +493,8 @@ func remoteParts(remote string) (host, path string, err error) {
 }
 
 // ParseRemote reads the forge, owner and name from a git remote URL.
-// Hosts other than github.com, gitlab.com and codeberg.org must be in
-// hosts. Web is the host's configured URL, else what the remote implies
+// Hosts other than github.com, gitlab.com, codeberg.org and bitbucket.org
+// must be in hosts. Web is the host's configured URL, else what the remote implies
 // (remoteWeb).
 func ParseRemote(remote string, hosts Hosts) (Repo, error) {
 	r, err := parseRemote(remote, hosts)
@@ -488,7 +514,7 @@ func parseRemote(remote string, hosts Hosts) (Repo, error) {
 	}
 	kind, ok := hosts.Kind(host)
 	if !ok {
-		return Repo{}, fmt.Errorf("remote %q is not on github.com, gitlab.com or codeberg.org (for a self-hosted forge set GH_HOST, GITLAB_HOST or GITEA_HOST=%s)", remote, strings.ToLower(host))
+		return Repo{}, fmt.Errorf("remote %q is not on github.com, gitlab.com, codeberg.org or bitbucket.org (for a self-hosted forge set GH_HOST, GITLAB_HOST or GITEA_HOST=%s)", remote, strings.ToLower(host))
 	}
 	if kind == GitHub {
 		r, err := gh.ParseRemote(remote, host)
@@ -525,14 +551,15 @@ type Ref struct {
 }
 
 // ParseIssueRef reads an issue number or URL: https://github.com/o/r/issues/12,
-// https://gitlab.com/g/p/-/issues/12, https://codeberg.org/o/r/issues/12.
+// https://gitlab.com/g/p/-/issues/12, https://codeberg.org/o/r/issues/12,
+// https://bitbucket.org/w/r/issues/12.
 func ParseIssueRef(s string, hosts Hosts) (Ref, error) {
 	return parseRef(s, hosts, "issue", func(k Kind) string { return "issues" })
 }
 
 // ParsePullRef reads a pull request number or URL: .../o/r/pull/12 on
 // GitHub (also .../pull/12/files), .../g/p/-/merge_requests/12 on GitLab,
-// .../o/r/pulls/12 on Gitea.
+// .../o/r/pulls/12 on Gitea, .../w/r/pull-requests/12 on Bitbucket.
 func ParsePullRef(s string, hosts Hosts) (Ref, error) {
 	return parseRef(s, hosts, "pull request", func(k Kind) string {
 		switch k {
@@ -540,6 +567,8 @@ func ParsePullRef(s string, hosts Hosts) (Ref, error) {
 			return "merge_requests"
 		case Gitea:
 			return "pulls"
+		case Bitbucket:
+			return "pull-requests"
 		}
 		return "pull"
 	})
@@ -559,7 +588,7 @@ func parseRef(s string, hosts Hosts, what string, segment func(Kind) string) (Re
 	}
 	kind, ok := hosts.Kind(u.Hostname())
 	if !ok {
-		return Ref{}, fmt.Errorf("%s %q is not on github.com, gitlab.com or codeberg.org (for a self-hosted forge set GH_HOST, GITLAB_HOST or GITEA_HOST=%s)", what, s, strings.ToLower(u.Hostname()))
+		return Ref{}, fmt.Errorf("%s %q is not on github.com, gitlab.com, codeberg.org or bitbucket.org (for a self-hosted forge set GH_HOST, GITLAB_HOST or GITEA_HOST=%s)", what, s, strings.ToLower(u.Hostname()))
 	}
 	path := strings.Trim(u.Path, "/")
 	pre := hosts.prefix(u.Hostname())
@@ -609,6 +638,8 @@ func exampleURL(k Kind, seg string) string {
 		return "https://<host>/<group>/<project>/-/" + seg + "/<n>"
 	case Gitea:
 		return "https://<host>/<owner>/<repo>/" + seg + "/<n>"
+	case Bitbucket:
+		return "https://bitbucket.org/<workspace>/<repo>/" + seg + "/<n>"
 	}
 	return "https://github.com/<owner>/<repo>/" + seg + "/<n>"
 }
@@ -641,8 +672,9 @@ type Comment struct {
 type commentAuthor struct {
 	id    int64
 	assoc string // GitHub's author_association
-	typ   string // GitHub's user type (Bot)
+	typ   string // GitHub's user type (Bot), Bitbucket's (user, app_user)
 	bot   bool
+	uuid  string // Bitbucket's account UUID
 }
 
 // Pull is a pull request (a merge request on GitLab).
@@ -762,6 +794,8 @@ func New(kind Kind, api, token string, notes io.Writer) Client {
 		return newGitLab(api, token, notes)
 	case Gitea:
 		return newGitea(api, token, notes)
+	case Bitbucket:
+		return newBitbucket(api, token, notes)
 	}
 	c := gh.NewClient(api, token)
 	c.Notes = notes
@@ -774,7 +808,7 @@ const maxPages = 5
 // ErrTooLarge means a text answer was longer than the caller allows.
 var ErrTooLarge = gh.ErrTooLarge
 
-// APIError is a non-2xx answer from GitLab or Gitea (GitHub's are
+// APIError is a non-2xx answer from GitLab, Gitea or Bitbucket (GitHub's are
 // *gh.APIError).
 type APIError struct {
 	Forge   Kind

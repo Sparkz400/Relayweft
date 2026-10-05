@@ -7,8 +7,8 @@ import (
 	"github.com/sparkz400/relayweft/internal/forge"
 )
 
-// The forge (GitHub, GitLab or Gitea) of rw pr, issues as tasks, rw watch
-// and rw review is the origin remote's host (package forge).
+// The forge (GitHub, GitLab, Gitea or Bitbucket) of rw pr, issues as tasks,
+// rw watch and rw review is the origin remote's host (package forge).
 
 // originURL is dir's origin remote URL ("" and an error without one).
 func originURL(dir string) (string, error) {
@@ -18,7 +18,7 @@ func originURL(dir string) (string, error) {
 
 // forgeHosts are the configured forge hosts. An explicit API URL means:
 // trust the remote's host, as the forge the URL looks like (/api/v4 is
-// GitLab, /api/v1 Gitea, else GitHub).
+// GitLab, /api/v1 Gitea, /2.0 Bitbucket, else GitHub).
 func forgeHosts(remote, api string) forge.Hosts {
 	h := forge.EnvHosts()
 	if api != "" && remote != "" {

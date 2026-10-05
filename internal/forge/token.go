@@ -22,6 +22,8 @@ import (
 //   - GitLab: GITLAB_TOKEN or GITLAB_ACCESS_TOKEN, then `glab config get
 //     token --host <host>`.
 //   - Gitea: GITEA_TOKEN or FORGEJO_TOKEN.
+//   - Bitbucket: BITBUCKET_TOKEN, for bitbucket.org only (Bitbucket Cloud
+//     has no other host): an access token, or "<email>:<API token>".
 //
 // When GITLAB_HOST (GITEA_HOST, FORGEJO_HOST) is set, the GitLab (Gitea)
 // variables are for the hosts it names only, as with glab: a token for a
@@ -43,6 +45,13 @@ func Token(k Kind, host string) (token, source string) {
 	case Gitea:
 		if envTokenFor(host, giteaHostValues()) {
 			if t, v := firstEnv("GITEA_TOKEN", "FORGEJO_TOKEN"); t != "" {
+				return t, v
+			}
+		}
+		return "", ""
+	case Bitbucket:
+		if isBitbucketCloud(host) {
+			if t, v := firstEnv("BITBUCKET_TOKEN"); t != "" {
 				return t, v
 			}
 		}
@@ -108,9 +117,9 @@ var GLabToken = func(host string) string {
 }
 
 // reCloses matches closing keywords followed by a same-repository issue
-// number: "Closes #12", "fixes #3", "Resolved #7", and GitLab's "Fixing",
-// "Implements" and so on.
-var reCloses = regexp.MustCompile(`(?i)\b(?:clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)\s*:?\s+#(\d+)\b`)
+// number: "Closes #12", "fixes #3", "Resolved #7", GitLab's "Fixing",
+// "Implements" and so on, and Bitbucket's "fixes issue #4".
+var reCloses = regexp.MustCompile(`(?i)\b(?:clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)\s*:?\s+(?:(?:issue|bug|ticket)\s+)?#(\d+)\b`)
 
 // ClosedBy returns the issue numbers the pull requests' bodies close.
 func ClosedBy(pulls []Pull) map[int]bool {
