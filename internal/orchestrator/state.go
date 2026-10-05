@@ -274,11 +274,7 @@ func (s TaskState) Interrupted() bool {
 	if s.Status != "running" {
 		return false
 	}
-	unlock, ok := proc.TryLock(filepath.Join(stateDir(), s.ID+".lock"))
-	if ok {
-		unlock()
-	}
-	return ok
+	return !proc.Locked(filepath.Join(stateDir(), s.ID+".lock"))
 }
 
 // LoadTask reads one task state.
