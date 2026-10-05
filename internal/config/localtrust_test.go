@@ -96,6 +96,38 @@ func TestUntrustedLocalConfigRunsNothing(t *testing.T) {
 	}
 }
 
+// An untrusted ./switchyard.yaml may not raise routing.best_of above your
+// own config (it multiplies what steps cost); trusting it applies it, and
+// a later change to best_of asks again.
+func TestUntrustedLocalConfigBestOf(t *testing.T) {
+	isolateTrust(t)
+	writeUserConfig(t, "routing:\n  best_of: {when: hard, n: 2}\n")
+	t.Chdir(t.TempDir())
+	os.WriteFile(FileName, []byte("routing:\n  best_of: {when: always, n: 4}\n"), 0o644)
+	c, _, ignored, err := LoadInfo("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bo := c.Routing.BestOf; bo.When != BestOfHard || bo.N != 2 || !slices.Contains(ignored, "routing.best_of") {
+		t.Errorf("untrusted: best_of = %+v, ignored %v", bo, ignored)
+	}
+	if err := TrustLocal(FileName); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, ignored, _ := LoadInfo(""); c.Routing.BestOf.N != 4 || len(ignored) != 0 {
+		t.Errorf("trusted: best_of = %+v, ignored %v", c.Routing.BestOf, ignored)
+	}
+	os.WriteFile(FileName, []byte("routing:\n  best_of: {when: always, n: 3}\n"), 0o644)
+	if c, _, _, _ := LoadInfo(""); c.Routing.BestOf.When != BestOfHard {
+		t.Errorf("a changed best_of kept the trust: %+v", c.Routing.BestOf)
+	}
+	// Lowering it needs no trust.
+	os.WriteFile(FileName, []byte("routing:\n  best_of: {when: off}\n"), 0o644)
+	if c, _, ignored, _ := LoadInfo(""); c.Routing.BestOf.On() || len(ignored) != 0 {
+		t.Errorf("lowered: best_of = %+v, ignored %v", c.Routing.BestOf, ignored)
+	}
+}
+
 // Trusting the file applies it in full; a later edit of its routes keeps
 // the trust, a change to what it runs does not.
 func TestTrustedLocalConfig(t *testing.T) {

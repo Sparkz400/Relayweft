@@ -62,6 +62,11 @@ type StepRun struct {
 	Started time.Time `json:"started"`
 	// Token identifies this run in its slot's hold mark (holds.go).
 	Token string `json:"token,omitempty"`
+	// A best-of winner (bestof.go): Kept is its committed work (against
+	// Base, also on a branch), landed instead if its worktree is gone;
+	// BestOf how it was picked, for the step's result.
+	Kept   string `json:"kept,omitempty"`
+	BestOf string `json:"best_of,omitempty"`
 }
 
 // TaskState is the persisted progress of one task.
@@ -220,8 +225,12 @@ func (s *TaskState) setResult(id string, r stepResult, interrupted bool) {
 	if s.Results == nil {
 		s.Results = map[string]StepState{}
 	}
-	s.Results[id] = StepState{OK: r.ok, Final: clip(r.final, 4000), Err: clip(r.err, 1000), BestOf: clip(r.bestOf, 600)}
 	run, had := s.Running[id]
+	bestOf := r.bestOf
+	if bestOf == "" {
+		bestOf = run.BestOf // a best-of winner that finished through a resume
+	}
+	s.Results[id] = StepState{OK: r.ok, Final: clip(r.final, 4000), Err: clip(r.err, 1000), BestOf: clip(bestOf, 600)}
 	if !interrupted {
 		delete(s.Running, id)
 	}

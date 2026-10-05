@@ -114,6 +114,9 @@ func TestBestOfChecksPickTheWinner(t *testing.T) {
 	if kept == "" {
 		t.Fatalf("the loser's work is not on a branch: %q", branches)
 	}
+	if strings.Contains(branches, "/work--claude") {
+		t.Errorf("the winner's branch was not deleted after it landed: %q", branches)
+	}
 	if got := tgit(t, dir, "show", kept+":greet.txt"); strings.TrimSpace(got) != "hello from codex" {
 		t.Errorf("kept branch has %q", got)
 	}

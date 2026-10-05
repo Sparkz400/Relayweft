@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,30 +12,50 @@ import (
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
+	"github.com/sparkz400/switchyard/internal/proc"
 	"github.com/sparkz400/switchyard/internal/runner"
 	"github.com/sparkz400/switchyard/internal/sessionlog"
 )
 
 // Regression tests from the adversarial review of best of N.
 
-// blockingReview holds change review until the task is cancelled.
+// blockingReview answers change review with feedback the first times,
+// then holds it until the task is cancelled.
 type blockingReview struct {
 	fakeApprover
-	asked chan ChangeSet
+	feedback int
+	asked    chan ChangeSet
 }
 
 func (b *blockingReview) ReviewChanges(ctx context.Context, cs ChangeSet) ChangeDecision {
+	b.mu.Lock()
+	b.seen = append(b.seen, cs)
+	round := len(b.seen)
+	b.mu.Unlock()
+	if round <= b.feedback {
+		return ChangeDecision{Feedback: "say it louder"}
+	}
 	b.asked <- cs
 	<-ctx.Done()
 	return ChangeDecision{}
 }
 
-// A cancel while the winner waits for change review keeps its work: the
-// winner is the step's running agent in its held worktree, its work is on
-// a branch, and sy resume --force continues the winner there (no
-// candidate runs again) and lands it.
-func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
-	dir := gitRepo(t)
+// reviewStop is a best-of task whose winner (Claude: only its checks pass)
+// was stopped while it waited for change review.
+type reviewStop struct {
+	st   TaskState
+	o    *Orchestrator
+	work func(runner.Spec) runner.Result
+	edit func(*config.Config)
+}
+
+// stopInReview runs bestOfTask and cancels it at change review, after
+// feedback rounds of feedback. Each agent run reports a new session id
+// (sess-<provider>-<n>); a continued session keeps its id.
+func stopInReview(t *testing.T, dir string, feedback int) reviewStop {
+	t.Helper()
+	var mu sync.Mutex
+	calls := map[string]int{}
 	work := func(s runner.Spec) runner.Result {
 		if r, ok := twoEdits(s); ok && !strings.Contains(s.Prompt, runner.MarkerStep) && !strings.Contains(s.Prompt, runner.MarkerResume) {
 			return r
@@ -42,11 +63,19 @@ func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
 		if strings.Contains(s.Prompt, runner.MarkerResume) {
 			return runner.Result{Final: "already done", SessionID: s.Resume}
 		}
-		os.WriteFile(filepath.Join(s.Dir, "greet.txt"), []byte("hello from "+s.Provider+"\n"), 0o644)
+		mu.Lock()
+		calls[s.Provider]++
+		n := calls[s.Provider]
+		mu.Unlock()
+		text := "hello from " + s.Provider
+		if strings.Contains(s.Prompt, "say it louder") {
+			text = "HELLO FROM " + s.Provider
+		}
+		os.WriteFile(filepath.Join(s.Dir, "greet.txt"), []byte(text+"\n"), 0o644)
 		if s.Provider == event.Claude {
 			os.WriteFile(filepath.Join(s.Dir, "ok.txt"), []byte("ok\n"), 0o644)
 		}
-		return runner.Result{Final: "done", SessionID: "sess-" + s.Provider}
+		return runner.Result{Final: "done", SessionID: fmt.Sprintf("sess-%s-%d", s.Provider, n)}
 	}
 	edit := func(c *config.Config) {
 		bestOfOn(c)
@@ -54,7 +83,7 @@ func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
 		c.Orchestrator.ReviewChanges = true
 	}
 	o, _ := newOrc(t, dir, both(work), edit)
-	ap := &blockingReview{asked: make(chan ChangeSet, 1)}
+	ap := &blockingReview{feedback: feedback, asked: make(chan ChangeSet, 1)}
 	withApprover(o, ap)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -67,11 +96,39 @@ func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
 	}
 	cancel()
 	<-done
+	return reviewStop{st: History(dir, 1)[0], o: o, work: work, edit: edit}
+}
 
-	st := History(dir, 1)[0]
-	run, ok := st.Running["work"]
-	if !ok || run.Provider != event.Claude || run.Slot == "" || run.Session != "sess-claude" {
-		t.Fatalf("the winner is not recorded as the step's running agent: %+v", st.Running)
+// resume continues the stopped task in a new sy (change review off) and
+// returns the agents it ran.
+func (rs reviewStop) resume(t *testing.T, dir string) (TaskResult, []runner.Spec) {
+	t.Helper()
+	var mu sync.Mutex
+	var agents []runner.Spec
+	o2, _ := newOrc(t, dir, both(func(s runner.Spec) runner.Result {
+		mu.Lock()
+		agents = append(agents, s)
+		mu.Unlock()
+		return rs.work(s)
+	}), func(c *config.Config) { rs.edit(c); c.Orchestrator.ReviewChanges = false })
+	saved, err := LoadTask(rs.st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := o2.RunWith(context.Background(), "", TaskOptions{Resume: saved, Force: true})
+	return res, agents
+}
+
+// A cancel while the winner waits for change review keeps its work: the
+// winner is the step's running agent in its held worktree, its work is on
+// a branch, and sy resume --force continues the winner there (no
+// candidate runs again) and lands it, keeping the step's best-of trail.
+func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
+	dir := gitRepo(t)
+	rs := stopInReview(t, dir, 0)
+	run, ok := rs.st.Running["work"]
+	if !ok || run.Provider != event.Claude || run.Slot == "" || run.Session != "sess-claude-1" || run.Kept == "" {
+		t.Fatalf("the winner is not recorded as the step's running agent: %+v", rs.st.Running)
 	}
 	if !slotHeld(run.Slot) {
 		t.Error("the winner's worktree is not held")
@@ -80,26 +137,16 @@ func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
 	if !strings.Contains(branches, "/work--claude") {
 		t.Errorf("the winner's work is on no branch: %q", branches)
 	}
-	for _, r := range bestOfRecs(t, o) {
+	for _, r := range bestOfRecs(t, rs.o) {
 		if r.OK != nil && *r.OK {
 			t.Errorf("a pick that did not land is recorded as a win: %+v", r)
 		}
 	}
-
-	// Resume: only the winner continues, in its worktree.
-	var mu sync.Mutex
-	var agents []runner.Spec
-	o2, _ := newOrc(t, dir, both(func(s runner.Spec) runner.Result {
-		mu.Lock()
-		agents = append(agents, s)
-		mu.Unlock()
-		return work(s)
-	}), func(c *config.Config) { edit(c); c.Orchestrator.ReviewChanges = false })
-	saved, err := LoadTask(st.ID)
-	if err != nil {
-		t.Fatal(err)
+	if _, ok := rs.o.Session("work--claude"); ok {
+		t.Error("the winner that did not land can still take a follow-up")
 	}
-	res := o2.RunWith(context.Background(), "", TaskOptions{Resume: saved, Force: true})
+
+	res, agents := rs.resume(t, dir)
 	if !res.OK {
 		t.Fatalf("resume: %+v", res)
 	}
@@ -108,7 +155,7 @@ func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
 		if strings.Contains(s.AgentID, "--") {
 			t.Errorf("candidate %s ran again", s.AgentID)
 		}
-		if s.AgentID == "work" && strings.Contains(s.Prompt, runner.MarkerResume) && samePath(s.Dir, run.Dir) && s.Resume == "sess-claude" {
+		if s.AgentID == "work" && strings.Contains(s.Prompt, runner.MarkerResume) && samePath(s.Dir, run.Dir) && s.Resume == "sess-claude-1" {
 			resumed = true
 		}
 	}
@@ -117,6 +164,87 @@ func TestBestOfCancelDuringReviewKeepsWinner(t *testing.T) {
 	}
 	if got := read(t, filepath.Join(dir, "greet.txt")); got != "hello from claude\n" {
 		t.Errorf("greet.txt = %q", got)
+	}
+	if after, _ := LoadTask(rs.st.ID); !strings.Contains(after.Results["work"].BestOf, "kept work--claude") {
+		t.Errorf("the step lost its best-of trail: %+v", after.Results["work"])
+	}
+}
+
+// After a feedback round the step's running agent is the rerun: a resume
+// continues the session that saw the feedback, not the first one.
+func TestBestOfFeedbackRerunIsTheRunningAgent(t *testing.T) {
+	dir := gitRepo(t)
+	rs := stopInReview(t, dir, 1)
+	run := rs.st.Running["work"]
+	if run.Session != "sess-claude-2" || run.Attempt < 2 {
+		t.Fatalf("running agent after the feedback round: %+v", run)
+	}
+	res, agents := rs.resume(t, dir)
+	if !res.OK {
+		t.Fatalf("resume: %+v", res)
+	}
+	for _, s := range agents {
+		if strings.Contains(s.Prompt, runner.MarkerResume) && s.Resume != "sess-claude-2" {
+			t.Errorf("resumed session %q, want the rerun's", s.Resume)
+		}
+	}
+	if got := read(t, filepath.Join(dir, "greet.txt")); got != "HELLO FROM claude\n" {
+		t.Errorf("greet.txt = %q, want the reviewed rerun's", got)
+	}
+}
+
+// When the winner's worktree cannot be claimed on resume (here: another
+// sy has it locked), its kept work lands from a fresh worktree instead of
+// a fresh agent redoing the step.
+func TestBestOfResumeLandsKeptWork(t *testing.T) {
+	dir := gitRepo(t)
+	rs := stopInReview(t, dir, 0)
+	old := claimWait
+	claimWait = 50 * time.Millisecond
+	defer func() { claimWait = old }()
+	unlock, ok := proc.TryLock(rs.st.Running["work"].Slot + ".lock")
+	if !ok {
+		t.Fatal("lock")
+	}
+	defer unlock()
+	res, agents := rs.resume(t, dir)
+	if !res.OK {
+		t.Fatalf("resume: %+v", res)
+	}
+	for _, s := range agents {
+		if strings.Contains(s.Prompt, runner.MarkerStep) || strings.Contains(s.Prompt, runner.MarkerResume) {
+			t.Errorf("an agent redid the step: %s (%s)", s.AgentID, s.Provider)
+		}
+	}
+	if got := read(t, filepath.Join(dir, "greet.txt")); got != "hello from claude\n" {
+		t.Errorf("greet.txt = %q, want the kept winner's", got)
+	}
+	if after, _ := LoadTask(rs.st.ID); !strings.Contains(after.Results["work"].BestOf, "kept work--claude") {
+		t.Errorf("the step lost its best-of trail: %+v", after.Results["work"])
+	}
+}
+
+
+// What taking a candidate's worktree did (here: saving an expired hold's
+// edits on a branch) reaches the log on screen, not only the debug log.
+func TestBestOfCandidateSlotNotes(t *testing.T) {
+	dir := gitRepo(t)
+	expire(t, interruptC(t, dir))
+	set := both(func(s runner.Spec) runner.Result {
+		if r, ok := twoEdits(s); ok && !strings.Contains(s.Prompt, runner.MarkerStep) {
+			return r
+		}
+		os.WriteFile(filepath.Join(s.Dir, "greet.txt"), []byte(s.Provider+"\n"), 0o644)
+		return runner.Result{Final: "done"}
+	})
+	o, rec := newOrc(t, dir, set, func(c *config.Config) { bestOfOn(c); c.Orchestrator.ReviewBeforeDone = false })
+	o.Run(context.Background(), bestOfTask)
+	noted := false
+	for _, e := range rec.all() {
+		noted = noted || (e.Kind == event.Log && strings.Contains(e.Text, "sy-unfinished.patch"))
+	}
+	if !noted {
+		t.Error("the saved edits are not named in the log")
 	}
 }
 

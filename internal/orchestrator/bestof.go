@@ -513,13 +513,21 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 	// (held): if sy stops during your review or while it lands, sy resume
 	// continues the winner there, like any step, instead of running every
 	// candidate again; a merge that already happened is then a no-op.
+	summary := bestOfSummary(cands, winner, how)
 	if t.state != nil && t.planSteps[st.ID] {
 		run := StepRun{Provider: winner.pin.Provider, Kind: t.cfg.Kind(winner.pin.Provider), Model: winner.pin.Model, Effort: winner.pin.Effort,
-			Role: winner.pin.Role, Dir: winner.loc.dir, Slot: winner.loc.slot, Base: winner.loc.base, Attempt: 1, Started: time.Now()}
+			Role: winner.pin.Role, Dir: winner.loc.dir, Slot: winner.loc.slot, Base: winner.loc.base, Attempt: 1, Started: time.Now(),
+			BestOf: summary}
+		if winner.changed {
+			run.Kept = winner.commit
+		}
 		if s, ok := o.Session(winner.id); ok && samePath(s.Dir, winner.loc.dir) {
 			run.Session = s.SessionID
 		}
 		t.state.setRunning(st.ID, run)
+		// A feedback rerun is the step's running agent too: its session
+		// replaces the first one for a resume.
+		winner.loc.owner = true
 	}
 	r = o.landSlotFrom(sctx, t, rp, st, deps, winner.loc, winner.res, true, winner)
 	if r.ok {
@@ -534,8 +542,9 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 		// Picked but not landed (rejected, a conflict, stopped): no route
 		// won, and the pick is no evidence for or against one.
 		o.recordBestOf(t, st, cands, nil, sessionlog.BestOfNone, fmt.Sprintf("picked %s (%s) but it did not land: %s", winner.id, how, r.err))
+		// Its work is not in the tree (a resume uses the task state).
+		o.forgetSession(winner.id)
 	}
-	summary := bestOfSummary(cands, winner, how)
 	o.logf("%s: %s", st.ID, summary)
 	r.route = fmt.Sprintf("%s (best of %d)", winner.pin.Label(), len(cands))
 	r.bestOf = summary
@@ -550,6 +559,42 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 	return r, true
 }
 
+// landKept lands a best-of winner's kept work on resume when its worktree
+// cannot be claimed (in use, a leftover agent, reused or removed): in a
+// fresh worktree at the same base with the winner's files, through the
+// usual landing (change review, a feedback rerun on the winner's route).
+// ok is false when that is not possible either (the commit is gone, no
+// worktree): then a fresh agent takes the step over.
+func (o *Orchestrator) landKept(ctx context.Context, t, rp *task, st Subtask, deps []string, prev StepRun, mainDir string, why error) (stepResult, bool) {
+	short := prev.Kept[:min(12, len(prev.Kept))]
+	if _, err := (git{rp.root}).out("cat-file", "-e", prev.Kept+"^{commit}"); err != nil {
+		o.logf("%s: the best-of winner's worktree cannot be used (%v) and its kept commit %s is gone; the step starts over", st.ID, why, short)
+		return stepResult{}, false
+	}
+	sl, err := acquireSlot(rp.root, prev.Base)
+	if err != nil {
+		o.logf("%s: the best-of winner's worktree cannot be used (%v), and no other worktree is free (%v); the step starts over", st.ID, why, err)
+		return stepResult{}, false
+	}
+	o.slotNotes(t, sl)
+	defer sl.release()
+	if err := restoreSlot(sl.path, prev.Kept); err != nil {
+		o.logf("%s: the best-of winner's kept work %s cannot be put in a worktree (%v); the step starts over", st.ID, short, err)
+		return stepResult{}, false
+	}
+	o.logf("%s: the best-of winner's worktree cannot be used (%v); its kept work (%s) lands from %s", st.ID, why, short, sl.path)
+	loc := stepLoc{dir: slotWorkDir(sl.path, rp.root, mainDir), slot: sl.path, base: prev.Base, owner: true}
+	c := &bestOfCand{id: st.ID, commit: prev.Kept, changed: true, loc: loc, branch: "commit " + short,
+		pin: event.Decision{Role: prev.Role, Provider: prev.Provider, Model: prev.Model, Effort: prev.Effort, Rule: router.RuleForced, Reason: "the kept best-of winner", Confidence: 1}}
+	if t.state != nil {
+		// It stays the step's running agent, now in this worktree.
+		run := prev
+		run.Dir, run.Slot, run.Session, run.Token, run.Started = loc.dir, loc.slot, "", "", time.Now()
+		t.state.setRunning(st.ID, run)
+	}
+	return o.landSlotFrom(ctx, t, rp, st, deps, loc, stepResult{ok: true, route: c.pin.Label(), final: "the kept work of the best-of winner (" + c.pin.Label() + ")"}, true, c), true
+}
+
 // runCandidate runs one candidate in a pool worktree at base, commits its
 // work there and runs the repo's checks on it.
 func (o *Orchestrator) runCandidate(ctx context.Context, t, rp *task, st Subtask, deps []string, base string, c *bestOfCand, checkMu *sync.Mutex) {
@@ -558,6 +603,9 @@ func (o *Orchestrator) runCandidate(ctx context.Context, t, rp *task, st Subtask
 		mainDir = rp.dir
 	}
 	sl, err := acquireSlot(rp.root, base)
+	if err == nil {
+		o.slotNotes(t, sl)
+	}
 	if err != nil {
 		c.res = stepResult{err: "no worktree: " + err.Error()}
 		o.emit(event.Event{Kind: event.Error, AgentID: c.id, Text: fmt.Sprintf("no worktree for this candidate (%v); it does not run (sy doctor lists the pools)", err)})

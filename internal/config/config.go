@@ -517,11 +517,17 @@ func guardLocal(c *Config, data []byte, own []string) []string {
 	// only where the file itself sets them, since your own config differs
 	// from the defaults the file was read over.
 	changed := restoreCommandSettings(c, base)
+	// Best of N multiplies what a step costs: like a repo file, the local
+	// file may lower it, not raise it above your own config.
+	var ignored []string
+	if bestOfRaised(base.Routing.BestOf, c.Routing.BestOf) {
+		c.Routing.BestOf = base.Routing.BestOf
+		ignored = append(ignored, bestOfKey)
+	}
 	set, err := trustSubset(data)
 	if err != nil {
-		return changed // unreadable as a plain mapping: report all
+		return append(changed, ignored...) // unreadable as a plain mapping: report all
 	}
-	var ignored []string
 	for _, k := range changed {
 		if _, ok := set[k]; ok {
 			ignored = append(ignored, k)

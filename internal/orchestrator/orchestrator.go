@@ -334,6 +334,9 @@ type stepLoc struct {
 	dir  string // its working directory
 	slot string // the pool worktree dir is in ("" = the repo's own tree)
 	base string // the commit the slot was prepared at
+	// owner: the agent is its step's running agent although its id is not
+	// the step's (a best-of winner's feedback rerun, bestof.go).
+	owner bool
 }
 
 // interruptedRun returns the run of a subtask that sy stopped in the middle
@@ -1309,6 +1312,12 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		if err == nil {
 			s, base = cs, prev.Base
 			o.logf("%s: continuing in %s, which holds the edits its agent made before sy stopped", st.ID, prev.Slot)
+		} else if prev.Kept != "" && rp.useWT {
+			// A best-of winner: its work is kept as a commit (bestof.go).
+			t.takeInterrupted(st.ID)
+			if r, ok := o.landKept(ctx, t, rp, st, deps, prev, mainDir, err); ok {
+				return r
+			}
 		} else {
 			// Its session must not be continued elsewhere: it would
 			// think its edits are there.
@@ -1878,14 +1887,26 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	if resume != nil {
 		spec.Resume = resume.Session
 	}
-	if t.state != nil && agentID == step.ID && t.planSteps[step.ID] {
+	if t.state != nil && (agentID == step.ID || loc.owner) && t.planSteps[step.ID] {
 		// A plan step: record where its agent works, and its session as
 		// soon as the CLI reports it, so a resume can continue it.
-		t.state.setRunning(step.ID, StepRun{Provider: d.Provider, Kind: t.cfg.Kind(d.Provider), Model: d.Model, Effort: d.Effort, Role: d.Role,
-			Session: spec.Resume, Dir: loc.dir, Slot: loc.slot, Base: loc.base, Attempt: attempt, Started: time.Now()})
+		run := StepRun{Provider: d.Provider, Kind: t.cfg.Kind(d.Provider), Model: d.Model, Effort: d.Effort, Role: d.Role,
+			Session: spec.Resume, Dir: loc.dir, Slot: loc.slot, Base: loc.base, Attempt: attempt, Started: time.Now()}
+		if prev, ok := t.state.runningStep(step.ID); ok {
+			// A best-of winner's kept work and outcome stay (bestof.go).
+			run.Kept, run.BestOf = prev.Kept, prev.BestOf
+			if loc.owner {
+				run.Attempt = max(attempt, prev.Attempt+1)
+			}
+		}
+		t.state.setRunning(step.ID, run)
 		spec.OnSession = func(id string) { t.state.noteSession(step.ID, id) }
 	}
 	res := rn.Run(actx, spec, o.emit)
+	if spec.OnSession != nil && res.SessionID != "" {
+		// Also when the CLI reported it only at the end.
+		t.state.noteSession(step.ID, res.SessionID)
+	}
 	res = o.deliverTold(actx, rn, spec, agentID, res)
 	if res.SessionID != "" {
 		o.rememberSession(agentID, AgentSession{Provider: d.Provider, Model: d.Model, Effort: d.Effort, Role: d.Role,

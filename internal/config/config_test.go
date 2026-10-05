@@ -118,10 +118,13 @@ func TestRepoFileBestOf(t *testing.T) {
 	}
 	user := Default()
 	user.Routing.BestOf.N = 3
-	for _, raise := range []string{"{when: hard}", "{n: 4}", "{routes: [claude, \"claude:opus:high\"]}"} {
+	for _, raise := range []string{"{when: hard}", "{n: 4}", "{routes: [claude, \"claude:opus:high\"]}", "{routes: []}"} {
 		os.WriteFile(repo, []byte("routing:\n  best_of: "+raise+"\n"), 0o644)
 		u := user.Clone()
 		u.Routing.BestOf.When = map[bool]string{true: BestOfOff, false: BestOfHard}[raise == "{when: hard}"]
+		if raise == "{routes: []}" {
+			u.Routing.BestOf.Routes = []string{"codex", "codex:gpt-6.1-sol:low"} // emptying means the default candidates
+		}
 		bo, info := apply(u)
 		if !reflect.DeepEqual(bo, u.Routing.BestOf) || !contains(info.Ignored, "routing.best_of") {
 			t.Errorf("untrusted %s: best_of = %+v, ignored %v", raise, bo, info.Ignored)

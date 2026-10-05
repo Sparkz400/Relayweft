@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -222,14 +223,14 @@ func dropUnknownProviders(c, before *Config) {
 const bestOfKey = "routing.best_of"
 
 // bestOfRaised reports whether after runs more best-of steps, more
-// candidates or other routes than before.
+// candidates or other routes than before (any change to the routes, also
+// emptying them, which means the default candidates).
 func bestOfRaised(before, after BestOfCfg) bool {
 	rank := map[string]int{"": 0, BestOfOff: 0, BestOfHard: 1, BestOfAlways: 2}
 	if !after.On() {
 		return false
 	}
-	return rank[after.When] > rank[before.When] || after.Count() > before.Count() ||
-		(len(after.Routes) > 0 && !reflect.DeepEqual(after.Routes, before.Routes))
+	return rank[after.When] > rank[before.When] || after.Count() > before.Count() || !slices.Equal(after.Routes, before.Routes)
 }
 
 // teamDirKey is the one budget setting that needs trust.
@@ -343,6 +344,11 @@ func trustSubset(data []byte) (map[string]any, error) {
 	if n, ok := raw["notify"].(map[string]any); ok {
 		if w, ok := n["webhooks"]; ok {
 			out[webhooksKey] = w
+		}
+	}
+	if r, ok := raw["routing"].(map[string]any); ok {
+		if b, ok := r["best_of"]; ok {
+			out[bestOfKey] = b // raising it needs trust (guardLocal)
 		}
 	}
 	return out, nil
