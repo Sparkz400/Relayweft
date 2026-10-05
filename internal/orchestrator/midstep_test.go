@@ -644,13 +644,61 @@ func TestFollowUpResumesInPoolWorktree(t *testing.T) {
 		t.Error("a3.txt missing")
 	}
 
-	// Codex keeps sessions by id, not by folder: resumed from the main tree.
+	// Codex finds its sessions anywhere, but its history names the
+	// worktree's paths: it is resumed in the worktree too, and the result
+	// lands the same way.
 	codex := sess
 	codex.Provider, codex.SessionID = event.Codex, "sess-a-codex"
 	res = o.FollowUpSession(context.Background(), codex, "please also write a4.txt")
 	s = last()
-	if !res.OK || s.Resume != "sess-a-codex" || !samePath(s.Dir, dir) {
-		t.Fatalf("codex follow-up: %+v resume %q dir %s", res, s.Resume, s.Dir)
+	if !res.OK || s.Resume != "sess-a-codex" || !samePath(s.Dir, sess.Dir) {
+		t.Fatalf("codex follow-up: %+v resume %q dir %s (agent ran in %s)", res, s.Resume, s.Dir, sess.Dir)
+	}
+	if read(t, filepath.Join(dir, "a4.txt")) != "codex\n" {
+		t.Error("the codex follow-up's change did not land in the main tree")
+	}
+	if st, _ := (git{sess.Slot}).out("status", "--porcelain"); strings.TrimSpace(st) != "?? a4.txt" {
+		t.Errorf("worktree status after the codex follow-up (not moved to the tree's state first?):\n%s", st)
+	}
+	if again, _ := o.Session(sess.AgentID); !samePath(again.Slot, sess.Slot) || again.SessionID != "sess-a-codex" {
+		t.Errorf("the codex follow-up's session does not name the worktree: %+v", again)
+	}
+
+	// Busy: a fresh Codex agent in the main tree, with context.
+	unlock, ok = proc.TryLock(sess.Slot + ".lock")
+	if !ok {
+		t.Fatal("lock")
+	}
+	res = o.FollowUpSession(context.Background(), codex, "please also write a5.txt")
+	unlock()
+	s = last()
+	if !res.OK || s.Resume != "" || !samePath(s.Dir, dir) || !strings.Contains(s.Prompt, "THE USER'S FOLLOW-UP") {
+		t.Fatalf("busy worktree (codex): %+v resume %q dir %s", res, s.Resume, s.Dir)
+	}
+
+	// The resume fails: a fresh Codex agent takes over in the same
+	// worktree, and its work lands.
+	failing := sess
+	failing.Provider, failing.SessionID = event.Codex, "sess-gone"
+	o.opts.Runners = func(*config.Config) runner.Set {
+		return bothCtx(func(ctx context.Context, s runner.Spec) runner.Result {
+			mu.Lock()
+			specs = append(specs, s)
+			mu.Unlock()
+			if s.Resume != "" {
+				return runner.Result{Err: errors.New("no rollout found for thread id sess-gone")}
+			}
+			os.WriteFile(filepath.Join(s.Dir, "a6.txt"), []byte(s.Provider+"\n"), 0o644)
+			return runner.Result{Final: "wrote a6.txt", SessionID: "sess-fresh"}
+		})
+	}
+	res = o.FollowUpSession(context.Background(), failing, "please also write a6.txt")
+	s = last()
+	if !res.OK || s.Resume != "" || !samePath(s.Dir, sess.Dir) || !strings.Contains(s.Prompt, "THE USER'S FOLLOW-UP") {
+		t.Fatalf("failed codex resume: %+v resume %q dir %s", res, s.Resume, s.Dir)
+	}
+	if read(t, filepath.Join(dir, "a6.txt")) != "codex\n" {
+		t.Error("the fresh codex agent's change did not land in the main tree")
 	}
 }
 

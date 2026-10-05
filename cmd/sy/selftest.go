@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/orchestrator"
 	"github.com/sparkz400/switchyard/internal/proc"
@@ -50,6 +51,7 @@ const (
 	selftestAgentCmd = "__selftest-agent" // hidden: sy acting as the scripted agent CLI
 	envSelftestDir   = "SY_SELFTEST_DIR"  // where the agent writes its pid and call log
 	envSelftestHang  = "SY_SELFTEST_HANG" // "1": the combine step hangs until killed
+	envSelftestAs    = "SY_SELFTEST_AS"   // the CLI the agent stands in for (default claude)
 )
 
 // The scripted task. The agent recognises its steps by these texts, so the
@@ -95,6 +97,7 @@ func cmdSelftest(args []string) error {
 	oneDrive := fs.Bool("onedrive", false, "also run a task in a test repo inside your OneDrive folder (removed afterwards; OneDrive may keep a copy in its recycle bin)")
 	in := fs.String("in", "", "create the work folder in this folder (default: the temp folder)")
 	sandboxMode := fs.String("sandbox", "auto", "auto: also run tasks in a container sandbox when docker or podman is there; off; only: just that")
+	firstOnly := fs.Bool("first-run", false, "only the guided first run (sy setup) from fresh profiles, timed")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage: sy selftest [--files 2000] [--onedrive] [--sandbox auto|off|only] [--keep] [--in <folder>]
 
@@ -142,25 +145,36 @@ left to check by hand is printed at the end.
 
 	start := time.Now()
 	proj := filepath.Join(t.work, "projects", "my project ä")
-	if t.setup(proj, *files) {
-		if *sandboxMode != "only" {
-			t.section("Environment")
-			t.environment()
-			t.section("Task killed mid-run, then resume and undo")
-			t.scenario(proj, filepath.Join(t.work, "agent main"), true)
-			if *oneDrive {
-				t.section("A task inside OneDrive")
-				t.oneDriveRun()
-			}
+	if *firstOnly {
+		*files = 1
+	}
+	ready := t.setup(proj, *files)
+	switch {
+	case ready && *firstOnly:
+		t.section("First run: guided setup from a fresh profile")
+		t.firstRun()
+	case ready && *sandboxMode == "only":
+	case ready:
+		t.section("Environment")
+		t.environment()
+		t.section("Task killed mid-run, then resume and undo")
+		t.scenario(proj, filepath.Join(t.work, "agent main"), true)
+		if *oneDrive {
+			t.section("A task inside OneDrive")
+			t.oneDriveRun()
 		}
-		if *sandboxMode != "off" {
-			t.section("Agents in a container sandbox")
-			t.sandboxScenario()
-		}
+		t.section("First run: guided setup from a fresh profile")
+		t.firstRun()
+	}
+	if ready && !*firstOnly && *sandboxMode != "off" {
+		t.section("Agents in a container sandbox")
+		t.sandboxScenario()
 	}
 
-	t.section("Still to do by hand")
-	fmt.Fprint(t.out, manualSteps)
+	if !*firstOnly {
+		t.section("Still to do by hand")
+		fmt.Fprint(t.out, manualSteps)
+	}
 	fmt.Fprintf(t.out, "\n%d ok, %d warning(s), %d failed, %d skipped in %s\n",
 		t.counts[markOK], t.counts[markWarn], t.counts[markFail], t.counts[markSkip], time.Since(start).Round(time.Second))
 	diag.Logf("selftest: %d ok, %d warn, %d failed, %d skipped", t.counts[markOK], t.counts[markWarn], t.counts[markFail], t.counts[markSkip])
@@ -245,7 +259,7 @@ func (t *selftest) setup(proj string, files int) bool {
 	}
 	t.check(m, "binary", "a fresh copy in a folder with spaces starts in %s%s", took.Round(10*time.Millisecond), note)
 
-	if t.shim, err = writeAgentShim(filepath.Join(roaming, "npm"), t.bin); err != nil {
+	if t.shim, err = writeAgentShim(filepath.Join(roaming, "npm"), t.bin, "claude"); err != nil {
 		t.check(markFail, "agent cli", "%v", err)
 		return false
 	}
@@ -337,19 +351,25 @@ func (t *selftest) makeRepo(dir string, files int) error {
 // childEnv is this process's environment with the user folders moved into
 // the test profile.
 func (t *selftest) childEnv(extra ...string) []string {
-	set := map[string]string{envSelftestDir: "", envSelftestHang: ""}
+	return profileEnv(t.profile, extra...)
+}
+
+// profileEnv is this process's environment with the user folders moved
+// into profile.
+func profileEnv(profile string, extra ...string) []string {
+	set := map[string]string{envSelftestDir: "", envSelftestHang: "", envSelftestAs: "", envSetupInteractive: ""}
 	if runtime.GOOS == "windows" {
-		set["APPDATA"] = filepath.Join(t.profile, "AppData", "Roaming")
-		set["LOCALAPPDATA"] = filepath.Join(t.profile, "AppData", "Local")
-		set["TEMP"] = filepath.Join(t.profile, "AppData", "Local", "Temp")
+		set["APPDATA"] = filepath.Join(profile, "AppData", "Roaming")
+		set["LOCALAPPDATA"] = filepath.Join(profile, "AppData", "Local")
+		set["TEMP"] = filepath.Join(profile, "AppData", "Local", "Temp")
 		set["TMP"] = set["TEMP"]
 	} else {
-		set["XDG_CONFIG_HOME"] = filepath.Join(t.profile, ".config")
-		set["XDG_CACHE_HOME"] = filepath.Join(t.profile, ".cache")
+		set["XDG_CONFIG_HOME"] = filepath.Join(profile, ".config")
+		set["XDG_CACHE_HOME"] = filepath.Join(profile, ".cache")
 		if runtime.GOOS == "darwin" {
 			// os.UserConfigDir and UserCacheDir read only HOME there; git
 			// identity comes from the command lines, not ~/.gitconfig.
-			set["HOME"] = t.profile
+			set["HOME"] = profile
 		}
 	}
 	for _, kv := range extra {
@@ -576,11 +596,6 @@ wait:
 	}
 	wdKilled, wdResumed := fileText(filepath.Join(stateDir, "agent.wd")), fileText(filepath.Join(stateDir, "resume.wd"))
 	switch {
-	case !gone && runtime.GOOS != "windows" && runtime.GOOS != "linux" && fresh && !continued:
-		// Without /proc, sy cannot tell the killed sy's agent from a
-		// program that got its pid since, so it does not kill it, and
-		// it never resumes into a worktree an agent still works in.
-		t.check(markInfo, "resume", "the killed sy's agent still ran in its worktree on %s, so a fresh agent took the step over in another one", runtime.GOOS)
 	case !continued || fresh:
 		t.check(markFail, "resume", "the interrupted step did not continue its agent's session %s (calls: %s)", strings.TrimPrefix(want, "resume:"),
 			strings.Join(readCalls(stateDir)[before:], ", "))
@@ -726,10 +741,34 @@ func (t *selftest) oneDriveRun() {
 
 // --- the scripted agent ---------------------------------------------------
 
+// selftestQuickCheck answers the commands sy setup and sy doctor run, as a
+// logged-in Claude Code or a logged-out Codex of the tested versions. It
+// reports whether args were one of them.
+func selftestQuickCheck(as string, args []string) bool {
+	if as == "" {
+		as = "claude"
+	}
+	switch strings.Join(args, " ") {
+	case "--version":
+		fmt.Println(config.Default().Providers[as].TestedVersion)
+	case "auth status":
+		fmt.Println(`{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "selftest"}`)
+	case "login status":
+		fmt.Fprintln(os.Stderr, "Not logged in")
+		os.Exit(1)
+	default:
+		return false
+	}
+	return true
+}
+
 // cmdSelftestAgent speaks enough of `claude -p --output-format stream-json`
 // for the orchestrator: a fixed plan, approving reviews, and steps that
 // write files in the agent's working directory.
 func cmdSelftestAgent() {
+	if selftestQuickCheck(os.Getenv(envSelftestAs), os.Args[2:]) {
+		return
+	}
 	in, _ := io.ReadAll(os.Stdin)
 	prompt := string(in)
 	dir := os.Getenv(envSelftestDir)

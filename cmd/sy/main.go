@@ -67,6 +67,8 @@ func main() {
 		err = cmdModels(args)
 	case "init":
 		err = cmdInit(args)
+	case "setup":
+		err = cmdSetup(args)
 	case "clean":
 		err = cmdClean(args)
 	case "bugreport":
@@ -173,6 +175,9 @@ Usage:
   sy tune [--here] [--since 7d]    routing suggestions from your logs
   sy tune --apply | --learned | --reset   update, show or forget this repo's learned routes (routing.learn)
   sy models [--refresh] [--all]    show routes and catalogs; refresh Codex catalog
+  sy setup [--yes] [--force] [--no-task]   guided first run: find and check the agent CLIs, write your config,
+                             save this repo's checks, run a small read-only first task (sy, sy run and
+                             sy web start it by themselves when there is no config yet)
   sy doctor                  check CLIs, versions, git and terminal
   sy init [--global] [--force] [--print]   write the commented default config
   sy init --repo             write .switchyard.yaml: this repo's shared settings (detected checks, routes)
@@ -414,6 +419,11 @@ func cmdTUI(args []string) error {
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q (use `sy run \"task\"` for headless runs)", fs.Arg(0))
 	}
+	if !*demo {
+		if err := firstRun(c.configPath, c.dir, true); err != nil {
+			return err
+		}
+	}
 	store, dir, err := c.setup()
 	if err != nil {
 		return err
@@ -625,7 +635,10 @@ func cmdClean(args []string) error {
 		fmt.Printf("removed %d idle pooled worktree(s), freed %s\n", n, orchestrator.HumanBytes(freed))
 		return nil
 	}
-	n, err := orchestrator.CleanPool(*dir)
+	n, saved, err := orchestrator.CleanPoolSaved(*dir)
+	for _, s := range saved {
+		fmt.Println(s.Hint())
+	}
 	if err != nil {
 		return err
 	}

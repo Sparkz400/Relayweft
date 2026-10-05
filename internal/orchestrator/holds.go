@@ -8,7 +8,13 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
+
+	"github.com/sparkz400/switchyard/internal/diag"
+	"github.com/sparkz400/switchyard/internal/proc"
 )
 
 // Held pool worktrees:
@@ -26,6 +32,13 @@ import (
 //     a slot would delete the edits.
 //   - A resume claims the worktree only if the mark is still its own run's
 //     (same token): any other use of the worktree replaces or removes it.
+//   - Before a hold that expired (or whose task's state is gone) is
+//     released, and before sy clean removes a held worktree, the half-done
+//     edits in it are saved on a branch (sy/<task>/<step>-unfinished, like
+//     rejected work) and recorded in the task's state (Saved), so sy history
+//     and sy resume can say where they are. Only a new branch is created:
+//     the person's branches, index and working tree are never touched. If
+//     they cannot be saved, the worktree stays held.
 
 const holdMaxAge = 7 * 24 * time.Hour
 
@@ -34,6 +47,9 @@ type slotHold struct {
 	Task  string `json:"task"`
 	Step  string `json:"step"`
 	Token string `json:"token,omitempty"`
+	// Base is the commit the slot was prepared at: what the run changed
+	// can still be told when its task's state is gone.
+	Base string `json:"base,omitempty"`
 }
 
 func holdPath(slot string) string { return slot + ".hold" }
@@ -75,42 +91,294 @@ func unholdSlot(slot, task, step string) {
 	}
 }
 
-// holdState reports whether slot is held, and whether its mark is stale
-// (it surely no longer applies and may be removed). It changes nothing.
-func holdState(slot string) (held, stale bool) {
+// holdInfo is what a slot's mark means now.
+type holdInfo struct {
+	held  bool
+	stale bool // it surely no longer applies and may be removed
+	// save: stale, but the worktree may still hold half-done edits nobody
+	// landed or threw away (the hold expired, or its task's state is
+	// gone); they are saved before the mark goes (saveHeldEdits).
+	save bool
+	hold slotHold // the mark, when it could be read
+	run  StepRun  // the step run the task's state records, if any
+}
+
+// checkHold reads slot's mark and the state of its task. It changes
+// nothing.
+func checkHold(slot string) holdInfo {
 	h, ok, err := readHold(slot)
 	if !ok {
-		return false, false
+		return holdInfo{}
 	}
 	if err != nil {
 		// Unreadable: held, unless the mark is older than any hold.
 		if st, serr := os.Stat(holdPath(slot)); serr == nil && time.Since(st.ModTime()) > holdMaxAge {
-			return false, true
+			return holdInfo{stale: true, save: true}
 		}
-		return true, false
+		return holdInfo{held: true}
 	}
+	i := holdInfo{hold: h}
 	st, err := readTask(h.Task)
 	if errors.Is(err, fs.ErrNotExist) {
-		return false, true // the task's state is gone (pruned)
+		i.stale, i.save = true, true // the task's state is gone (pruned)
+		return i
 	}
 	if err != nil {
-		return true, false // cannot tell right now: keep the edits
+		i.held = true // cannot tell right now: keep the edits
+		return i
 	}
 	r, running := st.Running[h.Step]
-	if !running || !samePath(r.Slot, slot) || time.Since(r.Started) >= holdMaxAge {
-		return false, true
+	if !running || !samePath(r.Slot, slot) {
+		i.stale = true // the step ended, or works elsewhere now
+		return i
 	}
-	return true, false
+	i.run = r
+	if time.Since(r.Started) < holdMaxAge || taskLocked(h.Task) {
+		// Held; or expired, but a sy is running the task right now and
+		// may still claim the worktree: that sy decides.
+		i.held = true
+		return i
+	}
+	i.stale, i.save = true, true
+	return i
 }
 
-// slotHeld is holdState that removes a stale mark. The caller holds the
-// slot lock.
-func slotHeld(slot string) bool {
-	held, stale := holdState(slot)
-	if stale {
-		os.Remove(holdPath(slot))
+// taskLocked reports whether a sy is running the task now (it holds the
+// task's lock).
+func taskLocked(id string) bool {
+	unlock, ok := proc.TryLock(filepath.Join(stateDir(), id+".lock"))
+	if ok {
+		unlock()
 	}
+	return !ok
+}
+
+// holdState reports whether slot is held, and whether its mark is stale
+// (it surely no longer applies and may be removed). It changes nothing.
+func holdState(slot string) (held, stale bool) {
+	i := checkHold(slot)
+	return i.held, i.stale
+}
+
+// slotHeld is holdState that removes a stale mark, after saving what an
+// expired hold kept (saveHeldEdits). The caller holds the slot lock.
+func slotHeld(slot string) bool {
+	held, _ := slotHeldNote(slot)
 	return held
+}
+
+// unsavedSaid are the worktrees whose edits could not be saved that were
+// reported already.
+var unsavedSaid sync.Map
+
+// errTaskRunning: a sy runs the task now; its state is that sy's.
+var errTaskRunning = errors.New("its task is running in a sy")
+
+// slotHeldNote is slotHeld that also says what was saved where, or why
+// the slot stays held.
+func slotHeldNote(slot string) (held bool, note string) {
+	i := checkHold(slot)
+	if !i.stale {
+		return i.held, ""
+	}
+	if i.save {
+		saved, err := saveHeldEdits(slot, i, "its worktree was freed after 7 days")
+		if errors.Is(err, errTaskRunning) {
+			return true, "" // its sy decides
+		}
+		if err != nil {
+			// Not saved: keep the worktree held rather than lose them.
+			// Said once per worktree and sy: every scan of the pool
+			// comes here again.
+			if _, said := unsavedSaid.LoadOrStore(canonPath(slot), true); said {
+				return true, ""
+			}
+			msg := fmt.Sprintf("%s holds the half-done edits of an interrupted task that could not be saved on a branch (%v), so it is kept: copy what you need from it, then delete the folder", slot, err)
+			diag.Logf("pool: %s", msg)
+			diag.Health("leftover", "what", "unsaved-edits", "path", slot)
+			return true, msg
+		}
+		if saved != nil {
+			note = saved.Hint()
+		}
+	}
+	os.Remove(holdPath(slot))
+	return false, note
+}
+
+// SavedEdits are the half-done edits of an interrupted step, saved on a
+// branch when its pool worktree was given up.
+type SavedEdits struct {
+	Step   string `json:"step,omitempty"`
+	Task   string `json:"task,omitempty"`
+	Branch string `json:"branch"`
+	// Base is the commit the step started from: the edits are the
+	// difference between Base and Branch.
+	Base string    `json:"base"`
+	Repo string    `json:"repo,omitempty"` // the repository the branch is in
+	Why  string    `json:"why"`
+	When time.Time `json:"when"`
+	// Left are what the branch could not take: nested repositories the
+	// agent created, and files written outside a sparse checkout.
+	Left []string `json:"left,omitempty"`
+}
+
+// Hint says where the edits are and how to get them. The patch goes
+// through a file, not a pipe: Windows PowerShell 5.1 re-encodes piped
+// text (non-ASCII letters become "?", LF becomes CRLF), and git apply
+// would apply that without an error. It is applied from the repository's
+// top folder, so no path is skipped, and --binary keeps binary files.
+func (s SavedEdits) Hint() string {
+	what := "half-done edits"
+	if s.Step != "" {
+		what = s.Step + "'s half-done edits"
+	}
+	if s.Task != "" {
+		what += " (task " + s.Task + ")"
+	}
+	gitC := "git"
+	if s.Repo != "" {
+		gitC = `git -C "` + s.Repo + `"`
+	}
+	base := s.Base[:min(12, len(s.Base))]
+	h := fmt.Sprintf("%s were saved on branch %s when %s. See them: `%s diff %s %s`. Put them in your tree: `%s diff --binary --no-ext-diff --no-color %s %s --output=sy-unfinished.patch`, then `%s apply sy-unfinished.patch` (add --3way if it does not apply), then delete sy-unfinished.patch",
+		what, s.Branch, s.Why, gitC, base, s.Branch, gitC, base, s.Branch, gitC)
+	if len(s.Left) > 0 {
+		h += ". Not on the branch (nested repositories, files outside the sparse checkout): " + strings.Join(s.Left, ", ")
+	}
+	return h
+}
+
+// saveHeldEdits saves what the step run that holds slot left there on a
+// new branch and records it in the task's state, which then no longer
+// counts the step as running there. The caller holds the slot lock. A
+// slot that is no longer a worktree, or holds no edits, gives nil. It
+// fails when the task is running in a sy right now: that sy owns its
+// state and may still claim the worktree.
+func saveHeldEdits(slot string, i holdInfo, why string) (*SavedEdits, error) {
+	task, step := i.hold.Task, i.hold.Step
+	if task != "" {
+		// (A hold without a task state, such as a stopped follow-up's,
+		// has no lock either; none is created for it.)
+		if _, err := readTask(task); err == nil && taskLocked(task) {
+			return nil, fmt.Errorf("task %s: %w", task, errTaskRunning)
+		}
+	}
+	base := i.run.Base
+	if base == "" {
+		base = i.hold.Base // the task's state is gone
+	}
+	name := "sy/unfinished-" + time.Now().Format("20060102") + "-" + refPart(filepath.Base(slot))
+	label := "unfinished work"
+	if task != "" {
+		name = "sy/" + refPart(task) + "/" + refPart(step) + "-unfinished"
+		label = "unfinished " + step + " of " + task
+	}
+	// The git work runs before the task's lock is taken: it can take a
+	// while in a big tree, and sy resume of the task must not find the
+	// lock taken meanwhile.
+	saved, err := saveSlotWork(slot, base, name, label+" (saved from "+slot+" when "+why+")")
+	if err != nil || saved == nil {
+		return nil, err
+	}
+	saved.Step, saved.Task, saved.Why = step, task, why
+	if task == "" {
+		diag.Logf("pool: %s", saved.Hint())
+		return saved, nil
+	}
+	if _, err := readTask(task); errors.Is(err, fs.ErrNotExist) {
+		diag.Logf("pool: %s", saved.Hint()) // no state to record it in
+		return saved, nil
+	}
+	// Recorded under the task's lock, so no sy runs the task meanwhile.
+	// Whatever goes wrong here, the branch is dropped again and the
+	// worktree stays held: the edits are still there.
+	unlock, ok := lockRetry(filepath.Join(stateDir(), task+".lock"))
+	if !ok {
+		dropRef(slot, saved.Branch)
+		return nil, fmt.Errorf("task %s: %w", task, errTaskRunning)
+	}
+	defer unlock()
+	st, err := readTask(task)
+	if err == nil {
+		stateMu.Lock()
+		st.Saved = append(st.Saved, *saved)
+		if r, ok := st.Running[step]; ok && samePath(r.Slot, slot) {
+			delete(st.Running, step) // its edits are on the branch now
+		}
+		stateMu.Unlock()
+		err = st.saveErr()
+	}
+	if err != nil {
+		dropRef(slot, saved.Branch)
+		return nil, fmt.Errorf("the task's state could not be updated: %v", err)
+	}
+	diag.Logf("pool: %s", saved.Hint())
+	return saved, nil
+}
+
+// saveSlotWork commits what is in the pool worktree slot (the agent's own
+// commits included) and keeps it on a new branch named like name. base is
+// the commit the slot was prepared at ("" = unknown); the edits are the
+// difference between Base and Branch. A slot that is no longer a worktree,
+// or holds nothing new, gives nil. An error means nothing references the
+// work: the caller must not let the slot be reset.
+func saveSlotWork(slot, base, name, msg string) (*SavedEdits, error) {
+	if _, err := os.Lstat(filepath.Join(slot, ".git")); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil // gone, or never prepared: nothing to save
+	}
+	wg := git{slot}
+	head, err := wg.out("rev-parse", "-q", "--verify", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("%s has no HEAD: %v", slot, err)
+	}
+	if base != "" && base != head && !wg.isAncestor(base, head) {
+		base = "" // not where this slot came from: unknown
+	}
+	sc, err := wg.commitWork(head, "switchyard: "+msg)
+	if err != nil {
+		return nil, err
+	}
+	if base == "" {
+		// Unknown: HEAD may hold commits the agent made, which a reset
+		// would lose. They are new unless some ref has them already.
+		base = head
+		if refs, _ := wg.out("for-each-ref", "--count=1", "--contains", head, "--format=%(refname)"); refs == "" {
+			if mb, err := wg.out("merge-base", head, "main-worktree/HEAD"); err == nil && mb != "" && mb != head {
+				base = mb
+			} else if p, err := wg.out("rev-parse", "-q", "--verify", head+"^"); err == nil {
+				base = p
+			}
+		}
+	}
+	if sc.Commit == base {
+		return nil, nil // the agent had not changed anything yet
+	}
+	branch, err := newBranch(wg, name, sc.Commit)
+	if err != nil {
+		return nil, err
+	}
+	return &SavedEdits{Branch: branch, Base: base, Repo: slotRepo(slot), When: time.Now(), Left: append(sc.Nested, sc.Sparse...)}, nil
+}
+
+// dropRef deletes a branch (or ref) saveSlotWork just created.
+func dropRef(slot, name string) {
+	ref := name
+	if !strings.HasPrefix(ref, "refs/") {
+		ref = "refs/heads/" + name
+	}
+	git{slot}.out("update-ref", "-d", ref)
+}
+
+// lockRetry takes a lock file, trying for a moment while someone else has
+// it (another sy looking at it, or recording saved edits).
+func lockRetry(path string) (unlock func(), ok bool) {
+	for i := 0; ; i++ {
+		if unlock, ok = proc.TryLock(path); ok || i == 40 {
+			return unlock, ok
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // ownHold reports (as an error) whether the slot's mark is still the one

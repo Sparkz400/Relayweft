@@ -16,17 +16,18 @@ Out of the box Switchyard uses **subscriptions only**: it drives the official `c
 
 ## Quick start (Windows)
 
-1. **Install the CLIs and log in once** (PowerShell):
+1. **Install at least one agent CLI and log in** (PowerShell). One is enough; `sy setup` below tells you what is missing:
    ```powershell
+   npm install -g @anthropic-ai/claude-code   # or: irm https://claude.ai/install.ps1 | iex
+   claude auth login
    npm install -g @openai/codex
    codex login
-   npm install -g @anthropic-ai/claude-code   # or the native installer
-   claude            # log in once, then exit
    ```
 2. **Install Git 2.38+** from <https://git-scm.com/>.
 3. **Install Switchyard**, one of:
    - Download `sy-windows-amd64.exe` from the [latest release](https://github.com/sparkz400/switchyard/releases/latest), rename it to `sy.exe` and put it on your PATH. Later, `sy update` replaces it with the newest release (checksum-verified).
    - Scoop: `scoop install https://raw.githubusercontent.com/sparkz400/switchyard/main/packaging/scoop/sy.json`. winget follows once the package is accepted into winget-pkgs; see `packaging/README.md`.
+   - macOS and Linux: `brew tap sparkz400/switchyard https://github.com/Sparkz400/Switchyard && brew install switchyard`. From v0.3.0 each release also has `switchyard-linux-amd64.deb`, `.rpm` and `.apk` (`sudo apt install ./switchyard-linux-amd64.deb`, `sudo dnf install ./switchyard-linux-amd64.rpm`), and the AUR has `switchyard-cli-bin`. `sy update` tells you to use the package manager that installed `sy`.
    - From source with **Go 1.24+**:
      ```powershell
      git clone https://github.com/sparkz400/switchyard
@@ -34,15 +35,17 @@ Out of the box Switchyard uses **subscriptions only**: it drives the official `c
      go build -o sy.exe ./cmd/sy
      ```
      Or `go install ./cmd/sy`, which puts `sy.exe` in `%USERPROFILE%\go\bin` (that folder must be on your PATH). CI also builds `sy.exe` as a downloadable artifact on every push.
-4. **Check the setup:**
+4. **Run the guided setup in your repo** (about a minute; Enter takes the default at every question):
    ```powershell
-   .\sy.exe doctor
-   ```
-5. **Try it:**
-   ```powershell
-   .\sy.exe --demo                      # the full animated pipeline, fake agents
    cd C:\path\to\your\repo
-   C:\path\to\switchyard\sy.exe         # the real thing
+   sy setup
+   ```
+   It finds Claude Code, Codex, Gemini CLI, Qwen Code and Ollama, checks their versions and logins without using quota, and says how to install or log in to a missing one. It writes your config with the ready ones turned on, saves your repo's test commands to `.switchyard.yaml`, and offers a first read-only task ("explain this repo", one short haiku call) so you see a whole run. `sy`, `sy run` and `sy web` start the same setup by themselves when there is no config yet (not in CI; `SY_NO_SETUP=1` turns it off). For scripts: `sy setup --yes` (no questions; it also runs the first task).
+5. **Use it:**
+   ```powershell
+   sy             # the TUI in this repo
+   sy --demo      # the full animated pipeline with fake agents (no CLIs, no quota)
+   sy doctor      # check the setup again later
    ```
 
 Use **Windows Terminal** for the full look. Legacy `conhost` is detected and gets an ASCII theme (force either with `--ascii` / `--unicode`).
@@ -77,12 +80,12 @@ With the defaults, two more steps involve you or your repo's checks:
 - **Edit the plan's order.** In the plan view, `x` edits a step's dependencies. Cycles are refused.
 - **Agents run your tests.** `sy init` detects your checks (`go test`, `npm test`/`pnpm`/`yarn`, `pytest`, `cargo test`, `dotnet test`, Maven, Gradle) and writes them to `verify.commands`. Claude workers may run exactly these commands without asking, Codex workers already can in their sandbox, and Switchyard runs them itself before the final review. Change them with `/verify`.
 - **Follow up.** `@worker-id also handle the empty case` (or `@ message` for the last agent) continues that agent's own CLI conversation (`codex exec resume` / `claude --resume`), so it remembers what it did.
-  - A Claude agent that worked in a pool worktree is resumed in that worktree (Claude Code keeps its sessions per folder), moved to your tree's current state first; its changes are merged into your tree like a step's.
+  - An agent that worked in a pool worktree (Claude or Codex) is resumed in that worktree, moved to your tree's current state first; its changes are merged into your tree like a step's. Its history names the worktree's paths, so resuming it anywhere else would have it work in the wrong folder.
   - If the conversation can't be resumed, a fresh agent on the same route gets the earlier task and answer as context.
   - Agents are remembered per project across restarts.
   - Sending `@agent` to an agent that is **still running** delivers the message when its current turn ends, before its work is merged.
 - **Queue tasks.** Submitting while a task runs queues the new one (`/queue` to list, `/queue rm <n>`, `/queue clear`). Queued tasks run one after another, unattended: no approvals. Headless, use `sy run --file tasks.txt`, one task per line or blocks separated by `---`.
-- **History and resume.** Every task's plan and per-step results are saved as it runs. If `sy`, the terminal or the PC dies mid-task, `sy resume` (or `/resume`) continues it: finished steps are skipped and the rest runs, then verify and review. A step whose agent was working when `sy` died continues that agent's own session, in the folder it worked in (your tree, or the pool worktree that still holds its half-done edits), and is told to check the files and finish. If the session can't be continued, a fresh agent takes the step over and is told about half-done edits. `sy history` (or `/history`) lists recent tasks with status and cost.
+- **History and resume.** Every task's plan and per-step results are saved as it runs. If `sy`, the terminal or the PC dies mid-task, `sy resume` (or `/resume`) continues it: finished steps are skipped and the rest runs, then verify and review. A step whose agent was working when `sy` died continues that agent's own session, in the folder it worked in (your tree, or the pool worktree that still holds its half-done edits), and is told to check the files and finish. If the session can't be continued, a fresh agent takes the step over and is told about half-done edits. Other tasks leave that worktree alone for 7 days; after that, or when `sy clean` removes it, its half-done edits are first saved on a branch (`sy/<task>/<step>-unfinished`), and `sy history` and `sy resume` say where they are and how to get them. `sy history` (or `/history`) lists recent tasks with status and cost.
 - **Notifications.** A desktop notification (a Windows toast, macOS Notification Center or `notify-send`) when a task that ran at least `notify.min_task` (1 minute) finishes or fails, when a provider hits its limit, and when `sy` waits for your approval. On macOS they come from Script Editor (`osascript`), so if they do not show up, allow Script Editor in System Settings > Notifications.
 - **Webhooks to your phone** (`notify.webhooks`). The same news goes to Slack, Discord or [ntfy](https://ntfy.sh), so overnight runs and `sy watch` reach you away from the PC. Webhooks are sent whenever they are listed; `notify.enabled` only switches the desktop notifications. `sy notify` shows where notifications go, and `sy notify --test` posts a test message to each webhook:
 
@@ -292,7 +295,7 @@ First results (Claude only): [docs/bench](docs/bench/2026-10-03-starter-claude.m
 - whether turning the judge on (or off) would pay;
 - routed tasks doing worse than single-agent runs.
 
-It needs about 10 logged tasks before its suggestions mean anything.
+It needs about 10 logged tasks before its suggestions mean anything. A rate counts only when it is clearly above its threshold, given how many runs there are: a route needs 3 failures in 5 runs, 4 in 10 or 7 in 20 before it "fails often". A provider "keeps running out" only when that happens at least twice, 12 hours or more apart.
 
 **Learned routes.** `sy tune --apply` turns this into per-repo routes: for each role (planner, worker, worker_high, explorer, researcher) it switches to another configured route only on clear evidence from this repo's logs and bench runs (at least `routing.learn_min_samples` runs, default 8, on both routes; +15 points of success, or the same success with 40% fewer tokens; older runs count less, half every 30 days; one change per role at a time). They are stored in your config folder, not in the repo. Order: defaults < your config < learned < the repo file < flags, so anything you set for a role explicitly wins. Every decision that used a learned route says so in its reason (log, reports). `routing.learn: suggest` (default) uses only what you applied; `auto` refreshes them at most once a day; `off` ignores them. `sy tune --learned` shows them, `--reset` forgets them.
 
@@ -445,7 +448,7 @@ Build the image once with `docker build -t switchyard-sandbox packaging/sandbox`
   With `routing.judge: true`, low-confidence default decisions ask the judge model a closed A/B/C/D question.
 
   **Cost-aware model tiers** (`routing.tiers: auto`, `/tiers on`, `--tiers`; off by default). The rules still pick the role, and the tiers pick the model for each work step:
-  - **Difficulty.** Each step gets a score from 0 to 1 before it runs. It starts from the role the rules picked (explorer 0.2, worker 0.5, worker_high 0.8). One file or a short prompt lowers it, and so do routine words (typo, rename, docs, format). Three or more files, a long prompt and hard words (race, concurrency, parser, algorithm, performance) raise it. Below 0.35 is `fast`, 0.65 and up is `strong`, and everything between is `standard`.
+  - **Difficulty.** Each step gets a score from 0 to 1 before it runs. It starts from the role the rules picked (explorer 0.2, worker 0.5, worker_high 0.8). One file or a short prompt lowers it, and so do routine words (typo, rename, docs, format) in the step's title; a prompt that only mentions them does not count. Three or more files, a long prompt and hard words (race, concurrency, parser, algorithm, performance) raise it. Below 0.35 is `fast`, 0.65 and up is `strong`, and everything between is `standard`.
   - **Quota left.** This is the tightest of the provider's reported limit and your task, day and team budgets. Once less than `routing.tiers_save_below` (0.5) is left, scores move down, by up to 0.3 (about one tier) when nothing is left.
   - **Each tier uses a route you already have:** `fast` = the explorer route, `standard` = the worker route, `strong` = the worker_high route, on the provider the rules chose. A Codex step can therefore move between efforts of one model, and a Claude step between Haiku, Sonnet and Opus. The step keeps its role (and its MCP servers and write access).
   - **What never moves:** planner, reviewer, judge, a role picked in plan approval, a role you set explicitly (repo file, flags, `/route`, the model picker), and a local model on [standby](docs/providers.md). Large, sensitive and repeating-error steps, and the judge's pick, never drop below their rule's tier. Read-only steps never go above `standard`.

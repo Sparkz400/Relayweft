@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -121,6 +122,9 @@ func cmdBench(args []string) error {
 	fs.Parse(args)
 
 	if *starter != "" {
+		if py := starterPython(); !onPath(py) {
+			fmt.Printf("note: %s is not on PATH; the starter checks need Python 3\n", py)
+		}
 		if err := writeStarter(*starter); err != nil {
 			return err
 		}
@@ -265,12 +269,11 @@ func cmdBench(args []string) error {
 	defer log.Close()
 	tracker := limits.NewTracker()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	go func() {
-		<-ctx.Done()
-		stop()
-		fmt.Fprintln(os.Stderr, "\ncancelling the bench... (Ctrl+C again to force quit)")
-	}()
+	// The normal end cancels ctx too, which must not print the Ctrl+C notice.
+	var closing atomic.Bool
+	watched := make(chan struct{})
+	go func() { watchInterrupt(ctx, stop, &closing, os.Stderr); close(watched) }()
+	defer func() { closing.Store(true); stop(); <-watched }()
 
 	var results []benchResult
 	n := 0

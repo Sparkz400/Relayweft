@@ -148,8 +148,3 @@ func expandUserPath(p string) (string, error) {
 	}
 	return p, nil
 }
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}
