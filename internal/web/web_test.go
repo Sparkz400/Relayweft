@@ -254,7 +254,7 @@ func TestSecurityChecks(t *testing.T) {
 		{"POST", "/api/kill"}, {"POST", "/api/approvals/a1/plan"}, {"POST", "/api/approvals/a1/changes"}, {"POST", "/api/approvals/a1/estimate"}, {"GET", "/api/routes"},
 		{"POST", "/api/routes"}, {"POST", "/api/config/save"}, {"POST", "/api/settings"}, {"GET", "/api/history"},
 		{"POST", "/api/resume"}, {"GET", "/api/queue"}, {"POST", "/api/queue/remove"}, {"POST", "/api/queue/clear"},
-		{"GET", "/api/stats"}, {"GET", "/api/sessions"}, {"POST", "/api/limit"}, {"POST", "/api/demo/review"},
+		{"GET", "/api/stats"}, {"GET", "/api/dashboard"}, {"GET", "/api/sessions"}, {"POST", "/api/limit"}, {"POST", "/api/demo/review"},
 		{"POST", "/api/bye"},
 	}
 	for _, rt := range routes {

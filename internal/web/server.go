@@ -69,6 +69,7 @@ type Server struct {
 	last        *resultView
 	awake       func()               // releases the keep-awake while scheduled work is pending
 	limitUntil  map[string]time.Time // per provider: the limit last posted to webhooks
+	dash        dashCache
 
 	stateKick chan struct{}
 	stop      chan struct{}
@@ -273,6 +274,7 @@ func (s *Server) observe(e event.Event) {
 		s.mainProv = ""
 	case event.TaskDone:
 		s.phase = "done"
+		s.dash.clear()
 		rv := &resultView{OK: e.OK, Text: e.Text}
 		if e.Cost != nil {
 			rv.Cost, rv.CostUSD = e.Cost.Summary(), e.Cost.CostUSD
