@@ -75,3 +75,18 @@ contents:
     packager: apk
     file_info:
       mode: 0644
+
+# Signatures. linux-packages.sh sets the key files when it has the keys;
+# an empty key_file leaves that package unsigned, and linux-packages.sh
+# checks every signature after the build. The apk key name is the file
+# name apk looks for in /etc/apk/keys (relayweft-apk.rsa.pub).
+deb:
+  signature:
+    key_file: ${PACKAGE_GPG_KEY_FILE}
+rpm:
+  signature:
+    key_file: ${PACKAGE_GPG_KEY_FILE}
+apk:
+  signature:
+    key_file: ${PACKAGE_APK_KEY_FILE}
+    key_name: relayweft-apk
