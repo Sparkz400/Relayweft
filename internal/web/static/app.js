@@ -273,6 +273,10 @@ function fold(e) {
       addLog({ ts, kind: k, text: 'task: ' + (e.text || '') });
       return;
     case 'task_done': {
+      if (!S.replaying) {
+        S.peekAt = 0;
+        if (S.drawer === 'dashboard') drawDashboard($('#drawer-body'));
+      }
       for (const n of S.nodes.values()) {
         if (n.status === 'queued' || n.status === 'running') {
           if (n.id === 'main' && e.ok) continue;
@@ -1894,19 +1898,25 @@ function dayTable(days, cols) {
 const FLAG_LABELS = { judged: ['judged', 'routed by the judge'], learned: ['learned', 'on a learned route'], tier: ['tier', 'model picked by the cost tiers'],
   repeat_error: ['retry', 'escalated here after the same error twice'], fallback: ['fallback', 'moved here after a limit hit'], preempt: ['pre-empt', 'moved here before the limit'] };
 const WINDOW_LABELS = { five_hour: '5h', seven_day: '7d', seven_day_opus: '7d Opus', seven_day_sonnet: '7d Sonnet' };
+// known looks a name from the logs up in a table of known ones ("constructor"
+// is not a known name).
+const known = (table, k) => (Object.prototype.hasOwnProperty.call(table, k) ? table[k] : k);
 const SEV_LABEL = { high: 'act', medium: 'consider', info: 'hint' };
 
-async function drawDashboard(body) {
+async function drawDashboard(body, fresh) {
   let days = Number(store.get('sy-dash-days'));
   if (!DASH_RANGES.includes(days)) days = 7;
   const here = store.get('sy-dash-here') === '1';
   if (!body.firstChild) body.append(h('div', { class: 'muted small' }, 'Loading…'));
   const seq = S.dashSeq = (S.dashSeq || 0) + 1; // a slower, older answer must not win
   let v;
-  try { v = await api('GET', `/api/dashboard?days=${days}${here ? '&here=1' : ''}`); } catch (e) { if (seq === S.dashSeq) body.textContent = e.message; return; }
+  try { v = await api('GET', `/api/dashboard?days=${days}${here ? '&here=1' : ''}${fresh ? '&fresh=1' : ''}`); } catch (e) {
+    if (seq === S.dashSeq && S.drawer === 'dashboard') body.textContent = e.message;
+    return;
+  }
   if (seq !== S.dashSeq) return;
   S.dash = v;
-  if (days === 7 && !here) S.peek = v;
+  if (days === 7 && !here) { S.peek = v; S.peekAt = Date.now(); }
   if (S.drawer === 'dashboard') renderDashboard(body, v);
 }
 
@@ -1925,7 +1935,7 @@ function renderDashboard(body, v) {
       onchange: (e) => { store.set('sy-dash-here', e.target.checked ? '1' : '0'); reload(); } }), 'this project only'),
     h('div', { class: 'grow' }),
     h('span', { class: 'muted small', title: `built in ${v.elapsed_ms} ms` }, `${dayLabel(v.from)} – ${dayLabel(v.to)}`),
-    h('button', { class: 'btn sm ghost', onclick: reload, title: 'Read the logs again' }, 'Refresh')));
+    h('button', { class: 'btn sm ghost', onclick: () => drawDashboard(body, true), title: v.cached ? `Read the logs again (these numbers are from ${clock(v.generated)})` : 'Read the logs again' }, 'Refresh')));
   for (const w of v.warnings || []) body.append(h('div', { class: 'sug medium small', style: 'margin-bottom:8px' }, w));
   if (!body._tip) { dashTip(body); body._tip = true; }
 
@@ -1968,22 +1978,32 @@ function renderDashboard(body, v) {
     if (all && b.day_usd) usdLines.push({ v: b.day_usd, label: 'day ' + usd(b.day_usd), color: 'var(--warn)' });
     if (all && b.team && b.team_day_tokens) tokLines.push({ v: b.team_day_tokens, label: 'team ' + human(b.team_day_tokens), color: 'var(--fail)' });
     if (all && b.team && b.team_day_usd) usdLines.push({ v: b.team_day_usd, label: 'team ' + usd(b.team_day_usd), color: 'var(--fail)' });
-    const others = b.team && all && Object.keys(team).length;
+    const others = b.team && all && b.team_machines > 0;
+    const tday = (d) => team[d.date] || { fresh_tokens: 0, usd: 0, machines: 0, no_data: 0 };
+    // What the other machines' files say about a day ("no data" when none
+    // holds it: a file holds only that machine's last 7 days).
+    const teamText = (d, fmt) => {
+      const t = tday(d);
+      if (!t.machines) return '(no data)';
+      return fmt(t) + (t.no_data ? ` (${t.no_data} of ${b.team_machines} machines: no data)` : '');
+    };
+    const gaps = others && v.days.some((d) => tday(d).no_data);
     const tokSeries = others ? [...provSeries, { key: '_team', label: 'other machines', color: 'var(--wire)', hatch: true }] : provSeries;
     const usdSeries = others ? [{ key: 'usd', label: 'this machine', color: 'var(--router)' }, { key: '_team', label: 'other machines', color: 'var(--wire)', hatch: true }] : [{ key: 'usd', label: '$', color: 'var(--router)' }];
-    const tokOf = (d, k) => (k === '_team' ? (team[d.date] || {}).fresh_tokens || 0 : d.providers[k] || 0);
-    const usdOf = (d, k) => (k === '_team' ? (team[d.date] || {}).usd || 0 : d.usd);
+    const tokOf = (d, k) => (k === '_team' ? tday(d).fresh_tokens : d.providers[k] || 0);
+    const usdOf = (d, k) => (k === '_team' ? tday(d).usd : d.usd);
     const budgetNote = v.here && (b.day_usd || b.day_tokens || b.team) ? 'Budgets count every project: switch off "this project only" to see them.' : '';
     body.append(card('Cost per day', `$ is Claude's API-equivalent price, not billed on a subscription`,
       h('div', { class: 'dash-sub muted small' }, 'Fresh tokens per provider'), legend(tokSeries),
       columnChart(v.days, { width: cw, height: 150, series: tokSeries, get: tokOf, fmt: human, lines: tokLines, label: 'Fresh tokens per day and provider',
-        tip: (d) => `${dayLabel(d.date)}: ` + tokSeries.map((s) => `${s.label} ${human(tokOf(d, s.key))}`).join(', ') }),
+        tip: (d) => `${dayLabel(d.date)}: ` + tokSeries.map((s) => `${s.label} ${s.key === '_team' ? teamText(d, (t) => human(t.fresh_tokens)) : human(tokOf(d, s.key))}`).join(', ') }),
       h('div', { class: 'dash-sub muted small' }, 'API-equivalent $'), others ? legend(usdSeries) : '',
       columnChart(v.days, { width: cw, height: 110, series: usdSeries, get: usdOf, fmt: (n) => '$' + (n >= 10 ? Math.round(n) : n.toFixed(2)), lines: usdLines, label: 'API-equivalent dollars per day',
-        tip: (d) => `${dayLabel(d.date)}: ${usd(d.usd)}` + (others ? `, other machines ${usd(usdOf(d, '_team'))}` : '') + (b.day_usd && all ? ` (${pct(d.usd / b.day_usd)} of the daily budget)` : '') }),
+        tip: (d) => `${dayLabel(d.date)}: ${usd(d.usd)}` + (others ? `, other machines ${teamText(d, (t) => usd(t.usd))}` : '') + (b.day_usd && all ? ` (${pct(d.usd / b.day_usd)} of the daily budget)` : '') }),
       budgetNote ? h('div', { class: 'muted small' }, budgetNote) : '',
+      gaps ? h('div', { class: 'muted small' }, 'Other machines: each file in the team folder holds only that machine\'s last 7 days, so older days have no data for it (see the tooltips and the table).') : '',
       dayTable(v.days, [...v.providers.map((p) => [p, (d) => human(d.providers[p] || 0)]), ['$', (d) => usd(d.usd), (d) => d.tasks || d.usd],
-        ...(others ? [['Other machines $', (d) => usd(usdOf(d, '_team'))]] : [])])));
+        ...(others ? [['Other machines $', (d) => teamText(d, (t) => usd(t.usd))]] : [])])));
   }
 
   // Routes.
@@ -2002,7 +2022,7 @@ function renderDashboard(body, v) {
         tbl.append(h('tr', { class: 'grp' }, h('td', { colspan: 11 }, h('span', { class: 'rolecell', style: `--rc:${Object.prototype.hasOwnProperty.call(ROLE_COLORS, r.role) ? ROLE_COLORS[r.role] : 'var(--muted)'}` }, h('i'), String(r.role).replace('_', ' ')))));
       }
       const dec = flags.filter((f) => r.decisions && r.decisions[f]).map((f) => {
-        const c = r.decisions[f], [lab, what] = FLAG_LABELS[f] || [f, f];
+        const c = r.decisions[f], fl = known(FLAG_LABELS, f), [lab, what] = Array.isArray(fl) ? fl : [f, f];
         return h('span', { class: 'cp' + (c.failed ? ' bad' : ''), title: `${c.runs} run${c.runs === 1 ? '' : 's'} ${what}, ${c.failed} failed` }, `${lab} ${c.runs}` + (c.failed ? ` (${c.failed}✗)` : ''));
       });
       tbl.append(h('tr', null,
@@ -2069,8 +2089,8 @@ function renderDashboard(body, v) {
       q.limited_until ? h('div', { class: 'small', style: 'color:var(--fail)' }, `at its limit until ${when(q.limited_until)}`) : '',
       wins.map((w) => {
         const u = q.windows[w], lvl = u >= 0.9 ? 'bad' : u >= 0.7 ? 'warn' : '';
-        return h('div', { class: 'hbar' }, h('div', { class: 'hbar-l small' }, h('span', null, WINDOW_LABELS[w] || w), h('span', { class: 'mono' }, pct(u) + (lvl === 'bad' ? ' - nearly full' : lvl === 'warn' ? ' - high' : ''))),
-          h('div', { class: 'hbar-t ' + lvl, role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(u * 100)), 'aria-label': `${p} ${WINDOW_LABELS[w] || w} window` },
+        return h('div', { class: 'hbar' }, h('div', { class: 'hbar-l small' }, h('span', null, known(WINDOW_LABELS, w)), h('span', { class: 'mono' }, pct(u) + (lvl === 'bad' ? ' - nearly full' : lvl === 'warn' ? ' - high' : ''))),
+          h('div', { class: 'hbar-t ' + lvl, role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(u * 100)), 'aria-label': `${p} ${known(WINDOW_LABELS, w)} window` },
             h('span', { style: `width:${Math.min(100, u * 100)}%` })));
       })));
   }
@@ -2114,7 +2134,8 @@ function renderDashboard(body, v) {
   body.scrollTop = st;
 }
 
-// peek is the dashboard's summary on the empty start page.
+// dashPeek is the dashboard's summary on the empty start page.
+const PEEK_TTL = 5 * 60e3, PEEK_RETRY = 2 * 60e3;
 function dashPeek() {
   const el = h('div', { class: 'dash-peek', hidden: true });
   const fill = (v) => {
@@ -2127,9 +2148,13 @@ function dashPeek() {
     el.hidden = false;
   };
   if (S.peek) fill(S.peek);
-  else if (!S.peekLoading && S.connected) {
+  const now = Date.now();
+  if ((!S.peek || now - (S.peekAt || 0) > PEEK_TTL) && !S.peekLoading && S.connected && now - (S.peekFailAt || 0) > PEEK_RETRY) {
     S.peekLoading = true;
-    api('GET', '/api/dashboard?days=7').then((v) => { S.peek = v; if (el.isConnected) fill(v); }).catch(() => {}).finally(() => { S.peekLoading = false; });
+    api('GET', '/api/dashboard?days=7')
+      .then((v) => { S.peek = v; S.peekAt = Date.now(); if (el.isConnected) fill(v); })
+      .catch(() => { S.peekFailAt = Date.now(); }) // the Dashboard panel shows the error
+      .finally(() => { S.peekLoading = false; });
   }
   return el;
 }

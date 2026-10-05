@@ -190,6 +190,16 @@ func DashboardSince(now time.Time, days int) time.Time {
 	return DayStart(now).AddDate(0, 0, -(days - 1))
 }
 
+// SuggestSince is where the suggestions of a range of days start: days
+// times 24 hours before now, like `sy tune --since <days>d`. It is up to a
+// day before DashboardSince, so read from here.
+func SuggestSince(now time.Time, days int) time.Time {
+	if days <= 0 {
+		days = 7
+	}
+	return now.Add(-time.Duration(days) * 24 * time.Hour)
+}
+
 // BuildDashboard aggregates the records of the range.
 func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 	if o.Days <= 0 {
@@ -204,6 +214,9 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 	since := DashboardSince(o.Now, o.Days)
 	f := Filter{Since: since, Cwd: o.Cwd}
 	account := Filter{Since: since} // limits are per account, not per repo
+	// The suggestions look back N times 24 hours, as `sy tune --since Nd`
+	// does; the per-day charts and rows use whole calendar days.
+	tune := Filter{Since: SuggestSince(o.Now, o.Days), Cwd: o.Cwd}
 	d := Dashboard{From: since.Format("2006-01-02"), To: DayStart(o.Now).Format("2006-01-02"),
 		Totals: DashTotals{Providers: map[string]int64{}}, Routes: []*RouteRow{}, Suggestions: []Suggestion{}, Learned: []LearnedEvent{},
 		Limits: DashLimits{PerProvider: map[string]*LimitCount{}, Hits: []LimitEvent{}, Switches: []LimitEvent{}, Quota: map[string]QuotaReading{}}}
@@ -235,8 +248,11 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 		return fmt.Sprintf("%s|%s|%s|%d", r.Session, r.TaskID, r.Step, attempt)
 	}
 
-	var kept []Record // the repo-filtered records, for the suggestions
+	var kept []Record // the records `sy tune --since Nd` would read
 	for _, r := range recs {
+		if tune.keep(r) {
+			kept = append(kept, r)
+		}
 		if account.keep(r) {
 			switch {
 			case r.Type == TypeLimit:
@@ -259,7 +275,6 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 		if !f.keep(r) {
 			continue
 		}
-		kept = append(kept, r)
 		switch r.Type {
 		case TypeTaskEnd:
 			addDay(days, r)

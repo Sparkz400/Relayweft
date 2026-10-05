@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
@@ -43,6 +45,7 @@ type dashboardView struct {
 	Health        *dashHealth          `json:"health"`
 	Warnings      []string             `json:"warnings"`
 	ElapsedMS     int64                `json:"elapsed_ms"`
+	Cached        bool                 `json:"cached"` // answered from the cache (see dashCache)
 }
 
 type dashBudget struct {
@@ -51,14 +54,19 @@ type dashBudget struct {
 	TeamDayUSD    float64 `json:"team_day_usd,omitempty"`
 	TeamDayTokens int64   `json:"team_day_tokens,omitempty"`
 	Team          bool    `json:"team"` // a team folder is set
-	// TeamDays are the other machines' totals per date (from the team
-	// folder; this machine's own are the days above).
-	TeamDays map[string]teamDay `json:"team_days,omitempty"`
+	// TeamMachines is how many other machines have a file in the team
+	// folder; TeamDays are their totals per date of the range. A machine's
+	// file holds only its last days (7 when sy writes it), so for older
+	// days it has no data.
+	TeamMachines int                `json:"team_machines,omitempty"`
+	TeamDays     map[string]teamDay `json:"team_days,omitempty"`
 }
 
 type teamDay struct {
-	Tokens int64   `json:"fresh_tokens"`
-	USD    float64 `json:"usd"`
+	Tokens   int64   `json:"fresh_tokens"`
+	USD      float64 `json:"usd"`
+	Machines int     `json:"machines"` // machines whose file holds this day
+	NoData   int     `json:"no_data"`  // machines whose file does not
 }
 
 type dashQuota struct {
@@ -117,12 +125,94 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		days = n
 	}
-	v, err := s.dashboard(days, q.Get("here") == "1", time.Now())
+	v, err := s.dash.get(r.Context(), dashKey{days, q.Get("here") == "1"}, q.Get("fresh") == "1",
+		func(k dashKey) (*dashboardView, error) { return s.dashboard(k.days, k.here, time.Now()) })
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the page went away or asked again
+		}
 		fail(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, v)
+}
+
+// dashTTL is how long a built dashboard is served again. Every load reads
+// up to 90 days of logs, the team folder and the health logs, and asks the
+// repo for its root, so quick range clicks and the start page's summary
+// share one build. A task ending here clears the cache; the panel's
+// Refresh asks for a fresh one.
+const dashTTL = time.Minute
+
+type dashKey struct {
+	days int
+	here bool
+}
+
+// dashCache serves built dashboards for dashTTL and runs one build at a
+// time: a request that arrives while the same one is being built waits
+// for it. A build runs on when its request goes away, so the next click
+// gets it.
+type dashCache struct {
+	mu      sync.Mutex
+	gen     int // bumped by clear
+	entries map[dashKey]*dashEntry
+	build   sync.Mutex // one build at a time, whatever the key
+	now     func() time.Time
+}
+
+type dashEntry struct {
+	done chan struct{}
+	v    *dashboardView
+	err  error
+	at   time.Time // zero while building
+	gen  int
+}
+
+// clear drops what was built before (a task ended: its numbers changed).
+func (c *dashCache) clear() {
+	c.mu.Lock()
+	c.gen++
+	c.mu.Unlock()
+}
+
+func (c *dashCache) get(ctx context.Context, k dashKey, fresh bool, build func(dashKey) (*dashboardView, error)) (*dashboardView, error) {
+	now := time.Now
+	if c.now != nil {
+		now = c.now
+	}
+	c.mu.Lock()
+	if c.entries == nil {
+		c.entries = map[dashKey]*dashEntry{}
+	}
+	e := c.entries[k]
+	building := e != nil && e.at.IsZero()
+	if e == nil || (!building && (fresh || e.err != nil || e.gen != c.gen || now().Sub(e.at) >= dashTTL)) {
+		e = &dashEntry{done: make(chan struct{}), gen: c.gen}
+		c.entries[k] = e
+		go func() {
+			c.build.Lock()
+			v, err := build(k)
+			c.build.Unlock()
+			c.mu.Lock()
+			e.v, e.err, e.at = v, err, now()
+			c.mu.Unlock()
+			close(e.done)
+		}()
+		building = true
+	}
+	c.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-e.done:
+	}
+	if e.err != nil {
+		return nil, e.err
+	}
+	v := *e.v // the cached view is shared: mark a copy
+	v.Cached = !building
+	return &v, nil
 }
 
 // dashboard builds the view for the last days days (today included).
@@ -134,7 +224,7 @@ func (s *Server) dashboard(days int, here bool, now time.Time) (*dashboardView, 
 		Quota: map[string]dashQuota{}, Warnings: []string{}}
 	// One read covers the range and the learned-routes dry run; files not
 	// written to since then are skipped unread.
-	readFrom := sessionlog.DashboardSince(now, max(days, dashLearnDays))
+	readFrom := sessionlog.SuggestSince(now, max(days, dashLearnDays))
 	recs, err := sessionlog.ReadDirSince(dir, readFrom)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		if len(recs) == 0 {
@@ -172,7 +262,9 @@ func (s *Server) dashBudget(cfg *config.Config, now time.Time, v *dashboardView)
 	if err != nil {
 		v.Warnings = append(v.Warnings, "team budget: no machine id ("+err.Error()+"); this machine's own file may be counted twice")
 	}
-	exps, warns, err := sessionlog.ReadTeamDir(folder, me, now)
+	// Stale files are kept: the days they hold are still true, and a
+	// machine that stopped writing must not warn on every load.
+	exps, warns, err := sessionlog.ReadTeamHistory(folder, me, now)
 	if err != nil {
 		v.Warnings = append(v.Warnings, "team budget: cannot read the team folder "+folder+": "+err.Error())
 		return b
@@ -180,12 +272,21 @@ func (s *Server) dashBudget(cfg *config.Config, now time.Time, v *dashboardView)
 	for _, w := range warns {
 		v.Warnings = append(v.Warnings, "team folder: "+w)
 	}
+	b.TeamMachines = len(exps)
 	b.TeamDays = map[string]teamDay{}
 	for _, d := range v.Days {
-		tok, usd := sessionlog.TeamDay(exps, d.Date)
-		if tok > 0 || usd > 0 {
-			b.TeamDays[d.Date] = teamDay{Tokens: tok, USD: usd}
+		var td teamDay
+		for _, e := range exps {
+			if !e.Covers(d.Date) {
+				td.NoData++
+				continue
+			}
+			td.Machines++
+			tok, usd := e.DayTotal(d.Date)
+			td.Tokens += tok
+			td.USD += usd
 		}
+		b.TeamDays[d.Date] = td
 	}
 	return b
 }

@@ -2,7 +2,10 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,11 +49,17 @@ func TestDashboardEndpoint(t *testing.T) {
 	idFile := filepath.Join(t.TempDir(), "machine-id")
 	defer func(f func() string) { sessionlog.MachineIDFile = f }(sessionlog.MachineIDFile)
 	sessionlog.MachineIDFile = func() string { return idFile }
-	// Another machine's export in the team folder.
+	// Two other machines in the team folder: one writing now (its file
+	// holds the last 7 days, as sy writes it), one that stopped 20 days ago.
+	day := func(ago int) string { return time.Now().AddDate(0, 0, -ago).Format("2006-01-02") }
 	other := sessionlog.Export{Format: sessionlog.ExportFormat, Version: sessionlog.ExportVersion, Machine: "othermachine", Generated: time.Now(),
-		Days: []sessionlog.ExportDay{{Date: time.Now().Format("2006-01-02"), Tasks: 3, FreshTokens: 9000, USD: 2}}}
-	if err := sessionlog.WriteTeamFile(team, other); err != nil {
-		t.Fatal(err)
+		Since: sessionlog.DayStart(time.Now()).AddDate(0, 0, -6), Days: []sessionlog.ExportDay{{Date: day(0), Tasks: 3, FreshTokens: 9000, USD: 2}}}
+	stale := sessionlog.Export{Format: sessionlog.ExportFormat, Version: sessionlog.ExportVersion, Machine: "stalemachine", Generated: time.Now().AddDate(0, 0, -20),
+		Since: sessionlog.DayStart(time.Now()).AddDate(0, 0, -26), Days: []sessionlog.ExportDay{{Date: day(22), Tasks: 1, FreshTokens: 500, USD: 5}}}
+	for _, e := range []sessionlog.Export{other, stale} {
+		if err := sessionlog.WriteTeamFile(team, e); err != nil {
+			t.Fatal(err)
+		}
 	}
 	env := newEnv(t, func(c *config.Config) {
 		c.LogDir = logs
@@ -110,9 +119,24 @@ func TestDashboardEndpoint(t *testing.T) {
 	if len(v.Routes) != 1 || v.Routes[0].Model != "<img src=x onerror=alert(1)>" || v.Limits.PerProvider["claude"].Hits != 1 {
 		t.Errorf("routes %+v, limits %+v", v.Routes, v.Limits)
 	}
-	today := time.Now().Format("2006-01-02")
-	if b := v.Budget; b.DayUSD != 5 || !b.Team || b.TeamDayUSD != 20 || b.TeamDays[today].USD != 2 {
+	b := v.Budget
+	if b.DayUSD != 5 || !b.Team || b.TeamDayUSD != 20 || b.TeamMachines != 2 || len(b.TeamDays) != 30 {
 		t.Errorf("budget = %+v (warnings %v)", b, v.Warnings)
+	}
+	// Each machine counts only for the days its file holds; the rest is
+	// "no data", not zero use. The stopped machine is no warning.
+	for ago, want := range map[int]teamDay{
+		0:  {USD: 2, Tokens: 9000, Machines: 1, NoData: 1},
+		10: {Machines: 0, NoData: 2},
+		22: {USD: 5, Tokens: 500, Machines: 1, NoData: 1},
+		29: {Machines: 0, NoData: 2},
+	} {
+		if got := b.TeamDays[day(ago)]; got != want {
+			t.Errorf("team day %d days ago = %+v, want %+v", ago, got, want)
+		}
+	}
+	if len(v.Warnings) != 0 {
+		t.Errorf("warnings = %v", v.Warnings)
 	}
 	if q := v.Quota["claude"]; q.Source != "live" || q.Windows["five_hour"] != 0.1 || q.ResetsAt == nil {
 		t.Errorf("quota = %+v", v.Quota)
@@ -159,5 +183,106 @@ func TestPageHasNoHTMLSinks(t *testing.T) {
 	page, _ := staticFS.ReadFile("static/index.html")
 	if bytes.Count(page, []byte("<script")) != bytes.Count(page, []byte("<script src=")) {
 		t.Error("index.html has an inline script (the CSP blocks it)")
+	}
+}
+
+// The dashboard is built once and served again: by a second request, by
+// one that came while it was built, until a task ends here or the panel
+// asks for a fresh one.
+func TestDashboardEndpointCaches(t *testing.T) {
+	healthOptions = health.Options{Dir: t.TempDir(), NoLeftovers: true}
+	defer func() { healthOptions = health.Options{} }()
+	env := newEnv(t, func(c *config.Config) { c.LogDir = t.TempDir() })
+	cached := func(q string) bool {
+		var v struct {
+			Cached bool `json:"cached"`
+		}
+		env.call("GET", "/api/dashboard"+q, nil, &v)
+		return v.Cached
+	}
+	if cached("") || !cached("") || cached("?days=30") || !cached("?days=30") {
+		t.Error("a repeated request was built again, or a new one was cached")
+	}
+	if cached("?fresh=1") || !cached("") {
+		t.Error("fresh=1 did not rebuild")
+	}
+	env.srv.observe(event.Event{Kind: event.TaskDone, OK: true})
+	if cached("") {
+		t.Error("served from the cache after a task ended")
+	}
+}
+
+func TestDashCache(t *testing.T) {
+	var c dashCache
+	clock := time.Now()
+	c.now = func() time.Time { return clock }
+	k := dashKey{7, false}
+	release := make(chan struct{})
+	builds := 0
+	build := func(dashKey) (*dashboardView, error) {
+		builds++
+		<-release
+		return &dashboardView{RangeDays: builds}, nil
+	}
+	// Three requests while the first build runs share it; one that gives
+	// up returns at once, and the build still finishes.
+	ctx, cancel := context.WithCancel(context.Background())
+	gaveUp := make(chan error, 1)
+	go func() { _, err := c.get(ctx, k, false, build); gaveUp <- err }()
+	results := make(chan *dashboardView, 2)
+	for i := 0; i < 2; i++ {
+		go func() { v, _ := c.get(context.Background(), k, false, build); results <- v }()
+	}
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if err := <-gaveUp; !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled request: %v", err)
+	}
+	close(release)
+	for i := 0; i < 2; i++ {
+		if v := <-results; v.RangeDays != 1 || v.Cached {
+			t.Errorf("shared build: %+v", v)
+		}
+	}
+	if v, _ := c.get(context.Background(), k, false, build); builds != 1 || !v.Cached {
+		t.Errorf("second request: %d builds, %+v", builds, v)
+	}
+	clock = clock.Add(dashTTL)
+	if v, _ := c.get(context.Background(), k, false, build); builds != 2 || v.Cached {
+		t.Errorf("after the TTL: %d builds", builds)
+	}
+	c.clear()
+	if c.get(context.Background(), k, false, build); builds != 3 {
+		t.Errorf("after clear: %d builds", builds)
+	}
+	// A failed build is not served again.
+	failing := func(dashKey) (*dashboardView, error) { builds++; return nil, errors.New("boom") }
+	c.get(context.Background(), dashKey{30, true}, false, failing)
+	if _, err := c.get(context.Background(), dashKey{30, true}, false, failing); err == nil || builds != 5 {
+		t.Errorf("failed build cached: %v, %d builds", err, builds)
+	}
+}
+
+// /api/stats suggests what sy tune and the dashboard suggest: with the
+// models of your config, not the built-in defaults.
+func TestStatsSuggestionsUseConfig(t *testing.T) {
+	logs := t.TempDir()
+	var buf bytes.Buffer
+	for i := 0; i < 5; i++ {
+		b, _ := json.Marshal(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TS: time.Now(), Session: "s", TaskID: "t", Step: "x", Attempt: 1,
+			Role: "researcher", Provider: "codex", Model: "gpt-big", OK: sessionlog.Bool(true), Tokens: &event.TokenUsage{Input: 1000}})
+		buf.Write(append(b, '\n'))
+	}
+	os.WriteFile(filepath.Join(logs, "s.jsonl"), buf.Bytes(), 0o644)
+	env := newEnv(t, func(c *config.Config) {
+		c.LogDir = logs
+		ex := c.Roles["explorer"]
+		ex.Codex = config.Route{Model: "mini-test", Effort: "low"}
+		c.Roles["explorer"] = ex
+	})
+	var sv statsView
+	env.call("GET", "/api/stats", nil, &sv)
+	if len(sv.Suggestions) != 1 || fmt.Sprint(sv.Suggestions[0].Commands) != "[/route researcher codex:mini-test:low]" {
+		t.Errorf("suggestions = %+v", sv.Suggestions)
 	}
 }

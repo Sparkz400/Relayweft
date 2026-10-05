@@ -728,7 +728,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	st.Print(&b)
 	v := statsView{Stats: st, Text: b.String(), MinTasks: minTuneTasks, LogDir: dir, Totals: map[string]int64{},
-		Suggestions: sessionlog.Suggest(recs, f)}
+		Suggestions: sessionlog.SuggestFor(recs, f, sessionlog.CatalogFrom(cfg))}
 	if v.Suggestions == nil {
 		v.Suggestions = []sessionlog.Suggestion{}
 	}

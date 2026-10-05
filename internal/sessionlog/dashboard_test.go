@@ -7,6 +7,8 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +88,13 @@ func TestBuildDashboard(t *testing.T) {
 		add(Record{Type: TypeAgentEnd, TS: at(4, i), TaskID: fmt.Sprintf("p%d", i), Step: "plan", Attempt: 1, Role: "planner", Provider: "codex", Model: "gpt-x", OK: Bool(i == 0)})
 	}
 
+	// Researcher runs 7x24h ago but before the first calendar day: in the
+	// window of `sy tune --since 7d`, so they count for the suggestions.
+	for i := 0; i < 6; i++ {
+		add(Record{Type: TypeAgentEnd, TS: now.Add(-7*24*time.Hour + time.Hour + time.Duration(i)*time.Minute), TaskID: fmt.Sprintf("r%d", i), Step: "x", Attempt: 1,
+			Role: "researcher", Provider: "claude", Model: "sonnet", OK: Bool(false)})
+	}
+
 	dir := t.TempDir()
 	writeLog(t, dir, "20261004-090000-aaaa", recs)
 	read, err := ReadDir(dir)
@@ -134,6 +143,18 @@ func TestBuildDashboard(t *testing.T) {
 	p := row("planner", "codex:gpt-x")
 	if p.Runs != 6 || p.Failed != 5 || len(p.Suggested) != 1 || d.Suggestions[p.Suggested[0]].Title != "planner on codex:gpt-x fails often" {
 		t.Errorf("planner row = %+v, suggestions %+v", p, d.Suggestions)
+	}
+	tune := SuggestFor(read, Filter{Since: now.Add(-7 * 24 * time.Hour), Cwd: repo}, DefaultCatalog)
+	if !reflect.DeepEqual(d.Suggestions, tune) {
+		t.Errorf("suggestions differ from sy tune --since 7d:\n%+v\n%+v", d.Suggestions, tune)
+	}
+	if !strings.Contains(fmt.Sprint(d.Suggestions), "researcher on claude:sonnet fails often") {
+		t.Errorf("runs 7x24h ago are not in the suggestions: %+v", d.Suggestions)
+	}
+	for _, r := range d.Routes {
+		if r.Role == "researcher" {
+			t.Errorf("a run before the first calendar day has a row: %+v", r)
+		}
 	}
 	if d.Routes[0].Role != "planner" {
 		t.Errorf("rows not in role order: first is %s", d.Routes[0].Role)
@@ -193,6 +214,32 @@ func TestBuildDashboardEmpty(t *testing.T) {
 		if _, ok := lim[k].([]any); !ok {
 			t.Errorf("limits.%s = %v", k, lim[k])
 		}
+	}
+}
+
+// A team file holds the days from its Since to the day it was written;
+// ReadTeamHistory keeps a machine that stopped writing, without a warning.
+func TestTeamHistoryCoverage(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.Local)
+	e := Export{Generated: now.AddDate(0, 0, -20), Since: DayStart(now).AddDate(0, 0, -26)}
+	for date, want := range map[string]bool{"2026-09-08": true, "2026-09-14": true, "2026-09-07": false, "2026-09-15": false} {
+		if e.Covers(date) != want {
+			t.Errorf("covers %s = %v", date, !want)
+		}
+	}
+	if !(Export{Generated: now}).Covers("2020-01-01") {
+		t.Error("an export without since does not cover earlier days")
+	}
+	dir := t.TempDir()
+	e.Format, e.Version, e.Machine = ExportFormat, ExportVersion, "stalemachine"
+	if err := WriteTeamFile(dir, e); err != nil {
+		t.Fatal(err)
+	}
+	if exps, warns, _ := ReadTeamDir(dir, "", now); len(exps) != 0 || len(warns) != 1 {
+		t.Errorf("ReadTeamDir: %d exports, warnings %v", len(exps), warns)
+	}
+	if exps, warns, _ := ReadTeamHistory(dir, "", now); len(exps) != 1 || len(warns) != 0 {
+		t.Errorf("ReadTeamHistory: %d exports, warnings %v", len(exps), warns)
 	}
 }
 
