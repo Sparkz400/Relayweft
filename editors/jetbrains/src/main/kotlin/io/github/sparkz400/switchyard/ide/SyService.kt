@@ -98,6 +98,9 @@ class SyService(val project: Project) : Disposable {
     val api: SyApi? get() = session?.api
     val dir: String? get() = session?.dir
 
+    /** The environment for sy instead of the IDE's (tests: scratch config folders). */
+    var environment: Map<String, String>? = null
+
     /** The pid of the sy this project started, while it runs. */
     val syPid: Long? get() = session?.proc?.pid
     val hello get() = session?.proc?.hello
@@ -178,7 +181,7 @@ class SyService(val project: Project) : Disposable {
 
             override fun run(indicator: ProgressIndicator) {
                 indicator.isIndeterminate = true
-                val proc = SyProcess.start(exe, args, File(dir), { l -> appendLogLater("sy: $l") })
+                val proc = SyProcess.start(exe, args, File(dir), { l -> appendLogLater("sy: $l") }, env = environment)
                 val api = SyApi(proc.hello.url) { proc.request("bootstrap").str("bootstrap") }
                 try {
                     api.login(proc.hello.bootstrap)
@@ -187,7 +190,13 @@ class SyService(val project: Project) : Disposable {
                     api.close()
                     throw e
                 }
-                s = Session(proc, api, dir)
+                val ns = Session(proc, api, dir)
+                // The project closed while sy started: onSuccess may never run.
+                if (project.isDisposed) {
+                    stopSession(ns, 2000)
+                    return
+                }
+                s = ns
             }
 
             override fun onSuccess() {

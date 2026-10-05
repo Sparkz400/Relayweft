@@ -222,6 +222,9 @@ class ReviewController(private val project: Project, private val svc: SyService)
             if (rg != null) requests[file].putUserData(DiffUserDataKeys.SCROLL_TO_LINE, com.intellij.openapi.util.Pair.create(Side.RIGHT, rg.start))
         }
         r.diffFile?.let { FileEditorManager.getInstance(project).closeFile(it) }
+        // A headless IDE (the plugin's tests) has no editor tabs to show it in;
+        // the documents and their marks exist all the same.
+        if (ApplicationManager.getApplication().isHeadlessEnvironment) return
         val vf = ChainDiffVirtualFile(SimpleDiffRequestChain(requests, file), "${r.cv.stepId} review")
         r.diffFile = vf
         DiffEditorTabFilesManager.getInstance(project).showDiffFile(vf, true)
