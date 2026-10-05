@@ -18,21 +18,23 @@ import (
 //
 //   - The token is an access token (sent as Bearer) or "<email>:<API
 //     token>" (sent as Basic), see Token.
-//   - People have no stable login name, so an author is their nickname
-//     plus their account UUID ("ann {0f3c...}"): nobody can pass for the
-//     token's owner by choosing a name.
+//   - People have no stable login name, so an author is their account
+//     UUID ("{0f3c...}"): nobody can pass for the token's owner or a
+//     reviewer by choosing a name.
 //   - The issue tracker is optional per repository and has no labels:
 //     label x is the component x, and open issues are those in state new
-//     or open. A repository without a tracker (Jira instead) gets a clear
-//     error.
+//     or open. As anyone who files an issue may be able to set its
+//     component, an issue counts only when its reporter, or whoever set
+//     the component last, may direct work on the repository. A repository
+//     without a tracker (Jira instead) gets a clear error.
 //   - A draft is Bitbucket's draft flag.
 //   - Failed checks are the failed steps of the newest pipeline per target
 //     on the commit, with each step's log tail, plus the failed commit
 //     statuses other CI posted.
-//   - Feedback is reviewers requesting changes and unresolved inline
-//     comments. An author is trusted with write access to the repository,
-//     or, when the token may not read permissions, as a member of the
-//     workspace; apps never are.
+//   - Feedback is reviewers requesting changes (one item per reviewer and
+//     pull request) and unresolved inline comments. An author is trusted
+//     with write access to the repository, or, when the token may read no
+//     permissions, as a member of the workspace; apps never are.
 //   - A comment review is one comment per inline finding plus one comment
 //     with the text; a finding Bitbucket cannot place on its line goes into
 //     the text.
@@ -64,30 +66,21 @@ func bbRepo(r Repo) string {
 }
 
 type bbUser struct {
-	Type        string `json:"type"` // user, app_user, team
-	UUID        string `json:"uuid"`
-	Nickname    string `json:"nickname"`
-	DisplayName string `json:"display_name"`
+	Type string `json:"type"` // user, app_user, team
+	UUID string `json:"uuid"`
 }
 
 // reBBUUID matches an account UUID as Bitbucket writes it.
 var reBBUUID = regexp.MustCompile(`^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$`)
 
-// login is the user's name for people plus the account UUID, which alone
-// tells accounts apart; "" without a valid UUID.
+// login is the account UUID, in lower case: the one thing that tells
+// accounts apart (names change, and anyone may pick anyone's). "" without
+// a valid UUID.
 func (u bbUser) login() string {
 	if !reBBUUID.MatchString(u.UUID) {
 		return ""
 	}
-	name := u.Nickname
-	if name == "" {
-		name = u.DisplayName
-	}
-	name = strings.Join(strings.Fields(name), " ")
-	if r := []rune(name); len(r) > 64 {
-		name = string(r[:64])
-	}
-	return strings.TrimSpace(name + " " + strings.ToLower(u.UUID))
+	return strings.ToLower(u.UUID)
 }
 
 type bbLinks struct {
@@ -282,8 +275,10 @@ func (b *bitbucket) Issue(r Repo, n int) (*Issue, error) {
 	return &out, nil
 }
 
+// Comments are the issue's newest comments (up to the page cap), oldest
+// first: a flood of old comments cannot hide a new team claim.
 func (b *bitbucket) Comments(r Repo, n int) ([]Comment, error) {
-	cs, err := bbPages[bbComment](b, fmt.Sprintf("%s/issues/%d/comments?sort=created_on", bbRepo(r), n), 100, 0)
+	cs, err := bbPages[bbComment](b, fmt.Sprintf("%s/issues/%d/comments?sort=-created_on", bbRepo(r), n), 100, 0)
 	if err != nil {
 		return nil, b.issues(r, err)
 	}
@@ -309,32 +304,81 @@ func bbqlString(s string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
 
-// OpenIssues are the issues in state new or open whose component is label:
-// Bitbucket issues have no labels.
+// OpenIssues are the issues in state new or open whose component is label
+// (Bitbucket issues have no labels), oldest first. With a label, an issue
+// counts only when queued says so.
 func (b *bitbucket) OpenIssues(r Repo, label string, max int) ([]Issue, error) {
 	q := `(state="new" OR state="open")`
 	if label != "" {
 		q += ` AND component.name=` + bbqlString(label)
 	}
 	path := bbRepo(r) + "/issues?" + url.Values{"q": {q}, "sort": {"created_on"}}.Encode()
-	is, err := bbPages[bbIssue](b, path, 50, max)
+	is, err := bbPages[bbIssue](b, path, 50, 0)
 	if err != nil {
 		return nil, b.issues(r, err)
 	}
+	sort.SliceStable(is, func(i, j int) bool {
+		if !is[i].CreatedOn.Equal(is[j].CreatedOn) {
+			return is[i].CreatedOn.Before(is[j].CreatedOn)
+		}
+		return is[i].ID < is[j].ID
+	})
 	var out []Issue
 	for _, i := range is {
+		if max > 0 && len(out) == max {
+			break
+		}
+		if label != "" {
+			ok, err := b.queued(r, i, label)
+			if err != nil {
+				return nil, fmt.Errorf("issue #%d: %w", i.ID, err)
+			}
+			if !ok {
+				b.note(fmt.Sprintf("note: skipping #%d: neither its reporter nor whoever set its component %q has write access to %s", i.ID, label, r))
+				continue
+			}
+		}
 		out = append(out, i.issue())
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].Created.Equal(out[j].Created) {
-			return out[i].Created.Before(out[j].Created)
-		}
-		return out[i].Number < out[j].Number
-	})
-	if max > 0 && len(out) > max {
-		out = out[:max]
-	}
 	return out, nil
+}
+
+// queued reports whether issue i is in the queue of component label: its
+// reporter may direct work on the repository, or the component was last
+// set (to label) by someone who may. Bitbucket may let anyone who files an
+// issue pick its component, unlike a label on the other forges.
+func (b *bitbucket) queued(r Repo, i bbIssue, label string) (bool, error) {
+	if i.Reporter != nil {
+		if ok, err := b.trusted(r, *i.Reporter); err != nil || ok {
+			return ok, err
+		}
+	}
+	changes, err := bbPages[struct {
+		User      bbUser    `json:"user"`
+		CreatedOn time.Time `json:"created_on"`
+		Changes   struct {
+			Component *struct {
+				New string `json:"new"`
+			} `json:"component"`
+		} `json:"changes"`
+	}](b, fmt.Sprintf("%s/issues/%d/changes?sort=-created_on", bbRepo(r), i.ID), 50, 0)
+	if s := status(err); s == 401 || s == 403 || s == 404 {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	sort.SliceStable(changes, func(x, y int) bool { return changes[x].CreatedOn.After(changes[y].CreatedOn) })
+	for _, c := range changes {
+		if c.Changes.Component == nil {
+			continue
+		}
+		if c.Changes.Component.New != label {
+			return false, nil
+		}
+		return b.trusted(r, c.User)
+	}
+	return false, nil
 }
 
 func (b *bitbucket) OpenPulls(r Repo) ([]Pull, error) {
@@ -391,27 +435,40 @@ func (b *bitbucket) pr(r Repo, n int) (*bbPR, error) {
 }
 
 // Pull reads a pull request. Bitbucket gives its head commit's hash
-// shortened, so the full one is looked up: rw watch compares it with the
-// branch it fetched.
+// shortened, so the full one is looked up, in the source repository (a
+// fork's commit may not be in r) and then in r: rw watch compares it with
+// the branch it fetched. A failed lookup is no 404 of the pull request,
+// which would make rw watch stop watching it.
 func (b *bitbucket) Pull(r Repo, n int) (*Pull, error) {
 	p, err := b.pr(r, n)
 	if err != nil {
 		return nil, err
 	}
 	out := p.pull(r)
-	if out.HeadSHA != "" && len(out.HeadSHA) < 40 {
+	if out.HeadSHA == "" || len(out.HeadSHA) >= 40 {
+		return &out, nil
+	}
+	repos := []string{bbRepo(r)}
+	if src := p.Source.Repository; src != nil {
+		if w, s, ok := strings.Cut(src.FullName, "/"); ok && w != "" && s != "" && !strings.Contains(s, "/") {
+			repos = []string{"/repositories/" + url.PathEscape(w) + "/" + url.PathEscape(s), bbRepo(r)}
+		}
+	}
+	var last error
+	for _, repo := range repos {
 		var c struct {
 			Hash string `json:"hash"`
 		}
-		if err := b.do(http.MethodGet, bbRepo(r)+"/commit/"+url.PathEscape(out.HeadSHA), nil, &c); err != nil {
-			return nil, fmt.Errorf("read the head commit of %s: %w", r.Ref(n), err)
+		if last = b.do(http.MethodGet, repo+"/commit/"+url.PathEscape(out.HeadSHA), nil, &c); last != nil {
+			continue
 		}
 		if !sameCommit(c.Hash, out.HeadSHA) {
 			return nil, fmt.Errorf("the head %q of %s is commit %q on Bitbucket", out.HeadSHA, r.Ref(n), c.Hash)
 		}
 		out.HeadSHA = c.Hash
+		return &out, nil
 	}
-	return &out, nil
+	return nil, fmt.Errorf("read the head commit %s of %s: %v", out.HeadSHA, r.Ref(n), last)
 }
 
 // sameCommit reports whether two hashes, either maybe shortened (at least
@@ -579,44 +636,58 @@ func (b *bitbucket) trusted(r Repo, u bbUser) (bool, error) {
 
 func writes(perm string) bool { return perm == "write" || perm == "admin" }
 
+// unreadable reports an answer that says the token may not ask: 401 (an
+// access token on a workspace endpoint), 403 or 404.
+func unreadable(err error) bool {
+	s := status(err)
+	return s == 401 || s == 403 || s == 404
+}
+
 func (b *bitbucket) lookupTrust(r Repo, uuid string) (bool, error) {
+	// A 401 here means the token may not use the endpoint: it must not
+	// make the client go on without the token.
+	probe := *b.rest
+	probe.keep = true
 	ws := url.PathEscape(r.Owner)
 	// The user's effective permission (needs a workspace admin's token).
+	// Only the user's own row counts, should the filter not apply.
 	var eff struct {
 		Values []struct {
 			Permission string `json:"permission"`
+			User       bbUser `json:"user"`
 		} `json:"values"`
 	}
 	q := url.Values{"q": {"user.uuid=" + bbqlString(uuid)}}
-	err := b.do(http.MethodGet, "/workspaces/"+ws+"/permissions/repositories/"+url.PathEscape(r.Name)+"?"+q.Encode(), nil, &eff)
+	err := probe.do(http.MethodGet, "/workspaces/"+ws+"/permissions/repositories/"+url.PathEscape(r.Name)+"?"+q.Encode(), nil, &eff)
 	if err == nil {
 		for _, v := range eff.Values {
-			if writes(v.Permission) {
+			if strings.EqualFold(v.User.UUID, uuid) && writes(v.Permission) {
 				return true, nil
 			}
 		}
 		return false, nil
 	}
-	if s := status(err); s != 403 && s != 404 {
+	if !unreadable(err) {
 		return false, err
 	}
-	// A permission given to the user on the repository (needs admin on it).
+	// The permission given to the user on the repository (needs admin on
+	// it): when it can be read, it decides.
 	var perm struct {
 		Permission string `json:"permission"`
 	}
-	err = b.do(http.MethodGet, bbRepo(r)+"/permissions-config/users/"+url.PathEscape(uuid), nil, &perm)
-	if err == nil && writes(perm.Permission) {
-		return true, nil
+	err = probe.do(http.MethodGet, bbRepo(r)+"/permissions-config/users/"+url.PathEscape(uuid), nil, &perm)
+	if err == nil {
+		return writes(perm.Permission), nil
 	}
-	if s := status(err); err != nil && s != 403 && s != 404 {
+	if !unreadable(err) {
 		return false, err
 	}
 	// A member of the workspace: 200 means yes, 404 no.
-	err = b.do(http.MethodGet, "/workspaces/"+ws+"/members/"+url.PathEscape(uuid), nil, nil)
+	err = probe.do(http.MethodGet, "/workspaces/"+ws+"/members/"+url.PathEscape(uuid), nil, nil)
 	if err == nil {
 		return true, nil
 	}
-	if s := status(err); s != 403 && s != 404 {
+	if !unreadable(err) {
 		return false, err
 	}
 	return false, nil
@@ -636,11 +707,14 @@ func (b *bitbucket) Feedback(r Repo, n int) ([]Feedback, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Asking for changes again later is a new request.
-		out = append(out, Feedback{ID: "review:" + strings.ToLower(pt.User.UUID) + "@" + pt.ParticipatedOn, Review: true,
-			Author: pt.User.login(), Trusted: ok})
+		// One item per reviewer: Bitbucket's change request has no id of
+		// its own, and its time changes whenever the reviewer comments.
+		// What they ask for is in their inline comments.
+		out = append(out, Feedback{ID: "review:" + pt.User.login(), Review: true, Author: pt.User.login(), Trusted: ok})
 	}
-	cs, err := bbPages[bbComment](b, fmt.Sprintf("%s/pullrequests/%d/comments", bbRepo(r), n), 100, 0)
+	// The newest comments (up to the page cap): old ones cannot hide new
+	// feedback.
+	cs, err := bbPages[bbComment](b, fmt.Sprintf("%s/pullrequests/%d/comments?sort=-created_on", bbRepo(r), n), 100, 0)
 	if err != nil {
 		return nil, fmt.Errorf("read comments: %w", err)
 	}

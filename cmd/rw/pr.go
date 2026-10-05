@@ -869,23 +869,36 @@ func renderPRParts(st *orchestrator.TaskState, o prBodyOptions) prParts {
 // issue #7, bug #7, owner/repo#7, group/sub/project#7 or an issues URL);
 // reMention finds @user, @org/team and Bitbucket's @{account}; reQuickAction
 // finds GitLab quick actions ("/merge", "/approve" at the start of a line),
-// which GitLab runs with the poster's rights.
+// which GitLab runs with the poster's rights. reJiraKey finds a Jira issue
+// key: with one in the text, "#word" may be a Jira smart commit command
+// (PROJ-12 #close, #time 2h, #comment) that Bitbucket and GitHub run for
+// a linked Jira as the pusher, so reSmartCommand breaks those.
+//
+// Spaces include the Unicode ones (no-break space and others) and \v,
+// which \s alone leaves out.
 var (
-	reCloseRef    = regexp.MustCompile(`(?i)\b(clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?|reopen(?:s|ed|ing)?|hold(?:s|ing)?|wontfix|invalidat(?:e[sd]?|ing))(\s*:?\s*(?:(?:issue|bug|ticket)\s*)?(?:[\w.-]+(?:/[\w.-]+)+)?#\d|\s*:?\s*https?://[^\s]*/issues/\d)`)
-	reMention     = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9{])`)
-	reQuickAction = regexp.MustCompile(`(?m)^([ \t]*)/([A-Za-z])`)
+	reCloseRef = regexp.MustCompile(strings.ReplaceAll(`(?i)\b(clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?|reopen(?:s|ed|ing)?|hold(?:s|ing)?|wontfix|invalidat(?:e[sd]?|ing))(SP*:?SP*(?:(?:issue|bug|ticket)SP*)?(?:[\w.-]+(?:/[\w.-]+)+)?#\d|SP*:?SP*https?://[^\s]*/issues/\d)`,
+		"SP", `[\s\v\p{Z}]`))
+	reMention      = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9{])`)
+	reQuickAction  = regexp.MustCompile(`(?m)^([ \t]*)/([A-Za-z])`)
+	reJiraKey      = regexp.MustCompile(`\b[A-Z][A-Z0-9_]+-\d+\b`)
+	reSmartCommand = regexp.MustCompile(`#([A-Za-z])`)
 )
 
 // defuseRefs stops text written by others (an issue's body, a task, CI
 // output) from closing issues, notifying people or running GitLab quick
 // actions when it lands in a commit message, a PR title, a comment or a
 // squash commit built from the PR body: a word joiner (U+2060, invisible)
-// breaks the keyword, the @ and the /. The text reads the same.
+// breaks the keyword, the @, the / and a smart commit's #. The text reads
+// the same.
 func defuseRefs(s string) string {
 	s = reCloseRef.ReplaceAllStringFunc(s, func(m string) string {
 		return m[:1] + "\u2060" + m[1:]
 	})
 	s = reQuickAction.ReplaceAllString(s, "${1}/\u2060${2}")
+	if reJiraKey.MatchString(s) {
+		s = reSmartCommand.ReplaceAllString(s, "#\u2060${1}")
+	}
 	return reMention.ReplaceAllString(s, "${1}@\u2060${2}")
 }
 

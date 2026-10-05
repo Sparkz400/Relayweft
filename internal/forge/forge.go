@@ -204,12 +204,13 @@ func (r Repo) gh() gh.Repo { return gh.Repo{Host: r.Host, Owner: r.Owner, Name: 
 
 // APIServes reports whether the API base URL api belongs to host: the
 // same host name (any port), api.github.com for github.com, or
-// api.bitbucket.org for bitbucket.org. A token is for one host, so a
-// client for api only gets the token of a host it serves.
+// https://api.bitbucket.org (on its own port) for bitbucket.org. A token
+// is for one host, so a client for api only gets the token of a host it
+// serves.
 func APIServes(api, host string) bool {
 	if isBitbucketCloud(host) {
 		u, err := url.Parse(api)
-		return err == nil && strings.EqualFold(u.Hostname(), "api.bitbucket.org")
+		return err == nil && strings.EqualFold(u.Scheme, "https") && strings.EqualFold(u.Host, "api.bitbucket.org")
 	}
 	return gh.APIServes(api, host)
 }

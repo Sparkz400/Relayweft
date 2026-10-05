@@ -110,7 +110,8 @@ func (f *bbAPI) server(t *testing.T) string {
 			if strings.Contains(r.URL.Query().Get("q"), bbDevUUID) {
 				perm = "write"
 			}
-			fmt.Fprintf(w, `{"values":[{"permission":%q}]}`, perm)
+			uuid := strings.Trim(strings.TrimPrefix(r.URL.Query().Get("q"), "user.uuid="), `"`)
+			fmt.Fprintf(w, `{"values":[{"permission":%q,"user":%s}]}`, perm, bbUser("x", uuid))
 		case r.Method == "GET" && p == "/2.0/user":
 			io.WriteString(w, bbUser("me", bbMeUUID))
 		case r.Method == "POST" && p == repo+"/pullrequests/101/comments":
@@ -142,7 +143,9 @@ func (f *bbAPI) server(t *testing.T) string {
 // pushed to the branch, with a comment on the pull request.
 func TestBitbucketPullRequestAndWatch(t *testing.T) {
 	dir := prRepo(t)
-	run(t, dir, "remote", "set-url", "origin", "git@bitbucket.org:w/r.git")
+	// The fake's host: the Bitbucket token goes only where --api serves
+	// the remote's host.
+	run(t, dir, "remote", "set-url", "origin", "https://127.0.0.1/w/r.git")
 	bare := filepath.Join(t.TempDir(), "remote.git")
 	run(t, dir, "init", "-q", "--bare", "-b", "main", bare)
 	run(t, dir, "push", "-q", bare, "main")
@@ -184,7 +187,7 @@ func TestBitbucketPullRequestAndWatch(t *testing.T) {
 		t.Fatalf("not recorded for rw watch: %+v", prs)
 	}
 
-	run(t, dir, "config", "url."+filepath.ToSlash(bare)+".insteadOf", "git@bitbucket.org:w/r.git")
+	run(t, dir, "config", "url."+filepath.ToSlash(bare)+".insteadOf", "https://127.0.0.1/w/r.git")
 	wr := &watchRunner{}
 	oldRunners, oldPrint, oldOut := watchRunners, eventPrint, watchOut
 	t.Cleanup(func() { watchRunners, eventPrint, watchOut = oldRunners, oldPrint, oldOut })
@@ -285,25 +288,34 @@ func TestBitbucketReviewAndIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(tasks) != 1 || !strings.HasPrefix(tasks[0], "Fix Bitbucket issue #3: Shout the first line\n\na.txt should start loud\n\nLabels: rw") ||
-		!strings.Contains(tasks[0], "@bob {00000000-0000-4000-8000-000000000007} wrote:\n/close this") || f.origin.Kind != forge.Bitbucket || f.items[0].closes != "#3" {
+		!strings.Contains(tasks[0], "@{00000000-0000-4000-8000-000000000007} wrote:\n/close this") || f.origin.Kind != forge.Bitbucket || f.items[0].closes != "#3" {
 		t.Fatalf("tasks %q, origin %+v", tasks, f.origin)
 	}
 }
 
 func TestDefuseBitbucketRefs(t *testing.T) {
 	for _, in := range []string{"fixes issue #6", "Resolving bug #2", "closes ticket #9", "reopen #3", "wontfix #4", "Invalidates #5",
-		"holding issue #1", "cc @{557058:0f3c-ab}", "ping @{00000000-0000-4000-8000-000000000003}"} {
+		"holding issue #1", "cc @{557058:0f3c-ab}", "ping @{00000000-0000-4000-8000-000000000003}",
+		"fixes\u00a0#3", "fixes\v#3", "fixes\u2003issue #3", "closes\u3000#3"} {
 		out := defuseRefs(in)
 		if reCloseRef.MatchString(out) || reMention.MatchString(out) {
 			t.Errorf("%q -> %q still live", in, out)
 		}
-		if strings.ReplaceAll(out, "⁠", "") != in {
+		if strings.ReplaceAll(out, "\u2060", "") != in {
 			t.Errorf("%q -> %q changed the visible text", in, out)
 		}
 	}
-	for _, keep := range []string{"Fix Bitbucket issue #42: crash", "a hold on #", "map{x}"} {
+	for _, keep := range []string{"Fix Bitbucket issue #42: crash", "a hold on #", "map{x}", "see #readme and #3"} {
 		if out := defuseRefs(keep); out != keep {
 			t.Errorf("%q changed to %q", keep, out)
+		}
+	}
+	// Jira smart commits: with an issue key in the text, no #command
+	// stays live.
+	for _, in := range []string{"PROJ-12 #close #comment hi", "Fix it ABC_1-7 #time 2h", "PROJ-12 #start-review"} {
+		out := defuseRefs(in)
+		if reSmartCommand.MatchString(out) || strings.ReplaceAll(out, "\u2060", "") != in {
+			t.Errorf("%q -> %q", in, out)
 		}
 	}
 }
@@ -312,5 +324,37 @@ func TestDefuseBitbucketRefs(t *testing.T) {
 func TestCIFilesBitbucket(t *testing.T) {
 	if got := ciFiles([]string{"M bitbucket-pipelines.yml", "A Bitbucket-Pipelines.yml", "M sub/bitbucket-pipelines.yml"}); strings.Join(got, ",") != "bitbucket-pipelines.yml,Bitbucket-Pipelines.yml" {
 		t.Fatalf("ciFiles = %v", got)
+	}
+}
+
+// With origin on bitbucket.org, an --api elsewhere (a shell alias for
+// another forge, say) gets no Bitbucket token, also not later through
+// rw watch's stored entry.
+func TestBitbucketTokenNotSentToOtherAPI(t *testing.T) {
+	isolate(t)
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = append(auth, r.Header.Get("Authorization"))
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+	old := prToken
+	t.Cleanup(func() { prToken = old })
+	prToken = func(forge.Kind, string) (string, string) { return "bbtok", "test" }
+	repo := forge.Repo{Kind: forge.Bitbucket, Host: "bitbucket.org", Owner: "w", Name: "r"}
+	for _, api := range []string{srv.URL + "/2.0", strings.Replace(srv.URL, "127.0.0.1", "localhost", 1) + "/api/v3"} {
+		c := forgeClient(repo, api, io.Discard)
+		if c.HasToken() {
+			t.Errorf("%s: the client has the Bitbucket token", api)
+		}
+		c.Pull(repo, 1)
+	}
+	for _, a := range auth {
+		if a != "" {
+			t.Fatalf("sent %q", a)
+		}
+	}
+	if c := forgeClient(repo, "", io.Discard); !c.HasToken() {
+		t.Fatal("api.bitbucket.org lost the token")
 	}
 }

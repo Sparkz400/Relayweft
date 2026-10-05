@@ -34,6 +34,11 @@ func forgeClient(repo forge.Repo, api string, notes io.Writer) forge.Client {
 		api = repo.APIBase()
 	}
 	tok, _ := prToken(repo.Kind, repo.Host)
+	if repo.Kind == forge.Bitbucket && !forge.APIServes(api, repo.Host) {
+		// --api (or a watched entry's) elsewhere: the Bitbucket token
+		// stays with api.bitbucket.org.
+		tok = ""
+	}
 	return forge.New(repo.Kind, api, tok, notes)
 }
 

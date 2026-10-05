@@ -38,6 +38,11 @@ type fakeBitbucket struct {
 	inline    []map[string]any
 	lookups   []string
 	elsewhere string // a next link it gives for page 2 of the issues
+	// How the permission endpoints answer: unfiltered lists everyone's
+	// workspace permission (a filter Bitbucket ignored); explicitRead
+	// gives everyone read on the repository; probe401 refuses the token
+	// on workspace endpoints, as for an access token.
+	unfiltered, explicitRead, probe401 bool
 }
 
 const bbHead = "abc1234def0123456789abc1234def0123456789"
@@ -78,7 +83,7 @@ func (f *fakeBitbucket) handler(t *testing.T) http.Handler {
 		case r.Method == "GET" && p == repo+"/issues/9":
 			write(`{"id":9,"title":"Old","state":"resolved"}`)
 		case r.Method == "GET" && p == repo+"/issues/4/comments":
-			if q.Get("sort") != "created_on" || q.Get("pagelen") != "100" {
+			if q.Get("sort") != "-created_on" || q.Get("pagelen") != "100" {
 				t.Errorf("comment query %s", r.URL.RawQuery)
 			}
 			write(`{"values":[{"id":31,"content":{"raw":"me too"},"user":` + bbUserJSON("bob", bbVisitor) + `},
@@ -91,7 +96,8 @@ func (f *fakeBitbucket) handler(t *testing.T) http.Handler {
 			write(`{}`)
 		case r.Method == "GET" && p == repo+"/issues":
 			if q.Get("page") == "2" {
-				write(`{"values":[{"id":5,"created_on":"2026-02-01T00:00:00Z"}]}`)
+				write(`{"values":[{"id":5,"created_on":"2026-02-01T00:00:00Z","reporter":` + bbUserJSON("visitor", bbVisitor) + `},
+					{"id":6,"created_on":"2026-02-02T00:00:00Z","reporter":` + bbUserJSON("visitor", bbVisitor) + `}]}`)
 				return
 			}
 			if q.Get("q") != `(state="new" OR state="open") AND component.name="r\"w"` || q.Get("sort") != "created_on" || q.Get("pagelen") != "50" {
@@ -101,7 +107,18 @@ func (f *fakeBitbucket) handler(t *testing.T) http.Handler {
 			if f.elsewhere != "" {
 				next = f.elsewhere
 			}
-			fmt.Fprintf(w, `{"values":[{"id":3,"created_on":"2026-01-01T00:00:00Z"},{"id":9,"created_on":"2026-03-01T00:00:00Z"}],"next":%q}`, next)
+			fmt.Fprintf(w, `{"values":[{"id":3,"created_on":"2026-01-01T00:00:00Z","reporter":%s},{"id":9,"created_on":"2026-03-01T00:00:00Z","reporter":%s}],"next":%q}`,
+				bbUserJSON("dev", bbDev), bbUserJSON("visitor", bbVisitor), next)
+		// Who set the component of the issues a stranger reported: a
+		// developer (#9), the stranger (#5); #6's changes are not readable.
+		case r.Method == "GET" && p == repo+"/issues/9/changes":
+			write(`{"values":[{"created_on":"2026-03-01T00:00:00Z","user":` + bbUserJSON("visitor", bbVisitor) + `,"changes":{"component":{"new":"other"}}},
+				{"created_on":"2026-03-02T00:00:00Z","user":` + bbUserJSON("dev", bbDev) + `,"changes":{"component":{"old":"other","new":"r\"w"}}},
+				{"created_on":"2026-03-03T00:00:00Z","user":` + bbUserJSON("visitor", bbVisitor) + `,"changes":{"title":{"new":"x"}}}]}`)
+		case r.Method == "GET" && p == repo+"/issues/5/changes":
+			write(`{"values":[{"created_on":"2026-02-01T00:00:00Z","user":` + bbUserJSON("visitor", bbVisitor) + `,"changes":{"component":{"new":"r\"w"}}}]}`)
+		case r.Method == "GET" && p == repo+"/issues/6/changes":
+			w.WriteHeader(403)
 		case r.Method == "GET" && p == repo+"/pullrequests":
 			if q.Get("state") != "OPEN" {
 				t.Errorf("pull query %s", r.URL.RawQuery)
@@ -126,6 +143,14 @@ func (f *fakeBitbucket) handler(t *testing.T) http.Handler {
 			write(`{"id":8,"state":"MERGED","source":{"branch":{"name":"rw/y"},"commit":{"hash":"abc1234def01"}}}`)
 		case r.Method == "GET" && p == repo+"/commit/abc1234def01":
 			write(`{"hash":"` + bbHead + `"}`)
+		// #9 comes from a fork: its head is only there. #10's head is
+		// nowhere (deleted).
+		case r.Method == "GET" && p == repo+"/pullrequests/9":
+			write(`{"id":9,"state":"OPEN","source":{"branch":{"name":"x"},"commit":{"hash":"beef12340000"},"repository":{"full_name":"fork/r"}}}`)
+		case r.Method == "GET" && p == "/repositories/fork/r/commit/beef12340000":
+			write(`{"hash":"beef123400000000000000000000000000000000"}`)
+		case r.Method == "GET" && p == repo+"/pullrequests/10":
+			write(`{"id":10,"state":"OPEN","source":{"branch":{"name":"x"},"commit":{"hash":"0000000dead1"},"repository":{"full_name":"w/r"}}}`)
 		case r.Method == "GET" && p == repo+"/pullrequests/7/diff":
 			http.Redirect(w, r, "/2.0"+repo+"/diff/w/r:abc1234def01%0Dw/r:main?from_pullrequest_id=7", http.StatusFound)
 		case r.Method == "GET" && strings.HasPrefix(p, repo+"/diff/"):
@@ -166,6 +191,9 @@ func (f *fakeBitbucket) handler(t *testing.T) http.Handler {
 				{"key":"lint","name":"Lint","state":"FAILED","description":"2 problems","url":"https://ci.example/9","updated_on":"t2"},
 				{"key":"ok","name":"Fine","state":"SUCCESSFUL","updated_on":"t3"}]}`)
 		case r.Method == "GET" && p == repo+"/pullrequests/7/comments":
+			if q.Get("sort") != "-created_on" {
+				t.Errorf("comment query %s", r.URL.RawQuery)
+			}
 			const thread = `"inline":{"path":"a.go","to":3}`
 			write(`{"values":[
 				{"id":11,"content":{"raw":"rename"},"user":` + bbUserJSON("dev", bbDev) + `,` + thread + `},
@@ -179,7 +207,14 @@ func (f *fakeBitbucket) handler(t *testing.T) http.Handler {
 				{"id":101,"content":{"raw":"bot"},"user":{"type":"app_user","uuid":"{00000000-0000-4000-8000-000000000009}"},` + thread + `}]}`)
 		case r.Method == "GET" && strings.HasPrefix(p, "/workspaces/w/permissions/repositories/r"):
 			f.lookups = append(f.lookups, "eff:"+strings.TrimPrefix(q.Get("q"), "user.uuid="))
-			if !f.permAdmin {
+			switch {
+			case f.probe401:
+				w.WriteHeader(401)
+				return
+			case f.unfiltered:
+				write(`{"values":[{"permission":"admin","user":` + bbUserJSON("me", bbMe) + `},{"permission":"read","user":` + bbUserJSON("dev", bbDev) + `}]}`)
+				return
+			case !f.permAdmin:
 				w.WriteHeader(403)
 				return
 			}
@@ -187,13 +222,22 @@ func (f *fakeBitbucket) handler(t *testing.T) http.Handler {
 			if strings.Contains(q.Get("q"), bbDev) {
 				perm = "write"
 			}
-			fmt.Fprintf(w, `{"values":[{"permission":%q}]}`, perm)
+			uuid := strings.Trim(strings.TrimPrefix(q.Get("q"), "user.uuid="), `"`)
+			fmt.Fprintf(w, `{"values":[{"permission":%q,"user":%s}]}`, perm, bbUserJSON("x", uuid))
 		case r.Method == "GET" && strings.HasPrefix(p, repo+"/permissions-config/users/"):
 			f.lookups = append(f.lookups, "explicit")
+			if f.explicitRead {
+				write(`{"permission":"read"}`)
+				return
+			}
 			w.WriteHeader(403)
 		case r.Method == "GET" && strings.HasPrefix(p, "/workspaces/w/members/"):
 			who := strings.TrimPrefix(p, "/workspaces/w/members/")
 			f.lookups = append(f.lookups, "member")
+			if f.probe401 {
+				w.WriteHeader(401)
+				return
+			}
 			if who == "%7B00000000-0000-4000-8000-000000000003%7D" {
 				write(`{"user":{}}`)
 				return
@@ -244,14 +288,14 @@ func TestBitbucketIssuesAndPulls(t *testing.T) {
 	c := New(Bitbucket, api, "me@example.com:ATATT3x", nil)
 	is, err := c.Issue(bbTestRepo, 4)
 	if err != nil || is.Title != "Crash" || is.Body != "Steps" || is.State != "open" || strings.Join(is.Labels, ",") != "rw,bug" ||
-		is.Author != "ann "+bbVisitor || is.URL != "https://bitbucket.org/w/r/issues/4" {
+		is.Author != bbVisitor || is.URL != "https://bitbucket.org/w/r/issues/4" {
 		t.Fatalf("%+v %v", is, err)
 	}
 	if is, err := c.Issue(bbTestRepo, 9); err != nil || is.State != "closed" {
 		t.Fatalf("a resolved issue: %+v %v", is, err)
 	}
 	cs, err := c.Comments(bbTestRepo, 4)
-	if err != nil || len(cs) != 4 || cs[0].Author != "bob "+bbVisitor || cs[0].ID != 31 || cs[1].Author != "dev "+bbDev {
+	if err != nil || len(cs) != 4 || cs[0].Author != bbVisitor || cs[0].ID != 31 || cs[1].Author != bbDev {
 		t.Fatalf("empty comments left out: %+v %v", cs, err)
 	}
 	// The team queue's calls: trust per comment author, and edits.
@@ -266,7 +310,7 @@ func TestBitbucketIssuesAndPulls(t *testing.T) {
 	}
 	// A name cannot make someone the token's owner: the UUID is theirs.
 	me, err := c.Viewer()
-	if err != nil || me != "me "+bbMe || strings.EqualFold(cs[3].Author, me) {
+	if err != nil || me != bbMe || strings.EqualFold(cs[3].Author, me) {
 		t.Fatalf("viewer %q, impostor %q, %v", me, cs[3].Author, err)
 	}
 	if err := c.EditComment(bbTestRepo, 4, 31, "new text"); err != nil || f.comments[len(f.comments)-1] != "edit 31: new text" {
@@ -274,13 +318,20 @@ func TestBitbucketIssuesAndPulls(t *testing.T) {
 	}
 	f.comments = nil
 	// label r"w is the component r"w; the next page is followed, and
-	// the result is oldest first.
+	// the result is oldest first. A stranger's issue counts only when a
+	// developer set its component last (#9), not when the stranger did
+	// (#5) or nobody can tell (#6).
+	var notes strings.Builder
+	c = New(Bitbucket, api, "me@example.com:ATATT3x", &notes)
 	open, err := c.OpenIssues(bbTestRepo, `r"w`, 0)
-	if err != nil || len(open) != 3 || open[0].Number != 3 || open[1].Number != 5 || open[2].Number != 9 {
+	if err != nil || len(open) != 2 || open[0].Number != 3 || open[1].Number != 9 {
 		t.Fatalf("oldest first over two pages: %+v %v", open, err)
 	}
-	if open, err := c.OpenIssues(bbTestRepo, `r"w`, 2); err != nil || len(open) != 2 || open[0].Number != 3 || open[1].Number != 9 {
-		t.Fatalf("at most 2 (from the first page): %+v %v", open, err)
+	if !strings.Contains(notes.String(), "skipping #5") || !strings.Contains(notes.String(), "skipping #6") {
+		t.Fatalf("notes %q", notes.String())
+	}
+	if open, err := c.OpenIssues(bbTestRepo, `r"w`, 1); err != nil || len(open) != 1 || open[0].Number != 3 {
+		t.Fatalf("at most 1: %+v %v", open, err)
 	}
 	ps, err := c.OpenPulls(bbTestRepo)
 	if err != nil || !ClosedBy(ps)[5] {
@@ -426,8 +477,9 @@ https://ci.example/9|""`
 	// Change requests first, then unresolved inline comments oldest first;
 	// resolved threads (with their replies), deleted and draft comments and
 	// general comments are left out, and apps are never trusted.
-	want = "review:" + bbDev + "@2026-10-01T10:00:00Z dev true :0 |review:" + bbVisitor + "@2026-10-01T11:00:00Z visitor false :0 |" +
-		"comment:11 dev true a.go:3 rename|comment:17 dev true b.go:0 old side|comment:100 visitor false a.go:3 drive-by|" +
+	d, v := bbDev, bbVisitor
+	want = "review:" + d + " " + d + " true :0 |review:" + v + " " + v + " false :0 |" +
+		"comment:11 " + d + " true a.go:3 rename|comment:17 " + d + " true b.go:0 old side|comment:100 " + v + " false a.go:3 drive-by|" +
 		"comment:101 {00000000-0000-4000-8000-000000000009} false a.go:3 bot"
 	if got := feedback(); got != want {
 		t.Fatalf("feedback\n%q\nwant\n%q", got, want)
@@ -489,6 +541,7 @@ func TestBitbucketTokenAndHosts(t *testing.T) {
 		t.Errorf("Gitea got %q", tok)
 	}
 	for api, want := range map[string]bool{"https://api.bitbucket.org/2.0": true, "https://API.Bitbucket.org/2.0/": true,
+		"http://api.bitbucket.org/2.0": false, "https://api.bitbucket.org:8443/2.0": false,
 		"https://bitbucket.org/2.0": false, "https://api.bitbucket.org.evil.example/2.0": false, "https://evil.example/2.0": false} {
 		if got := APIServes(api, "bitbucket.org"); got != want {
 			t.Errorf("APIServes(%q, bitbucket.org) = %v", api, got)
@@ -532,17 +585,71 @@ func TestBitbucketRemotesAndRefs(t *testing.T) {
 	if got := restMessage([]byte(`{"type":"error","error":{"message":"Bad request","detail":"title: required"}}`)); got != "Bad request; title: required" {
 		t.Errorf("restMessage %q", got)
 	}
+	got := restMessage([]byte(`{"type":"error","error":{"message":"Bad request","detail":{"x":1},"fields":{"source.branch":["not found"],"title":"too long"}}}`))
+	if got != `Bad request; {"x":1}; source.branch not found; title too long` {
+		t.Errorf("restMessage with fields %q", got)
+	}
 }
 
 func TestBitbucketLogin(t *testing.T) {
 	for u, want := range map[bbUser]string{
-		{Nickname: "ann", UUID: "{0F3C0000-0000-4000-8000-000000000001}"}:          "ann {0f3c0000-0000-4000-8000-000000000001}",
-		{DisplayName: "Ann  B\nC", UUID: "{0f3c0000-0000-4000-8000-000000000001}"}: "Ann B C {0f3c0000-0000-4000-8000-000000000001}",
-		{Nickname: "ann", UUID: ""}: "",
-		{Nickname: "ann {0f3c0000-0000-4000-8000-000000000001}", UUID: "{not a uuid}"}: "",
+		{UUID: "{0F3C0000-0000-4000-8000-000000000001}"}: "{0f3c0000-0000-4000-8000-000000000001}",
+		{UUID: ""}:             "",
+		{UUID: "{not a uuid}"}: "",
+		{UUID: "ann {0f3c0000-0000-4000-8000-000000000001}"}: "",
 	} {
 		if got := u.login(); got != want {
 			t.Errorf("%+v: %q, want %q", u, got, want)
 		}
+	}
+}
+
+// Review findings: trust is fail-safe when Bitbucket's answers are not
+// what rw asked for.
+func TestBitbucketTrustFailsSafe(t *testing.T) {
+	dev := Comment{Author: bbDev, who: commentAuthor{typ: "user", uuid: bbDev}}
+	for name, set := range map[string]func(*fakeBitbucket){
+		// The workspace list ignores the user filter: someone else's
+		// admin row must not make dev trusted.
+		"unfiltered": func(f *fakeBitbucket) { f.unfiltered = true },
+		// dev has read on the repository: being a workspace member does
+		// not lift that.
+		"explicit read": func(f *fakeBitbucket) { f.explicitRead = true },
+	} {
+		f, api := bitbucketServer(t, "tok")
+		set(f)
+		c := New(Bitbucket, api, "tok", nil)
+		if ok, err := c.CommentTrusted(bbTestRepo, dev); err != nil || ok {
+			t.Errorf("%s: trusted %v, %v (lookups %v)", name, ok, err, f.lookups)
+		}
+	}
+	// An access token gets 401 from workspace endpoints: that is "may
+	// not read", and the client keeps its token for what follows.
+	f, api := bitbucketServer(t, "tok")
+	f.probe401 = true
+	c := New(Bitbucket, api, "tok", nil)
+	if ok, err := c.CommentTrusted(bbTestRepo, dev); err != nil || ok {
+		t.Fatalf("401 probes: %v %v", ok, err)
+	}
+	if !c.HasToken() || c.Rejected() {
+		t.Fatal("a 401 from a permission probe dropped the token")
+	}
+	if err := c.CommentIssue(bbTestRepo, 4, "claim"); err != nil {
+		t.Fatalf("a write after the probes: %v", err)
+	}
+}
+
+// The head of a fork's pull request is looked up in the fork; a head
+// found nowhere is an error, but no 404 (rw watch drops a pull request
+// on a 404).
+func TestBitbucketPullHeadLookup(t *testing.T) {
+	_, api := bitbucketServer(t, "tok")
+	c := New(Bitbucket, api, "tok", nil)
+	if p, err := c.Pull(bbTestRepo, 9); err != nil || p.HeadSHA != "beef123400000000000000000000000000000000" || p.HeadRepo != "fork/r" {
+		t.Fatalf("fork: %+v %v", p, err)
+	}
+	_, err := c.Pull(bbTestRepo, 10)
+	if err == nil || IsNotFound(err) || !strings.Contains(err.Error(), "0000000dead1") {
+		t.Fatalf("missing head: %v", err)
 	}
 }
