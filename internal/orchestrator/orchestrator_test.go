@@ -317,7 +317,8 @@ func TestWorktreeConflictKeepsBranch(t *testing.T) {
 		os.WriteFile(filepath.Join(s.Dir, "shared.txt"), []byte("changed by "+s.StepID+"\n"), 0o644)
 		return runner.Result{Final: "changed"}
 	})
-	o, rec := newOrc(t, dir, set, nil)
+	// No resolve step (resolve_test.go): the conflict keeps its branch.
+	o, rec := newOrc(t, dir, set, func(c *config.Config) { c.Orchestrator.Conflicts = config.ConflictsFail })
 	res := o.Run(context.Background(), longTask)
 	if res.OK {
 		t.Fatal("a conflict must not report success")

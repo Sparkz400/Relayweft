@@ -564,35 +564,45 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 // fresh worktree at the same base with the winner's files, through the
 // usual landing (change review, a feedback rerun on the winner's route).
 // ok is false when that is not possible either (the commit is gone, no
-// worktree): then a fresh agent takes the step over.
+// worktree): then a fresh agent takes the step over. A step whose merge
+// conflict was being resolved (prev.Resolve, resolve.go) lands its kept
+// work the same way, and the conflict is resolved anew.
 func (o *Orchestrator) landKept(ctx context.Context, t, rp *task, st Subtask, deps []string, prev StepRun, mainDir string, why error) (stepResult, bool) {
 	short := prev.Kept[:min(12, len(prev.Kept))]
+	what, lead := "the best-of winner", fmt.Sprintf("the best-of winner's worktree cannot be used (%v)", why)
+	if prev.Resolve != nil {
+		what, lead = "the step", why.Error()
+	}
 	if _, err := (git{rp.root}).out("cat-file", "-e", prev.Kept+"^{commit}"); err != nil {
-		o.logf("%s: the best-of winner's worktree cannot be used (%v) and its kept commit %s is gone; the step starts over", st.ID, why, short)
+		o.logf("%s: %s and its kept commit %s is gone; the step starts over", st.ID, lead, short)
 		return stepResult{}, false
 	}
 	sl, err := acquireSlot(rp.root, prev.Base)
 	if err != nil {
-		o.logf("%s: the best-of winner's worktree cannot be used (%v), and no other worktree is free (%v); the step starts over", st.ID, why, err)
+		o.logf("%s: %s, and no worktree is free (%v); the step starts over", st.ID, lead, err)
 		return stepResult{}, false
 	}
 	o.slotNotes(t, sl)
 	defer sl.release()
 	if err := restoreSlot(sl.path, prev.Kept); err != nil {
-		o.logf("%s: the best-of winner's kept work %s cannot be put in a worktree (%v); the step starts over", st.ID, short, err)
+		o.logf("%s: the kept work of %s (%s) cannot be put in a worktree (%v); the step starts over", st.ID, what, short, err)
 		return stepResult{}, false
 	}
-	o.logf("%s: the best-of winner's worktree cannot be used (%v); its kept work (%s) lands from %s", st.ID, why, short, sl.path)
+	o.logf("%s: %s; the kept work of %s (%s) lands from %s", st.ID, lead, what, short, sl.path)
 	loc := stepLoc{dir: slotWorkDir(sl.path, rp.root, mainDir), slot: sl.path, base: prev.Base, owner: true}
 	c := &bestOfCand{id: st.ID, commit: prev.Kept, changed: true, loc: loc, branch: "commit " + short,
-		pin: event.Decision{Role: prev.Role, Provider: prev.Provider, Model: prev.Model, Effort: prev.Effort, Rule: router.RuleForced, Reason: "the kept best-of winner", Confidence: 1}}
+		pin: event.Decision{Role: prev.Role, Provider: prev.Provider, Model: prev.Model, Effort: prev.Effort, Rule: router.RuleForced, Reason: "the kept work of " + what, Confidence: 1}}
 	if t.state != nil {
 		// It stays the step's running agent, now in this worktree.
 		run := prev
 		run.Dir, run.Slot, run.Session, run.Token, run.Started = loc.dir, loc.slot, "", "", time.Now()
 		t.state.setRunning(st.ID, run)
 	}
-	return o.landSlotFrom(ctx, t, rp, st, deps, loc, stepResult{ok: true, route: c.pin.Label(), final: "the kept work of the best-of winner (" + c.pin.Label() + ")"}, true, c), true
+	final := "the kept work of " + what + " (" + c.pin.Label() + ")"
+	if prev.Resolve != nil && prev.Resolve.Summary != "" {
+		final = prev.Resolve.Summary
+	}
+	return o.landSlotFrom(ctx, t, rp, st, deps, loc, stepResult{ok: true, route: c.pin.Label(), final: final, dec: c.pin}, true, c), true
 }
 
 // runCandidate runs one candidate in a pool worktree at base, commits its

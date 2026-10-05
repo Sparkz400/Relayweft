@@ -777,13 +777,3 @@ func (o *Orchestrator) saveBranchIn(rp *task, stepID, commit string) string {
 	}
 	return b
 }
-
-// keepBranchIn keeps a conflicting commit of repo rp on a branch and
-// records it as kept (parallel steps of every repo).
-func (o *Orchestrator) keepBranchIn(t, rp *task, stepID, commit string) string {
-	b := o.saveBranchIn(rp, stepID, commit)
-	t.notesMu.Lock()
-	t.kept = append(t.kept, b)
-	t.notesMu.Unlock()
-	return b
-}
