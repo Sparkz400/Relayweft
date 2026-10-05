@@ -191,6 +191,8 @@ class SyServiceIdeTest : HeavyPlatformTestCase() {
         assertEquals(want.joinToString("\n") + "\n", env.readRepo(Fake.NOTES))
         assertEquals(Fake.EDITED_PLAN_TEXT + "\n", env.readRepo("added.txt"))
         pumpUntil("the done notification") { notes.any { it.content.startsWith("Task done") } }
+        // Answered questions do not stay on screen.
+        assertTrue(notes.filter { it.content.contains("Review the changes of edit") || it.content.contains("Approve the plan") }.all { it.isExpired })
         assertTrue(svc.log.any { it.contains("applying 2 file(s), 1 of them partly") })
 
         // sy dies: the plugin notices and says so with a next step.

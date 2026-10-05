@@ -91,6 +91,9 @@ class SyService(val project: Project) : Disposable {
     private var replaying = false
     private var lastLogged = 0L
     private val seenApprovals = HashSet<String>()
+
+    /** The balloon of each waiting question; it goes away once the question is answered (here or elsewhere). */
+    private val approvalNotes = HashMap<String, com.intellij.notification.Notification>()
     private val inbox = ConcurrentLinkedQueue<SseMessage>()
     private val draining = AtomicBoolean(false)
 
@@ -287,6 +290,8 @@ class SyService(val project: Project) : Disposable {
         streamError = ""
         review.attach(null)
         seenApprovals.clear()
+        approvalNotes.values.forEach { it.expire() }
+        approvalNotes.clear()
         lastLogged = 0
         replaying = false
         fire()
@@ -402,6 +407,7 @@ class SyService(val project: Project) : Disposable {
     private fun notifyApprovals(approvals: List<ApprovalRequest>) {
         val live = approvals.map { it.id }.toSet()
         seenApprovals.retainAll(live)
+        approvalNotes.keys.filter { it !in live }.forEach { approvalNotes.remove(it)?.expire() }
         val notify = SySettings.get().state.notifyApprovals
         for (a in approvals) {
             if (!seenApprovals.add(a.id) || !notify) continue
@@ -411,7 +417,7 @@ class SyService(val project: Project) : Disposable {
                 "budget" -> (a.budget?.text ?: "The budget is reached") to "Decide"
                 else -> continue
             }
-            Notify.info(project, msg, action to { answerApproval(a.id) })
+            approvalNotes[a.id] = Notify.info(project, msg, action to { answerApproval(a.id) })
         }
     }
 
