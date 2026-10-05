@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/sparkz400/relayweft/internal/diag"
 )
 
 // Resolve finds a command on PATH. On Windows exec.LookPath honours PATHEXT,
@@ -151,7 +153,13 @@ func Started(cmd *exec.Cmd) {
 // kill-on-close. Elsewhere the commands Prepare sets up from then on run
 // in a wrapper that kills their process group when rw's end of a pipe
 // closes (proc_unix.go).
-func Guard() error { return guard() }
+func Guard() error {
+	err := guard()
+	if err != nil {
+		diag.Logf("guard: agents may outlive rw: %v", err)
+	}
+	return err
+}
 
 // Breakaway configures cmd to start outside Guard's job, so it outlives rw:
 // for the user's own programs rw merely launches (a browser), never for

@@ -48,15 +48,22 @@ const shPath = "/bin/sh"
 
 // wrapper runs the command ("$@") with the watch pipe on fd 3. The
 // watcher reads fd 3 until rw closes it (nothing is ever written), then
-// kills the whole process group (kill 0). It must not hold the command's
-// output pipes, or rw's Wait would wait for it. The command does not get
-// fd 3. A command killed by a signal exits with 128+n here.
-const wrapper = `{ read -r x <&3; kill -KILL 0; } </dev/null >/dev/null 2>&1 &
+// kills the wrapper's process group ($$ is the wrapper, the group leader;
+// were it not one, the kill would fail rather than hit rw's group). It
+// must not hold the command's output pipes, or rw's Wait would wait for
+// it. The command does not get fd 3. The wrapper reaps the watcher it
+// killed: a zombie left to a parent that never reaps (rw as pid 1 in a
+// container) would keep the group alive, and the slot would look taken.
+// Options from the environment (SHELLOPTS) are turned off first. A
+// command killed by a signal exits with 128+n here.
+const wrapper = `set +eux
+{ read -r x <&3; kill -s KILL -- "-$$"; } </dev/null >/dev/null 2>&1 &
 w=$!
 "$@" 3<&-
 s=$?
-kill -KILL $w 2>/dev/null
-exit $s`
+kill -s KILL "$w" 2>/dev/null
+wait "$w" 2>/dev/null
+exit "$s"`
 
 // wrap starts cmd in the wrapper once Guard has run. It leaves alone a
 // command whose path did not resolve (Start reports that) and one that
