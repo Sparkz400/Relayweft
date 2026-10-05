@@ -119,10 +119,10 @@ class SwitchyardUiTest {
 
             // Type a task in the prompt box and run it.
             val prompt = byName("Switchyard task")
-            prompt.click()
             prompt.component.requestFocus()
             prompt.keyboard { typeText(task, 5) }
-            x("//div[@class='JButton' and @visible_text='Run']").click()
+            // Ctrl+Enter runs it (balloons in the corner can cover the Run button on a small display).
+            prompt.keyboard { hotKey(KeyEvent.VK_CONTROL, KeyEvent.VK_ENTER) }
             until("the plan in the tree", 120_000) { agents.texts().firstOrNull { it.contains("Approve plan: 2 subtask") } }
             shot(frame, "2-plan-waiting")
 
