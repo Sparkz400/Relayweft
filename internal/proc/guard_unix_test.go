@@ -44,9 +44,16 @@ func waitGroupGone(pid int, d time.Duration) bool {
 
 // The wrapper is invisible to the command: input, output, errors and the
 // exit code pass through, Wait does not wait for the watcher, and the
-// watcher ends with the command.
+// watcher ends with the command. Run a few times: bash (macOS's sh) only
+// sometimes reported the killed watcher on stderr.
 func TestWrapperPassesThrough(t *testing.T) {
 	testWatch(t)
+	for i := 0; i < 20 && !t.Failed(); i++ {
+		passThrough(t)
+	}
+}
+
+func passThrough(t *testing.T) {
 	cmd := exec.CommandContext(context.Background(), "sh", "-c", `cat; printf ' "%s"' "$@"; echo oops >&2; exit 7`, "x", "a b", `c"d`)
 	Prepare(cmd)
 	if cmd.Path != shPath || len(cmd.Args) < 3 || cmd.Args[2] != wrapper {

@@ -54,15 +54,18 @@ const shPath = "/bin/sh"
 // it. The command does not get fd 3. The wrapper reaps the watcher it
 // killed: a zombie left to a parent that never reaps (rw as pid 1 in a
 // container) would keep the group alive, and the slot would look taken.
-// Options from the environment (SHELLOPTS) are turned off first. A
-// command killed by a signal exits with 128+n here.
+// Its output goes nowhere once the command ended: bash (macOS's sh) may
+// report the killed watcher ("Killed: 9") on stderr. Options from the
+// environment (SHELLOPTS) are turned off first. A command killed by a
+// signal exits with 128+n here.
 const wrapper = `set +eux
 { read -r x <&3; kill -s KILL -- "-$$"; } </dev/null >/dev/null 2>&1 &
 w=$!
 "$@" 3<&-
 s=$?
-kill -s KILL "$w" 2>/dev/null
-wait "$w" 2>/dev/null
+exec >/dev/null 2>&1
+kill -s KILL "$w"
+wait "$w"
 exit "$s"`
 
 // wrap starts cmd in the wrapper once Guard has run. It leaves alone a
