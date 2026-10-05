@@ -11,8 +11,9 @@ import (
 	"github.com/sparkz400/relayweft/internal/orchestrator"
 )
 
-// Issues as tasks (rw run --issue / --issues), on GitHub, GitLab or
-// Gitea/Forgejo (the origin remote's forge, or the issue URL's):
+// Issues as tasks (rw run --issue / --issues), on GitHub, GitLab,
+// Gitea/Forgejo or Azure DevOps (work items; labels are tags) (the origin
+// remote's forge, or the issue URL's):
 //
 //   - --issue N|URL reads the issue (title, body, labels; comments with
 //     --with-comments) and runs "Fix GitHub issue #N: <title>" (GitLab
@@ -80,7 +81,7 @@ type issueItem struct {
 
 func registerIssueFlags(fs *flag.FlagSet) *issueFlags {
 	f := &issueFlags{}
-	fs.StringVar(&f.issue, "issue", "", "run an issue (number or URL; GitHub, GitLab or Gitea) as the task")
+	fs.StringVar(&f.issue, "issue", "", "run an issue (number or URL; GitHub, GitLab, Gitea or an Azure DevOps work item) as the task")
 	fs.StringVar(&f.issues, "issues", "", "label:<name>: run the open issues with this label one after another, unattended (needs --pr)")
 	fs.IntVar(&f.limit, "limit", 5, "with --issues: at most this many issues")
 	fs.BoolVar(&f.withComments, "with-comments", false, "with --issue(s): include the issue's comments in the task")
@@ -133,7 +134,7 @@ func (f *issueFlags) prepare(fs *flag.FlagSet, dir string) error {
 	f.dir = dir
 	hosts := forge.EnvHosts()
 	if u, err := originURL(dir); err != nil {
-		f.originErr = fmt.Errorf("%s has no git remote `origin` on GitHub, GitLab or Gitea", dir)
+		f.originErr = fmt.Errorf("%s has no git remote `origin` on GitHub, GitLab, Gitea or Azure DevOps", dir)
 	} else {
 		hosts = forgeHosts(u, f.api)
 		f.origin, f.originErr = forge.ParseRemote(u, hosts)
@@ -147,6 +148,10 @@ func (f *issueFlags) prepare(fs *flag.FlagSet, dir string) error {
 			if f.originErr != nil {
 				return fmt.Errorf("%w; give the issue as a URL", f.originErr)
 			}
+			ref.Repo = f.origin
+		} else if f.originErr == nil && ref.Repo.SameIssues(f.origin) {
+			// An Azure DevOps work item URL names a project, not a
+			// repository: one of the origin's organization is its own.
 			ref.Repo = f.origin
 		}
 		if f.pr && f.originErr != nil {

@@ -22,10 +22,14 @@ import (
 //   - GitLab: GITLAB_TOKEN or GITLAB_ACCESS_TOKEN, then `glab config get
 //     token --host <host>`.
 //   - Gitea: GITEA_TOKEN or FORGEJO_TOKEN.
+//   - Azure DevOps: AZURE_DEVOPS_TOKEN or AZURE_DEVOPS_EXT_PAT (the
+//     variable of the az devops CLI): a personal access token, or a
+//     Microsoft Entra access token (a JWT, sent as a bearer token).
 //
-// When GITLAB_HOST (GITEA_HOST, FORGEJO_HOST) is set, the GitLab (Gitea)
-// variables are for the hosts it names only, as with glab: a token for a
-// company's server is never sent to gitlab.com or codeberg.org. In a
+// When GITLAB_HOST (GITEA_HOST, FORGEJO_HOST, AZURE_DEVOPS_HOST) is set,
+// the GitLab (Gitea, Azure DevOps) variables are for the hosts it names
+// only, as with glab: a token for a company's server is never sent to
+// gitlab.com, codeberg.org or dev.azure.com. In a
 // Forgejo or Gitea Actions job the job's server counts as named, so the
 // job's token stays with its server.
 func Token(k Kind, host string) (token, source string) {
@@ -43,6 +47,13 @@ func Token(k Kind, host string) (token, source string) {
 	case Gitea:
 		if envTokenFor(host, giteaHostValues()) {
 			if t, v := firstEnv("GITEA_TOKEN", "FORGEJO_TOKEN"); t != "" {
+				return t, v
+			}
+		}
+		return "", ""
+	case Azure:
+		if envTokenFor(host, envHostValues("AZURE_DEVOPS_HOST")) {
+			if t, v := firstEnv("AZURE_DEVOPS_TOKEN", "AZURE_DEVOPS_EXT_PAT"); t != "" {
 				return t, v
 			}
 		}

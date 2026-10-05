@@ -107,8 +107,8 @@ Usage:
                              each issue is claimed with a comment first, so it runs on one machine only
   rw pr [task] [--base main] [--branch name] [--draft] [--title t] [--no-push] [--yes]
                              branch + commit + pull request from a finished task (index/worktree untouched)
-                             on GitHub, GitLab (merge request) or Gitea/Forgejo; self-hosted: GH_HOST,
-                             GITLAB_HOST or GITEA_HOST=<host>
+                             on GitHub, GitLab (merge request), Gitea/Forgejo or Azure DevOps; self-hosted:
+                             GH_HOST, GITLAB_HOST, GITEA_HOST or AZURE_DEVOPS_HOST=<host>
   rw watch [--every 15m] [--dir repo]   follow up on the PRs rw opened: failed checks and review comments get
                              a task on the PR branch in a separate checkout, pushed (never forced) with a reply
   rw watch --list | --forget <n>          list the watched pull requests, or stop watching one

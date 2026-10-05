@@ -27,8 +27,9 @@ import (
 // rw review <PR> has one agent review a pull request, read-only:
 //
 //   - The diff and the pull request's details come from the forge's API:
-//     GitHub, GitLab (merge requests) or Gitea/Forgejo; self-hosted ones
-//     through GH_HOST, GITLAB_HOST, GITEA_HOST or --api, as for rw pr. A
+//     GitHub, GitLab (merge requests), Gitea/Forgejo or Azure DevOps;
+//     self-hosted ones through GH_HOST, GITLAB_HOST, GITEA_HOST,
+//     AZURE_DEVOPS_HOST or --api, as for rw pr. A
 //     public repository needs no token to read.
 //   - The reviewer is the provider that did not write the change when rw
 //     opened the pull request (rw watch's list, else the task's state),
@@ -99,8 +100,8 @@ func cmdReview(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage: rw review <PR number|URL> [--provider <name>] [--post] [--yes]
 
-Has one agent review a pull request (GitHub, a GitLab merge request or
-Gitea/Forgejo) read-only and prints its findings
+Has one agent review a pull request (GitHub, a GitLab merge request,
+Gitea/Forgejo or Azure DevOps) read-only and prints its findings
 (file, line, severity). By default the reviewer is the provider that did not
 write the change, when rw opened the pull request; otherwise the reviewer
 role as configured. --post publishes them as one comment review (never an
@@ -139,7 +140,7 @@ func runReview(ctx context.Context, c *common, ref string, o reviewOptions) erro
 	}
 	hosts := forge.EnvHosts()
 	var origin forge.Repo
-	originErr := fmt.Errorf("%s has no git remote `origin` on GitHub, GitLab or Gitea", dir)
+	originErr := fmt.Errorf("%s has no git remote `origin` on GitHub, GitLab, Gitea or Azure DevOps", dir)
 	if u, err := originURL(dir); err == nil {
 		hosts = forgeHosts(u, o.api)
 		origin, originErr = forge.ParseRemote(u, hosts)

@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-// rest is the HTTP side of the GitLab and Gitea clients: JSON in and out,
-// the token in an Authorization header, and reads that go on without a
-// token the forge rejected (a stale token must not block a public
-// repository).
+// rest is the HTTP side of the GitLab, Gitea and Azure DevOps clients:
+// JSON in and out, the token in an Authorization header, and reads that go
+// on without a token the forge rejected (a stale token must not block a
+// public repository).
 type rest struct {
 	kind     Kind
 	base     string
@@ -23,6 +23,14 @@ type rest struct {
 	http     *http.Client
 	notes    io.Writer
 	rejected bool
+
+	// header has more headers for every request; forbidden is the hint
+	// for a 403 ("" = the GitLab and Gitea one). keepToken: a 401 may mean
+	// a scope the token lacks (Azure DevOps), so reads never go on
+	// without it, and the 401 hint names forbidden too.
+	header    http.Header
+	forbidden string
+	keepToken bool
 }
 
 func newRest(kind Kind, base, token, scheme string, notes io.Writer) *rest {
@@ -160,6 +168,9 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", "relayweft")
+	for k, v := range c.header {
+		req.Header[k] = v
+	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -171,7 +182,7 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s %s: %w", c.name(), method, path, err)
 	}
-	if resp.StatusCode == http.StatusUnauthorized && authed && method == http.MethodGet {
+	if resp.StatusCode == http.StatusUnauthorized && authed && method == http.MethodGet && !c.keepToken {
 		resp.Body.Close()
 		c.note("note: " + c.name() + " rejected the token (401); continuing without it")
 		c.rejected = true
@@ -184,7 +195,9 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 		hint := c.kind.TokenHint()
 		switch resp.StatusCode {
 		case http.StatusUnauthorized:
-			if authed || c.rejected {
+			if authed && c.keepToken {
+				ae.Hint = "The token (" + hint + ") was rejected: it expired, or lacks a scope this needs. " + c.forbidden
+			} else if authed || c.rejected {
 				ae.Hint = "The token (" + hint + ") was rejected; create a new one"
 			} else {
 				ae.Hint = "This needs a token: " + hint
@@ -197,6 +210,9 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 			}
 		case http.StatusForbidden:
 			ae.Hint = "The token may lack the needed permission (api scope on GitLab; repository and issue write on Gitea)"
+			if c.forbidden != "" {
+				ae.Hint = c.forbidden
+			}
 		}
 		return nil, ae
 	}

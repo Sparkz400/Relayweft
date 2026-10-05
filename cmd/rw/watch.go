@@ -30,14 +30,15 @@ import (
 )
 
 // rw watch follows up on the pull requests rw opened, on GitHub, GitLab
-// (merge requests) and Gitea/Forgejo (forge.Client):
+// (merge requests), Gitea/Forgejo and Azure DevOps (forge.Client):
 //
 //   - rw pr (and rw run --issue(s) --pr) records every pull request it
 //     opens in <user config dir>/relayweft/watch.json: the repository,
 //     its folder, the number, branch, head commit and task.
 //   - A pass reads each recorded pull request. A merged or closed one is
 //     dropped. New items are failed checks on the current head commit
-//     (GitHub check runs, GitLab pipeline jobs, Gitea commit statuses),
+//     (GitHub check runs, GitLab pipeline jobs, Gitea commit statuses,
+//     Azure Pipelines builds and their failed tasks),
 //     inline review comments, and reviews that request changes, by people
 //     who may direct work on the repository (forge.Feedback.Trusted: the
 //     owner, members, collaborators or developers; not bots, not other
@@ -261,7 +262,7 @@ func cmdWatch(args []string) error {
 		fmt.Fprint(os.Stderr, `Usage: rw watch [--every 15m] [--dir repo] | --list | --forget <n>
 
 Follows up on the pull requests rw pr opened (GitHub, GitLab merge requests,
-Gitea/Forgejo). Each pass reads every watched pull request: merged or closed
+Gitea/Forgejo, Azure DevOps). Each pass reads every watched pull request: merged or closed
 ones are dropped; failed checks (or pipeline jobs) on its head commit,
 review comments and reviews requesting changes (by the repository's owner,
 members and collaborators; not your own, not bots) start one follow-up task
@@ -796,15 +797,25 @@ func (w *watcher) land(e watchEntry, co *orchestrator.Checkout, res orchestrator
 
 // CI and forge settings that rw watch never pushes, on any forge: GitHub
 // Actions and settings, GitLab CI, Gitea and Forgejo Actions, Woodpecker
-// (Codeberg's CI) and Drone.
+// (Codeberg's CI), Drone, and Azure Pipelines (azure-pipelines*.yml in any
+// folder, and the usual pipeline and Azure DevOps folders; a pipeline may
+// name a YAML file anywhere, so branch policies still matter there).
 var (
-	ciDirs   = []string{".github/", ".gitlab/", ".gitea/", ".forgejo/", ".woodpecker/"}
+	ciDirs   = []string{".github/", ".gitlab/", ".gitea/", ".forgejo/", ".woodpecker/", ".azuredevops/", ".azure-pipelines/", ".pipelines/", ".vsts/"}
 	ciNames  = []string{".gitlab-ci.yml", ".gitlab-ci.yaml", ".woodpecker.yml", ".woodpecker.yaml", ".drone.yml", ".drone.yaml"}
-	ciPlaces = ".github/, .gitlab-ci.yml, .gitlab/, .gitea/, .forgejo/, .woodpecker, .drone.yml"
+	ciPlaces = ".github/, .gitlab-ci.yml, .gitlab/, .gitea/, .forgejo/, .woodpecker, .drone.yml, azure-pipelines*.yml, .azuredevops/, .azure-pipelines/, .pipelines/"
 )
 
+// isAzurePipeline reports whether p's file name is an Azure Pipelines one
+// (azure-pipelines.yml, azure-pipelines-ci.yaml, ...).
+func isAzurePipeline(p string) bool {
+	name := strings.ToLower(p[strings.LastIndexAny(p, `/\`)+1:])
+	return strings.HasPrefix(name, "azure-pipelines") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml"))
+}
+
 // ciFiles are the CI and forge settings files among buildPRCommit's files
-// ("<status> <path>"): anything under ciDirs, and ciNames at the top.
+// ("<status> <path>"): anything under ciDirs, ciNames at the top, and
+// Azure Pipelines files anywhere.
 func ciFiles(files []string) []string {
 	var out []string
 	for _, f := range files {
@@ -819,6 +830,9 @@ func ciFiles(files []string) []string {
 			if strings.EqualFold(p, n) {
 				hit = true
 			}
+		}
+		if isAzurePipeline(p) {
+			hit = true
 		}
 		if hit {
 			out = append(out, p)

@@ -7,7 +7,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/forge"
 )
 
-// The forge (GitHub, GitLab or Gitea) of rw pr, issues as tasks, rw watch
+// The forge (GitHub, GitLab, Gitea or Azure DevOps) of rw pr, issues as tasks, rw watch
 // and rw review is the origin remote's host (package forge).
 
 // originURL is dir's origin remote URL ("" and an error without one).

@@ -25,6 +25,9 @@ var childSecrets = []string{
 	"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN",
 	// Gitea / Forgejo
 	"GITEA_TOKEN", "FORGEJO_TOKEN",
+	// Azure DevOps, and an Azure Pipelines job's token (when a job maps
+	// System.AccessToken into the environment)
+	"AZURE_DEVOPS_TOKEN", "AZURE_DEVOPS_EXT_PAT", "SYSTEM_ACCESSTOKEN",
 	// GitHub Actions runner tokens; Forgejo and Gitea runners set the same
 	// ones, plus GITHUB_TOKEN and FORGEJO_TOKEN (GITEA_TOKEN) to the job's
 	// token. A registration token lets anyone register a runner and take
