@@ -92,6 +92,8 @@ class SwitchyardUiTest {
             applyVMOptionsPatch {
                 addSystemProperty("idea.trust.all.projects", true)
                 addSystemProperty("ide.show.tips.on.startup.default.value", false)
+                // No embedded browser: on CI its "suspended" balloon covers the prompt box.
+                addSystemProperty("ide.browser.jcef.enabled", false)
                 // sy's config and state in the scratch folders (the IDE passes its environment on to sy).
                 for (k in listOf("APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")) env.env[k]?.let { withEnv(k, it) }
             }
@@ -118,6 +120,7 @@ class SwitchyardUiTest {
             // Type a task in the prompt box and run it.
             val prompt = byName("Switchyard task")
             prompt.click()
+            prompt.component.requestFocus()
             prompt.keyboard { typeText(task, 5) }
             x("//div[@class='JButton' and @visible_text='Run']").click()
             until("the plan in the tree", 120_000) { agents.texts().firstOrNull { it.contains("Approve plan: 2 subtask") } }

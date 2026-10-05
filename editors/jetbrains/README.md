@@ -173,7 +173,18 @@ The first run downloads the IDE it compiles against (about 1 GB);
   the diff documents, notifications, a killed sy, and closing the project
   while an agent works.
 
-Without Go and without `SY_EXE` the last two are skipped; `SY_IT_REQUIRED=1`
+`./gradlew uiTest` (with `SY_UI_TEST=1`) runs `SwitchyardUiTest`: the
+plugin in a real IntelliJ IDEA, as its own process and window, driven
+through its UI with JetBrains' IDE Starter and Driver frameworks. It
+starts sy from the toolbar, types a task in the prompt box, edits the plan
+in the plan dialog, unticks a hunk in the Review tab, opens the diff,
+applies, checks the files and stops sy, and saves screenshots of the IDE
+window to `build/reports/uiTest`. The driver clicks and types with
+`java.awt.Robot` into whatever has the focus, so run it on a display of
+its own: the `jetbrains` workflow's `ui` job runs it on Xvfb. It downloads
+IntelliJ IDEA Community 2025.2 the first time.
+
+Without Go and without `SY_EXE` the real-sy tests are skipped; `SY_IT_REQUIRED=1`
 (CI) makes that a failure. Their scratch folders are in
 `%TEMP%/sy-jetbrains-test` (`SY_JB_TEST_DIR` changes it; `SY_JB_TEST_KEEP=1`
 keeps them). Your own IDE settings and sy state are not touched.
