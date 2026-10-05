@@ -6,8 +6,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// conflictOverlay asks whether an agent may resolve a merge conflict:
-// y/enter lets it, n/esc keeps the change on a branch.
+// conflictOverlay asks whether an agent may resolve a merge conflict: y
+// lets it, n/esc keeps the change on a branch. Enter does nothing: an
+// Enter meant for the prompt must not let an agent merge your edits.
 type conflictOverlay struct{ r *approvalReq }
 
 func (c *conflictOverlay) req() *approvalReq { return c.r }
@@ -18,7 +19,7 @@ func (c *conflictOverlay) keys() string {
 
 func (c *conflictOverlay) update(m *Model, k tea.KeyMsg) tea.Cmd {
 	switch strings.ToLower(k.String()) {
-	case "y", "enter":
+	case "y":
 		m.flashNotice(c.r.conflict.StepID + ": an agent resolves the conflict")
 		m.answer(approvalReply{ok: true})
 	case "n", "esc":

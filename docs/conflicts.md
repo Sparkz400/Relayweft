@@ -17,7 +17,7 @@ Until now the step then failed and its change was kept on a branch. Now rw can r
    - the conflict hunks;
    - the repo's checks (`verify.commands`).
 4. rw checks the result:
-   - no conflict markers are left in the conflicted files (a file that had such lines on either side may keep them);
+   - no conflict markers are left in the conflicted files: lines starting with `<<<<<<< `, `||||||| ` or `>>>>>>> ` (a file that had such lines on either side may keep as many; a bare `=======` is a Markdown heading underline too, so it is not counted);
    - the step's change is not dropped as a whole (as `git merge --abort` would do);
    - `verify.commands` pass. Checks that already failed on the tree before the merge do not count against it.
 5. A failed check is another attempt, with the reason, up to `max_resolve_rounds` (default 2).
@@ -61,7 +61,7 @@ No agent ever works in your folder. rw resolves a conflict with your edits like 
 3. The result lands through the usual 3-way path: a file you changed again in the meantime is merged once more, and if that conflicts, nothing is written.
 4. Your version from before the resolution is kept on `<step>-your-edits`.
 
-No other step lands in your tree until this is done.
+No other step starts or lands in that repo until this is done.
 
 Because the agent edits lines you are working on, `auto` asks you first. A task that runs unattended (queued, scheduled, `--file`) cannot ask, so the change is kept on a branch, as before.
 
@@ -81,11 +81,12 @@ orchestrator:
 | `ask` | rw asks first | rw asks first |
 | `fail` | kept on a branch | kept on a branch |
 
-In the TUI: `/conflicts auto|resolve|ask|fail`. Unattended tasks never ask: there, `ask` means `fail`.
+In the TUI: `/conflicts auto|resolve|ask|fail`. The question takes `y` or `n` (Enter does nothing there, so an Enter meant for the prompt cannot say yes). Unattended tasks never ask: there, `ask` means `fail`.
 
 A repo's `.relayweft.yaml` (or a `./relayweft.yaml` that came with a clone) may make `conflicts` stricter or lower `max_resolve_rounds` without `rw trust`, never the other way: a resolve agent costs quota and may write into files you edit.
 
 ## Resume and undo
 
-- While the agent works, the task state records the step's change as kept. If rw stops (a cancel, a crash, a closed window), `rw resume` lands that change again and resolves the conflict anew. The writer does not run again.
+- From the moment rw starts the merge, the task state records the step's change as kept. If rw stops (a cancel, a crash, a closed window, also while it asks you), `rw resume` lands that change again and resolves the conflict anew. The writer does not run again.
+- After a resume, the tree the kept change meets may hold edits you made while rw was stopped, so in `auto` rw asks before an agent resolves that conflict.
 - `rw undo` reverts a task with a resolved conflict like any task.

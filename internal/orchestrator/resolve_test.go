@@ -352,10 +352,19 @@ func TestResolveCancelThenResume(t *testing.T) {
 		os.WriteFile(filepath.Join(s.Dir, "shared.txt"), []byte("x and y\n"), 0o644)
 		return runner.Result{Final: "kept both"}
 	}
-	o, _ := newOrc(t, dir, c2.runners(), nil)
+	// One writer at a time now: the step has no pool worktree of its own
+	// (review fix: the writer ran again in the merge worktree).
+	o, _ := newOrc(t, dir, c2.runners(), func(c *config.Config) { c.Orchestrator.MaxThreads = 1 })
+	// The kept work started before this run's snapshot of your tree, so the
+	// other side may hold your own edits: auto asks.
+	ask := &conflictAsker{answer: true}
+	withApprover(o, ask)
 	res := o.RunWith(context.Background(), "", TaskOptions{Resume: &st, Force: true})
 	if !res.OK {
 		t.Fatalf("resume failed: %+v", res)
+	}
+	if len(ask.asked) != 1 || !ask.asked[0].Yours || !strings.Contains(ask.asked[0].With, "or your own") {
+		t.Errorf("not asked about a conflict that may involve your edits: %+v", ask.asked)
 	}
 	if len(c2.writers) != 0 || len(c2.resolves) != 1 {
 		t.Fatalf("resume ran writers %v and %d resolve agents; want only one resolve agent", c2.writers, len(c2.resolves))

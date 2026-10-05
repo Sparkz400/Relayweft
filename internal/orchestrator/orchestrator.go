@@ -1264,7 +1264,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				case bestOf:
 				case st.Kind.ReadOnly():
 					r = o.runStep(ctx, t, st, deps, stepLoc{dir: dir}, "")
-				case rp.useWT || prev.Slot != "":
+				case rp.useWT || prev.Slot != "" || prev.Resolve != nil:
 					r = o.runInWorktree(ctx, t, st, deps, "")
 				default:
 					writeSem := writeSem
@@ -1329,7 +1329,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		return o.runStep(ctx, t, st, deps, stepLoc{dir: mainDir}, prompt)
 	}
 	var s *slot
-	if prev, ok := t.interruptedRun(st.ID); ok && prev.Resolve != nil && prev.Kept != "" && rp.useWT {
+	if prev, ok := t.interruptedRun(st.ID); ok && prev.Resolve != nil && prev.Kept != "" && rp.useGit {
 		// rw stopped while an agent resolved the step's merge conflict
 		// (resolve.go): its work is kept as a commit. It lands again, and
 		// the conflict is resolved anew; the worktree it held is not

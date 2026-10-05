@@ -29,6 +29,12 @@ func TestConflictOverlay(t *testing.T) {
 			}
 		}
 		m.Update(key("x")) // other keys do nothing
+		// Nor does Enter: one meant for the prompt must not let an agent
+		// merge your edits (review fix).
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if _, ok := m.overlay.(*conflictOverlay); !ok {
+			t.Fatal("enter answered the conflict question")
+		}
 		m.Update(key(k))
 		select {
 		case ok := <-got:
