@@ -110,7 +110,7 @@ func (o *Orchestrator) verifyAt(ctx context.Context, t *task, vc config.VerifyCf
 	var plans []affected.Plan
 	// The selection's tools read the agents' configs: in the sandbox when
 	// agents write in one.
-	in := affected.Input{Root: site.root, Dir: site.dir, Files: files, Exec: selectExec(t.cfg)}
+	in := affected.Input{Root: site.root, Dir: site.dir, Files: files, Exec: selectExec(o.taskCfg(t))}
 	for _, c := range cmds {
 		plans = append(plans, affected.Select(ctx, c, vc.AffectedCommands[c], in))
 	}
@@ -220,7 +220,7 @@ func (o *Orchestrator) runChecks(ctx context.Context, t *task, vc config.VerifyC
 		start := time.Now()
 		var out []byte
 		// Full and narrowed runs alike: in the sandbox when agents write in one.
-		cmd, done, err := checkCmd(cctx, t.cfg, site.dir, r.cmd)
+		cmd, done, err := checkCmd(cctx, o.taskCfg(t), site.dir, r.cmd)
 		if err == nil {
 			out, err = cmd.CombinedOutput()
 			if why := done(err, out); why != "" {

@@ -36,7 +36,7 @@ func (o *Orchestrator) runHooks(ctx context.Context, t *task, which string, cmds
 	vars := append(proc.WithoutSecrets(os.Environ()), sy...)
 	// after_merge and after_task run on code agents wrote (npm run lint
 	// runs their scripts): in the sandbox when agents write in one.
-	_, boxed := t.cfg.CheckSandbox()
+	_, boxed := o.taskCfg(t).CheckSandbox()
 	boxed = boxed && which != "before_task"
 	for _, c := range cmds {
 		cctx, cancel := context.WithTimeout(ctx, timeout)
@@ -46,7 +46,7 @@ func (o *Orchestrator) runHooks(ctx context.Context, t *task, which string, cmds
 		if boxed {
 			var cmd *exec.Cmd
 			var done func(error, []byte) string
-			if cmd, done, err = shellCmd(cctx, t.cfg, o.opts.Dir, c, sy); err == nil {
+			if cmd, done, err = shellCmd(cctx, o.taskCfg(t), o.opts.Dir, c, sy); err == nil {
 				out, err = cmd.CombinedOutput()
 				if why := done(err, out); why != "" {
 					out = append(out, "\n"+why...)

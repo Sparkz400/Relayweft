@@ -19,6 +19,15 @@ func checkCmd(ctx context.Context, cfg *config.Config, dir, line string) (cmd *e
 	return shellCmd(ctx, cfg, dir, line, nil)
 }
 
+// taskCfg is t's config, or the orchestrator's when the task has none of
+// its own: the sandbox settings must never be skipped for lack of one.
+func (o *Orchestrator) taskCfg(t *task) *config.Config {
+	if t != nil && t.cfg != nil {
+		return t.cfg
+	}
+	return o.opts.Store.Get()
+}
+
 // selectExec is how the narrowed verify run (package affected) runs the
 // tools that pick the tests (go list, cargo metadata) in the agents'
 // folder: nil (here) when no writing agent runs in a sandbox, otherwise in
