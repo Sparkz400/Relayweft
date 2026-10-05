@@ -297,6 +297,7 @@ orchestrator:
 verify:
   commands: []                     # e.g. ["go test ./...", "go vet ./..."]
   timeout: 10m
+  affected: auto                   # after a fix round (not the last), first only the tests the changes affect; the full checks always run before the final review (off = always full)
 
 # Your own commands around every task (run through the system shell in the
 # project folder). Environment: SY_TASK, SY_TASK_ID, SY_DIR, SY_STATUS
