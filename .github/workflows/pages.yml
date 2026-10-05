@@ -97,10 +97,16 @@ jobs:
           HUGO_BASEURL: ${{ steps.pages.outputs.base_url && format('{0}/', steps.pages.outputs.base_url) || 'https://sparkz400.github.io/Relayweft/' }}
           HUGO_ENVIRONMENT: production
         run: website/build.sh
-      # The signed apt and dnf repositories live on the same site. Their
-      # script adds _site/apt/ and _site/rpm/; give it the env it needs here.
+      # The signed package repositories live on the same site; their script
+      # adds them under _site (apt/, rpm/, ...).
       - name: package repositories
         if: github.event_name != 'pull_request' && hashFiles('packaging/repo/build-pages.sh') != ''
+        env:
+          PACKAGE_GPG_KEY: ${{ secrets.PACKAGE_GPG_KEY }}
+          PACKAGE_APK_KEY: ${{ secrets.PACKAGE_APK_KEY }}
+          PACKAGE_SIGNING_REQUIRED: ${{ github.repository == 'Sparkz400/Relayweft' }}
+          GH_TOKEN: ${{ github.token }}
+          RW_REPO_URL: ${{ steps.pages.outputs.base_url }}
         run: bash packaging/repo/build-pages.sh _site
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request'
