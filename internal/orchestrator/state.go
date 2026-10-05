@@ -241,6 +241,24 @@ func (s *TaskState) setResult(id string, r stepResult, interrupted bool) {
 	s.save()
 }
 
+// dropRunning forgets a subtask's running agent in slot and frees the slot
+// (dropCleanHold).
+func (s *TaskState) dropRunning(id, slot string) {
+	if s == nil {
+		return
+	}
+	stateMu.Lock()
+	run, had := s.Running[id]
+	if had && samePath(run.Slot, slot) {
+		delete(s.Running, id)
+	}
+	stateMu.Unlock()
+	if had && samePath(run.Slot, slot) {
+		s.save()
+		unholdSlot(slot, s.ID, id)
+	}
+}
+
 // lock takes the task's lock file for as long as it runs; ok is false when
 // another sy holds it. Another sy may hold it for a moment without running
 // the task (checking a hold, recording saved edits), so it is retried
