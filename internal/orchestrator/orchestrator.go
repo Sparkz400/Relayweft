@@ -1145,7 +1145,8 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 	writeSem := t.writeSem
 	inflight := 0
 	var wg sync.WaitGroup
-	wake := make(chan struct{}, len(p.Subtasks)+1)
+	// Each subtask sends once, when it ends, so a send never blocks.
+	wake := make(chan struct{}, len(p.Subtasks))
 
 	for {
 		mu.Lock()

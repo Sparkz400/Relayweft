@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 )
@@ -43,13 +44,8 @@ func frame(name string, v any) []byte {
 	if err != nil {
 		data = []byte(`{}`)
 	}
-	b := make([]byte, 0, len(data)+len(name)+16)
-	b = append(b, "event: "...)
-	b = append(b, name...)
-	b = append(b, "\ndata: "...)
-	b = append(b, data...)
-	b = append(b, "\n\n"...)
-	return b
+	// One allocation; slices.Concat checks the total size itself.
+	return slices.Concat([]byte("event: "), []byte(name), []byte("\ndata: "), data, []byte("\n\n"))
 }
 
 // publish sends a frame to every client; record also keeps it for replay.
