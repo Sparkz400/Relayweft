@@ -474,6 +474,17 @@ const teamStaleAfter = 7 * 24 * time.Hour
 // name, or are stale are left out, each with a warning: a broken file of
 // one machine must not stop everyone's work.
 func ReadTeamDir(dir, skip string, now time.Time) (exps []Export, warnings []string, err error) {
+	return readTeamDir(dir, skip, now, false)
+}
+
+// ReadTeamHistory is ReadTeamDir for looking back (the dashboard): stale
+// files are kept, without a warning, since the days they hold are still
+// true. Use Export.Covers to see which days a file holds.
+func ReadTeamHistory(dir, skip string, now time.Time) (exps []Export, warnings []string, err error) {
+	return readTeamDir(dir, skip, now, true)
+}
+
+func readTeamDir(dir, skip string, now time.Time, keepStale bool) (exps []Export, warnings []string, err error) {
 	if _, err := os.Stat(dir); err != nil {
 		return nil, nil, err
 	}
@@ -502,7 +513,7 @@ func ReadTeamDir(dir, skip string, now time.Time) (exps []Export, warnings []str
 			continue
 		case e.Machine == skip:
 			continue
-		case now.Sub(e.Generated) > teamStaleAfter:
+		case now.Sub(e.Generated) > teamStaleAfter && !keepStale:
 			warnings = append(warnings, fmt.Sprintf("skipped %s: stale (last written %s)", filepath.Base(f), e.Generated.Local().Format("2006-01-02 15:04")))
 			continue
 		case e.Generated.Sub(now) > 24*time.Hour:
@@ -537,6 +548,16 @@ func RegularFile(path string) error {
 // trimPath drops the file path an error repeats.
 func trimPath(err error, path string) string {
 	return strings.TrimPrefix(err.Error(), path+": ")
+}
+
+// Covers reports whether the export holds date (YYYY-MM-DD): from its
+// Since (without one, every earlier day) to the day it was written. A
+// covered day without an entry had no use; an uncovered one is unknown.
+func (e Export) Covers(date string) bool {
+	if date > e.Generated.Local().Format("2006-01-02") {
+		return false
+	}
+	return e.Since.IsZero() || date >= e.Since.Local().Format("2006-01-02")
 }
 
 // TeamDay totals date over the exports.

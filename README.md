@@ -453,6 +453,7 @@ Switchyard should never be what tips a PC over.
 - the plan editor (drag to reorder, edit prompts, kinds, roles and dependencies);
 - change review with per-hunk checkboxes;
 - routes and models, settings, history and resume, the queue, and stats with `sy tune` suggestions;
+- a **Dashboard** over 7, 30 or 90 days, for this project or all: tasks and success per day, fresh tokens and API-equivalent $ per day against your budgets, results per route and role with what `sy tune` flags, learned-route changes, Claude's 5-hour and 7-day use, limit hits and switches, and the `sy health` streak (screenshot: [docs/web/dashboard.png](docs/web/dashboard.png));
 - dark and light themes.
 
 **VS Code.** `editors/vscode` is an extension on the same engine (`sy web --client`): an Agents view with the live tree and queue, the activity log, plan approval, follow-ups, undo, and change review in VS Code's diff editor with per-hunk accept/reject. See [editors/vscode/README.md](editors/vscode/README.md) to build and install it.
