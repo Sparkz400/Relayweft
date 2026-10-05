@@ -29,7 +29,7 @@ Out of the box Relayweft uses **subscriptions only**: it drives the official `co
 3. **Install Relayweft**, one of:
    - Download `rw-windows-amd64.exe` from the [latest release](https://github.com/sparkz400/relayweft/releases/latest), rename it to `rw.exe` and put it on your PATH. Later, `rw update` replaces it with the newest release (checksum-verified).
    - Scoop: `scoop install https://raw.githubusercontent.com/sparkz400/relayweft/main/packaging/scoop/rw.json`. winget follows once the package is accepted into winget-pkgs; see `packaging/README.md`.
-   - macOS and Linux: `brew tap sparkz400/relayweft https://github.com/Sparkz400/Relayweft && brew install relayweft`. From v0.3.0 each release also has `relayweft-linux-amd64.deb`, `.rpm` and `.apk` (`sudo apt install ./relayweft-linux-amd64.deb`, `sudo dnf install ./relayweft-linux-amd64.rpm`), and the AUR has `relayweft-cli-bin`. `rw update` tells you to use the package manager that installed `rw`.
+   - macOS and Linux: `brew tap sparkz400/relayweft https://github.com/Sparkz400/Relayweft && brew install relayweft`. From v0.3.0 each release also has `relayweft-linux-amd64.deb`, `.rpm` and `.apk` (`sudo apt install ./relayweft-linux-amd64.deb`, `sudo dnf install ./relayweft-linux-amd64.rpm`), and `packaging/aur` has the PKGBUILD of the AUR package `relayweft-bin` (not yet published). `rw update` tells you to use the package manager that installed `rw`.
    - From source with **Go 1.24+**:
      ```powershell
      git clone https://github.com/sparkz400/relayweft
@@ -51,6 +51,17 @@ Out of the box Relayweft uses **subscriptions only**: it drives the official `co
    ```
 
 Use **Windows Terminal** for the full look. Legacy `conhost` is detected and gets an ASCII theme (force either with `--ascii` / `--unicode`).
+
+### Upgrading from Switchyard (`sy`)
+
+Relayweft was called Switchyard, with the command `sy`, up to v0.2.0. v0.3.0 is the first release as `rw`. `sy update` cannot install it, because the release has only `rw-*` binaries. Reinstall once:
+
+1. Install `rw` as above. With Scoop, `scoop uninstall sy` first. With a Homebrew tap added as Switchyard, `brew update && brew upgrade` should move you to `relayweft`.
+2. Run `rw` once (`rw doctor` will do). On its first start it copies your Switchyard folder (`%APPDATA%\switchyard`; `~/.config/switchyard` on Linux, `~/Library/Application Support/switchyard` on macOS) to `relayweft`: config, task history, session logs, the health and debug logs behind `rw health`'s streak, learned routes, reports and trusted files. It says so in one line and leaves the old folder alone. This happens only once, so switch over before you use `sy` again.
+3. Rename each repo's `.switchyard.yaml` to `.relayweft.yaml` (and a `./switchyard.yaml` to `./relayweft.yaml`); rw does not read the old names and says so when it finds one. Trust carries over while the content is unchanged.
+4. Delete `sy` (`sy.exe`).
+
+Hooks that read `SY_*` variables need the `RW_*` names, and old `sy/…` branches and the old worktree pool (`%LOCALAPPDATA%\switchyard`) are left for you to delete. [The v0.3.0 release notes](packaging/release-notes/v0.3.0.md) list everything that changed name.
 
 **Tested CLI versions:** `codex-cli 0.160.0` and `Claude Code 2.1.288`. Output formats can change between releases. `rw doctor` warns when your versions differ, and the parsers are covered by recorded JSON fixtures in `internal/runner/testdata`.
 

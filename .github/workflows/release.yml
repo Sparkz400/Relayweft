@@ -95,4 +95,10 @@ jobs:
         run: |
           pre=""
           case "$TAG" in *-*) pre="--prerelease" ;; esac
-          gh release create "$TAG" dist/* --generate-notes --target "$GITHUB_SHA" --title "Relayweft $TAG" $pre
+          # packaging/release-notes/<tag>.md, when there is one, goes above
+          # the generated notes (gh prepends --notes-file to them).
+          notes=()
+          if [ -f "packaging/release-notes/$TAG.md" ]; then
+            notes=(--notes-file "packaging/release-notes/$TAG.md")
+          fi
+          gh release create "$TAG" dist/* --generate-notes "${notes[@]}" --target "$GITHUB_SHA" --title "Relayweft $TAG" $pre
