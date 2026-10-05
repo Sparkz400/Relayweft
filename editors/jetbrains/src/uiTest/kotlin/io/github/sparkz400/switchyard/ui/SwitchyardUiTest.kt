@@ -143,14 +143,18 @@ class SwitchyardUiTest {
 
             // The change review: reject the second hunk of notes.txt in the Review tab.
             until("the review in the tree", 120_000) { agents.texts().firstOrNull { it.contains("Review edit: 2 file") } }
-            agents.getAllTexts { it.text.contains("Review edit: 2 file") }.first().doubleClick()
+            // Select the row and press Enter (a double click works too, but
+            // is timing-sensitive on a slow CI display).
+            agents.getAllTexts { it.text.contains("Review edit: 2 file") }.first().click()
+            agents.keyboard { enter() }
             val review = byName("Switchyard review")
             until("the review tab") { review.present() && review.texts().any { it.contains("hunk 2") } }
             review.getAllTexts { it.text == "hunk 2" }.first().click()
             review.keyboard { space() }
             until("the hunk unticked") { review.texts().any { it.contains("1 of 2 file(s)") || it.contains("1 partly") } }
             // The diff of notes.txt, with the rejected hunk struck through.
-            review.getAllTexts { it.text == "hunk 2" }.first().doubleClick()
+            review.getAllTexts { it.text == "hunk 2" }.first().click()
+            review.keyboard { enter() }
             until("the diff of notes.txt") { x("//div[@class='IdeFrameImpl']").hasSubtext("${Fake.NOTES} — edit review") }
             Thread.sleep(2_000)
             shot(frame, "4-diff-review")

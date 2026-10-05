@@ -73,15 +73,12 @@ class ReviewPanel(private val project: Project, private val svc: SyService) : Si
             }
         })
         object : DoubleClickListener() {
-            override fun onDoubleClick(event: MouseEvent): Boolean {
-                when (val it = selectedItem()) {
-                    is ReviewItem.File -> svc.review.openDiff(it.id, it.file)
-                    is ReviewItem.Hunk -> svc.review.openDiff(it.id, it.file, it.hunk)
-                    else -> return false
-                }
-                return true
-            }
+            override fun onDoubleClick(event: MouseEvent): Boolean = openSelected()
         }.installOn(tree)
+        // Enter opens the diff too (Space switches the checkbox).
+        com.intellij.openapi.project.DumbAwareAction.create { openSelected() }.registerCustomShortcutSet(
+            com.intellij.openapi.actionSystem.CustomShortcutSet(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ENTER, 0)), tree, this,
+        )
         setContent(ScrollPaneFactory.createScrollPane(tree, true))
         val group = ActionManager.getInstance().getAction("Switchyard.ReviewToolbar") as ActionGroup
         val tb = ActionManager.getInstance().createActionToolbar("SwitchyardReview", group, true)
@@ -98,6 +95,15 @@ class ReviewPanel(private val project: Project, private val svc: SyService) : Si
     override fun uiDataSnapshot(sink: DataSink) {
         super.uiDataSnapshot(sink)
         selectedItem()?.let { sink[REVIEW_ID] = it.id }
+    }
+
+    private fun openSelected(): Boolean {
+        when (val it = selectedItem()) {
+            is ReviewItem.File -> svc.review.openDiff(it.id, it.file)
+            is ReviewItem.Hunk -> svc.review.openDiff(it.id, it.file, it.hunk)
+            else -> return false
+        }
+        return true
     }
 
     fun selectedItem(): ReviewItem? = (tree.selectionPath?.lastPathComponent as? CheckedTreeNode)?.userObject as? ReviewItem
