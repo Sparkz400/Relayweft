@@ -28,9 +28,14 @@ func reap(pid int, stamp string, own bool) bool {
 		return true
 	}
 	if !stamped || stamp == "" {
-		return false // cannot tell a leftover agent from a program that got the pid since
-	}
-	if leader && procStamp(pid) != stamp {
+		// No stamp (none on this OS, or the process had already ended
+		// when it was recorded): a live pid cannot be told from a program
+		// that got it since. Only a group this sy recorded itself, whose
+		// leader is gone, is still known to be its agent's.
+		if leader || !own {
+			return false
+		}
+	} else if leader && procStamp(pid) != stamp {
 		// The pid belongs to another program now. POSIX does not let a pid
 		// that is still in use as a process group id be handed out again
 		// (Linux and macOS check it), so the agent's group is gone.

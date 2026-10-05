@@ -122,14 +122,24 @@ func TestReapLeavesUnverifiedGroup(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "slot.pid")
 	stop := TrackDir(dir, pidFile)
 	defer stop()
-	cmd := Shell(context.Background(), "sleep 300 & exit 0")
+	// The leader runs until its stdin closes, so it is recorded with its
+	// stamp while it lives.
+	cmd := Shell(context.Background(), "sleep 300 & read x")
 	cmd.Dir = dir
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	Started(cmd)
 	pid := cmd.Process.Pid
 	defer syscallKillGroup(pid)
+	if data, _ := os.ReadFile(pidFile); len(strings.Fields(string(data))) != 2 {
+		t.Fatalf("pid file %q lacks the leader's stamp", data)
+	}
+	in.Close()
 	cmd.Wait() // the leader ended; the sleep still runs in its group
 	if !groupAlive(pid) {
 		t.Fatal("the group ended with its leader")
