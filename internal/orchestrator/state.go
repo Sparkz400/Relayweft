@@ -206,7 +206,7 @@ func (s *TaskState) saveErr() error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 	s.Updated = time.Now()
-	os.MkdirAll(stateDir(), 0o755)
+	_ = os.MkdirAll(stateDir(), 0o755) // writeFileAtomic reports it
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -264,7 +264,10 @@ func (s *TaskState) dropRunning(id, slot string) {
 // the task (checking a hold, recording saved edits), so it is retried
 // briefly.
 func (s *TaskState) lock() (unlock func(), ok bool) {
-	os.MkdirAll(stateDir(), 0o755)
+	if err := os.MkdirAll(stateDir(), 0o755); err != nil {
+		// The lock below fails then and reads as "another rw has it".
+		diag.Logf("task state: %v", err)
+	}
 	return lockRetry(filepath.Join(stateDir(), s.ID+".lock"))
 }
 

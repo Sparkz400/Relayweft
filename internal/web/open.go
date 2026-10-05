@@ -127,6 +127,6 @@ func startDetachedCmd(name string, args []string) (*exec.Cmd, error) {
 			return nil, err
 		}
 	}
-	go cmd.Wait()
+	go cmd.Wait() //nolint:errcheck // only reaps the child
 	return cmd, nil
 }

@@ -1,9 +1,11 @@
 package orchestrator
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -77,6 +79,34 @@ func TestApplyDiffUserEditElsewhereMerges(t *testing.T) {
 	}
 }
 
+// A merge input that cannot be written in full (disk full) must count as a
+// conflict: merging against a cut-off copy of the agent's file would drop
+// its end from the user's file without a word.
+func TestApplyDiffMergeInputWriteFailureConflicts(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, strconv.Itoa(i))
+	}
+	content := strings.Join(lines, "\n") + "\n"
+	dir, from, to := setupApply(t, false, content, strings.Replace(content, "\n2\n", "\nTWO\n", 1))
+	user := strings.Replace(content, "\n6\n", "\nSIX\n", 1)
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte(user), 0o644)
+	writeMergeInput = func(name string, data []byte, perm os.FileMode) error {
+		if filepath.Base(name) == "theirs" {
+			os.WriteFile(name, data[:len(data)/2], perm)
+			return errors.New("no space left on device")
+		}
+		return os.WriteFile(name, data, perm)
+	}
+	defer func() { writeMergeInput = os.WriteFile }()
+	if err := (git{dir}).applyDiff(from, to); err == nil || !strings.Contains(err.Error(), "file.txt") {
+		t.Fatalf("want a conflict naming file.txt, got %v", err)
+	}
+	if got := read(t, filepath.Join(dir, "file.txt")); got != user {
+		t.Errorf("user's file changed:\n%s", got)
+	}
+}
+
 func TestApplyDiffUserConflictIsNotClobbered(t *testing.T) {
 	dir, from, to := setupApply(t, false, "a\nb\nc\n", "a\nAGENT\nc\n")
 	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("a\nUSER\nc\n"), 0o644)
@@ -131,7 +161,7 @@ func TestWorktreeKeepsLFSPointers(t *testing.T) {
 	if _, err := g.out("add", "-A"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.commitTree("commit", "-q", "-m", "lfs"); err != nil {
+	if _, err := g.asRelayweft(nil, "commit", "-q", "-m", "lfs"); err != nil {
 		t.Fatal(err)
 	}
 	if !g.usesLFS() {
@@ -191,5 +221,62 @@ func TestSnapshotFromStagedIndexMatchesWorkingTree(t *testing.T) {
 	}
 	if after, _ := g.out("ls-files", "--stage"); after != before {
 		t.Errorf("real index changed:\n%s\nwant\n%s", after, before)
+	}
+}
+
+// Commit messages reach git on stdin: a message that starts with "-", one
+// longer than a Windows command line may be, or one that is not ASCII is
+// kept byte for byte, and the commit is the same one -m would make.
+func TestCommitTreeMessageOnStdin(t *testing.T) {
+	dir := gitRepo(t)
+	g := git{dir}
+	t.Setenv("GIT_AUTHOR_DATE", "2020-01-01T00:00:00Z")
+	t.Setenv("GIT_COMMITTER_DATE", "2020-01-01T00:00:00Z")
+	tree, err := g.out("write-tree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := g.out("rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("Ä task text that goes on and on. ", 1500) // ~50 KB
+	for _, msg := range []string{
+		"-m oops --amend",
+		"--help",
+		"Grüße, 日本語, emoji ✓",
+		"two\nlines",
+		"ends with a newline\n",
+		long,
+	} {
+		c, err := g.commitTree(tree, []string{head}, msg)
+		if err != nil {
+			t.Fatalf("commitTree(%.30q): %v", msg, err)
+		}
+		obj, err := g.run(nil, nil, "cat-file", "commit", c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, got, _ := strings.Cut(obj, "\n\n")
+		want := msg
+		if !strings.HasSuffix(want, "\n") {
+			want += "\n"
+		}
+		if got != want {
+			t.Errorf("message of %.30q: got %.60q (%d bytes), want %d bytes", msg, got, len(got), len(want))
+		}
+		if !strings.Contains(obj, "\nparent "+head+"\n") {
+			t.Errorf("commit of %.30q lost its parent:\n%.300s", msg, obj)
+		}
+		if msg != long {
+			// The same commit as before the message moved to stdin.
+			old, err := g.asRelayweft(nil, "commit-tree", tree, "-p", head, "-m", msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if old != c {
+				t.Errorf("message %.30q: commit %s with -F -, %s with -m", msg, c, old)
+			}
+		}
 	}
 }

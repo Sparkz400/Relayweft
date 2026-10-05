@@ -50,8 +50,8 @@ func reap(pid int, stamp string, own bool) bool {
 		// and rw doctor lists the group.
 		return false
 	}
-	syscall.Kill(-pid, syscall.SIGKILL)
-	syscall.Kill(pid, syscall.SIGKILL)
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
 	for i := 0; i < 60; i++ {
 		if syscall.Kill(-pid, 0) != nil && !alive(pid) {
 			return true

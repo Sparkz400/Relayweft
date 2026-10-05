@@ -38,7 +38,9 @@ func NewBenchWorkspace(dir string) (*BenchWorkspace, error) {
 
 // Lock makes sure only one rw bench uses the workspace.
 func (b *BenchWorkspace) Lock() (unlock func(), err error) {
-	os.MkdirAll(filepath.Dir(b.Path), 0o755)
+	if err := os.MkdirAll(filepath.Dir(b.Path), 0o755); err != nil {
+		return nil, fmt.Errorf("bench workspace: %w", err)
+	}
 	unlock, ok := proc.TryLock(b.Path + ".lock")
 	if !ok {
 		return nil, fmt.Errorf("another rw bench is running for this repo")
@@ -64,7 +66,7 @@ func (b *BenchWorkspace) Reset(commit string) error {
 	gd := filepath.Join(b.Path, ".git")
 	st, err := os.Lstat(gd)
 	own := err == nil && st.IsDir()
-	os.MkdirAll(filepath.Dir(b.Path), 0o755) // so the disk check can measure it
+	_ = os.MkdirAll(filepath.Dir(b.Path), 0o755) // so the disk check can measure it
 	if err := checkDisk(filepath.Dir(b.Path)); err != nil && !own {
 		return err
 	}
@@ -74,7 +76,7 @@ func (b *BenchWorkspace) Reset(commit string) error {
 	}
 	if own {
 		// The pool worktrees of the previous run's repository hold its work.
-		CleanPool(b.Path)
+		_, _ = CleanPool(b.Path)
 	} else if _, err := os.Lstat(b.Path); err == nil {
 		// The workspace of an older rw (a worktree sharing the repo's
 		// history) or a broken one: remove it and its worktree record.
@@ -86,7 +88,7 @@ func (b *BenchWorkspace) Reset(commit string) error {
 	// change (their stat data is still right) instead of writing them all.
 	oldIndex := b.Path + ".index"
 	os.Remove(oldIndex)
-	os.Rename(filepath.Join(gd, "index"), oldIndex)
+	_ = os.Rename(filepath.Join(gd, "index"), oldIndex)
 	if err := os.RemoveAll(gd); err != nil {
 		return err
 	}
@@ -104,7 +106,7 @@ func (b *BenchWorkspace) Reset(commit string) error {
 	if err := b.loadTree(tree); err != nil {
 		return err
 	}
-	c, err := g.commitTree("commit-tree", tree, "-m", BenchCommitMessage)
+	c, err := g.commitTree(tree, nil, BenchCommitMessage)
 	if err != nil {
 		return err
 	}
@@ -148,7 +150,7 @@ func (b *BenchWorkspace) copySettings(gd string) error {
 	common := src.commonDir()
 	for _, f := range []string{"exclude", "attributes"} {
 		if data, err := os.ReadFile(filepath.Join(common, "info", f)); err == nil {
-			os.MkdirAll(filepath.Join(gd, "info"), 0o755)
+			_ = os.MkdirAll(filepath.Join(gd, "info"), 0o755)
 			if err := os.WriteFile(filepath.Join(gd, "info", f), data, 0o644); err != nil {
 				return err
 			}
@@ -234,8 +236,8 @@ func copyObjects(src, dst string, list []byte) error {
 	}
 	proc.Started(pack)
 	if err := index.Start(); err != nil {
-		pack.Process.Kill()
-		pack.Wait()
+		_ = pack.Process.Kill()
+		_ = pack.Wait()
 		return err
 	}
 	proc.Started(index)

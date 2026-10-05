@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -468,8 +469,10 @@ func aheadCount(root, base string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("no origin/%s to compare HEAD with (git fetch origin)", base)
 	}
-	var n int
-	fmt.Sscanf(strings.TrimSpace(s), "%d", &n)
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list --count: %w", err)
+	}
 	return n, nil
 }
 

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"os"
 	"path"
 	"path/filepath"
@@ -122,7 +121,7 @@ func (g git) full(p string) string { return filepath.Join(g.dir, filepath.FromSl
 
 // blobID is the id git gives a blob with this content.
 func (g git) blobID(format string, data []byte) string {
-	var h hash.Hash = sha1.New()
+	h := sha1.New()
 	if format == "sha256" {
 		h = sha256.New()
 	}
@@ -483,6 +482,10 @@ func removeEmptyParents(root, p string) {
 	}
 }
 
+// writeMergeInput writes mergeFile's base and theirs files (a variable so
+// a test can make it fail).
+var writeMergeInput = os.WriteFile
+
 // mergeFile 3-way merges one file the user edited while an agent changed it:
 // base = the file at `from`, theirs = the file at `to`, ours = the working
 // tree. Blobs are read with --filters so line endings match the checkout.
@@ -500,8 +503,14 @@ func (g git) mergeFile(from, to, path string) (string, error) {
 	}
 	defer os.RemoveAll(tmp)
 	bp, tp := filepath.Join(tmp, "base"), filepath.Join(tmp, "theirs")
-	os.WriteFile(bp, []byte(base), 0o644)
-	os.WriteFile(tp, []byte(theirs), 0o644)
+	// A cut-off input (disk full) would merge without a conflict and drop
+	// the rest of the file.
+	if err := writeMergeInput(bp, []byte(base), 0o644); err != nil {
+		return "", err
+	}
+	if err := writeMergeInput(tp, []byte(theirs), 0o644); err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(full); err != nil {
 		return "", err
 	}

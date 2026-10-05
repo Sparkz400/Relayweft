@@ -219,7 +219,7 @@ func Post(ctx context.Context, w Webhook, m Message) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)) // drain for connection reuse
 		return nil
 	}
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))

@@ -211,7 +211,7 @@ func (m *Model) alert(ev, title, body string) {
 		post := sendWebhooks
 		// A failure has nowhere to show in a running TUI; rw notify --test
 		// reports it.
-		go post(context.Background(), hooks, msg)
+		go post(context.Background(), hooks, msg) //nolint:errcheck // see above
 	}
 	if !cfg.Notify.Enabled {
 		return
