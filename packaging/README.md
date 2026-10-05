@@ -28,6 +28,19 @@ install `rw` once by hand (README, "Upgrading from sy").
 
 ## Cutting a release
 
+Before you tag:
+
+1. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [1.2.3] - <date>`
+   and put a new, empty `## [Unreleased]` above it. Update the compare
+   links at the bottom: `[Unreleased]` compares `v1.2.3...HEAD`, and a new
+   `[1.2.3]` line compares the previous tag with `v1.2.3`. Merge that
+   change first, so the tag contains it.
+2. If users must do something to upgrade, write
+   `packaging/release-notes/v1.2.3.md`. The release workflow puts it above
+   the generated notes. Keep it consistent with the CHANGELOG.
+
+Then tag:
+
 ```sh
 git tag v1.2.3
 git push --tags
