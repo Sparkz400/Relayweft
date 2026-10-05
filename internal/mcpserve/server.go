@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/sparkz400/relayweft/internal/diag"
 )
 
 // Instructions tell the calling agent how to use the tools (MCP clients
@@ -116,8 +117,7 @@ func addTools(s *mcp.Server, e *Engine) {
 	mcp.AddTool(s, &mcp.Tool{Name: "run_task", Annotations: act("Run a task", false),
 		Description: "Start a multi-step coding task in this repository (planner, workers, reviewer). Returns task_id at once; follow it with task_status. One task at a time."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in RunTaskIn) (*mcp.CallToolResult, any, error) {
-			id, err := e.Run(ctx, RunOptions{Prompt: in.Prompt, ApprovePlan: in.ApprovePlan, ReviewChanges: in.ReviewChanges,
-				ReadOnly: in.ReadOnly, BudgetUSD: in.BudgetUSD, BudgetTokens: in.BudgetTokens})
+			id, err := e.Run(ctx, RunOptions(in))
 			if err != nil {
 				return nil, nil, err
 			}
@@ -131,7 +131,9 @@ func addTools(s *mcp.Server, e *Engine) {
 				n := 0.0
 				progress = func(msg string) {
 					n++
-					req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{ProgressToken: tok, Progress: n, Message: msg})
+					if err := req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{ProgressToken: tok, Progress: n, Message: msg}); err != nil {
+						diag.Logf("mcp: progress note not sent: %v", err) // the status itself still comes
+					}
 				}
 			}
 			wait := time.Duration(max(0, in.WaitSeconds)) * time.Second

@@ -65,12 +65,12 @@ func selftestNestedMCP() string {
 	if err := cmd.Start(); err != nil {
 		return report + err.Error()
 	}
-	defer cmd.Wait()
+	defer func() { _ = cmd.Wait() }()
 	defer in.Close()
 	rd := bufio.NewReader(out)
 	send := func(v any) {
 		b, _ := json.Marshal(v)
-		in.Write(append(b, '\n'))
+		_, _ = in.Write(append(b, '\n'))
 	}
 	recv := func(id int) map[string]any {
 		for {
