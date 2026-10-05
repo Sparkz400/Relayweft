@@ -1,0 +1,103 @@
+<idea-plugin>
+    <id>io.github.sparkz400.switchyard</id>
+    <name>Switchyard</name>
+    <vendor url="https://github.com/sparkz400/switchyard">sparkz400</vendor>
+    <description><![CDATA[
+<p>A thin client for <a href="https://github.com/sparkz400/switchyard">Switchyard</a> (<code>sy</code>),
+which routes coding tasks to Codex and Claude Code agents.</p>
+<p>The plugin starts <code>sy web --client</code> for your project and drives the same local API the
+browser UI uses:</p>
+<ul>
+  <li>the agent tree and the activity log in a tool window, with a prompt box to start a task, and cancel;</li>
+  <li>plan approval: edit, add, delete and reorder the subtasks, then approve or reject;</li>
+  <li>change review in the IDE's diff viewer: accept or reject each hunk or file, or send the changes back with feedback;</li>
+  <li>follow-ups to an agent, undo of the last task, and notifications when a task is done or failed or a question waits.</li>
+</ul>
+<p>Everything stays on your machine: sy listens on 127.0.0.1 only, and the plugin logs in with a
+single-use secret it reads from sy's output. It needs <code>sy</code> installed.</p>
+]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Switchyard" anchor="right" icon="/icons/switchyard.svg"
+                    factoryClass="io.github.sparkz400.switchyard.ide.SyToolWindowFactory"/>
+        <applicationConfigurable parentId="tools" id="io.github.sparkz400.switchyard.settings" displayName="Switchyard"
+                                 instance="io.github.sparkz400.switchyard.ide.SySettingsConfigurable"/>
+        <notificationGroup id="Switchyard" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <action id="Switchyard.Start" class="io.github.sparkz400.switchyard.ide.StartAction"
+                text="Start Switchyard" description="Start sy web --client for this project" icon="AllIcons.Actions.Execute"/>
+        <action id="Switchyard.Stop" class="io.github.sparkz400.switchyard.ide.StopAction"
+                text="Stop Switchyard" description="Stop sy (the running task is cancelled)" icon="AllIcons.Actions.Suspend"/>
+        <action id="Switchyard.RunTask" class="io.github.sparkz400.switchyard.ide.RunTaskAction"
+                text="Run Task…" description="Start a task, or queue it while one runs" icon="AllIcons.General.Add"/>
+        <action id="Switchyard.CancelTask" class="io.github.sparkz400.switchyard.ide.CancelTaskAction"
+                text="Cancel Running Task" description="Cancel the running task and stop its agents" icon="AllIcons.Actions.Cancel"/>
+        <action id="Switchyard.ApprovePlan" class="io.github.sparkz400.switchyard.ide.ApprovePlanAction"
+                text="Approve or Edit Plan…" description="Open the plan waiting for approval" icon="AllIcons.Actions.Edit"/>
+        <action id="Switchyard.FollowUp" class="io.github.sparkz400.switchyard.ide.FollowUpAction"
+                text="Follow Up with Agent…" description="Send a message to a finished or running agent" icon="AllIcons.General.Balloon"/>
+        <action id="Switchyard.Undo" class="io.github.sparkz400.switchyard.ide.UndoLastTaskAction"
+                text="Undo Last Task…" description="Show what sy undo would change and run it" icon="AllIcons.Actions.Rollback"/>
+        <action id="Switchyard.OpenInBrowser" class="io.github.sparkz400.switchyard.ide.OpenInBrowserAction"
+                text="Open in Browser" description="Open the full sy web UI with a single-use link" icon="AllIcons.General.Web"/>
+        <action id="Switchyard.Settings" class="io.github.sparkz400.switchyard.ide.OpenSettingsAction"
+                text="Switchyard Settings…" description="The sy executable and its arguments" icon="AllIcons.General.Settings"/>
+
+        <action id="Switchyard.Review.Open" class="io.github.sparkz400.switchyard.ide.ReviewOpenAction"
+                text="Review Changes…" description="Open the change set's diff" icon="AllIcons.Actions.Diff"/>
+        <action id="Switchyard.Review.AcceptHunk" class="io.github.sparkz400.switchyard.ide.AcceptHunkAction"
+                text="Accept Hunk at Caret" description="Switchyard review: accept the hunk at the caret" icon="AllIcons.Actions.Checked"/>
+        <action id="Switchyard.Review.RejectHunk" class="io.github.sparkz400.switchyard.ide.RejectHunkAction"
+                text="Reject Hunk at Caret" description="Switchyard review: reject the hunk at the caret" icon="AllIcons.Actions.Cancel"/>
+        <action id="Switchyard.Review.AcceptFile" class="io.github.sparkz400.switchyard.ide.AcceptFileAction"
+                text="Accept File" description="Switchyard review: accept this whole file"/>
+        <action id="Switchyard.Review.RejectFile" class="io.github.sparkz400.switchyard.ide.RejectFileAction"
+                text="Reject File" description="Switchyard review: reject this whole file"/>
+        <action id="Switchyard.Review.Apply" class="io.github.sparkz400.switchyard.ide.ApplySelectedAction"
+                text="Apply Selected Changes" description="Switchyard review: send the decision (accepted files and hunks land)" icon="AllIcons.Actions.Commit"/>
+        <action id="Switchyard.Review.RejectAll" class="io.github.sparkz400.switchyard.ide.RejectAllAction"
+                text="Reject All Changes" description="Switchyard review: keep the changes on a branch only" icon="AllIcons.Actions.GC"/>
+        <action id="Switchyard.Review.Feedback" class="io.github.sparkz400.switchyard.ide.FeedbackAction"
+                text="Send Back with Feedback…" description="Switchyard review: rerun the agent with your message" icon="AllIcons.Actions.Refresh"/>
+
+        <group id="Switchyard.ToolWindowToolbar">
+            <reference ref="Switchyard.Start"/>
+            <reference ref="Switchyard.Stop"/>
+            <reference ref="Switchyard.CancelTask"/>
+            <separator/>
+            <reference ref="Switchyard.ApprovePlan"/>
+            <reference ref="Switchyard.FollowUp"/>
+            <reference ref="Switchyard.Undo"/>
+            <separator/>
+            <reference ref="Switchyard.OpenInBrowser"/>
+            <reference ref="Switchyard.Settings"/>
+        </group>
+
+        <group id="Switchyard.ReviewToolbar">
+            <reference ref="Switchyard.Review.Open"/>
+            <reference ref="Switchyard.Review.Apply"/>
+            <reference ref="Switchyard.Review.Feedback"/>
+            <reference ref="Switchyard.Review.RejectAll"/>
+        </group>
+
+        <group id="Switchyard.ToolsMenu" text="Switchyard" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <reference ref="Switchyard.Start"/>
+            <reference ref="Switchyard.Stop"/>
+            <reference ref="Switchyard.RunTask"/>
+            <reference ref="Switchyard.CancelTask"/>
+            <separator/>
+            <reference ref="Switchyard.ApprovePlan"/>
+            <reference ref="Switchyard.Review.Open"/>
+            <reference ref="Switchyard.FollowUp"/>
+            <reference ref="Switchyard.Undo"/>
+            <separator/>
+            <reference ref="Switchyard.OpenInBrowser"/>
+            <reference ref="Switchyard.Settings"/>
+        </group>
+    </actions>
+</idea-plugin>

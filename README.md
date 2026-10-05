@@ -483,6 +483,8 @@ Switchyard should never be what tips a PC over.
 
 **VS Code.** `editors/vscode` is an extension on the same engine (`sy web --client`): an Agents view with the live tree and queue, the activity log, plan approval, follow-ups, undo, and change review in VS Code's diff editor with per-hunk accept/reject. See [editors/vscode/README.md](editors/vscode/README.md) to build and install it.
 
+**JetBrains IDEs.** `editors/jetbrains` is a plugin for IntelliJ IDEA, PyCharm, GoLand, WebStorm, Rider and the other JetBrains IDEs (2025.2 or newer), on the same engine: a Switchyard tool window with the agent tree, the activity log and a prompt box, plan approval, follow-ups, undo, and change review in the IDE's diff viewer with per-hunk accept/reject. See [editors/jetbrains/README.md](editors/jetbrains/README.md) to build and install it.
+
 The server listens on 127.0.0.1 only. Each link `sy` prints or opens works once, within 2 minutes; press Enter in `sy`'s terminal for a new one. The page trades the link for a session that lives only in that browser tab, and there are no cookies. Requests from other sites, other ports and other host names are refused.
 
 | | |

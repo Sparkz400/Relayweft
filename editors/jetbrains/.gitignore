@@ -1,0 +1,8 @@
+.gradle/
+.intellijPlatform/
+.kotlin/
+build/
+out/
+.idea/
+*.iml
+allure-results/
