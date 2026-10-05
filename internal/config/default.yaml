@@ -292,6 +292,14 @@ orchestrator:
   approve_plan: true               # TUI / rw run --approve: show the plan and let you edit it before anything runs
   review_changes: false            # show each agent's changes (per file) before they land in your tree
   handoff: true                    # give agents a repo map, earlier tasks' notes and read-only findings
+  # When two steps' changes conflict, or a step's change conflicts with your
+  # own uncommitted edits: auto (an agent resolves conflicts between steps
+  # in a pool worktree; rw asks before one resolves a conflict with your
+  # edits), resolve (always), ask (always ask first) or fail (keep the
+  # change on a branch, as before). Unattended tasks never ask: ask means fail.
+  conflicts: auto
+  max_resolve_rounds: 2            # resolve attempts per conflict (markers left or checks failing count as one)
+  resolve_role: ""                 # worker or worker_high; empty = the route that wrote the later change
 
   # Machine protection: rw should never be what tips your PC over.
   low_priority: true               # agents and git run below normal CPU priority
