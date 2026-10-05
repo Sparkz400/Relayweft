@@ -517,13 +517,29 @@ wait:
 	t.check(markOK, "run", "sy run planned the task and finished 3 steps; the last step's agent (pid %d) is working after %s",
 		agent, time.Since(began).Round(100*time.Millisecond))
 
+	// The agent prints its session id before it writes its pid, and sy
+	// saves the id in the task state as soon as it reads that line. Under
+	// load, saving can take longer than the 50ms poll above. A kill before
+	// the save is a real case, and sy handles it with a fresh agent. But
+	// this check is about continuing the session, so the kill waits for
+	// the save: the kill point no longer depends on timing.
+	sid := fmt.Sprintf("selftest-%d", agent)
+	saved, ok := waitSessionSaved(profileConfigDir(t.profile), sid, 30*time.Second)
+	if !ok {
+		cmd.Process.Kill()
+		<-exited
+		t.check(markFail, "run", "the agent reported session %s, but sy had not saved it in the task state after %s:\n%s", sid, saved.Round(time.Millisecond), tailLines(fileText(logf.Name()), 15))
+		return false
+	}
+
 	// TerminateProcess, as when the console is closed and Windows ends sy.
 	if err := cmd.Process.Kill(); err != nil {
 		t.check(markFail, "kill", "could not kill sy run: %v", err)
 		return false
 	}
 	<-exited
-	t.check(markOK, "kill", "sy run killed hard (pid %d), as closing the window does", cmd.Process.Pid)
+	t.check(markOK, "kill", "sy run killed hard (pid %d) once it had saved the agent's session (waited %s for that), as closing the window does",
+		cmd.Process.Pid, saved.Round(time.Millisecond))
 
 	gone := waitGone(agent, 10*time.Second)
 	switch {
@@ -586,8 +602,8 @@ wait:
 	wdKilled, wdResumed := fileText(filepath.Join(stateDir, "agent.wd")), fileText(filepath.Join(stateDir, "resume.wd"))
 	switch {
 	case !continued || fresh:
-		t.check(markFail, "resume", "the interrupted step did not continue its agent's session %s (calls: %s)", strings.TrimPrefix(want, "resume:"),
-			strings.Join(readCalls(stateDir)[before:], ", "))
+		t.check(markFail, "resume", "the interrupted step did not continue its agent's session %s (calls: %s); sy resume said:\n%s", strings.TrimPrefix(want, "resume:"),
+			strings.Join(readCalls(stateDir)[before:], ", "), resumeReasons(out))
 		return false
 	case wdKilled == "" || !orchestrator.SamePath(wdKilled, wdResumed):
 		t.check(markFail, "resume", "the interrupted step's session was continued in %s, not where it ran (%s)", wdResumed, wdKilled)
@@ -646,6 +662,63 @@ func fileSum(path string) (string, error) {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// resumeReasons picks the lines of sy resume's output that say why an
+// interrupted step was or was not continued.
+func resumeReasons(out string) string {
+	var keep []string
+	for _, l := range strings.Split(out, "\n") {
+		for _, k := range []string{"interrupted", "fresh agent", "cannot be used", "could not be continued", "continuing", "starts over"} {
+			if strings.Contains(l, k) {
+				keep = append(keep, strings.TrimRight(l, "\r"))
+				break
+			}
+		}
+	}
+	if len(keep) == 0 {
+		return tailLines(out, 15)
+	}
+	return strings.Join(keep, "\n")
+}
+
+// profileConfigDir is os.UserConfigDir for a sy started with
+// profileEnv(profile).
+func profileConfigDir(profile string) string {
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(profile, "AppData", "Roaming")
+	case "darwin":
+		return filepath.Join(profile, "Library", "Application Support")
+	}
+	return filepath.Join(profile, ".config")
+}
+
+// waitSessionSaved waits until a task state under cfgDir records a running
+// step with session sid, for at most d. It returns how long it waited.
+func waitSessionSaved(cfgDir, sid string, d time.Duration) (time.Duration, bool) {
+	began := time.Now()
+	for {
+		files, _ := filepath.Glob(filepath.Join(cfgDir, "switchyard", "tasks", "*.json"))
+		for _, f := range files {
+			var st struct {
+				Running map[string]struct {
+					Session string `json:"session"`
+				} `json:"running"`
+			}
+			if b, err := os.ReadFile(f); err == nil && json.Unmarshal(b, &st) == nil {
+				for _, r := range st.Running {
+					if r.Session == sid {
+						return time.Since(began), true
+					}
+				}
+			}
+		}
+		if time.Since(began) > d {
+			return time.Since(began), false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func waitGone(pid int, d time.Duration) bool {
