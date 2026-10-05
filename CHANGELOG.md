@@ -24,7 +24,22 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ## [Unreleased]
 
-- Nothing yet. This becomes 0.4.0.
+### Added
+
+- `rw completion bash|zsh|fish|powershell`: Tab completion for subcommands, flags, provider names, models and task ids (Windows PowerShell 5.1 and PowerShell 7 too). The .deb/.rpm/.apk packages, Homebrew and the AUR package install it. ([#49](https://github.com/Sparkz400/Relayweft/pull/49))
+- `docs/config.md`: every config key with its type, default, description and whether a repo's `.relayweft.yaml` needs `rw trust` for it; generated from the code, and CI fails when it is out of date. ([#49](https://github.com/Sparkz400/Relayweft/pull/49))
+- `CONTRIBUTING.md`, a pull request template and a Code of Conduct. ([#45](https://github.com/Sparkz400/Relayweft/pull/45))
+
+### Security
+
+- Releases are attested and signed: GitHub build provenance for every asset, a CycloneDX SBOM per binary (`rw-<os>-<arch>.cdx.json`, attested), and a keyless Sigstore signature of `checksums.txt` (`checksums.txt.sigstore.json`). `rw update` prints the `gh attestation verify` command after installing a signed release. See `packaging/README.md`, "Verifying a release". ([#47](https://github.com/Sparkz400/Relayweft/pull/47))
+- CI checks formatting (gofmt), runs golangci-lint and runs govulncheck on every change and weekly. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
+
+### Fixed
+
+- A user edit merged with an agent's change could lose the end of the agent's file when the disk was full; it now counts as a conflict and leaves the file as it was. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
+- `rw bench` blamed "another rw bench" for a workspace folder it could not create. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
+- Commit messages reach git on stdin, so very long task texts work on Windows. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
 
 ## [0.3.0] - 2026-10-05
 

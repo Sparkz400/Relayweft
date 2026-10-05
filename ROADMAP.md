@@ -75,9 +75,10 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **Release v0.2.0** (4 Oct 2026, as Switchyard/`sy`): more providers, `sy health`, model tiers, CI and team mode, self-hosted forges, webhooks, `sy selftest` and the fixes from real use. `sy update` from v0.1.0 to v0.2.0 was run for real (checksum verified). Scoop manifest updated; winget manifests rendered.
   - The repository is public: release downloads, `rw update` (then `sy update`) and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
-- **Release v0.3.0** (not released yet). The first tag run on 5 Oct 2026 failed on a flaky test, which #43 fixed, and that tag points at a commit from before the rename. v0.3.0 brings:
+- **Release v0.3.0** (5 Oct 2026), built with Go 1.26.8. v0.3.0 brings:
   - the **rename to Relayweft (`rw`)**. On its first start, rw copies the Switchyard user folder once. `sy update` cannot install v0.3.0, so v0.2.0 users reinstall once (README, "Upgrading from Switchyard").
   - `rw setup`, best of N, affected tests in fix rounds, the container sandbox, the dashboard, the JetBrains plugin, Homebrew/`.deb`/`.rpm`/`.apk`/AUR packaging, Codex follow-ups in pool worktrees, saved half-done edits, macOS orphan cleanup, and `rw tune` thresholds that account for sample size. Every change had an independent adversarial review before merge, and the 30-minute stress test passes on Ubuntu and Windows.
+- **Next: v0.4.0** (prepared): `rw completion` for bash, zsh, fish and PowerShell; a generated config reference (`docs/config.md`); release provenance, SBOMs and a signed `checksums.txt`; gofmt, golangci-lint and govulncheck in CI; CHANGELOG, CONTRIBUTING, a PR template and a Code of Conduct.
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
@@ -177,7 +178,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 2.5 | ✅ **Task history and resume**: the state of every task is saved after each step. `rw history` / `/history` list tasks; `rw resume` / `/resume` continue an interrupted one, skipping finished steps. Diffs per task come from `rw undo --list`. | Closing the window or a reboot no longer loses progress. |
 | 2.6 | ✅ **Task queue**: submitting while a task runs queues it in the TUI (`/queue`). `rw run --file tasks.txt` runs a list overnight. Queued tasks run unattended. | Uses quota while you're away. |
 | 2.7 | ✅ **Notifications**: a desktop notification when a task finishes or fails, a limit is hit, or `rw` waits for you (Windows toast, macOS, notify-send). | You don't have to watch the terminal. |
-| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, a Homebrew tap in this repo (`brew install relayweft`), `.deb`, `.rpm` and `.apk` packages on each release (from v0.3.0), an AUR PKGBUILD (`relayweft-bin`), and `rw update` (checksum-verified, swaps the running .exe safely on Windows, and points to the package manager that installed `rw` instead of replacing its binary). Code signing needs a certificate: see `packaging/README.md`. | Installing no longer needs Go or a build. |
+| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, a Homebrew tap in this repo (`brew install relayweft`), `.deb`, `.rpm` and `.apk` packages on each release (from v0.3.0), an AUR PKGBUILD (`relayweft-bin`), and `rw update` (checksum-verified, swaps the running .exe safely on Windows, and points to the package manager that installed `rw` instead of replacing its binary). Code signing needs a certificate: see `packaging/README.md`. Releases carry build provenance, SBOMs and a Sigstore-signed `checksums.txt` (from v0.4.0). | Installing no longer needs Go or a build. |
 
 **Gaps closed since:**
 - Dependencies can be edited in the plan view (`x`).
@@ -200,9 +201,10 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **2.3 Affected tests:** only the Go selection was run for real (on this repo). The jest/vitest, pytest, cargo, dotnet, Maven and Gradle selections are tested on file trees, not yet on real projects.
 - **2.5 Resume:** on Linux and macOS the agent of a killed `rw` keeps running (and spending) until the next `rw` takes its worktree.
 - **2.8 Distribution:**
-  - Code signing needs a certificate.
-  - The Scoop, winget, Homebrew and AUR manifests must be rendered (and the AUR one pushed) after each release.
-  - The Linux packages are unsigned, and there is no apt or dnf repository.
+  - Code signing of the Windows and macOS binaries needs a certificate (Authenticode, Apple notarization). Release integrity does not: from v0.4.0 every asset has GitHub build provenance, each binary a CycloneDX SBOM (attested), and `checksums.txt` a keyless Sigstore signature (`packaging/README.md`, "Verifying a release"). Not yet seen on a real release until v0.4.0 is cut; a dry run passed.
+  - `rw update` checks only the SHA-256; it prints the `gh attestation verify` command instead of verifying the signature itself (that would need sigstore-go and a fresh trust root).
+  - The Scoop, winget, Homebrew and AUR manifests must be rendered (and the AUR one pushed) after each release. Once they name v0.4.0 or later, drop the `version >= 0.4.0` completion guards in the Homebrew and AUR templates.
+  - The Linux packages have no GPG/apk signature (provenance and the signed checksums cover them), and there is no apt or dnf repository.
 
 **Exit criteria:**
 - You reach for `rw` before plain `codex` or `claude` for multi-step work.

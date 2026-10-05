@@ -20,6 +20,7 @@ These are the standing quality rules for every change.
 - **Pin and record CLI versions.** When Codex or Claude Code changes, record new output fixtures (`internal/runner/testdata`) before you raise the tested version in `rw doctor`.
 - **Adversarial review before merge.** Changes to the orchestrator, git, process or runner code get a second review pass focused on concurrency, Windows and failure paths. See [Adversarial review](#adversarial-review).
 - **No quota in tests.** Tests use fake or scripted CLIs and recorded output, never a real model.
+- **Commands and config stay documented.** A new subcommand goes into `commands` in `cmd/rw/commands.go` and parses its flags through `parseFlags`; a new config field needs a doc comment. Tests enforce both, so `rw completion` and `docs/config.md` never drift.
 
 ## Build and test
 
