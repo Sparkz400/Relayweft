@@ -609,6 +609,12 @@ func safeGitConfig(gitDir, runDir string) (string, error) {
 // projectHome is the per-project HOME folder (session stores) for key.
 func projectHome(key string) (string, error) {
 	k := key
+	// A worktree's .git file names the real path (macOS: /private/var),
+	// the main tree may be reached through a symlink (/var): one project,
+	// one home.
+	if real, err := filepath.EvalSymlinks(k); err == nil {
+		k = real
+	}
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		k = strings.ToLower(k)
 	}
