@@ -37,6 +37,9 @@ const (
 	ExportFormat  = "relayweft-stats"
 	ExportVersion = "1.0"
 	exportMajor   = "1"
+	// What sy (Switchyard, v0.2.0 and older) wrote: the same format, so a
+	// team's budget dir with exports from sy machines still counts them.
+	legacyExportFormat = "switchyard-stats"
 )
 
 // Export is one machine's usage, the `rw stats --json` file.
@@ -227,7 +230,7 @@ func ParseExport(data []byte) (Export, error) {
 	if err := json.Unmarshal(data, &head); err != nil {
 		return Export{}, fmt.Errorf("not a Relayweft stats export: %w", err)
 	}
-	if head.Format != ExportFormat {
+	if head.Format != ExportFormat && head.Format != legacyExportFormat {
 		return Export{}, fmt.Errorf("not a Relayweft stats export (format %q)", head.Format)
 	}
 	if major, _, _ := strings.Cut(head.Version, "."); major != exportMajor {

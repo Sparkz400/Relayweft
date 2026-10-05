@@ -48,6 +48,9 @@ type RepoInfo struct {
 	Path    string   // "" when there is none
 	Trusted bool     // the command-running parts were applied
 	Ignored []string // keys skipped because the file is not trusted
+	// Legacy is a .switchyard.yaml (sy's name for the file) found where
+	// there is no .relayweft.yaml: rw does not read it.
+	Legacy string
 }
 
 // FindRepoFile returns the .relayweft.yaml for dir: in dir or the nearest
@@ -77,7 +80,7 @@ func FindRepoFile(dir string) string {
 func ApplyRepo(c *Config, dir string) (RepoInfo, error) {
 	p := FindRepoFile(dir)
 	if p == "" {
-		return RepoInfo{}, nil
+		return RepoInfo{Legacy: LegacyRepoFile(dir)}, nil
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {

@@ -249,6 +249,8 @@ func (m *Model) checkInterrupted() {
 			msg += " (its " + strings.Join(r.Ignored, ", ") + " run commands and are ignored until you run `rw trust`)"
 		}
 		m.addLog(logLine{kind: event.Log, text: msg})
+	} else if r.Legacy != "" {
+		m.addLog(logLine{kind: event.Log, text: r.Legacy + " is not read: rw's repo file is " + config.RepoFileName + ". Rename it (and run `rw trust` if it runs commands)."})
 	}
 	s := orchestrator.LastInterrupted(m.opt.Dir)
 	if s == nil {

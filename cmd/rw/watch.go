@@ -77,6 +77,15 @@ var (
 // mistakes them for a reviewer's.
 const rwMark = "<!-- relayweft -->"
 
+// legacyMark is the rwMark of sy (Switchyard, v0.2.0 and older): what sy
+// posted on a pull request is not review feedback for rw watch either.
+const legacyMark = "<!-- switchyard -->"
+
+// ownComment reports whether rw (or sy before it) wrote body.
+func ownComment(body string) bool {
+	return strings.Contains(body, rwMark) || strings.Contains(body, legacyMark)
+}
+
 // watchEntry is one watched pull request.
 type watchEntry struct {
 	// Forge is gitlab or gitea; "" is GitHub (lists from before GitLab and
@@ -607,7 +616,7 @@ func watchItems(c forge.Client, repo forge.Repo, p *forge.Pull, viewer string) (
 		return nil, err
 	}
 	for _, f := range feedback {
-		if !f.Trusted || strings.EqualFold(f.Author, viewer) || strings.Contains(f.Body, rwMark) {
+		if !f.Trusted || strings.EqualFold(f.Author, viewer) || ownComment(f.Body) {
 			continue
 		}
 		if f.Review {

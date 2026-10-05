@@ -96,6 +96,21 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+// rw copies sy's logs on its first start (config.MigrateSwitchyard): the
+// debug log's "=== sy ..." session lines still count as days of use.
+func TestReadDebugOfSy(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 4, 9, 0, 0, 0, time.Local)
+	writeLog(t, dir, "rw-debug.log",
+		at.Format("2006-01-02 15:04:05.000")+" === sy 0.2.0 health (windows/amd64, 16 cpus) cwd=C:\\x args=[]",
+		at.Add(time.Hour).Format("2006-01-02 15:04:05.000")+" === rw 0.3.0 run (windows/amd64, 16 cpus) cwd=C:\\x args=[]",
+	)
+	sessions, _, _, _ := readDebug(dir, at.Add(24*time.Hour))
+	if len(sessions) != 2 || sessions[0].Version != "0.2.0" || sessions[0].Cmd != "health" || sessions[1].Cmd != "run" {
+		t.Errorf("sessions = %+v", sessions)
+	}
+}
+
 func TestCriterionMet(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.Local)

@@ -24,6 +24,38 @@ func noteUntrustedLocal(w io.Writer, path string, ignored []string) {
 	}
 }
 
+// migrateSwitchyard copies sy's user folder (Switchyard, v0.2.0 and
+// older) to rw's on rw's first start, and says so on w.
+func migrateSwitchyard(w io.Writer) {
+	msg, err := config.MigrateSwitchyard()
+	if err != nil {
+		// rw's folder gets created below, so there is no next try: say
+		// how to finish by hand. sy's folder is unchanged.
+		fmt.Fprintf(w, "warning: %v\nrw starts without your Switchyard settings and history. To bring them over, quit rw and copy the old folder's contents into rw's (switchyard.yaml becomes relayweft.yaml, logs/sy-*.log become logs/rw-*.log).\n", err)
+		return
+	}
+	if msg != "" {
+		fmt.Fprintln(w, msg)
+	}
+}
+
+// noteLegacyFiles points out config files under sy's names (Switchyard,
+// v0.2.0 and older), which rw does not read: a ./switchyard.yaml in the
+// current folder (when no --config is given) and the repo's
+// .switchyard.yaml (info.Legacy).
+func noteLegacyFiles(w io.Writer, configPath string, info config.RepoInfo) {
+	if configPath == "" {
+		if wd, err := os.Getwd(); err == nil {
+			if p := config.LegacyLocalFile(wd); p != "" {
+				fmt.Fprintf(w, "note: %s is not read: rw's config file is %s. Rename it (and run `rw trust` if it runs commands).\n", p, config.FileName)
+			}
+		}
+	}
+	if info.Legacy != "" {
+		fmt.Fprintf(w, "note: %s is not read: rw's repo file is %s. Rename it (and run `rw trust` if it runs commands).\n", info.Legacy, config.RepoFileName)
+	}
+}
+
 // cmdTrust shows what a repo's .relayweft.yaml, and a ./relayweft.yaml in
 // the project folder, would run and trusts them.
 func cmdTrust(args []string) error {

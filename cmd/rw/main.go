@@ -48,6 +48,8 @@ func main() {
 	switch sub {
 	case "version", "--version", "help", "-h", "--help":
 	default:
+		// Before anything creates rw's user folder (the debug log does).
+		migrateSwitchyard(os.Stderr)
 		startDiag(sub)
 		defer diag.Close()
 	}
@@ -289,6 +291,7 @@ func (c *common) setup() (*config.Store, string, error) {
 		return nil, "", err
 	}
 	fileRepos := repoFileWorkspace(userCfg, dir, info)
+	noteLegacyFiles(os.Stderr, c.configPath, info)
 	if len(info.Ignored) > 0 {
 		fmt.Fprintf(os.Stderr, "note: %s sets %s, which run commands; they are ignored until you review and trust the file: rw trust\n",
 			info.Path, strings.Join(info.Ignored, ", "))

@@ -94,6 +94,15 @@ func TestExportVersions(t *testing.T) {
 	if _, err := ParseExport([]byte(`{"format":"something-else","version":"1.0"}`)); err == nil || !strings.Contains(err.Error(), "not a Relayweft stats export") {
 		t.Errorf("foreign file: %v", err)
 	}
+	// sy (Switchyard, v0.2.0 and older) wrote the same format under its
+	// own name: a team's exports from sy machines still count.
+	var m map[string]any
+	json.Unmarshal(data, &m)
+	m["format"] = "switchyard-stats"
+	old, _ := json.Marshal(m)
+	if e, err := ParseExport(old); err != nil || e.Machine != "0123456789abcdef" {
+		t.Errorf("an export of sy: %+v, %v", e, err)
+	}
 	if _, err := ParseExport([]byte(`{"format":"relayweft-stats","version":"1.0","machine":"../../evil"}`)); err == nil {
 		t.Error("a machine id with a path was accepted")
 	}

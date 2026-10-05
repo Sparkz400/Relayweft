@@ -485,7 +485,9 @@ func readDebug(dir string, before time.Time) (sessions []Session, crashes, timeo
 			}
 			msg := line[len(layout)+1:]
 			switch {
-			case strings.HasPrefix(msg, "=== rw "):
+			// "=== sy ": a debug log of sy (Switchyard, v0.2.0 and
+			// older) that rw copied over on its first start.
+			case strings.HasPrefix(msg, "=== rw "), strings.HasPrefix(msg, "=== sy "):
 				fs := strings.Fields(msg)
 				s := Session{Start: t, Last: t}
 				if len(fs) > 2 {

@@ -57,7 +57,9 @@ const (
 )
 
 // reQueueMarker matches the marker in a claim comment.
-var reQueueMarker = regexp.MustCompile(`<!-- relayweft:queue id=([0-9a-f]{16}) machine=([0-9A-Za-z_-]{1,64}) state=([a-z]+) until=([0-9TZ:-]{20}) -->`)
+// sy (Switchyard, v0.2.0 and older) wrote "switchyard:queue": a claim of a
+// team member that still runs sy counts too.
+var reQueueMarker = regexp.MustCompile(`<!-- (?:relayweft|switchyard):queue id=([0-9a-f]{16}) machine=([0-9A-Za-z_-]{1,64}) state=([a-z]+) until=([0-9TZ:-]{20}) -->`)
 
 // queueClaim is one claim comment.
 type queueClaim struct {
@@ -92,7 +94,9 @@ func parseClaim(c forge.Comment) (queueClaim, bool) {
 }
 
 // isQueueComment reports whether a comment is a claim (of any machine).
-func isQueueComment(body string) bool { return strings.Contains(body, "<!-- relayweft:queue ") }
+func isQueueComment(body string) bool {
+	return strings.Contains(body, "<!-- relayweft:queue ") || strings.Contains(body, "<!-- switchyard:queue ")
+}
 
 // queueView is what an issue's comments say about it.
 type queueView struct {
