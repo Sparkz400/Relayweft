@@ -8,3 +8,6 @@
 
 # local sessions / scratch
 .switchyard/
+
+# editors/jetbrains ui tests (IDE Starter output)
+/out/

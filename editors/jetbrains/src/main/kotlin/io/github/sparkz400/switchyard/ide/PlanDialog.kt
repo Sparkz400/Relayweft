@@ -82,6 +82,9 @@ class PlanDialog(private val project: Project, private val svc: SyService, priva
 
     override fun createCenterPanel(): JComponent {
         list.selectionMode = ListSelectionModel.SINGLE_SELECTION
+        list.accessibleContext.accessibleName = "Subtasks"
+        prompt.accessibleContext.accessibleName = "Subtask prompt"
+        titleField.accessibleContext.accessibleName = "Subtask title"
         list.cellRenderer = object : ColoredListCellRenderer<Subtask>() {
             override fun customizeCellRenderer(l: JList<out Subtask>, s: Subtask, index: Int, sel: Boolean, focus: Boolean) {
                 append("${index + 1}. ", SimpleTextAttributes.GRAYED_ATTRIBUTES)

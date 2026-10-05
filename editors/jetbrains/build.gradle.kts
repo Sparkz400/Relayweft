@@ -19,12 +19,41 @@ kotlin {
     }
 }
 
+// src/uiTest: the plugin in a real IDE (a separate process with its own
+// window), driven through its UI by the Starter and Driver frameworks.
+// SY_UI_TEST=1 xvfb-run -a ./gradlew uiTest; it types and clicks with
+// java.awt.Robot, so it wants a display of its own (CI: the ui job).
+sourceSets {
+    create("uiTest") {
+        compileClasspath += sourceSets.main.get().output + sourceSets.test.get().output
+        runtimeClasspath += sourceSets.main.get().output + sourceSets.test.get().output
+    }
+}
+
+configurations.getByName("uiTestImplementation") {
+    extendsFrom(configurations.testImplementation.get())
+}
+
 dependencies {
     testImplementation("junit:junit:4.13.2")
 
     intellijPlatform {
         intellijIdeaCommunity(providers.gradleProperty("platformVersion"))
         testFramework(TestFrameworkType.Platform)
+        testFramework(TestFrameworkType.Starter, configurationName = "uiTestImplementation")
+    }
+    "uiTestImplementation"("org.junit.jupiter:junit-jupiter:5.14.4")
+    "uiTestImplementation"("org.junit.platform:junit-platform-launcher:1.14.4")
+    "uiTestImplementation"("org.kodein.di:kodein-di-jvm:7.33.0")
+    "uiTestImplementation"("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2")
+}
+
+intellijPlatformTesting.testIdeUi.register("uiTest") {
+    task {
+        val uiTestSourceSet = sourceSets.getByName("uiTest")
+        testClassesDirs = uiTestSourceSet.output.classesDirs
+        classpath = uiTestSourceSet.runtimeClasspath
+        useJUnitPlatform()
     }
 }
 

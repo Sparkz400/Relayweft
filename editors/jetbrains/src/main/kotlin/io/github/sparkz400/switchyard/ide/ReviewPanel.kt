@@ -56,6 +56,7 @@ class ReviewPanel(private val project: Project, private val svc: SyService) : Si
     init {
         tree = CheckboxTree(Renderer(), root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
         tree.isRootVisible = false
+        tree.accessibleContext.accessibleName = "Switchyard review"
         tree.showsRootHandles = true
         tree.emptyText.text = "No changes are waiting for your review."
         tree.emptyText.appendLine("Turn on \"review changes\" in sy (orchestrator.review_changes)")

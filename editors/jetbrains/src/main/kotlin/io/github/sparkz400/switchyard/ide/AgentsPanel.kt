@@ -76,6 +76,7 @@ class AgentsPanel(private val project: Project, private val svc: SyService) : Si
 
     init {
         tree.isRootVisible = false
+        tree.accessibleContext.accessibleName = "Switchyard agents"
         tree.showsRootHandles = true
         tree.cellRenderer = Renderer()
         tree.putClientProperty(AnimatedIcon.ANIMATION_IN_RENDERER_ALLOWED, true)
@@ -105,10 +106,12 @@ class AgentsPanel(private val project: Project, private val svc: SyService) : Si
         })
 
         logArea.isEditable = false
+        logArea.accessibleContext.accessibleName = "Switchyard activity log"
         logArea.font = EditorColorsManager.getInstance().globalScheme.getFont(com.intellij.openapi.editor.colors.EditorFontType.PLAIN)
         logArea.text = svc.log.joinToString("\n", postfix = if (svc.log.isEmpty()) "" else "\n")
 
         prompt.lineWrap = true
+        prompt.accessibleContext.accessibleName = "Switchyard task"
         prompt.wrapStyleWord = true
         prompt.emptyText.text = "Describe a task. \"@agent message\" follows up. Ctrl+Enter runs it."
         DumbAwareAction.create { submit() }.registerCustomShortcutSet(

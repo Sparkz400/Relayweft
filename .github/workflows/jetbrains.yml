@@ -58,6 +58,52 @@ jobs:
           path: editors/jetbrains/build/distributions/*.zip
           if-no-files-found: error
 
+  # The plugin in a real IntelliJ IDEA (its own process and window, on an
+  # Xvfb display with fluxbox), driven through its UI by the IDE Starter and
+  # Driver frameworks, against a real sy with the scripted agent.
+  # Screenshots of the IDE window are uploaded.
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/jetbrains
+    env:
+      SY_IT_REQUIRED: '1'
+      SY_UI_TEST: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: gradle/actions/wrapper-validation@v6
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: gradle/actions/setup-gradle@v6
+      - name: free disk space for the IDE download
+        working-directory: /
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: display (Xvfb and fluxbox)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb fluxbox
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+          DISPLAY=:99 fluxbox >/dev/null 2>&1 &
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+      - name: ui test
+        run: ./gradlew --no-daemon uiTest
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: jetbrains-ui-test
+          path: |
+            editors/jetbrains/build/reports/uiTest/
+            editors/jetbrains/build/reports/tests/uiTest/
+            out/ide-tests/tests/*/switchyard-ui/log/
+          if-no-files-found: ignore
+
   verify:
     runs-on: ubuntu-latest
     defaults:
