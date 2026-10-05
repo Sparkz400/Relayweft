@@ -39,7 +39,7 @@ Out of the box Switchyard uses **subscriptions only**: it drives the official `c
    cd C:\path\to\your\repo
    sy setup
    ```
-   It finds Claude Code, Codex, Gemini CLI, Qwen Code and Ollama, checks their versions and logins without using quota, and says how to install or log in to a missing one. It writes your config with the ready ones turned on, saves your repo's test commands to `.switchyard.yaml`, and offers a first read-only task ("explain this repo", one short haiku call) so you see a whole run. `sy`, `sy run` and `sy web` start the same setup by themselves when there is no config yet. For scripts: `sy setup --yes` (no questions; it also runs the first task).
+   It finds Claude Code, Codex, Gemini CLI, Qwen Code and Ollama, checks their versions and logins without using quota, and says how to install or log in to a missing one. It writes your config with the ready ones turned on, saves your repo's test commands to `.switchyard.yaml`, and offers a first read-only task ("explain this repo", one short haiku call) so you see a whole run. `sy`, `sy run` and `sy web` start the same setup by themselves when there is no config yet (not in CI; `SY_NO_SETUP=1` turns it off). For scripts: `sy setup --yes` (no questions; it also runs the first task).
 5. **Use it:**
    ```powershell
    sy             # the TUI in this repo

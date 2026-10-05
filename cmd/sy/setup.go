@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -75,9 +76,13 @@ var setupCLIs = []struct {
 	{"ollama", "ollama-run", true},
 }
 
-// setupExec runs one quick check command (tests swap it in).
-var setupExec = func(ctx context.Context, bin string, args ...string) (stdout, stderr string, err error) {
+// setupExec runs one quick check command with env added to sy's own
+// (tests swap it in).
+var setupExec = func(ctx context.Context, env []string, bin string, args ...string) (stdout, stderr string, err error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	proc.Prepare(cmd) // .cmd shims under paths with spaces; a timeout kills the tree
 	var o, e bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &o, &e
@@ -112,7 +117,7 @@ func probeCLIs(cfg *config.Config) []cliStatus {
 		}
 	}
 	for i, s := range out {
-		if s.name == "qwen" && s.path != "" {
+		if s.name == "qwen" && s.path != "" && s.login != loginNo { // loginNo: it does not run
 			out[i] = qwenNeedsOllama(cfg, s, ollama)
 		}
 	}
@@ -131,7 +136,7 @@ func probeCLI(cfg *config.Config, name, provider string, optional bool) (s cliSt
 	run := func(args ...string) (string, string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), setupTimeout)
 		defer cancel()
-		return setupExec(ctx, bin, args...)
+		return setupExec(ctx, nil, bin, args...)
 	}
 	out, errOut, err := run("--version")
 	if s.version = firstLine(out); err != nil || s.version == "" {
@@ -144,8 +149,10 @@ func probeCLI(cfg *config.Config, name, provider string, optional bool) (s cliSt
 		}
 	}
 	defer func() {
-		// No version and no sign-in: the CLI does not run at all.
-		if s.verErr != nil && s.login != loginOK {
+		// No version and no sign-in: the CLI does not run at all. Gemini's
+		// sign-in check reads files and runs nothing, so its version
+		// check alone decides.
+		if s.verErr != nil && (s.login != loginOK || name == "gemini") {
 			s.login, s.detail = loginNo, "does not run ("+s.verErr.Error()+")"
 			s.fix = installSteps(name, cfg)
 		}
@@ -196,6 +203,9 @@ func claudeLogin(run func(...string) (string, string, error)) (int, string) {
 	}
 	if json.Unmarshal([]byte(stdout), &st) == nil && st.LoggedIn != nil {
 		if !*st.LoggedIn {
+			if k := setEnv("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"); k != "" {
+				return loginUnknown, "no login, but " + k + " is set (Claude Code may use it)"
+			}
 			return loginNo, "not logged in"
 		}
 		how := st.AuthMethod
@@ -217,10 +227,26 @@ func codexLogin(run func(...string) (string, string, error)) (int, string) {
 	switch {
 	case err == nil:
 		return loginOK, text
-	case errors.Is(err, errNoAnswer) || text == "":
-		return loginUnknown, fmt.Sprintf("could not check the login (codex login status: %v)", err)
+	case errors.Is(err, errNoAnswer) || !reNotLoggedIn.MatchString(text):
+		// A timeout, or an older CLI without `login status`.
+		return loginUnknown, fmt.Sprintf("could not check the login (codex login status: %v %s)", err, text)
+	}
+	if k := setEnv("OPENAI_API_KEY", "CODEX_API_KEY"); k != "" {
+		return loginUnknown, "no login, but " + k + " is set (Codex may use it)"
 	}
 	return loginNo, text // "Not logged in", exit 1
+}
+
+var reNotLoggedIn = regexp.MustCompile(`(?i)not logged in|logged out|not signed in`)
+
+// setEnv returns the first of these variables that is set ("" = none).
+func setEnv(names ...string) string {
+	for _, n := range names {
+		if os.Getenv(n) != "" {
+			return n
+		}
+	}
+	return ""
 }
 
 func qwenNeedsOllama(cfg *config.Config, s, ollama cliStatus) cliStatus {
@@ -355,24 +381,43 @@ func needsSetup(cfgPath string) bool {
 // no config yet and someone is at the terminal. Scripts and CI (no
 // terminal) keep the built-in defaults, as before.
 func firstRun(cfgPath, dir string, tui bool) error {
-	if !needsSetup(cfgPath) || !setupInteractive(true) {
+	if !needsSetup(cfgPath) || !setupInteractive(true) || autoSetupOff() {
 		return nil
 	}
+	firstRunWith(bufio.NewReader(os.Stdin), os.Stdout, dir, tui)
+	return nil
+}
+
+// envNoSetup set to anything keeps sy, sy run and sy web from starting the
+// setup (a terminal nobody answers: docker run -t, IDE runners).
+const envNoSetup = "SY_NO_SETUP"
+
+// autoSetupOff reports whether the automatic setup is switched off: by
+// SY_NO_SETUP, or in CI, where a terminal may have nobody at it.
+func autoSetupOff() bool {
+	if os.Getenv(envSetupInteractive) == "1" {
+		return false
+	}
+	return os.Getenv(envNoSetup) != "" || os.Getenv("CI") != ""
+}
+
+// firstRunWith is the automatic setup. Whatever happens, the command you
+// asked for goes on afterwards: with the new config, or, if the setup
+// stopped, with the built-in defaults as before.
+func firstRunWith(in *bufio.Reader, out io.Writer, dir string, tui bool) {
 	path, err := userConfigPath()
-	if err != nil {
-		return err
+	if err == nil {
+		_, err = runSetup(setupOpts{in: in, out: out, interactive: true, path: path, dir: dir, auto: true})
 	}
-	in := bufio.NewReader(os.Stdin)
-	res, err := runSetup(setupOpts{in: in, out: os.Stdout, interactive: true, path: path, dir: dir, auto: true})
 	if err != nil {
-		return err
+		fmt.Fprintf(out, "\nSetup stopped: %v\nsy goes on with the built-in defaults. Run `sy setup` any time. "+
+			"`sy init --global` writes the default config, so this setup is not offered again (or set %s=1).\n", err, envNoSetup)
 	}
-	if tui && res.wrote {
+	if tui {
 		// The TUI's screen would hide what setup printed.
-		a := &asker{r: in, out: os.Stdout, interactive: true}
+		a := &asker{r: in, out: out, interactive: true}
 		a.line("\nPress Enter to start Switchyard. ")
 	}
-	return nil
 }
 
 func cmdSetup(args []string) error {
@@ -516,7 +561,10 @@ func runSetup(o setupOpts) (setupResult, error) {
 	// 1. An existing config is never replaced without asking, and never
 	// without a backup.
 	replace := true
-	if _, err := os.Stat(o.path); err == nil {
+	if _, err := os.Stat(o.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		finish()
+		return res, fmt.Errorf("cannot read %s: %w (nothing was changed)", o.path, err)
+	} else if err == nil {
 		switch {
 		case o.force:
 		case o.interactive:
@@ -590,7 +638,7 @@ func runSetup(o setupOpts) (setupResult, error) {
 	if r, err := gitRoot(dir); err == nil && strings.TrimSpace(r) != "" {
 		root = filepath.Clean(filepath.FromSlash(r))
 	}
-	setupChecks(a, w, root)
+	setupChecks(a, w, root, !o.auto)
 
 	// 5. The first task.
 	var taskTook time.Duration
@@ -767,15 +815,27 @@ func writeSetupConfig(path string, on map[string]bool) (backup string, err error
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	if old, err := os.ReadFile(path); err == nil {
-		backup = path + ".bak-" + time.Now().Format("20060102-150405")
-		if err := os.WriteFile(backup, old, 0o644); err != nil {
+	// The config can hold API keys (provider env) and webhook URLs: a new
+	// file is private, a replaced one keeps its mode, and so does its backup.
+	mode := os.FileMode(0o600)
+	st, err := os.Stat(path)
+	switch {
+	case err == nil:
+		mode = st.Mode().Perm()
+		old, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("cannot read %s to back it up: %w (nothing was changed)", path, err)
+		}
+		if backup, err = writeBackup(path, old, mode); err != nil {
 			return "", fmt.Errorf("back up %s: %w (nothing was changed)", path, err)
 		}
+	case !errors.Is(err, os.ErrNotExist):
+		return "", fmt.Errorf("cannot read %s: %w (nothing was changed)", path, err)
 	}
 	data := config.WithEnabled(config.DefaultYAML(), on)
 	tmp := path + ".new"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	os.Remove(tmp) // a leftover would keep its own mode
+	if err := writeFileMode(tmp, data, mode, false); err != nil {
 		return backup, err
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -790,13 +850,54 @@ func writeSetupConfig(path string, on map[string]bool) (backup string, err error
 	if _, _, err := config.Load(path); err != nil {
 		// Put back what was there.
 		if old, rerr := os.ReadFile(backup); backup != "" && rerr == nil {
-			os.WriteFile(path, old, 0o644)
+			os.WriteFile(path, old, mode)
 		} else if backup == "" {
 			os.Remove(path)
 		}
 		return backup, fmt.Errorf("the new config does not load (%v), so it was not kept; please report this with `sy bugreport`", err)
 	}
 	return backup, nil
+}
+
+// writeBackup writes data to a new <path>.bak-<time> file that did not
+// exist before, so a second replace in the same second never overwrites
+// the backup of the original.
+func writeBackup(path string, data []byte, mode os.FileMode) (string, error) {
+	base := path + ".bak-" + time.Now().Format("20060102-150405")
+	for i := 0; i < 100; i++ {
+		name := base
+		if i > 0 {
+			name = fmt.Sprintf("%s-%d", base, i)
+		}
+		err := writeFileMode(name, data, mode, true)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		return name, err
+	}
+	return "", fmt.Errorf("too many backups named %s-*", base)
+}
+
+// writeFileMode writes data to name with mode; with excl, name must not
+// exist yet.
+func writeFileMode(name string, data []byte, mode os.FileMode, excl bool) error {
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if excl {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	}
+	f, err := os.OpenFile(name, flags, mode)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(name)
+		return err
+	}
+	return os.Chmod(name, mode) // the umask may have narrowed it
 }
 
 func samePath(a, b string) bool {
@@ -808,8 +909,8 @@ func samePath(a, b string) bool {
 }
 
 // setupChecks saves the repo's checks to its .switchyard.yaml, as
-// sy init --repo does.
-func setupChecks(a *asker, w io.Writer, root string) {
+// sy init --repo does (without offer, it only names them).
+func setupChecks(a *asker, w io.Writer, root string, offer bool) {
 	fmt.Fprintln(w, "\n"+stRouter.Bold(true).Render("This repo's checks"))
 	if root == "" {
 		fmt.Fprintln(w, "  not in a git repo: nothing to detect (run sy in a repo; `sy init --repo` saves its checks)")
@@ -825,6 +926,12 @@ func setupChecks(a *asker, w io.Writer, root string) {
 		return
 	}
 	fmt.Fprintf(w, "  found: %s\n  Agents may run them, and sy runs them before the final review.\n", strings.Join(checks, ", "))
+	if !offer {
+		// Started by sy run or sy web: a new untracked file could stop what
+		// you asked for (sy run --issues needs a clean working tree).
+		fmt.Fprintln(w, "  `sy init --repo` saves them to "+config.RepoFileName)
+		return
+	}
 	if !a.yesNo("  Save them to "+filepath.Join(root, config.RepoFileName)+" (commit it to share)?", a.interactive) {
 		fmt.Fprintln(w, "  not saved (`sy init --repo` saves them later)")
 		return
@@ -875,10 +982,15 @@ func setupFirstTask(a *asker, w io.Writer, cfgPath, root string) (time.Duration,
 			return 0, err
 		}
 		dir = d
+		defer func() {
+			if err := removeAllRetry(d); err != nil {
+				fmt.Fprintf(w, "note: could not remove the sample project %s: %v\n", d, err)
+			}
+		}()
 		if err := writeStarter(dir); err != nil {
 			return 0, fmt.Errorf("create the sample project: %w", err)
 		}
-		fmt.Fprintf(w, "  sample project: %s\n", dir)
+		fmt.Fprintf(w, "  sample project (removed afterwards): %s\n", dir)
 	}
 	fmt.Fprintf(w, "  $ sy run %q\n\n", task)
 	t0 := time.Now()

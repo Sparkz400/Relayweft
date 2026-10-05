@@ -30,11 +30,12 @@ type firstRunCase struct {
 	answers   string   // the Enter presses piped in ("" = no terminal)
 	repo      bool     // run in a git repo (else in a plain folder: the sample project)
 	questions int      // how many questions setup must ask
+	saves     bool     // setup saves the repo's checks (not when started by sy run)
 }
 
 var firstRunCases = []firstRunCase{
-	{typed: "sy setup --yes", args: []string{"setup", "--yes"}, repo: true},
-	{typed: `sy run "` + firstTaskRepo + `", then Enter twice`, args: []string{"run", firstTaskRepo}, answers: "\n\n", repo: true, questions: 2},
+	{typed: "sy setup --yes", args: []string{"setup", "--yes"}, repo: true, saves: true},
+	{typed: `sy run "` + firstTaskRepo + `", then Enter`, args: []string{"run", firstTaskRepo}, answers: "\n", repo: true, questions: 1},
 	{typed: "sy setup outside a repo, then Enter twice", args: []string{"setup"}, answers: "\n\n", questions: 2},
 }
 
@@ -96,7 +97,12 @@ func (t *selftest) firstRunCase(n int, c firstRunCase) (time.Duration, bool) {
 	}
 	state := filepath.Join(t.work, "agent "+name)
 	os.MkdirAll(state, 0o755)
-	env := []string{envSelftestDir + "=" + state, "PATH=" + barePath(npm), "TMPDIR=" + tmp}
+	path, err := barePath(npm, filepath.Join(profile, "tools"))
+	if err != nil {
+		t.check(markFail, name, "%v", err)
+		return 0, false
+	}
+	env := []string{envSelftestDir + "=" + state, "PATH=" + path, "TMPDIR=" + tmp, envNoSetup + "=", "CI="}
 	if runtime.GOOS == "windows" {
 		env = append(env, "USERPROFILE="+profile)
 	} else {
@@ -130,10 +136,13 @@ func (t *selftest) firstRunCase(n int, c firstRunCase) (time.Duration, bool) {
 	if cfg.Providers["claude"].Disabled || !cfg.Providers["codex"].Disabled {
 		return fail("the config must turn claude on and the logged-out codex off")
 	}
-	if c.repo {
-		if b, _ := os.ReadFile(filepath.Join(dir, config.RepoFileName)); !strings.Contains(string(b), `"go test ./..."`) {
-			return fail("%s lacks the detected checks", config.RepoFileName)
-		}
+	b, err := os.ReadFile(filepath.Join(dir, config.RepoFileName))
+	switch {
+	case c.saves && !strings.Contains(string(b), `"go test ./..."`):
+		return fail("%s lacks the detected checks", config.RepoFileName)
+	case !c.saves && err == nil:
+		// An untracked file would stop sy run --issues (clean tree only).
+		return fail("%s was written, but sy run must leave the repo alone", config.RepoFileName)
 	}
 	explored := false
 	for _, call := range readCalls(state) {
@@ -181,19 +190,26 @@ func (t *selftest) goRepo(dir string) error {
 }
 
 // barePath is a PATH with the scripted CLIs, git and the system folders
-// only, so the real agent CLIs on this machine are not found.
-func barePath(cliDir string) string {
-	dirs := []string{cliDir}
-	if g, err := exec.LookPath("git"); err == nil {
-		dirs = append(dirs, filepath.Dir(g))
+// only, so the real agent CLIs on this machine are not found. On Unix git
+// gets a folder of its own (tools), since /usr/bin may hold a distro's
+// gemini or ollama.
+func barePath(cliDir, tools string) (string, error) {
+	g, err := exec.LookPath("git")
+	if err != nil {
+		return "", err
 	}
 	if runtime.GOOS == "windows" {
+		// Git for Windows' cmd folder holds only git and its GUIs.
 		root := os.Getenv("SystemRoot")
-		dirs = append(dirs, filepath.Join(root, "System32"), root)
-	} else {
-		dirs = append(dirs, "/usr/bin", "/bin")
+		return strings.Join([]string{cliDir, filepath.Dir(g), filepath.Join(root, "System32"), root}, ";"), nil
 	}
-	return strings.Join(dirs, string(os.PathListSeparator))
+	if err := os.MkdirAll(tools, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Symlink(g, filepath.Join(tools, "git")); err != nil && !os.IsExist(err) {
+		return "", err
+	}
+	return cliDir + ":" + tools, nil
 }
 
 // profileConfig is where sy finds the user config in a test profile.

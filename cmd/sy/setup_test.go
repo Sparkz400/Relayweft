@@ -44,7 +44,12 @@ func fakeCLIs(t *testing.T, names []string, answers func(cli, args string) (stri
 	t.Setenv("PATH", path)
 	t.Setenv(envSetupInteractive, "")
 	old := setupExec
-	setupExec = func(_ context.Context, bin string, args ...string) (string, string, error) {
+	// A key in the environment makes a logged-out CLI usable (unknown).
+	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+		"OPENAI_API_KEY", "CODEX_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", envNoSetup, "CI"} {
+		t.Setenv(k, "")
+	}
+	setupExec = func(_ context.Context, _ []string, bin string, args ...string) (string, string, error) {
 		cli := strings.TrimSuffix(filepath.Base(bin), filepath.Ext(bin))
 		out, err := answers(cli, strings.Join(args, " "))
 		return out, "", err
@@ -156,7 +161,8 @@ func TestProbeBrokenCLI(t *testing.T) {
 }
 
 func TestCodexLoginTimeoutIsUnknown(t *testing.T) {
-	login, _ := codexLogin(func(...string) (string, string, error) { return "", "", errNoAnswer })
+	// A CLI cut off while it still checks has printed something already.
+	login, _ := codexLogin(func(...string) (string, string, error) { return "Checking login... not logged in yet", "", errNoAnswer })
 	if login != loginUnknown {
 		t.Errorf("a timeout must not count as logged out: %d", login)
 	}
@@ -420,6 +426,9 @@ func TestSetupExecShimWithSpaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolate(t)
+	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"} {
+		t.Setenv(k, "")
+	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	s := probeCLI(config.Default(), "claude", "claude", false)
 	if s.version != "2.1.288 (Claude Code)" || s.login != loginNo || s.ready() {

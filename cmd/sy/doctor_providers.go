@@ -98,10 +98,11 @@ func doctorProviders(w io.Writer, cfg *config.Config, ok func(bool) string, warn
 			if endpoint(pc) != "" {
 				break // another API (DeepSeek, Ollama) with its own key
 			}
+			env, _ := pc.EnvFor(nil) // e.g. CLAUDE_CONFIG_DIR
 			login, detail := claudeLogin(func(args ...string) (string, string, error) {
 				ctx, cancel := context.WithTimeout(context.Background(), setupTimeout)
 				defer cancel()
-				return setupExec(ctx, bin, args...)
+				return setupExec(ctx, env, bin, args...)
 			})
 			switch login {
 			case loginOK:
