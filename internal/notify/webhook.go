@@ -47,10 +47,10 @@ var Kinds = []string{KindSlack, KindDiscord, KindNtfy, KindJSON}
 // are filled in from the environment when a message is sent, so the
 // secret does not have to be in the config file.
 type Webhook struct {
-	URL    string   `yaml:"url" json:"url"`
-	Kind   string   `yaml:"kind,omitempty" json:"kind,omitempty"`   // "" = from the URL's host
-	Token  string   `yaml:"token,omitempty" json:"token,omitempty"` // ntfy access token, or json's bearer token
-	Events []string `yaml:"events,omitempty,flow" json:"events,omitempty"`
+	URL    string   `yaml:"url" json:"url"`                                // the webhook; ${VAR} is read from your environment
+	Kind   string   `yaml:"kind,omitempty" json:"kind,omitempty"`          // "" = from the URL's host
+	Token  string   `yaml:"token,omitempty" json:"token,omitempty"`        // ntfy access token, or json's bearer token
+	Events []string `yaml:"events,omitempty,flow" json:"events,omitempty"` // done, failed, limit, waiting, watch (default: all)
 }
 
 // Message is one notification.

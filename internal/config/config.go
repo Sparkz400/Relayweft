@@ -40,15 +40,25 @@ var PreferOptions = []string{PreferOther, PreferAuto}
 
 // Route is a model + reasoning effort on one provider.
 type Route struct {
-	Model  string `yaml:"model"`
+	// Model is the model id given to the CLI ("" = this provider never
+	// runs the role).
+	Model string `yaml:"model"`
+	// Effort is the reasoning effort, one of the provider's efforts (""
+	// = the CLI's default).
 	Effort string `yaml:"effort"`
 }
 
 // RoleCfg holds a role's route on each provider.
 type RoleCfg struct {
+	// Prefer picks the provider: codex, claude or any provider name
+	// (always that one, unless it is at its usage limit), other (another
+	// provider than the planner's, for review) or auto (whichever has used
+	// fewer tokens this session).
 	Prefer string `yaml:"prefer"`
-	Codex  Route  `yaml:"codex"`
-	Claude Route  `yaml:"claude"`
+	// The role's route on each provider: one entry per provider name
+	// (codex:, claude:, gemini:, ...), each with model and effort.
+	Codex  Route `yaml:"codex"`
+	Claude Route `yaml:"claude"`
 	// Extra are the routes on every other configured provider, keyed by
 	// provider name (`gemini: {model: ...}` next to codex: and claude:).
 	Extra map[string]Route `yaml:",inline"`
@@ -86,9 +96,9 @@ func (r RoleCfg) With(provider string, rt Route) RoleCfg {
 
 // ModelInfo is one entry of a provider's model catalog.
 type ModelInfo struct {
-	ID    string `yaml:"id"`
-	Label string `yaml:"label,omitempty"`
-	Tier  string `yaml:"tier,omitempty"` // fast | standard | strong
+	ID    string `yaml:"id"`              // what the CLI is given
+	Label string `yaml:"label,omitempty"` // shown in the model picker
+	Tier  string `yaml:"tier,omitempty"`  // fast | standard | strong
 }
 
 // Duration is a time.Duration that reads and writes "1h30m" in YAML.
@@ -145,31 +155,54 @@ type ProviderCfg struct {
 	// provider's agents (sandbox.go).
 	Sandbox *SandboxCfg `yaml:"sandbox,omitempty"`
 	// InstallHint is what `rw doctor` suggests when the command is missing.
-	InstallHint         string      `yaml:"install_hint,omitempty"`
-	Command             string      `yaml:"command"`
-	TestedVersion       string      `yaml:"tested_version,omitempty"`
-	WriteSandbox        string      `yaml:"write_sandbox,omitempty"`
-	WritePermissionMode string      `yaml:"write_permission_mode,omitempty"`
-	WriteAllowedTools   []string    `yaml:"write_allowed_tools,omitempty"`
-	ExtraArgs           []string    `yaml:"extra_args"`
-	LimitCooldown       Duration    `yaml:"limit_cooldown"`
-	Efforts             []string    `yaml:"efforts"`
-	Models              []ModelInfo `yaml:"models"`
+	InstallHint string `yaml:"install_hint,omitempty"`
+	// Command is the CLI to run, found on PATH (with PATHEXT on Windows,
+	// so codex.cmd works) or a full path.
+	Command string `yaml:"command"`
+	// TestedVersion is the CLI version rw was tested with; `rw doctor`
+	// warns when yours differs.
+	TestedVersion string `yaml:"tested_version,omitempty"`
+	// WriteSandbox is Codex's sandbox for writing agents (read-only agents
+	// always get read-only).
+	WriteSandbox string `yaml:"write_sandbox,omitempty"`
+	// WritePermissionMode is the permission mode of writing agents
+	// (Claude Code: acceptEdits, auto, bypassPermissions or dontAsk;
+	// Gemini: auto_edit; Qwen: auto-edit).
+	WritePermissionMode string `yaml:"write_permission_mode,omitempty"`
+	// WriteAllowedTools are tools Claude Code's writing agents may use
+	// without asking, e.g. ["Bash(go test *)"] so workers can run tests.
+	WriteAllowedTools []string `yaml:"write_allowed_tools,omitempty"`
+	// ExtraArgs are appended to every run of the CLI.
+	ExtraArgs []string `yaml:"extra_args"`
+	// LimitCooldown is how long a provider stays "at limit" when the CLI
+	// says no reset time.
+	LimitCooldown Duration `yaml:"limit_cooldown"`
+	// Efforts are the reasoning efforts the CLI accepts (empty: it has no
+	// effort setting).
+	Efforts []string `yaml:"efforts"`
+	// Models is the catalog shown in the model picker (any other id can be
+	// typed too).
+	Models []ModelInfo `yaml:"models"`
 }
 
 // RoutingCfg tunes the rule router.
 type RoutingCfg struct {
-	MaxFilesBeforeHigh   int      `yaml:"max_files_before_high"`
-	SensitivePaths       []string `yaml:"sensitive_paths"`
-	Judge                bool     `yaml:"judge"`
-	JudgeBelowConfidence float64  `yaml:"judge_below_confidence"`
-	SwitchAtUtilization  float64  `yaml:"switch_at_utilization"`
+	MaxFilesBeforeHigh int `yaml:"max_files_before_high"`
+	// SensitivePaths are path words that send a step to worker_high.
+	SensitivePaths []string `yaml:"sensitive_paths"`
+	Judge          bool     `yaml:"judge"`
+	// JudgeBelowConfidence: with judge on, a rule decision less certain
+	// than this asks the judge model.
+	JudgeBelowConfidence float64 `yaml:"judge_below_confidence"`
+	SwitchAtUtilization  float64 `yaml:"switch_at_utilization"`
 	// ProviderOrder is the order providers are tried in when one is at its
 	// limit (and what prefer: other picks first). Empty = codex, claude,
 	// then the rest by name.
 	ProviderOrder []string `yaml:"provider_order,omitempty"`
-	// Learn and LearnMinSamples control the learned routes (learned.go).
-	Learn           string `yaml:"learn"`             // auto | suggest | off ("" = suggest)
+	// Learn controls the learned routes per repo: auto (refreshed daily
+	// at task start), suggest (only `rw tune --apply`) or off ("" =
+	// suggest).
+	Learn           string `yaml:"learn"`
 	LearnMinSamples int    `yaml:"learn_min_samples"` // runs (after the age decay) a route needs; 0 = 8
 	// Tiers picks a work step's model from its difficulty and the quota
 	// left (router/tiers.go): auto | off ("" = off).
@@ -232,37 +265,52 @@ func (r RoutingCfg) TiersSaveBelow() float64 {
 
 // OrchestratorCfg tunes the task lifecycle.
 type OrchestratorCfg struct {
-	MaxThreads           int      `yaml:"max_threads"`
-	Parallel             bool     `yaml:"parallel"`
-	Worktrees            bool     `yaml:"worktrees"`
-	WorktreeMaxFiles     int      `yaml:"worktree_max_files"`
-	ReviewBeforePlan     bool     `yaml:"review_before_plan"`
-	ReviewSingleStepPlan bool     `yaml:"review_single_step_plan"`
-	ReviewOnRepeatError  bool     `yaml:"review_on_repeat_error"`
-	ReviewBeforeDone     bool     `yaml:"review_before_done"`
-	MaxPlanRevisions     int      `yaml:"max_plan_revisions"`
-	MaxFixRounds         int      `yaml:"max_fix_rounds"`
-	MaxAttempts          int      `yaml:"max_attempts"`
-	AgentTimeout         Duration `yaml:"agent_timeout"`
-	SmallTaskWords       int      `yaml:"small_task_words"`
-	ApprovePlan          bool     `yaml:"approve_plan"`
-	ReviewChanges        bool     `yaml:"review_changes"`
-	Handoff              bool     `yaml:"handoff"`
-	LowPriority          bool     `yaml:"low_priority"`
-	MaxCPUPercent        int      `yaml:"max_cpu_percent"`
-	MinFreeMemoryMB      int      `yaml:"min_free_memory_mb"`
-	BusyMaxWait          Duration `yaml:"busy_max_wait"`
-	MinFreeDiskGB        float64  `yaml:"min_free_disk_gb"`
-	PoolWarnGB           float64  `yaml:"pool_warn_gb"`
-	PoolMaxIdle          Duration `yaml:"pool_max_idle"`
-	SnapshotMaxFileMB    int      `yaml:"snapshot_max_file_mb"`
+	MaxThreads int `yaml:"max_threads"`
+	// Parallel runs independent subtasks at the same time (false: one at
+	// a time, like --no-parallel).
+	Parallel         bool `yaml:"parallel"`
+	Worktrees        bool `yaml:"worktrees"`
+	WorktreeMaxFiles int  `yaml:"worktree_max_files"`
+	// ReviewBeforePlan has the reviewer check the plan before it runs.
+	ReviewBeforePlan     bool `yaml:"review_before_plan"`
+	ReviewSingleStepPlan bool `yaml:"review_single_step_plan"`
+	// ReviewOnRepeatError asks the reviewer when a subtask fails the same
+	// way twice.
+	ReviewOnRepeatError bool `yaml:"review_on_repeat_error"`
+	// ReviewBeforeDone has the reviewer check the result before the task
+	// ends; changes it asks for start a fix round.
+	ReviewBeforeDone bool `yaml:"review_before_done"`
+	// MaxPlanRevisions is how often the planner may revise a plan the
+	// reviewer sent back.
+	MaxPlanRevisions int `yaml:"max_plan_revisions"`
+	// MaxFixRounds is how many fix rounds failed checks or the final
+	// review may start.
+	MaxFixRounds int `yaml:"max_fix_rounds"`
+	MaxAttempts  int `yaml:"max_attempts"`
+	// AgentTimeout stops an agent that runs longer than this.
+	AgentTimeout      Duration `yaml:"agent_timeout"`
+	SmallTaskWords    int      `yaml:"small_task_words"`
+	ApprovePlan       bool     `yaml:"approve_plan"`
+	ReviewChanges     bool     `yaml:"review_changes"`
+	Handoff           bool     `yaml:"handoff"`
+	LowPriority       bool     `yaml:"low_priority"`
+	MaxCPUPercent     int      `yaml:"max_cpu_percent"`
+	MinFreeMemoryMB   int      `yaml:"min_free_memory_mb"`
+	BusyMaxWait       Duration `yaml:"busy_max_wait"`
+	MinFreeDiskGB     float64  `yaml:"min_free_disk_gb"`
+	PoolWarnGB        float64  `yaml:"pool_warn_gb"`
+	PoolMaxIdle       Duration `yaml:"pool_max_idle"`
+	SnapshotMaxFileMB int      `yaml:"snapshot_max_file_mb"`
 }
 
 // VerifyCfg lists the repo's own checks (tests, build, lint). Agents may
 // run them without asking, and Relayweft runs them before the final review.
 type VerifyCfg struct {
+	// Commands are the checks, run through the system shell in the
+	// project folder, e.g. ["go test ./...", "go vet ./..."].
 	Commands []string `yaml:"commands"`
-	Timeout  Duration `yaml:"timeout"`
+	// Timeout is the time limit for each command.
+	Timeout Duration `yaml:"timeout"`
 	// Affected: "auto" (or "") runs only the tests the changes affect
 	// after a fix round, and the full checks before the final review;
 	// "off" always runs the full checks.
@@ -280,7 +328,7 @@ type HooksCfg struct {
 	BeforeTask []string `yaml:"before_task,omitempty"`
 	AfterMerge []string `yaml:"after_merge,omitempty"` // after each agent's changes land in your tree
 	AfterTask  []string `yaml:"after_task,omitempty"`  // every end: done, failed or cancelled
-	Timeout    Duration `yaml:"timeout,omitempty"`
+	Timeout    Duration `yaml:"timeout,omitempty"`     // time limit for each hook
 }
 
 // WorkspaceCfg makes every task of the project a multi-repo task: Repos
@@ -288,6 +336,8 @@ type HooksCfg struct {
 // project folder), e.g. {frontend: ../web}. Agents write to these folders,
 // so a repo file's workspace applies only after `rw trust`.
 type WorkspaceCfg struct {
+	// Repos maps a short name to another git repository: a path relative
+	// to the project folder (to the repo file's folder in a .relayweft.yaml).
 	Repos map[string]string `yaml:"repos,omitempty"`
 }
 
@@ -296,8 +346,11 @@ type WorkspaceCfg struct {
 // file's webhooks apply only after `rw trust`: they say where rw sends
 // what your tasks did.
 type NotifyCfg struct {
-	Enabled  bool             `yaml:"enabled"`
-	MinTask  Duration         `yaml:"min_task"` // only tasks that ran at least this long
+	Enabled bool     `yaml:"enabled"`
+	MinTask Duration `yaml:"min_task"` // only tasks that ran at least this long
+	// Webhooks (Slack, Discord, ntfy or plain JSON) get done, failed,
+	// limit, waiting and watch messages: overnight runs, scheduled tasks
+	// and rw watch post here (rw notify --test sends a test message).
 	Webhooks []notify.Webhook `yaml:"webhooks,omitempty"`
 }
 
@@ -319,11 +372,11 @@ func (n NotifyCfg) Redacted() NotifyCfg {
 // limit is reached, an attended task asks whether to go on; unattended
 // tasks (queued, scheduled, --file) and tasks without anyone to ask stop.
 type BudgetCfg struct {
-	TaskTokens int64   `yaml:"task_tokens" json:"task_tokens"`
-	TaskUSD    float64 `yaml:"task_usd" json:"task_usd"`
-	DayTokens  int64   `yaml:"day_tokens" json:"day_tokens"`
-	DayUSD     float64 `yaml:"day_usd" json:"day_usd"`
-	WarnAt     float64 `yaml:"warn_at" json:"warn_at"` // warn once at this share of a limit (0 = no warning)
+	TaskTokens int64   `yaml:"task_tokens" json:"task_tokens"` // fresh tokens one task may use (0 = no limit)
+	TaskUSD    float64 `yaml:"task_usd" json:"task_usd"`       // API-equivalent $ one task may cost (0 = no limit)
+	DayTokens  int64   `yaml:"day_tokens" json:"day_tokens"`   // fresh tokens today's tasks may use (0 = no limit)
+	DayUSD     float64 `yaml:"day_usd" json:"day_usd"`         // API-equivalent $ today's tasks may cost (0 = no limit)
+	WarnAt     float64 `yaml:"warn_at" json:"warn_at"`         // warn once at this share of a limit (0 = no warning)
 	// Team is a day budget several machines share through a folder.
 	Team TeamBudgetCfg `yaml:"team" json:"team"`
 }
@@ -339,9 +392,9 @@ func (b BudgetCfg) Any() bool {
 // combined day total of every machine there before an agent starts. Dir
 // is where rw writes, so a repo file's dir applies only after `rw trust`.
 type TeamBudgetCfg struct {
-	Dir       string  `yaml:"dir" json:"dir"` // "" = off; ~ and environment variables ($X, %X%) are expanded
-	DayTokens int64   `yaml:"day_tokens" json:"day_tokens"`
-	DayUSD    float64 `yaml:"day_usd" json:"day_usd"`
+	Dir       string  `yaml:"dir" json:"dir"`               // "" = off; ~ and environment variables ($X, %X%) are expanded
+	DayTokens int64   `yaml:"day_tokens" json:"day_tokens"` // fresh tokens all machines together may use today (0 = no limit)
+	DayUSD    float64 `yaml:"day_usd" json:"day_usd"`       // API-equivalent $ all machines together may spend today (0 = no limit)
 }
 
 // Limited reports whether the team folder is set and has a limit.
@@ -381,7 +434,7 @@ func (t TeamBudgetCfg) Folder() (string, error) {
 // AGENTS.md...). The summary is built without a model call and is shown
 // as untrusted repo data: none of it becomes a command.
 type ContextCfg struct {
-	RepoDocs      bool `yaml:"repo_docs"`
+	RepoDocs      bool `yaml:"repo_docs"`        // give the planner and the final reviewer the summary
 	RepoDocsMaxKB int  `yaml:"repo_docs_max_kb"` // total size of the summary (0 = 8)
 }
 
@@ -395,22 +448,41 @@ type WatchCfg struct {
 
 // Config is the whole file.
 type Config struct {
-	Roles         map[string]RoleCfg     `yaml:"roles"`
-	Providers     map[string]ProviderCfg `yaml:"providers"`
-	Routing       RoutingCfg             `yaml:"routing"`
-	Orchestrator  OrchestratorCfg        `yaml:"orchestrator"`
-	Verify        VerifyCfg              `yaml:"verify"`
-	Notify        NotifyCfg              `yaml:"notify"`
-	Hooks         HooksCfg               `yaml:"hooks"`
-	MCP           MCPCfg                 `yaml:"mcp,omitempty"`
-	Workspace     WorkspaceCfg           `yaml:"workspace,omitempty"`
-	Sandbox       SandboxCfg             `yaml:"sandbox,omitempty"`
-	Budget        BudgetCfg              `yaml:"budget"`
-	Context       ContextCfg             `yaml:"context"`
-	Watch         WatchCfg               `yaml:"watch"`
-	LimitPatterns []string               `yaml:"limit_patterns"`
-	Theme         string                 `yaml:"theme"`
-	LogDir        string                 `yaml:"log_dir"`
+	// Roles are the jobs in a task (planner, worker, worker_high, explorer,
+	// researcher, reviewer, judge), each with a route on every provider.
+	Roles map[string]RoleCfg `yaml:"roles"`
+	// Providers are the agent CLIs rw drives: codex and claude, and gemini,
+	// deepseek, qwen, ollama and ollama-run (all off until you turn them
+	// on), or any CLI you describe (docs/providers.md).
+	Providers map[string]ProviderCfg `yaml:"providers"`
+	// Routing tunes how each step's role and provider are picked.
+	Routing RoutingCfg `yaml:"routing"`
+	// Orchestrator tunes a task's lifecycle: parallel agents, reviews,
+	// retries, and what keeps your machine responsive.
+	Orchestrator OrchestratorCfg `yaml:"orchestrator"`
+	Verify       VerifyCfg       `yaml:"verify"`
+	Notify       NotifyCfg       `yaml:"notify"`
+	Hooks        HooksCfg        `yaml:"hooks"`
+	// MCP gives the agents MCP servers, passed to both CLIs on every run
+	// of the listed roles. ${VAR} in any value is read from your
+	// environment when the agent starts, so secrets stay out of the file.
+	// `rw doctor` checks them.
+	MCP MCPCfg `yaml:"mcp,omitempty"`
+	// Workspace makes every task of the project a multi-repo task.
+	Workspace WorkspaceCfg `yaml:"workspace,omitempty"`
+	Sandbox   SandboxCfg   `yaml:"sandbox,omitempty"`
+	Budget    BudgetCfg    `yaml:"budget"`
+	Context   ContextCfg   `yaml:"context"`
+	Watch     WatchCfg     `yaml:"watch"`
+	// LimitPatterns are case-insensitive regular expressions: CLI output
+	// that matches one means "usage limit reached".
+	LimitPatterns []string `yaml:"limit_patterns"`
+	// Theme is the TUI's look: auto, unicode or ascii (ascii is picked
+	// automatically on the legacy console).
+	Theme string `yaml:"theme"`
+	// LogDir is where the session logs go ("" = <user config
+	// dir>/relayweft/sessions).
+	LogDir string `yaml:"log_dir"`
 	// Learned are the learned routes in effect, per role (learned.go): set
 	// by Store.ApplyLearned, read by the router for its reasons, never saved.
 	Learned map[string]LearnedRoute `yaml:"-" json:"-"`
