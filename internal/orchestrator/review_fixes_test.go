@@ -287,8 +287,7 @@ func TestBudgetStopDuringReviewKeepsBranch(t *testing.T) {
 		return nil
 	})
 	withApprover(o, ap)
-	done := make(chan TaskResult, 1)
-	go func() { done <- o.Run(context.Background(), longTask) }()
+	done, _ := runBG(t, func(ctx context.Context) TaskResult { return o.Run(ctx, longTask) }, nil)
 	var res TaskResult
 	select {
 	case res = <-done:

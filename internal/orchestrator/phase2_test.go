@@ -449,13 +449,14 @@ func TestTellReachesRunningAgent(t *testing.T) {
 	if err := o.Tell("work", "too early"); err == nil {
 		t.Fatal("told an agent that is not running")
 	}
-	done := make(chan TaskResult)
-	go func() { done <- o.Run(context.Background(), "add a test") }()
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	done, _ := runBG(t, func(ctx context.Context) TaskResult { return o.Run(ctx, "add a test") }, unblock)
 	<-started
 	if err := o.Tell("work", "use table tests"); err != nil {
 		t.Fatal(err)
 	}
-	close(release)
+	unblock()
 	if res := <-done; !res.OK {
 		t.Fatalf("task: %+v", res)
 	}
