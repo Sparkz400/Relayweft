@@ -1,0 +1,72 @@
+name: lint
+
+# Static checks: gofmt, golangci-lint (.golangci.yml) and govulncheck.
+# govulncheck also runs weekly, since a new advisory can hit code that has
+# not changed.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "41 4 * * 1" # weekly, Monday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOLANGCI_LINT_VERSION: "2.14.0"
+  # golangci-lint-2.14.0-linux-amd64.tar.gz, from the release's checksums.txt.
+  GOLANGCI_LINT_SHA256: ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab
+  # Fetched through the Go module proxy, so go.sum's checksum database
+  # verifies it.
+  GOVULNCHECK_VERSION: v1.8.0
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # On Linux: a Windows checkout with core.autocrlf has CRLF files that
+      # gofmt would all report.
+      - name: gofmt
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "::error::These files are not gofmt-formatted (run gofmt -w on them):"
+            echo "$files"
+            gofmt -d $files
+            exit 1
+          fi
+      - name: install golangci-lint
+        run: |
+          f="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64"
+          curl -fsSLo "$RUNNER_TEMP/$f.tar.gz" \
+            "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/$f.tar.gz"
+          echo "${GOLANGCI_LINT_SHA256}  $RUNNER_TEMP/$f.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$f" >> "$GITHUB_PATH"
+      - run: golangci-lint config verify
+      - name: golangci-lint (linux)
+        run: golangci-lint run ./...
+      # Files with build tags for other systems (proc, sandbox, ...).
+      - name: golangci-lint (windows)
+        run: GOOS=windows golangci-lint run ./...
+      - name: golangci-lint (darwin)
+        run: GOOS=darwin golangci-lint run ./...
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # Fails only on a vulnerability rw's code can reach (standard library
+      # included, at go.mod's toolchain version). Ones in unused parts of a
+      # dependency are listed but do not fail.
+      - name: govulncheck
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
