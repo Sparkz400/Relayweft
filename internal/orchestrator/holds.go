@@ -134,7 +134,13 @@ func checkHold(slot string) holdInfo {
 	}
 	r, running := st.Running[h.Step]
 	if !running || !samePath(r.Slot, slot) {
-		i.stale = true // the step ended, or works elsewhere now
+		// The step works elsewhere now, or ended, without this mark being
+		// removed: a step that finishes, sy undo and a clean cancel remove
+		// it. So the step started over without these edits (its resume
+		// lost the worktree to another sy, or a leftover agent ran in it):
+		// they never landed and are saved before the worktree is reused.
+		// Nothing changed there means nothing is saved.
+		i.stale, i.save = true, true
 		return i
 	}
 	i.run = r

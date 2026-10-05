@@ -103,11 +103,22 @@ func lockSlotWait(path string, d time.Duration) (func(), error) {
 			return unlock, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s is in use (another sy)", path)
+			return nil, fmt.Errorf("%s: %w", path, errSlotBusy)
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
 }
+
+// errSlotBusy: another sy has the slot locked.
+var errSlotBusy = errors.New("in use (another sy)")
+
+// claimHeldWait is how long a resume keeps waiting for its own held
+// worktree while another sy has it locked. A sy giving up a full pool's
+// held worktree (evictHeld) keeps the lock while it saves the edits, which
+// can take a while in a big repo, and lets go once it sees that a sy runs
+// the task (the resume holds the task's lock). Giving up sooner would
+// start the step over and leave the edits behind.
+var claimHeldWait = 60 * time.Second
 
 // lockSlot locks a slot and makes sure no leftover agent of a crashed sy is
 // still running in it.
@@ -134,32 +145,15 @@ func acquireSlot(root, commit string) (*slot, error) {
 	}
 	var firstErr error
 	var notes []string
-	evicted := false
-	for i := 0; i < maxPoolSlots; i++ {
-		path := filepath.Join(dir, strconv.Itoa(i))
-		if cap := int(poolCap.Load()); cap > 0 && !evicted && !slotExists(path) && countSlots(dir) >= cap {
-			// The pool is at its size and every slot is busy or held:
-			// before it grows by another full checkout, the oldest held
-			// worktree no sy is using is given up, its edits saved first.
-			evicted = true
-			s, held := evictHeld(root, dir, commit, &notes)
-			if s != nil {
-				return s, nil
-			}
-			if held > 0 {
-				msg := fmt.Sprintf("the worktree pool of this repo is at its size (%d), and %d worktree(s) holding interrupted tasks' edits cannot be given up now (their tasks are running, or their edits could not be saved): adding another one. sy history lists the interrupted tasks; sy resume finishes them, sy clean frees them", cap, held)
-				diag.Logf("pool: %s", msg)
-				notes = append(notes, msg)
-			}
-		}
+	take := func(path string) *slot {
 		if held, _ := holdState(path); held {
 			// It holds an interrupted step's edits. Checked before
 			// locking too: a resume claiming it must not find it locked.
-			continue
+			return nil
 		}
 		unlock, ok := lockSlot(path)
 		if !ok {
-			continue
+			return nil
 		}
 		held, note := slotHeldNote(path)
 		if note != "" {
@@ -167,7 +161,7 @@ func acquireSlot(root, commit string) (*slot, error) {
 		}
 		if held {
 			unlock()
-			continue
+			return nil
 		}
 		if err := prepareSlot(root, path, commit); err != nil {
 			unlock()
@@ -175,10 +169,41 @@ func acquireSlot(root, commit string) (*slot, error) {
 			if firstErr == nil {
 				firstErr = err
 			}
-			continue
+			return nil
 		}
 		touch(path)
-		return &slot{path: path, unlock: unlock, untrack: proc.TrackDir(path, pidFile(path)), notes: notes}, nil
+		return &slot{path: path, unlock: unlock, untrack: proc.TrackDir(path, pidFile(path)), notes: notes}
+	}
+	// First every worktree there is: the pool may have gaps (pruned slots,
+	// one that could not be prepared), and a free slot above a gap must
+	// be found before a held one is given up.
+	for i := 0; i < maxPoolSlots; i++ {
+		if path := filepath.Join(dir, strconv.Itoa(i)); slotExists(path) {
+			if s := take(path); s != nil {
+				return s, nil
+			}
+		}
+	}
+	if cap := int(poolCap.Load()); cap > 0 && countSlots(dir) >= cap {
+		// The pool is at its size and every slot is busy or held: before
+		// it grows by another full checkout, the oldest held worktree no
+		// sy is using is given up, its edits saved first.
+		s, held := evictHeld(root, dir, commit, &notes)
+		if s != nil {
+			return s, nil
+		}
+		if held > 0 {
+			msg := fmt.Sprintf("the worktree pool of this repo is at its size (%d), and %d worktree(s) holding interrupted tasks' edits cannot be given up now (their tasks are running, or their edits could not be saved): adding another one. sy history lists the interrupted tasks; sy resume finishes them, sy clean frees them", cap, held)
+			diag.Logf("pool: %s", msg)
+			notes = append(notes, msg)
+		}
+	}
+	for i := 0; i < maxPoolSlots; i++ {
+		if path := filepath.Join(dir, strconv.Itoa(i)); !slotExists(path) {
+			if s := take(path); s != nil {
+				return s, nil
+			}
+		}
 	}
 	also := ""
 	if len(notes) > 0 {
@@ -196,6 +221,15 @@ func acquireSlot(root, commit string) (*slot, error) {
 // interrupted or cancelled while an agent works keeps its worktree held:
 // without a cap the pool grew by one checkout per such task.
 var poolCap atomic.Int64
+
+// setPoolLimits applies cfg's disk minimum and pool size. Everything that
+// starts agents calls it first (a task, a follow-up, a read-only run, a
+// single-agent run): they are per process, and a follow-up in a fresh sy
+// runs before any task.
+func setPoolLimits(cfg *config.Config) {
+	minFreeDisk.Store(uint64(cfg.Orchestrator.MinFreeDiskGB * (1 << 30)))
+	poolCap.Store(int64(poolSize(cfg)))
+}
 
 // poolSize is the pool size a task with cfg works with: one worktree per
 // thread and one more (the stress test's bound). Best-of candidates keep
@@ -397,7 +431,20 @@ func claimSlot(root, path, commit string, keep *slotHold) (*slot, error) {
 	var notes []string
 	if keep != nil {
 		var err error
-		if unlock, err = lockSlotWait(path, claimWait); err != nil {
+		unlock, err = lockSlotWait(path, claimWait)
+		if errors.Is(err, errSlotBusy) && ownHold(path, *keep) == nil {
+			// Still this run's worktree: another sy is saving its edits
+			// to give it up, and lets go when it sees the task running.
+			began := time.Now()
+			diag.Logf("pool: %s is locked by another sy but still holds this task's edits; waiting for it (up to %s)", path, claimHeldWait)
+			for errors.Is(err, errSlotBusy) && ownHold(path, *keep) == nil && time.Since(began) < claimHeldWait {
+				unlock, err = lockSlotWait(path, time.Second)
+			}
+			if err == nil {
+				notes = append(notes, fmt.Sprintf("waited %s for another sy that had %s locked", (claimWait+time.Since(began)).Round(time.Second), path))
+			}
+		}
+		if err != nil {
 			return nil, err
 		}
 		if err := ownHold(path, *keep); err != nil {

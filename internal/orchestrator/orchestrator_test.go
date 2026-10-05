@@ -386,8 +386,7 @@ func TestBothProvidersLimited(t *testing.T) {
 		return runner.Result{Err: errString("usage limit"), LimitHit: true}
 	})
 	o, _ := newOrc(t, "", set, func(c *config.Config) { c.Orchestrator.ReviewBeforeDone = false })
-	done := make(chan TaskResult)
-	go func() { done <- o.Run(context.Background(), "fix it") }()
+	done, _ := runBG(t, func(ctx context.Context) TaskResult { return o.Run(ctx, "fix it") }, nil)
 	select {
 	case res := <-done:
 		if res.OK {
@@ -404,8 +403,7 @@ func TestKillAgent(t *testing.T) {
 	slow := scriptedCtx{started: started}
 	set[event.Codex], set[event.Claude] = slow, slow
 	o, _ := newOrc(t, "", set, func(c *config.Config) { c.Orchestrator.ReviewBeforeDone = false })
-	done := make(chan TaskResult)
-	go func() { done <- o.Run(context.Background(), "fix it") }()
+	done, _ := runBG(t, func(ctx context.Context) TaskResult { return o.Run(ctx, "fix it") }, nil)
 	<-started
 	if !o.Kill("work") {
 		t.Fatal("kill returned false")
@@ -442,14 +440,14 @@ func TestPauseHoldsDispatch(t *testing.T) {
 	})
 	o, _ := newOrc(t, "", set, func(c *config.Config) { c.Orchestrator.ReviewBeforeDone = false })
 	o.SetPaused(true)
-	done := make(chan TaskResult)
-	go func() { done <- o.Run(context.Background(), "fix it") }()
+	done, _ := runBG(t, func(ctx context.Context) TaskResult { return o.Run(ctx, "fix it") }, func() { o.SetPaused(false) })
 	time.Sleep(200 * time.Millisecond)
 	mu.Lock()
-	if n != 0 {
-		t.Fatalf("%d agents ran while paused", n)
-	}
+	ran := n
 	mu.Unlock()
+	if ran != 0 {
+		t.Fatalf("%d agents ran while paused", ran)
+	}
 	o.SetPaused(false)
 	if res := <-done; !res.OK {
 		t.Fatalf("%+v", res)
@@ -572,9 +570,7 @@ func TestCancelStopsWholeTask(t *testing.T) {
 		c.Orchestrator.MaxThreads = 2
 		c.Orchestrator.ReviewBeforePlan = false
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan TaskResult)
-	go func() { done <- o.Run(ctx, longTask) }()
+	done, cancel := runBG(t, func(ctx context.Context) TaskResult { return o.Run(ctx, longTask) }, nil)
 	<-running // planner
 	<-running // first subtasks running
 	cancel()

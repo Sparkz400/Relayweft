@@ -450,9 +450,9 @@ func TestMergeTreeBase(t *testing.T) {
 // all; or reset to a commit for a follow-up (recreated at the same path if
 // it was deleted).
 func TestClaimSlot(t *testing.T) {
-	old := claimWait
-	claimWait = 300 * time.Millisecond
-	defer func() { claimWait = old }()
+	old, oldHeld := claimWait, claimHeldWait
+	claimWait, claimHeldWait = 300*time.Millisecond, 300*time.Millisecond
+	defer func() { claimWait, claimHeldWait = old, oldHeld }()
 	dir := gitRepo(t)
 	g := git{dir}
 	base, err := g.snapshot("base")

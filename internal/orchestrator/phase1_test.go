@@ -64,18 +64,26 @@ func TestBusyMachineHoldsNewAgents(t *testing.T) {
 		}
 		return sysload.Sample{CPU: 0.2, CPUOK: true}
 	}
-	done := make(chan TaskResult)
-	go func() { done <- o.Run(context.Background(), longTask) }()
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	done, _ := runBG(t, func(ctx context.Context) TaskResult { return o.Run(ctx, longTask) }, unblock)
+	started := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(startedAt)
+	}
+	// The planner and the first agent may take a while on a busy CI
+	// machine: wait for the first, then make sure the second stays held.
+	if !waitFor(30*time.Second, func() bool { return started() >= 1 }) {
+		t.Fatal("the first agent never started")
+	}
 	time.Sleep(300 * time.Millisecond)
-	mu.Lock()
-	n := len(startedAt)
-	mu.Unlock()
-	if n != 1 {
+	if n := started(); n != 1 {
 		t.Fatalf("%d agents running while the machine is busy, want only the first", n)
 	}
 	busy.Store(false)
 	time.Sleep(100 * time.Millisecond)
-	close(release)
+	unblock()
 	if res := <-done; !res.OK {
 		t.Fatalf("%+v", res)
 	}
@@ -113,13 +121,11 @@ func TestBusyMachineGivesUpAfterMaxWait(t *testing.T) {
 		c.Orchestrator.BusyMaxWait = config.Duration(100 * time.Millisecond)
 	})
 	o.opts.Load = func() sysload.Sample { return sysload.Sample{MemFree: 10 << 20, MemOK: true} }
-	done := make(chan TaskResult)
-	go func() { done <- o.Run(context.Background(), longTask) }()
-	deadline := time.Now().Add(3 * time.Second)
-	for n.Load() < 2 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	close(release)
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	done, _ := runBG(t, func(ctx context.Context) TaskResult { return o.Run(ctx, longTask) }, unblock)
+	waitFor(30*time.Second, func() bool { return n.Load() >= 2 })
+	unblock()
 	if n.Load() < 2 {
 		t.Fatal("second agent never started although busy_max_wait passed")
 	}
@@ -561,8 +567,7 @@ func TestPanickingWriterReleasesLock(t *testing.T) {
 		c.Orchestrator.ReviewBeforePlan = false
 		c.Orchestrator.ReviewBeforeDone = false
 	})
-	done := make(chan TaskResult)
-	go func() { done <- o.Run(context.Background(), longTask) }()
+	done, _ := runBG(t, func(ctx context.Context) TaskResult { return o.Run(ctx, longTask) }, nil)
 	select {
 	case res := <-done:
 		if res.OK || ran.Load() != 1 {

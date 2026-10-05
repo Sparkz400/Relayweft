@@ -96,6 +96,7 @@ func (o *Orchestrator) RunRead(ctx context.Context, text, prompt string, kind ro
 	began := time.Now()
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
+	setPoolLimits(cfg)
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg), dir: o.opts.Dir}
 	t.key = o.opts.Log.Session() + "-" + t.id
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})

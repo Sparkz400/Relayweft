@@ -199,9 +199,9 @@ func TestBestOfFeedbackRerunIsTheRunningAgent(t *testing.T) {
 func TestBestOfResumeLandsKeptWork(t *testing.T) {
 	dir := gitRepo(t)
 	rs := stopInReview(t, dir, 0)
-	old := claimWait
-	claimWait = 50 * time.Millisecond
-	defer func() { claimWait = old }()
+	old, oldHeld := claimWait, claimHeldWait
+	claimWait, claimHeldWait = 50*time.Millisecond, 50*time.Millisecond
+	defer func() { claimWait, claimHeldWait = old, oldHeld }()
 	unlock, ok := proc.TryLock(rs.st.Running["work"].Slot + ".lock")
 	if !ok {
 		t.Fatal("lock")

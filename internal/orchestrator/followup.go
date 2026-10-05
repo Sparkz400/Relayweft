@@ -221,6 +221,7 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 	began := time.Now()
 	cfg := o.opts.Store.Get()
 	proc.SetLowPriority(cfg.Orchestrator.LowPriority)
+	setPoolLimits(cfg)
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
 	label := "follow-up to " + s.AgentID
