@@ -63,7 +63,7 @@ func cmdTrust(args []string) error {
 	dirFlag := fs.String("dir", "", "project directory (default current directory)")
 	yes := fs.Bool("yes", false, "trust without asking")
 	revoke := fs.Bool("revoke", false, "stop trusting the file")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	dir, err := absDir(*dirFlag)
 	if err != nil {
 		return err

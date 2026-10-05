@@ -85,6 +85,22 @@ echo "$files" | grep -Eq 'usr/share/(licenses/.*/LICENSE|doc/relayweft/copyright
   fail "no license file in the package"
 echo "ok: README and license"
 
+# Shell completion: every package built from this branch has it; the AUR
+# package once its release has `rw completion` (v0.4.0).
+if [ "$format" != aur ] || rw completion bash >/dev/null 2>&1; then
+  echo "$files" | grep -q 'usr/share/bash-completion/completions/rw$' || fail "no bash completion in the package"
+  echo "$files" | grep -Eq 'usr/share/zsh/(site-functions|vendor-completions)/_rw$' || fail "no zsh completion in the package"
+  echo "$files" | grep -q 'usr/share/fish/vendor_completions.d/rw.fish$' || fail "no fish completion in the package"
+  if command -v bash >/dev/null 2>&1; then
+    # The installed script in bash, as readline calls it for `rw compl<Tab>`.
+    got="$(bash --norc -c '. /usr/share/bash-completion/completions/rw
+      COMP_LINE="rw compl"; COMP_POINT=8; COMP_WORDS=(rw compl); COMP_CWORD=1
+      _rw_complete; echo "${COMPREPLY[*]}"')"
+    [ "$got" = completion ] || fail "bash completion of 'rw compl' gave '$got'"
+  fi
+  echo "ok: shell completion"
+fi
+
 if [ "$format" != aur ]; then
   out="$(rw update --check)" || fail "rw update --check failed: $out"
   echo "$out"

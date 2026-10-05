@@ -53,9 +53,9 @@ type SandboxCfg struct {
 
 // SandboxMount is one extra mount.
 type SandboxMount struct {
-	Path     string `yaml:"path"`             // on this machine; ~ is your home
-	Target   string `yaml:"target,omitempty"` // in the container (default: the same place under its home, for paths under yours)
-	Writable bool   `yaml:"writable,omitempty"`
+	Path     string `yaml:"path"`               // on this machine; ~ is your home
+	Target   string `yaml:"target,omitempty"`   // in the container (default: the same place under its home, for paths under yours)
+	Writable bool   `yaml:"writable,omitempty"` // mounted read-write
 }
 
 // On reports whether the sandbox runs anything.

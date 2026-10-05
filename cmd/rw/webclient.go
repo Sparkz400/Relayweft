@@ -48,11 +48,11 @@ func serveClient(ctx context.Context, w *webServer, in io.Reader, out io.Writer)
 			switch cmd := strings.TrimSpace(sc.Text()); cmd {
 			case "":
 			case "link":
-				emit(map[string]string{"link": w.srv.NewLink()})
+				_ = emit(map[string]string{"link": w.srv.NewLink()})
 			case "bootstrap":
-				emit(map[string]string{"bootstrap": w.srv.NewBootstrap()})
+				_ = emit(map[string]string{"bootstrap": w.srv.NewBootstrap()})
 			default:
-				emit(map[string]string{"error": fmt.Sprintf("unknown command %q (want link or bootstrap)", oneLine(cmd, 40))})
+				_ = emit(map[string]string{"error": fmt.Sprintf("unknown command %q (want link or bootstrap)", oneLine(cmd, 40))})
 			}
 		}
 	}()

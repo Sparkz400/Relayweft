@@ -258,5 +258,5 @@ func (g git) partialCommitHunks(base, commit string, paths []string, patches map
 	if err != nil {
 		return "", err
 	}
-	return g.commitTree("commit-tree", strings.TrimSpace(tree), "-p", base, "-m", msg)
+	return g.commitTree(strings.TrimSpace(tree), []string{base}, msg)
 }

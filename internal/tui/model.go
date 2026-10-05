@@ -5,7 +5,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -125,7 +124,6 @@ type pulse struct {
 	join   bool
 	target string // agent id
 	t      float64
-	color  string
 }
 
 type focusArea int
@@ -914,11 +912,4 @@ func (m *Model) tryQuit() (tea.Model, tea.Cmd) {
 		m.addLog(logLine{kind: event.Log, text: "note: model changes were not saved (/save)"})
 	}
 	return m, tea.Quit
-}
-
-func shortPath(p string) string {
-	if p == "" {
-		return ""
-	}
-	return filepath.Base(p)
 }

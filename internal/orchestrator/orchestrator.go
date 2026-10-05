@@ -699,7 +699,8 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		status = "cancelled"
 	}
 	// after_task runs even after a cancel, so give it a context of its own.
-	o.runHooks(context.WithoutCancel(ctx), t, "after_task", cfg.Hooks.AfterTask, map[string]string{"RW_STATUS": status, "RW_SUMMARY": res.Summary})
+	// runHooks shows and logs a failure itself.
+	_ = o.runHooks(context.WithoutCancel(ctx), t, "after_task", cfg.Hooks.AfterTask, map[string]string{"RW_STATUS": status, "RW_SUMMARY": res.Summary})
 	if res.OK && t.useGit && o.opts.Bench == "" && t.cfg.Orchestrator.Handoff {
 		addRepoNote(t.root, text, res.Summary, t.changedFiles())
 		for _, r := range t.repos {
@@ -1517,7 +1518,7 @@ func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask
 		r.ok, r.err = false, "merge conflict: "+reason
 		return r
 	}
-	merged, err := g.commitTree("commit-tree", tree, "-p", rp.snapshot, "-p", commit, "-m", "relayweft: merge "+st.ID)
+	merged, err := g.commitTree(tree, []string{rp.snapshot, commit}, "relayweft: merge "+st.ID)
 	if err != nil {
 		o.mergeEvent(t, st.ID, false, err.Error())
 		r.ok, r.err = false, err.Error()
@@ -1659,10 +1660,6 @@ func refPart(s string) string {
 		p = "x"
 	}
 	return p
-}
-
-func (o *Orchestrator) keepBranch(t *task, stepID, commit string) string {
-	return o.keepBranchIn(t, t, stepID, commit)
 }
 
 func (o *Orchestrator) mergeEvent(t *task, stepID string, ok bool, text string) {

@@ -116,7 +116,7 @@ func cmdSchedule(args []string) error {
 	daily := fs.Bool("daily", false, "every day instead of once")
 	dirFlag := fs.String("dir", "", "project directory (default current directory)")
 	goos := fs.String("os", runtime.GOOS, "print for this OS: windows, darwin or linux")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	dir, err := absDir(*dirFlag)
 	if err != nil {
 		return err

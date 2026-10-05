@@ -22,22 +22,24 @@ import (
 
 // MCPServer is one MCP server: a local command (stdio) or a URL (HTTP/SSE).
 type MCPServer struct {
-	Command string            `yaml:"command,omitempty"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	URL     string            `yaml:"url,omitempty"`
+	Command string            `yaml:"command,omitempty"` // the server program (a stdio server)
+	Args    []string          `yaml:"args,omitempty"`    // its arguments
+	Env     map[string]string `yaml:"env,omitempty"`     // added to its environment; use ${VAR} for secrets
+	URL     string            `yaml:"url,omitempty"`     // instead of command: the server's URL
 	// Type is the transport of a url server: http (default) or sse.
 	// Codex only speaks streamable HTTP, so sse servers go to Claude only.
 	Type    string            `yaml:"type,omitempty"`
-	Headers map[string]string `yaml:"headers,omitempty"`
+	Headers map[string]string `yaml:"headers,omitempty"` // HTTP headers for a url server; use ${VAR} for secrets
 	// Providers limits the server to codex or claude (empty = both).
 	Providers []string `yaml:"providers,omitempty"`
 }
 
 // MCPCfg is the mcp section.
 type MCPCfg struct {
+	// Servers are the MCP servers by name (letters, digits, - and _).
 	Servers map[string]MCPServer `yaml:"servers,omitempty"`
-	// Roles get the servers; empty means DefaultMCPRoles.
+	// Roles get the servers; empty means worker, worker_high, explorer and
+	// researcher.
 	Roles []string `yaml:"roles,omitempty"`
 	// AllowTools pre-approves the servers' tools for Claude (mcp__<server>),
 	// also for read-only roles: without it a headless Claude cannot call

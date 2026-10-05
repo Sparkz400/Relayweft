@@ -34,8 +34,8 @@ Without a task, the newest task that is not undone yet is used.
 	// Accept flags after the task key too (rw undo <key> --yes).
 	var key string
 	rest := args
-	for len(rest) > 0 {
-		fs.Parse(rest)
+	for { // parse at least once, also without arguments
+		parseFlags(fs, rest)
 		if fs.NArg() == 0 {
 			break
 		}

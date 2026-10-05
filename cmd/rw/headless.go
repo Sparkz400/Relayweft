@@ -97,7 +97,7 @@ func (h *headless) print(e event.Event, quiet bool) {
 	printEvent(e, quiet)
 	if e.Kind == event.ProviderState && !e.Until.IsZero() {
 		if h.cfg.Notify.Enabled {
-			go notify.Send("Relayweft: "+e.Provider+" limit", e.Text)
+			go notify.Send("Relayweft: "+e.Provider+" limit", e.Text) //nolint:errcheck // a desktop notification is best effort
 		}
 		h.webhook(notify.EventLimit, "Relayweft: "+e.Provider+" hit its limit", e.Text)
 	}
@@ -171,7 +171,7 @@ func cmdRun(args []string) error {
 	iss := registerIssueFlags(fs)
 	var sf scheduleFlags
 	sf.register(fs)
-	fs.Parse(args)
+	parseFlags(fs, args)
 	var tasks []string
 	if iss.active() {
 		if *file != "" {
@@ -363,7 +363,7 @@ func cmdHistory(args []string) error {
 	n := fs.Int("n", 20, "how many")
 	dirFlag := fs.String("dir", "", "project directory (default current directory)")
 	asJSON := fs.Bool("json", false, "print the tasks as JSON (newest first), for scripts and CI")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	dir := ""
 	if !*all {
 		d, err := absDir(*dirFlag)
@@ -464,7 +464,7 @@ func cmdResume(args []string) error {
 	quiet := fs.Bool("quiet", false, "only print routing, results and errors")
 	approve := fs.Bool("approve", false, "ask per change when orchestrator.review_changes is on")
 	force := fs.Bool("force", false, "resume a task that finished or failed (re-runs its unfinished steps)")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	var st *orchestrator.TaskState
 	if id := fs.Arg(0); id != "" {
 		s, err := orchestrator.LoadTask(id)

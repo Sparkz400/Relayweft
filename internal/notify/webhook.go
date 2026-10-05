@@ -47,10 +47,10 @@ var Kinds = []string{KindSlack, KindDiscord, KindNtfy, KindJSON}
 // are filled in from the environment when a message is sent, so the
 // secret does not have to be in the config file.
 type Webhook struct {
-	URL    string   `yaml:"url" json:"url"`
-	Kind   string   `yaml:"kind,omitempty" json:"kind,omitempty"`   // "" = from the URL's host
-	Token  string   `yaml:"token,omitempty" json:"token,omitempty"` // ntfy access token, or json's bearer token
-	Events []string `yaml:"events,omitempty,flow" json:"events,omitempty"`
+	URL    string   `yaml:"url" json:"url"`                                // the webhook; ${VAR} is read from your environment
+	Kind   string   `yaml:"kind,omitempty" json:"kind,omitempty"`          // "" = from the URL's host
+	Token  string   `yaml:"token,omitempty" json:"token,omitempty"`        // ntfy access token, or json's bearer token
+	Events []string `yaml:"events,omitempty,flow" json:"events,omitempty"` // done, failed, limit, waiting, watch (default: all)
 }
 
 // Message is one notification.
@@ -219,7 +219,7 @@ func Post(ctx context.Context, w Webhook, m Message) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)) // drain for connection reuse
 		return nil
 	}
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))

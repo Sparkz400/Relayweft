@@ -52,7 +52,7 @@ func NewCheckout(dir, name, commit string) (*Checkout, error) {
 	}
 	top, err := repoRoot(path)
 	if err != nil {
-		removeSlot(git{root}.commonDir(), path)
+		_ = removeSlot(git{root}.commonDir(), path)
 		return nil, err
 	}
 	return &Checkout{Dir: top, root: root}, nil

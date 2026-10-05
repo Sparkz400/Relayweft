@@ -275,7 +275,7 @@ comments only reach the agents as quoted data.
 `)
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
@@ -669,7 +669,7 @@ func (w *watcher) round(ctx context.Context, e watchEntry, client forge.Client, 
 		return e
 	}
 	fetchRef := "refs/relayweft/watch/" + slugify(fmt.Sprintf("%s-%s-%d", e.Owner, e.Name, e.Number), 60)
-	defer prGit(e.Root, nil, nil, "update-ref", "-d", fetchRef)
+	defer prGit(e.Root, nil, nil, "update-ref", "-d", fetchRef) //nolint:errcheck // cleanup; a leftover ref is harmless
 	head, err := w.fetch(e.Root, e.Branch, fetchRef)
 	if err != nil {
 		w.note(&e, "skipped: %v", err)
@@ -684,7 +684,7 @@ func (w *watcher) round(ctx context.Context, e watchEntry, client forge.Client, 
 		w.note(&e, "skipped: checkout of %s: %v", short(head), err)
 		return e
 	}
-	defer co.Remove()
+	defer co.Remove() //nolint:errcheck // cleanup; NewCheckout replaces a leftover
 
 	fmt.Fprintf(w.out, "%s: follow-up round %d of %d for %d item(s) on %s at %s\n", e, e.Rounds+1, cfg.Watch.MaxRounds, len(items), e.Branch, short(head))
 	log, err := sessionlog.Open(cfg.SessionDir(), co.Dir)
@@ -834,7 +834,7 @@ var errBranchMoved = errors.New("the branch moved on the remote since rw read it
 // is still an ancestor of it, and never forced.
 func (w *watcher) push(e watchEntry, commit string) error {
 	ref := "refs/relayweft/watch/" + slugify(fmt.Sprintf("%s-%s-%d-push", e.Owner, e.Name, e.Number), 70)
-	defer prGit(e.Root, nil, nil, "update-ref", "-d", ref)
+	defer prGit(e.Root, nil, nil, "update-ref", "-d", ref) //nolint:errcheck // cleanup; a leftover ref is harmless
 	now, err := w.fetch(e.Root, e.Branch, ref)
 	if err != nil {
 		return err

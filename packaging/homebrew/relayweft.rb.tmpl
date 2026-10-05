@@ -32,6 +32,8 @@ class Relayweft < Formula
     os = OS.mac? ? "darwin" : "linux"
     arch = Hardware::CPU.arm? ? "arm64" : "amd64"
     bin.install "rw-#{os}-#{arch}" => "rw"
+    # `rw completion` arrived in v0.4.0.
+    generate_completions_from_executable(bin/"rw", "completion") if version >= "0.4.0"
   end
 
   def caveats

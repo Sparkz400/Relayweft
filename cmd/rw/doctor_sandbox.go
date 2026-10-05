@@ -106,12 +106,10 @@ func doctorSandboxedCLI(w io.Writer, bin, p string, c *config.Config, s config.S
 		desc += "; network off: the CLI cannot reach its model API"
 	}
 	fmt.Fprintf(w, "%s   %-9s %s in the image  %s\n", ok(true), p, cli, stMuted.Render(desc))
-	var set, unset []string
+	var set []string
 	for _, n := range s.Env {
 		if v, found := os.LookupEnv(n); found && v != "" {
 			set = append(set, n)
-		} else {
-			unset = append(unset, n)
 		}
 	}
 	if pe, _ := c.Providers[p].EnvFor(nil); len(pe) > 0 {
