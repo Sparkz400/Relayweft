@@ -150,13 +150,14 @@ class SwitchyardUiTest {
             review.keyboard { space() }
             until("the hunk unticked") { review.texts().any { it.contains("1 of 2 file(s)") || it.contains("1 partly") } }
             // The diff of notes.txt, with the rejected hunk struck through.
-            review.getAllTexts { it.text == Fake.NOTES }.first().doubleClick()
-            Thread.sleep(2_500)
+            review.getAllTexts { it.text == "hunk 2" }.first().doubleClick()
+            until("the diff of notes.txt") { x("//div[@class='IdeFrameImpl']").hasSubtext("${Fake.NOTES} — edit review") }
+            Thread.sleep(2_000)
             shot(frame, "4-diff-review")
 
             // Apply from the Review tab's toolbar.
-            review.click()
-            byName("Apply Selected Changes").click()
+            // The bar above the diff: "Apply selected changes".
+            x("//div[@visible_text='Apply selected changes']").click()
             until("the task to finish", 120_000) { agents.texts().any { it.contains("last task done") } }
             shot(frame, "5-done")
 
