@@ -261,28 +261,83 @@ func packageManager(target, goarch string) (pkgManager, bool) {
 	}
 	// The release's package assets are named relayweft-linux-<arch>.<ext>.
 	asset := func(ext string) string { return "relayweft-linux-" + goarch + "." + ext }
+	// Without the Relayweft repository: the release's package, and how to
+	// add the repository.
+	download := func(ext, install, repo string) string {
+		return "download " + asset(ext) + " from the release and run `" + install + " ./" + asset(ext) +
+			"` (or add the Relayweft " + repo + " repository once: " + repoSetupURL + ")"
+	}
 	if out, err := updateOwnerQuery("dpkg-query", "-S", p); err == nil {
 		for _, line := range strings.Split(out, "\n") {
 			pkg, path, ok := strings.Cut(strings.TrimSpace(line), ": ")
 			if ok && path == p && debOwners.MatchString(pkg) {
-				return pkgManager{"a .deb package (" + pkg + ")",
-					"download " + asset("deb") + " from the release and run `sudo apt install ./" + asset("deb") + "`"}, true
+				how := download("deb", "sudo apt install", "apt")
+				if anyFile(aptRepoFiles) {
+					how = "run `sudo apt update && sudo apt install --only-upgrade relayweft`"
+				}
+				return pkgManager{"a .deb package (" + pkg + ")", how}, true
 			}
 		}
 	}
 	if pkg, ok := ownerName("rpm", "-qf", "--queryformat", "%{NAME}\n", p); ok {
-		return pkgManager{"an .rpm package (" + pkg + ")",
-			"download " + asset("rpm") + " from the release and run `sudo dnf install ./" + asset("rpm") + "`"}, true
+		how := download("rpm", "sudo dnf install", "rpm")
+		switch {
+		case anyFile(dnfRepoFiles):
+			how = "run `sudo dnf upgrade relayweft`"
+		case anyFile(zypperRepoFiles):
+			how = "run `sudo zypper update relayweft`"
+		}
+		return pkgManager{"an .rpm package (" + pkg + ")", how}, true
 	}
 	if pkg, ok := ownerName("pacman", "-Qqo", p); ok {
 		return pkgManager{"pacman (" + pkg + ")",
 			"update the " + pkg + " package with your AUR helper (for example `yay -Syu`) or makepkg"}, true
 	}
 	if pkg, ok := ownerName("apk", "info", "-q", "--who-owns", p); ok {
-		return pkgManager{"an .apk package (" + pkg + ")",
-			"download " + asset("apk") + " from the release and run `sudo apk add --allow-untrusted ./" + asset("apk") + "`"}, true
+		how := download("apk", "sudo apk add --allow-untrusted", "apk")
+		if apkRepoSetUp() {
+			how = "run `sudo apk update && sudo apk upgrade relayweft`"
+		}
+		return pkgManager{"an .apk package (" + pkg + ")", how}, true
 	}
 	return pkgManager{}, false
+}
+
+// The files the one-time setup of the Relayweft apt, rpm and apk
+// repositories writes (packaging/README.md). Tests point them elsewhere.
+var (
+	aptRepoFiles    = []string{"/etc/apt/sources.list.d/relayweft.list", "/etc/apt/sources.list.d/relayweft.sources"}
+	dnfRepoFiles    = []string{"/etc/yum.repos.d/relayweft.repo"}
+	zypperRepoFiles = []string{"/etc/zypp/repos.d/relayweft.repo"}
+	apkRepositories = "/etc/apk/repositories"
+)
+
+// repoSetupURL documents the one-time repository setup.
+const repoSetupURL = "https://github.com/sparkz400/relayweft/blob/main/packaging/README.md#apt-dnf-and-apk-repositories"
+
+func anyFile(paths []string) bool {
+	for _, p := range paths {
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
+}
+
+// apkRepoSetUp reports whether /etc/apk/repositories has the Relayweft
+// repository (a line that is not a comment and names relayweft).
+func apkRepoSetUp() bool {
+	data, err := os.ReadFile(apkRepositories)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "#") && strings.Contains(strings.ToLower(line), "relayweft") {
+			return true
+		}
+	}
+	return false
 }
 
 // ownerName runs a query that prints only the owning package's name, and
