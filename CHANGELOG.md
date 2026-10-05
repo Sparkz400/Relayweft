@@ -69,6 +69,7 @@ and the README section "Upgrading from Switchyard (`sy`)".
 
 ### Security
 
+- Release binaries are built with Go 1.26.8, which fixes 23 standard-library vulnerabilities that rw reaches with Go 1.26.0 (in `net/http`, `html/template`, `crypto/x509`, `net/url` and `os`). ([#46](https://github.com/Sparkz400/Relayweft/pull/46))
 - Every git command rw runs on your machine in a folder an agent wrote to runs with `core.fsmonitor=false` and without submodule recursion, so files an agent writes cannot make git run code. ([#35](https://github.com/Sparkz400/Relayweft/pull/35))
 - In a Forgejo or Gitea Actions job, the runner's `GITHUB_TOKEN` (the job's own token) is never sent to GitHub, and `GITEA_RUNNER_REGISTRATION_TOKEN` is kept from agents. ([#24](https://github.com/Sparkz400/Relayweft/pull/24))
 - An untrusted `./relayweft.yaml` or repo `.relayweft.yaml` may lower `routing.best_of` and make the sandbox stricter, but needs `rw trust` to raise or loosen them. ([#34](https://github.com/Sparkz400/Relayweft/pull/34), [#35](https://github.com/Sparkz400/Relayweft/pull/35))
