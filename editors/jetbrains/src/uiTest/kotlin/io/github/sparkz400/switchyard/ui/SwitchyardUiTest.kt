@@ -159,15 +159,17 @@ class SwitchyardUiTest {
             Thread.sleep(2_000)
             shot(frame, "4-diff-review")
 
-            // Apply from the Review tab's toolbar.
             // The bar above the diff: "Apply selected changes".
             x("//div[@visible_text='Apply selected changes']").click()
-            until("the task to finish", 120_000) { agents.texts().any { it.contains("last task done") } }
-            shot(frame, "5-done")
-
             val want = ItEnv.ORIG_NOTES.toMutableList()
             want[Fake.EDITED_LINES[0] - 1] = Fake.edited(Fake.EDITED_LINES[0])
-            assertEquals(want.joinToString("\n") + "\n", env.readRepo(Fake.NOTES), "only the accepted hunk is in notes.txt")
+            val wantText = want.joinToString("\n") + "\n"
+            until("the accepted hunk to land", 120_000) { env.readRepo(Fake.NOTES) == wantText }
+            // Back to the Agents tab: the task is done.
+            x("//div[@visible_text='Agents']").click()
+            until("the task to finish", 120_000) { agents.texts().any { it.contains("last task done") } }
+            shot(frame, "5-done")
+            assertEquals(wantText, env.readRepo(Fake.NOTES), "only the accepted hunk is in notes.txt")
             assertEquals(Fake.EDITED_PLAN_TEXT + "\n", env.readRepo("added.txt"), "the plan edited in the dialog reached the agent")
 
             // Stop from the toolbar: sy exits.
