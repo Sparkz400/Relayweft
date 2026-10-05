@@ -10,7 +10,17 @@ class LocateEnv(
     val isFile: (String) -> Boolean,
 )
 
-class Located(val path: String?, /** Where it looked, for the error message. */ val tried: List<String>)
+class Located(
+    val path: String?,
+    /** Where it looked, for the error message. */
+    val tried: List<String>,
+    /** Why the configured path was refused, if it was. */
+    val problem: String? = null,
+)
+
+/** Whether p is an absolute path on the platform (a relative one would be resolved against some working folder). */
+fun isAbsolutePath(p: String, windows: Boolean): Boolean =
+    if (windows) Regex("""^([A-Za-z]:[\\/]|\\\\)""").containsMatchIn(p) else p.startsWith("/")
 
 private fun join(windows: Boolean, dir: String, name: String): String {
     val sep = if (windows) '\\' else '/'
@@ -40,6 +50,9 @@ fun locateSy(configured: String, le: LocateEnv): Located {
 
     val want = expand(configured.trim())
     if (want.isNotEmpty() && (want.contains('/') || want.contains('\\'))) {
+        // A relative path would be checked against the IDE's folder but run
+        // from the project's: a repository could then provide its own "sy".
+        if (!isAbsolutePath(want, win)) return Located(null, tried, "the path must be absolute (it is relative: $want)")
         for (n in names(want)) if (check(n)) return Located(n, tried)
         return Located(null, tried)
     }
@@ -47,7 +60,9 @@ fun locateSy(configured: String, le: LocateEnv): Located {
     val pathVar = envVar(le.env, "PATH") ?: ""
     for (dir in pathVar.split(if (win) ';' else ':')) {
         val d = dir.trim().removeSurrounding("\"")
-        if (d.isEmpty()) continue
+        // Relative PATH entries ("." or "bin") would resolve against the
+        // project folder sy is started in: skip them.
+        if (d.isEmpty() || !isAbsolutePath(d, win)) continue
         for (n in names(base)) {
             val p = join(win, d, n)
             if (check(p)) return Located(p, tried)
@@ -65,7 +80,7 @@ fun locateSy(configured: String, le: LocateEnv): Located {
             extra.add("/opt/homebrew/bin")
             extra.add(join(false, join(false, le.home, ".local"), "bin"))
         }
-        for (d in extra) {
+        for (d in extra.filter { isAbsolutePath(it, win) }) {
             for (n in names("sy")) {
                 val p = join(win, d, n)
                 if (check(p)) return Located(p, tried)

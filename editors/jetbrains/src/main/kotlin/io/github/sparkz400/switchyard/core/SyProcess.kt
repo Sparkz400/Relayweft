@@ -21,6 +21,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class SyNotFoundException(message: String) : IOException(message)
 
+/** The start was cancelled (Stop while sy started); sy was stopped. */
+class StartCancelledException : IOException("the start was cancelled")
+
 class SyProcess private constructor(
     private val process: Process,
     val hello: ClientHello,
@@ -136,8 +139,12 @@ class SyProcess private constructor(
             env: Map<String, String>? = null,
             helloTimeoutMs: Long = HELLO_TIMEOUT_MS,
             windows: Boolean = System.getProperty("os.name").startsWith("Windows"),
+            /** Polled while waiting for the hello: true stops sy and throws (Stop pressed while it starts). */
+            cancelled: () -> Boolean = { false },
         ): SyProcess {
-            val cmd = listOf(exe) + if (windows) args.map { windowsArg(it) } else args
+            // Only an absolute path: a relative one would be resolved against cwd (the project).
+            if (!File(exe).isAbsolute) throw IOException("could not start $exe: the sy path must be absolute")
+            val cmd = listOf(File(exe).absolutePath) + if (windows) args.map { windowsArg(it) } else args
             val pb = ProcessBuilder(cmd).directory(cwd)
             if (env != null) {
                 pb.environment().clear()
@@ -202,13 +209,19 @@ class SyProcess private constructor(
                 }
                 throw e
             }
-            val line = try {
-                hello.get(helloTimeoutMs, TimeUnit.MILLISECONDS)
-            } catch (e: TimeoutException) {
-                failWith(IOException("sy did not start within ${helloTimeoutMs / 1000} seconds"))
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                failWith(IOException("interrupted while starting sy"))
+            val deadline = System.currentTimeMillis() + helloTimeoutMs
+            var line: String? = null
+            while (line == null) {
+                if (cancelled()) failWith(StartCancelledException())
+                line = try {
+                    hello.get(minOf(200L, maxOf(1L, deadline - System.currentTimeMillis())), TimeUnit.MILLISECONDS)
+                } catch (e: TimeoutException) {
+                    if (System.currentTimeMillis() >= deadline) failWith(IOException("sy did not start within ${helloTimeoutMs / 1000} seconds"))
+                    null
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    failWith(IOException("interrupted while starting sy"))
+                }
             }
             if (line.isEmpty()) {
                 p.waitFor(5, TimeUnit.SECONDS)

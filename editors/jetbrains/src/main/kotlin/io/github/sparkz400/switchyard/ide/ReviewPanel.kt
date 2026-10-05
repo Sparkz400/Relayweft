@@ -181,7 +181,7 @@ class ReviewPanel(private val project: Project, private val svc: SyService) : Si
                     t.append("${r.cv.stepId}: ${oneLine(r.cv.title, 80)}", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                     t.append("  round ${r.cv.round} · ${selectionSummary(r.files, r.sel)}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     t.icon = AllIcons.Actions.Diff
-                    t.toolTipText = Notify.escape(r.cv.summary.ifEmpty { r.cv.title })
+                    t.toolTipText = "<html>" + Notify.escape(r.cv.summary.ifEmpty { r.cv.title }) + "</html>"
                 }
                 is ReviewItem.File -> {
                     val f = r.files[item.file]

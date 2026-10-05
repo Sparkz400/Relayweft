@@ -17,6 +17,7 @@ import io.github.sparkz400.switchyard.core.TaskModel
 import io.github.sparkz400.switchyard.core.AgentStatus
 import io.github.sparkz400.switchyard.core.clientArgs
 import io.github.sparkz400.switchyard.core.decisionBody
+import io.github.sparkz400.switchyard.core.isAbsolutePath
 import io.github.sparkz400.switchyard.core.locateSy
 import io.github.sparkz400.switchyard.core.parseFollowUp
 import io.github.sparkz400.switchyard.core.parseHello
@@ -152,6 +153,39 @@ class UnitsTest {
         assertNull(locateSy("/opt/sy", le).path)
         files.add("/usr/bin/sy")
         assertEquals("/usr/bin/sy", locateSy("", le).path)
+    }
+
+    @Test
+    fun relativePathsNeverPickTheProgram() {
+        // Review fix: a relative path (configured, or a PATH entry like "."
+        // or "bin") was checked against the IDE's folder but run from the
+        // project's, so a repository could ship its own "sy".
+        val files = hashSetOf("bin/sy", "./sy", "/usr/local/bin/sy", "bin\\sy.exe", "C:\\tools\\sy.exe")
+        val unix = LocateEnv(false, mapOf("PATH" to ".:bin:/usr/local/bin"), "/home/me") { it in files }
+        val r = locateSy("", unix)
+        assertEquals("/usr/local/bin/sy", r.path)
+        assertFalse(r.tried.any { !it.startsWith("/") })
+        val rel = locateSy("bin/sy", unix)
+        assertNull(rel.path)
+        assertTrue(rel.problem!!.contains("absolute"))
+        assertNull(locateSy("./sy", unix).path)
+        val win = LocateEnv(true, mapOf("Path" to "bin;.;C:\\tools"), "C:\\Users\\me") { it in files }
+        assertEquals("C:\\tools\\sy.exe", locateSy("", win).path)
+        assertNull(locateSy("bin\\sy", win).path)
+        assertTrue(isAbsolutePath("\\\\server\\share\\sy.exe", true))
+        assertTrue(isAbsolutePath("D:/sy/sy.exe", true))
+        assertFalse(isAbsolutePath("D:sy.exe", true))
+        assertFalse(isAbsolutePath("sy/sy", false))
+    }
+
+    @Test
+    fun agentTextIsNeverReadAsHtmlByALabel() {
+        // Review fix: a file named "<html>..." in a change set rendered as
+        // HTML in the bar above the diff.
+        val evil = "<html><b>Approved by your admin</b><object classid='x'>"
+        assertFalse(javax.swing.plaf.basic.BasicHTML.isHTMLString(io.github.sparkz400.switchyard.ide.plainText(evil)))
+        assertEquals("notes.txt", io.github.sparkz400.switchyard.ide.plainText("notes.txt"))
+        assertFalse(javax.swing.plaf.basic.BasicHTML.isHTMLString(io.github.sparkz400.switchyard.ide.Notify.escape(evil)))
     }
 
     @Test

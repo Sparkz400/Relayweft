@@ -17,6 +17,9 @@ import io.github.sparkz400.switchyard.ide.ReviewPanel
 import io.github.sparkz400.switchyard.ide.SyService
 import io.github.sparkz400.switchyard.ide.SySettings
 import io.github.sparkz400.switchyard.it.ItEnv.Companion.ORIG_NOTES
+import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.vfs.LocalFileSystem
 import java.io.File
 import java.util.Collections
 import com.intellij.util.ui.tree.TreeUtil
@@ -94,6 +97,30 @@ class SyServiceIdeTest : HeavyPlatformTestCase() {
         }
         walk(p.tree.model.root as DefaultMutableTreeNode)
         return out
+    }
+
+    /** Review fix: Undo ran `sy undo` (and so git) in a project opened in safe mode. */
+    fun testAnUntrustedProjectRunsNoSy() {
+        svc.trustCheck = { false }
+        val before = env.syProcesses().size
+        svc.undoLastTask()
+        svc.start()
+        PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+        Thread.sleep(1_000)
+        PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+        assertFalse(svc.running || svc.starting)
+        assertEquals(before, env.syProcesses().size)
+        assertEquals(2, notes.count { it.content.contains("not trusted") })
+        assertFalse(svc.log.any { it.contains("sy undo") || it.startsWith("starting:") })
+        assertFalse(svc.trusted())
+        val ctx = com.intellij.openapi.actionSystem.impl.SimpleDataContext.getProjectContext(project)
+        val ev = com.intellij.openapi.actionSystem.AnActionEvent.createEvent(ctx, null, "test", com.intellij.openapi.actionSystem.ActionUiKind.NONE, null)
+        io.github.sparkz400.switchyard.ide.UndoLastTaskAction().update(ev)
+        assertFalse("Undo must be off in an untrusted project", ev.presentation.isEnabled)
+        svc.trustCheck = { true }
+        io.github.sparkz400.switchyard.ide.UndoLastTaskAction().update(ev)
+        assertTrue(ev.presentation.isEnabled)
+        env.cleanup()
     }
 
     fun testTheWholeFlowInAHeadlessIde() {
@@ -181,8 +208,22 @@ class SyServiceIdeTest : HeavyPlatformTestCase() {
             own?.let { EditorFactory.getInstance().releaseEditor(it) }
         }
 
+        // Unsaved edits in the IDE (review fix): Apply saves them first, so sy
+        // sees them and the IDE gets no "file changed on disk" conflict; the
+        // IDE's copy of notes.txt shows sy's result afterwards (VFS refresh).
+        val fs = LocalFileSystem.getInstance()
+        val readme = fs.refreshAndFindFileByPath(File(env.repo, "README.md").path)!!
+        val notesVf = fs.refreshAndFindFileByPath(File(env.repo, Fake.NOTES).path)!!
+        val fdm = FileDocumentManager.getInstance()
+        val readmeDoc = fdm.getDocument(readme)!!
+        val notesDoc = fdm.getDocument(notesVf)!!
+        assertEquals(ORIG_NOTES.joinToString("\n") + "\n", notesDoc.text)
+        WriteCommandAction.runWriteCommandAction(project) { readmeDoc.setText("# edited in the IDE, not saved\n") }
+        assertTrue(fdm.isDocumentUnsaved(readmeDoc))
+
         // Apply: only the accepted hunk lands.
         svc.review.submit(id)
+        assertEquals("# edited in the IDE, not saved\n", env.readRepo("README.md"))
         pumpUntil("the review to end") { svc.review.pending.isEmpty() }
         val st = pumpUntil("the task to finish", 120_000) { svc.model.state?.takeIf { !it.running && it.last != null } }
         assertTrue("task failed: " + st.last?.text, st.last?.ok == true)
@@ -194,6 +235,7 @@ class SyServiceIdeTest : HeavyPlatformTestCase() {
         // Answered questions do not stay on screen.
         assertTrue(notes.filter { it.content.contains("Review the changes of edit") || it.content.contains("Approve the plan") }.all { it.isExpired })
         assertTrue(svc.log.any { it.contains("applying 2 file(s), 1 of them partly") })
+        pumpUntil("the IDE to see sy's change to notes.txt") { notesDoc.text == want.joinToString("\n") + "\n" }
 
         // sy dies: the plugin notices and says so with a next step.
         val pid = svc.syPid!!

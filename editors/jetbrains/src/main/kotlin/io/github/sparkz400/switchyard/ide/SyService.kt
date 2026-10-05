@@ -78,6 +78,22 @@ class SyService(val project: Project) : Disposable {
     @Volatile
     private var session: Session? = null
 
+    /** Guards the hand-over of a started sy against the project closing meanwhile. */
+    private val lifecycle = Any()
+
+    @Volatile
+    private var disposed = false
+
+    /** A sy that has started but is not attached yet (dispose stops it too). */
+    private var pending: Session? = null
+
+    /** The indicator of a start in progress: Stop cancels it. */
+    @Volatile
+    private var startIndicator: ProgressIndicator? = null
+
+    /** Whether the project is trusted; tests replace it. Every way of running sy asks it (canRunSy). */
+    var trustCheck: (Project) -> Boolean = { TrustedProjects.isProjectTrusted(it) }
+
     var starting = false
         private set
     val model = TaskModel()
@@ -130,9 +146,44 @@ class SyService(val project: Project) : Disposable {
 
     fun appendLog(line: String) = appendLog(listOf(line))
 
-    private fun appendLogLater(line: String) = edt { appendLog(line) }
+    private val logInbox = ConcurrentLinkedQueue<String>()
+    private val logDraining = AtomicBoolean(false)
+
+    /** From any thread: lines are added on the EDT in batches (sy's stderr can be chatty). */
+    private fun appendLogLater(line: String) {
+        logInbox.add(line)
+        if (logDraining.compareAndSet(false, true)) {
+            edt {
+                logDraining.set(false)
+                val lines = ArrayList<String>()
+                while (true) lines.add(logInbox.poll() ?: break)
+                appendLog(lines)
+            }
+        }
+    }
 
     // --- process ---------------------------------------------------------------------
+
+    /**
+     * Whether sy may run in this project at all: only in a trusted one. sy
+     * runs git (and agents) in the project, and a cloned repository's git
+     * config could otherwise run its own commands. Every launch asks this
+     * (start, undo); it tells the person why not.
+     */
+    fun canRunSy(): Boolean {
+        if (project.basePath == null) {
+            Notify.error(project, "This project has no folder on this machine: sy works in a project folder.")
+            return false
+        }
+        if (!trustCheck(project)) {
+            Notify.error(project, "This project is not trusted (safe mode). Trust it first: sy runs git, agents and commands in the project.")
+            return false
+        }
+        return true
+    }
+
+    /** Whether the project is trusted (for enabling actions; no message). */
+    fun trusted(): Boolean = project.basePath != null && trustCheck(project)
 
     /** The sy executable, or null after telling the person how to fix it. */
     fun findSy(): String? {
@@ -143,7 +194,9 @@ class SyService(val project: Project) : Disposable {
         )
         found.path?.let { return it }
         appendLog("sy was not found. Looked at:\n  " + found.tried.joinToString("\n  "))
-        val what = if (configured.isNotBlank()) {
+        val what = if (found.problem != null) {
+            "\"$configured\" (Settings | Tools | Switchyard): ${found.problem}."
+        } else if (configured.isNotBlank()) {
             "\"$configured\" (Settings | Tools | Switchyard) is not an executable file."
         } else {
             "Could not find sy${if (SystemInfo.isWindows) ".exe" else ""} on PATH. Install Switchyard, or set the sy executable in Settings | Tools | Switchyard."
@@ -165,26 +218,23 @@ class SyService(val project: Project) : Disposable {
             return
         }
         if (starting) return
-        val dir = project.basePath
-        if (dir == null) {
-            Notify.error(project, "This project has no folder on this machine: sy works in a project folder.")
-            return
-        }
-        if (!TrustedProjects.isProjectTrusted(project)) {
-            Notify.error(project, "This project is not trusted (safe mode). Trust it first: sy runs agents and commands in the project.")
-            return
-        }
+        if (!canRunSy()) return
+        val dir = project.basePath ?: return
         val exe = findSy() ?: return
         val args = clientArgs(dir, splitArgLines(SySettings.get().state.extraArgs))
         starting = true
         fire()
         appendLog("starting: $exe ${args.joinToString(" ") { Json.write(it) }}")
-        object : Task.Backgroundable(project, "Starting Switchyard", false) {
+        object : Task.Backgroundable(project, "Starting Switchyard", true) {
             var s: Session? = null
 
             override fun run(indicator: ProgressIndicator) {
                 indicator.isIndeterminate = true
-                val proc = SyProcess.start(exe, args, File(dir), { l -> appendLogLater("sy: $l") }, env = environment)
+                startIndicator = indicator
+                val proc = SyProcess.start(
+                    exe, args, File(dir), { l -> appendLogLater("sy: $l") }, env = environment,
+                    cancelled = { indicator.isCanceled || disposed },
+                )
                 val api = SyApi(proc.hello.url) { proc.request("bootstrap").str("bootstrap") }
                 try {
                     api.login(proc.hello.bootstrap)
@@ -194,25 +244,45 @@ class SyService(val project: Project) : Disposable {
                     throw e
                 }
                 val ns = Session(proc, api, dir)
-                // The project closed while sy started: onSuccess may never run.
-                if (project.isDisposed) {
-                    stopSession(ns, 2000)
-                    return
+                // Hand over under the lock: if the project closes now, dispose
+                // sees the pending sy and stops it (onSuccess may never run).
+                synchronized(lifecycle) {
+                    if (disposed || indicator.isCanceled) {
+                        stopSession(ns, 2000)
+                        return
+                    }
+                    pending = ns
                 }
                 s = ns
             }
 
             override fun onSuccess() {
                 val ns = s ?: return
-                if (project.isDisposed) {
-                    stopSession(ns, 2000)
-                    return
+                synchronized(lifecycle) {
+                    if (pending !== ns) return // stopped meanwhile
+                    pending = null
+                    if (disposed || project.isDisposed) {
+                        stopSession(ns, 2000)
+                        return
+                    }
                 }
                 attach(ns)
                 onReady?.invoke()
             }
 
+            override fun onCancel() {
+                synchronized(lifecycle) {
+                    pending?.let { stopSession(it, 2000) }
+                    pending = null
+                }
+                appendLog("the start of sy was cancelled.")
+            }
+
             override fun onThrowable(error: Throwable) {
+                if (error is io.github.sparkz400.switchyard.core.StartCancelledException) {
+                    appendLog("the start of sy was cancelled.")
+                    return
+                }
                 val msg = error.message ?: error.javaClass.simpleName
                 appendLog("could not start sy: $msg")
                 if (error is SyNotFoundException) {
@@ -223,6 +293,7 @@ class SyService(val project: Project) : Disposable {
             }
 
             override fun onFinished() {
+                startIndicator = null
                 starting = false
                 fire()
             }
@@ -257,6 +328,15 @@ class SyService(val project: Project) : Disposable {
 
     /** Stops sy (EDT): closing its stdin lets it cancel the task and stop its agents. */
     fun stop(graceMs: Long = 10_000): CompletableFuture<Unit> {
+        if (session == null && starting) {
+            // Stop while sy starts: cancel the start (sy is stopped as soon as it is seen).
+            startIndicator?.cancel()
+            synchronized(lifecycle) {
+                pending?.let { stopSession(it, 2000) }
+                pending = null
+            }
+            return CompletableFuture.completedFuture(Unit)
+        }
         val s = session ?: return CompletableFuture.completedFuture(Unit)
         s.stopping = true
         detach()
@@ -304,6 +384,12 @@ class SyService(val project: Project) : Disposable {
      * exits before that, the operating system closes the pipe the same way.
      */
     override fun dispose() {
+        synchronized(lifecycle) {
+            disposed = true
+            pending?.let { stopSession(it, 2000) }
+            pending = null
+        }
+        startIndicator?.cancel()
         val s = session ?: return
         session = null
         s.stopping = true
@@ -374,6 +460,8 @@ class SyService(val project: Project) : Disposable {
                 val fresh = !replaying || ts > lastLogged
                 if (line != null && fresh) lines.add(logLine(e, line))
                 if (e.kind == "task_done" && fresh && (!replaying || lastLogged > 0)) notifyTaskEnd(e)
+                // sy wrote merged changes into the project: show them in the IDE now.
+                if (!replaying && ((e.kind == "merge" && e.ok) || e.kind == "task_done")) refreshProject()
                 if (ts > lastLogged) lastLogged = ts
             }
             "notice" -> {
@@ -555,15 +643,39 @@ class SyService(val project: Project) : Disposable {
 
     /** Runs a one-shot sy command (no shell; stdin closed so it never waits). */
     private fun runSy(exe: String, args: List<String>, dir: String): Pair<Int, String> {
-        val cmd = listOf(exe) + if (SystemInfo.isWindows) args.map { io.github.sparkz400.switchyard.core.windowsArg(it) } else args
-        val p = ProcessBuilder(cmd).directory(File(dir)).redirectErrorStream(true).start()
+        if (!File(exe).isAbsolute) throw IllegalStateException("the sy path must be absolute: $exe")
+        val cmd = listOf(File(exe).absolutePath) + if (SystemInfo.isWindows) args.map { io.github.sparkz400.switchyard.core.windowsArg(it) } else args
+        val pb = ProcessBuilder(cmd).directory(File(dir)).redirectErrorStream(true)
+        environment?.let {
+            pb.environment().clear()
+            pb.environment().putAll(it)
+        }
+        val p = pb.start()
         p.outputStream.close()
         val out = CompletableFuture.supplyAsync { p.inputStream.readBytes().toString(Charsets.UTF_8) }
         if (!p.waitFor(120, TimeUnit.SECONDS)) {
+            // sy and whatever it started (git): a child holding the pipe would block the reader.
+            p.descendants().forEach { it.destroyForcibly() }
             p.destroyForcibly()
+            try {
+                p.inputStream.close()
+            } catch (_: java.io.IOException) {
+            }
             throw IllegalStateException("sy ${args.firstOrNull() ?: ""} did not finish in 2 minutes")
         }
         return p.exitValue() to out.get(10, TimeUnit.SECONDS)
+    }
+
+    /** Saves the IDE's unsaved edits, so sy sees (and never overwrites) them (EDT). */
+    fun saveAll() {
+        com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveAllDocuments()
+    }
+
+    /** sy changed files in the project: let the IDE see them now, not on the next focus. */
+    fun refreshProject() {
+        val d = session?.dir ?: project.basePath ?: return
+        val root = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(d) ?: return
+        com.intellij.openapi.vfs.VfsUtil.markDirtyAndRefresh(true, true, true, root)
     }
 
     /** Shows what `sy undo` would change and asks before it runs `sy undo --yes`. */
@@ -572,8 +684,10 @@ class SyService(val project: Project) : Disposable {
             Notify.warn(project, "A task is running. Cancel it or wait for it to finish before undoing.")
             return
         }
+        if (!canRunSy()) return
         val dir = session?.dir ?: project.basePath ?: return
         val exe = findSy() ?: return
+        saveAll()
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 // Without --yes, sy undo prints what it would do and, with no
@@ -589,11 +703,13 @@ class SyService(val project: Project) : Disposable {
                     val detail = if (text.length > 1800) text.take(1800) + "\n… (see the activity log)" else text
                     val ok = Messages.showOkCancelDialog(project, detail, "Undo the Last Switchyard Task?", "Undo", "Cancel", Messages.getWarningIcon())
                     if (ok != Messages.OK) return@ui
+                    saveAll()
                     ApplicationManager.getApplication().executeOnPooledThread {
                         try {
                             val (c2, o2) = runSy(exe, listOf("undo", "--yes", "--dir", dir), dir)
                             edt {
                                 appendLog("--- sy undo ---\n" + o2.trim())
+                                refreshProject()
                                 if (c2 == 0) {
                                     val saidLine = oneLine(o2.lines().filter { Regex("done|redo", RegexOption.IGNORE_CASE).containsMatchIn(it) }.joinToString(" "), 200)
                                     Notify.info(project, saidLine.ifEmpty { "Undone." })

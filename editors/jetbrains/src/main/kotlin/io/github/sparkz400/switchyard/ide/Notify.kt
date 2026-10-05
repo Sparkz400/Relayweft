@@ -31,7 +31,13 @@ object Notify {
 
     fun error(project: Project?, text: String, vararg actions: Pair<String, () -> Unit>) = show(project, NotificationType.ERROR, text, *actions)
 
+    /** A plain label text Swing would render as HTML (it starts with <html>) gets a space in front. */
+    fun plain(s: String): String = if (javax.swing.plaf.basic.BasicHTML.isHTMLString(s)) " $s" else s
+
     /** Notification content is HTML: show sy's text as text. */
     fun escape(s: String): String =
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
 }
+
+/** Text for a Swing label or title that must not be read as HTML. */
+fun plainText(s: String): String = Notify.plain(s)

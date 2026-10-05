@@ -156,6 +156,8 @@ class ReviewController(private val project: Project, private val svc: SyService)
     /** Opens the change set's diff (all its files, at file / hunk). */
     fun openDiff(id: String, file: Int = 0, hunk: Int? = null) {
         val r = reviews[id] ?: return
+        // The "before" side is read from disk: write the IDE's unsaved edits first.
+        svc.saveAll()
         val f = r.files.getOrNull(file) ?: return
         val d = dir
         val todo = r.files.indices.filter { !r.files[it].binary && !r.recs.containsKey(it) }
@@ -195,11 +197,12 @@ class ReviewController(private val project: Project, private val svc: SyService)
 
     private fun request(r: Review, i: Int): DiffRequest {
         val f = r.files[i]
-        val title = "${f.path} — ${r.cv.stepId} review"
+        // Paths and step ids come from the agent: never let Swing read them as HTML.
+        val title = plainText("${f.path} — ${r.cv.stepId} review")
         val target = ReviewTarget(r.req.id, i)
         val c = if (f.binary) null else contents(r, i)
         val req: DiffRequest = if (c == null) {
-            MessageDiffRequest(title, "${f.path} is a binary file: accept or reject it as a whole in the Review tab.")
+            MessageDiffRequest(title, plainText("${f.path} is a binary file: accept or reject it as a whole in the Review tab."))
         } else {
             val whole = r.recs[i]?.whole != false
             SimpleDiffRequest(
@@ -237,6 +240,8 @@ class ReviewController(private val project: Project, private val svc: SyService)
         p.createActionLabel("Reject file") { setWholeFile(t.id, t.file, false) }
         p.createActionLabel("Apply selected changes") { submit(t.id) }
         p.createActionLabel("Send back with feedback…") { feedback(t.id) }
+        // The viewer makes a new bar each time it is rebuilt: drop the ones no longer shown.
+        r.banners.removeIf { (i, old) -> i == t.file && !old.isDisplayable }
         r.banners.add(t.file to p)
         updateBanner(r, t.file, p)
         return p
@@ -251,7 +256,8 @@ class ReviewController(private val project: Project, private val svc: SyService)
             n > 0 -> "${r.sel.hunks[i].size} of $n hunks accepted (click the gutter icons to switch)"
             else -> "file accepted (it is accepted or rejected as a whole)"
         }
-        p.text = "${f.path}: $what. Apply sends ${selectionSummary(r.files, r.sel)}."
+        // Starts with fixed text: a label whose text starts with <html> renders it as HTML.
+        p.text = "Review of ${f.path}: $what. Apply sends ${selectionSummary(r.files, r.sel)}."
     }
 
     // --- hunk marks in the diff editors -------------------------------------------------------
@@ -394,6 +400,9 @@ class ReviewController(private val project: Project, private val svc: SyService)
             )
             if (ok != Messages.OK) return@pick
         }
+        // sy writes the accepted hunks: the IDE's unsaved edits go to disk first,
+        // so sy sees them and the IDE gets no "file changed on disk" conflict.
+        svc.saveAll()
         post(rid, body.toJson())
     }
 
@@ -418,6 +427,7 @@ class ReviewController(private val project: Project, private val svc: SyService)
     private fun post(id: String, body: Map<String, Any?>) {
         svc.background("Review answer", { it.call("POST", "/api/approvals/${SyService.enc(id)}/changes", body) }) { res ->
             svc.said(messageOf(res))
+            svc.refreshProject()
             end(id)
             changed()
         }

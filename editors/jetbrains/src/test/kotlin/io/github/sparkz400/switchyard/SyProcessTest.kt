@@ -102,6 +102,23 @@ class SyProcessTest {
     }
 
     @Test
+    fun stopWhileStartingCancelsTheStartAndStopsSy() {
+        // Review fix: Stop could not cancel a start (up to the 60 s hello timeout).
+        val t0 = System.currentTimeMillis()
+        assertThrows(io.github.sparkz400.switchyard.core.StartCancelledException::class.java) {
+            SyProcess.start(java, listOf("-cp", cp, FakeSy::class.java.name, "sleep"), File("."), {}, cancelled = { System.currentTimeMillis() - t0 > 500 })
+        }
+        assertTrue(System.currentTimeMillis() - t0 < 10_000)
+    }
+
+    @Test
+    fun aRelativeExecutableIsRefused() {
+        // Review fix: a relative path would be resolved against the project folder.
+        val e = assertThrows(IOException::class.java) { SyProcess.start("bin/sy", listOf("web"), File("."), {}) }
+        assertTrue(e.message, e.message!!.contains("absolute"))
+    }
+
+    @Test
     fun aMissingExecutableSaysNotFound() {
         val missing = File(Files.createTempDirectory("no-sy").toFile(), if (System.getProperty("os.name").startsWith("Windows")) "sy.exe" else "sy")
         assertThrows(SyNotFoundException::class.java) {

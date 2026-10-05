@@ -37,6 +37,9 @@ class StartAction : SyAction() {
 }
 
 class StopAction : SyAction() {
+    // While sy starts, Stop cancels the start.
+    override fun enabled(s: SyService, e: AnActionEvent) = s.running || s.starting
+
     override fun actionPerformed(e: AnActionEvent) {
         svc(e)?.stop()
     }
@@ -78,9 +81,9 @@ class ApprovePlanAction : SyAction() {
             plans.isEmpty() -> Notify.info(project, "No plan is waiting for approval.")
             plans.size == 1 -> PlanDialog.ask(project, s, plans[0])
             else -> JBPopupFactory.getInstance()
-                .createPopupChooserBuilder(plans.map { oneLine(it.plan?.summary?.ifEmpty { null } ?: it.task, 100) })
+                .createPopupChooserBuilder(plans.map { planLabel(it) })
                 .setTitle("Which Plan?")
-                .setItemChosenCallback { label -> plans.firstOrNull { oneLine(it.plan?.summary?.ifEmpty { null } ?: it.task, 100) == label }?.let { PlanDialog.ask(project, s, it) } }
+                .setItemChosenCallback { label -> plans.firstOrNull { planLabel(it) == label }?.let { PlanDialog.ask(project, s, it) } }
                 .createPopup().showCenteredInCurrentWindow(project)
         }
     }
@@ -126,7 +129,8 @@ class FollowUpAction : SyAction() {
 }
 
 class UndoLastTaskAction : SyAction() {
-    override fun enabled(s: SyService, e: AnActionEvent) = s.model.state?.running != true
+    // sy undo runs git in the project: never in an untrusted one.
+    override fun enabled(s: SyService, e: AnActionEvent) = s.model.state?.running != true && s.trusted()
     override fun actionPerformed(e: AnActionEvent) {
         svc(e)?.undoLastTask()
     }
@@ -218,3 +222,7 @@ class FeedbackAction : ReviewAction() {
         s.review.feedback(reviewId(s, e))
     }
 }
+
+/** A plan's label in a list: fixed text first (the summary is the planner's output, never HTML). */
+fun planLabel(req: io.github.sparkz400.switchyard.core.ApprovalRequest): String =
+    "Plan: " + oneLine(req.plan?.summary?.ifEmpty { null } ?: req.task, 100)

@@ -184,7 +184,7 @@ class PlanDialog(private val project: Project, private val svc: SyService, priva
         try {
             val s = if (i in 0 until draft.size) draft[i] else null
             for (c in listOf(titleField, kind, role, repo, prompt, files, deps)) c.isEnabled = s != null
-            idLabel.text = s?.id ?: "(no subtask selected)"
+            idLabel.text = plainText(s?.id ?: "(no subtask selected)")
             titleField.text = s?.title ?: ""
             if (s != null && (0 until kind.itemCount).none { kind.getItemAt(it) == s.kind }) kind.addItem(s.kind)
             kind.selectedItem = s?.kind ?: "edit"
@@ -197,7 +197,7 @@ class PlanDialog(private val project: Project, private val svc: SyService, priva
             files.text = s?.files?.joinToString("\n") ?: ""
             deps.clear()
             if (s != null) {
-                for (o in draft.subtasks) if (o.id != s.id) deps.addItem(o.id, o.id + "  " + oneLine(o.title, 40), o.id in s.dependsOn)
+                for (o in draft.subtasks) if (o.id != s.id) deps.addItem(o.id, plainText(o.id + "  " + oneLine(o.title, 40)), o.id in s.dependsOn)
             }
         } finally {
             loading = false
