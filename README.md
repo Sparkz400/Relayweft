@@ -215,6 +215,7 @@ rw tune [--here] [--since 7d]         routing suggestions from your own logs, as
 rw tune --apply | --learned | --reset   update, show or forget this repo's learned routes
 rw update [--check] [--yes]           update rw to the latest GitHub release (checksum-verified)
 rw web / rw app [--port N] [--demo]   the browser UI / the same in its own window
+rw mcp [--dir <path>]                 an MCP server: Claude Code or Codex hand tasks to rw (docs/mcp.md)
 rw init --repo                        write this repo's .relayweft.yaml (shared settings)
 rw trust [--revoke]                   review and trust the commands in this repo's .relayweft.yaml (and ./relayweft.yaml)
 rw undo [--list] [--redo] [--yes] [task]   revert a task's changes (preview first), or put them back
@@ -558,7 +559,7 @@ They run in the project folder through the system shell. They get `RW_TASK`, `RW
 
 ### MCP servers
 
-Give the agents [MCP](https://modelcontextprotocol.io) servers (docs search, a database, an issue tracker...) on both CLIs:
+Give the agents [MCP](https://modelcontextprotocol.io) servers (docs search, a database, an issue tracker...) on both CLIs. (The other way round, Claude Code or Codex handing tasks to rw through `rw mcp`, is in [docs/mcp.md](docs/mcp.md).)
 
 ```yaml
 mcp:

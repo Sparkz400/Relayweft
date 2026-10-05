@@ -93,6 +93,8 @@ Usage:
   rw --demo                  the full animated TUI driven by fake agents
   rw web [--port N] [--no-open] [--demo]   the same engine in your browser (127.0.0.1, private link)
   rw app [--port N] [--demo]               the browser UI in its own window (Edge/Chrome app mode)
+  rw mcp [--dir <path>]      an MCP server on stdin/stdout: Claude Code or Codex hand tasks to rw
+                             (set-up: docs/mcp.md)
   rw run [flags] "task"      run one task headless and print events
   rw run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
   rw run --file tasks.txt    run a list of tasks one after another, unattended
@@ -662,6 +664,7 @@ func runDoctor(w io.Writer, cfgPath string) error {
 	}
 	wd, _ := os.Getwd()
 	problems += doctorMCP(w, cfg, wd, ok, warn)
+	problems += doctorMCPServe(w, cfg, wd, ok, warn)
 	problems += doctorSandbox(w, cfg, wd, ok, warn)
 	problems += doctorMachine(w, cfg, ok, warn)
 	if problems > 0 {
