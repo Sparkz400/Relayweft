@@ -92,6 +92,9 @@ type RouteRow struct {
 	Decisions map[string]FlagCount `json:"decisions,omitempty"`
 	// Suggested are the indexes of the suggestions about this route.
 	Suggested []int `json:"suggested,omitempty"`
+	// Unavailable counts runs whose CLI was logged out or missing (rw
+	// routed around it as at a limit); they are not in LimitHits.
+	Unavailable int `json:"unavailable"`
 }
 
 // FlagCount is runs with a decision flag and how many failed.
@@ -121,6 +124,9 @@ type DashLimits struct {
 	PerProvider map[string]*LimitCount `json:"per_provider"`
 	Hits        []LimitEvent           `json:"hits"`     // newest first
 	Switches    []LimitEvent           `json:"switches"` // pre-emptive switches and fallbacks, newest first
+	// Unavailable are the times a provider's CLI was logged out or missing,
+	// newest first: rw routed around it as at a limit, but it was none.
+	Unavailable []LimitEvent `json:"unavailable"`
 	// Quota is the newest provider-reported reading per provider.
 	Quota map[string]QuotaReading `json:"quota"`
 }
@@ -129,7 +135,9 @@ type DashLimits struct {
 type LimitCount struct {
 	Hits      int `json:"hits"`
 	Preempts  int `json:"preempts"`  // steps moved away before the limit
-	Fallbacks int `json:"fallbacks"` // steps moved away after a limit hit
+	Fallbacks int `json:"fallbacks"` // steps moved away after a limit hit (or an unavailable CLI)
+	// Unavailable counts the times its CLI was logged out or missing.
+	Unavailable int `json:"unavailable"`
 }
 
 // LimitEvent is a limit hit (Provider hit it) or a switch (work moved from
@@ -143,6 +151,9 @@ type LimitEvent struct {
 	Rule     string     `json:"rule,omitempty"`
 	Until    *time.Time `json:"until,omitempty"`
 	Text     string     `json:"text,omitempty"` // the CLI's message, shortened
+	// Unavailable marks a fallback away from a CLI that was logged out or
+	// missing (the last limit record of that provider in that session).
+	Unavailable bool `json:"unavailable,omitempty"`
 }
 
 // QuotaReading is a logged quota record.
@@ -220,7 +231,7 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 	tune := Filter{Since: SuggestSince(o.Now, o.Days), Cwd: o.Cwd}
 	d := Dashboard{From: since.Format("2006-01-02"), To: DayStart(o.Now).Format("2006-01-02"),
 		Totals: DashTotals{Providers: map[string]int64{}}, Routes: []*RouteRow{}, Suggestions: []Suggestion{}, Learned: []LearnedEvent{},
-		Limits: DashLimits{PerProvider: map[string]*LimitCount{}, Hits: []LimitEvent{}, Switches: []LimitEvent{}, Quota: map[string]QuotaReading{}}}
+		Limits: DashLimits{PerProvider: map[string]*LimitCount{}, Hits: []LimitEvent{}, Switches: []LimitEvent{}, Unavailable: []LimitEvent{}, Quota: map[string]QuotaReading{}}}
 	for _, fl := range DecisionFlags {
 		d.Flags = append(d.Flags, fl.Name)
 	}
@@ -246,6 +257,9 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 		}
 		return c
 	}
+	// Whether each provider's last limit record in a session was an
+	// unavailable CLI: the fallbacks after it moved away from that.
+	unavailableNow := map[string]bool{}
 	key := func(r Record, attempt int) string {
 		return fmt.Sprintf("%s|%s|%s|%d", r.Session, r.TaskID, r.Step, attempt)
 	}
@@ -257,7 +271,12 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 		}
 		if account.keep(r) {
 			switch {
+			case r.Type == TypeLimit && IsUnavailable(r):
+				unavailableNow[r.Session+"|"+r.Provider] = true
+				limit(r.Provider).Unavailable++
+				d.Limits.Unavailable = append(d.Limits.Unavailable, LimitEvent{TS: r.TS, Provider: r.Provider, Model: r.Model, Until: r.Until, Text: clipText(r.Text)})
 			case r.Type == TypeLimit:
+				unavailableNow[r.Session+"|"+r.Provider] = false
 				limit(r.Provider).Hits++
 				d.Limits.Hits = append(d.Limits.Hits, LimitEvent{TS: r.TS, Provider: r.Provider, Model: r.Model, Until: r.Until, Text: clipText(r.Text)})
 			case r.Type == TypeQuota && r.Quota != nil:
@@ -271,7 +290,8 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 				} else {
 					limit(from).Fallbacks++
 				}
-				d.Limits.Switches = append(d.Limits.Switches, LimitEvent{TS: r.TS, Provider: from, To: r.Provider, Model: r.Model, Role: r.Role, Rule: r.Rule})
+				d.Limits.Switches = append(d.Limits.Switches, LimitEvent{TS: r.TS, Provider: from, To: r.Provider, Model: r.Model, Role: r.Role, Rule: r.Rule,
+					Unavailable: r.Rule == "limit-fallback" && unavailableNow[r.Session+"|"+from]})
 			}
 		}
 		if !f.keep(r) {
@@ -311,7 +331,11 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 			}
 			row := routeRow(routes, r.Role, r.Provider, r.Model, r.Effort)
 			if r.LimitHit {
-				row.LimitHits++
+				if IsUnavailable(r) {
+					row.Unavailable++
+				} else {
+					row.LimitHits++
+				}
 				continue
 			}
 			bad := failed(r)
@@ -435,14 +459,15 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 			return ra < rb
 		case a.Role != b.Role:
 			return a.Role < b.Role
-		case a.Runs+a.LimitHits != b.Runs+b.LimitHits:
-			return a.Runs+a.LimitHits > b.Runs+b.LimitHits
+		case a.Runs+a.LimitHits+a.Unavailable != b.Runs+b.LimitHits+b.Unavailable:
+			return a.Runs+a.LimitHits+a.Unavailable > b.Runs+b.LimitHits+b.Unavailable
 		}
 		return a.Route < b.Route
 	})
 
 	d.Limits.Hits = newest(d.Limits.Hits, dashEvents)
 	d.Limits.Switches = newest(d.Limits.Switches, dashEvents)
+	d.Limits.Unavailable = newest(d.Limits.Unavailable, dashEvents)
 
 	// Learned routes: a new event when a role's learned route changes.
 	sort.SliceStable(learned, func(i, j int) bool { return learned[i].ts.Before(learned[j].ts) })

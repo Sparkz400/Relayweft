@@ -212,9 +212,60 @@ func TestBuildDashboardEmpty(t *testing.T) {
 		}
 	}
 	lim := m["limits"].(map[string]any)
-	for _, k := range []string{"hits", "switches"} {
+	for _, k := range []string{"hits", "switches", "unavailable"} {
 		if _, ok := lim[k].([]any); !ok {
 			t.Errorf("limits.%s = %v", k, lim[k])
+		}
+	}
+}
+
+// A logged-out CLI is no limit hit. rw routes around it the same way, so
+// the log has a limit record and an agent_end with limit_hit; sy and rw
+// 0.3 wrote them without "unavailable" (these lines are an anonymized copy
+// of a real log), rw now with it. Found in real logs: the dashboard said
+// "claude hit its limit (until 17:18)" for "Not logged in".
+func TestDashboardUnavailableCLI(t *testing.T) {
+	dir := t.TempDir()
+	lines := []string{
+		`{"type":"task_start","ts":"2026-10-05T05:18:09+02:00","session":"s1","cwd":"/work/repo","task":"Reply with exactly: hi","task_id":"task-1","mode":"routed"}`,
+		`{"type":"decision","ts":"2026-10-05T05:18:09.3+02:00","session":"s1","cwd":"/work/repo","task_id":"task-1","agent":"work","step":"work","kind":"edit","attempt":1,"role":"worker","provider":"claude","model":"sonnet","effort":"medium","rule":"default","reason":"default worker route","confidence":0.6}`,
+		`{"type":"limit","ts":"2026-10-05T05:18:11+02:00","session":"s1","cwd":"/work/repo","task_id":"task-1","agent":"work","provider":"claude","model":"sonnet","text":"Not logged in · Please run /login","until":"2026-10-05T17:18:11+02:00"}`,
+		`{"type":"agent_end","ts":"2026-10-05T05:18:11+02:00","session":"s1","cwd":"/work/repo","task_id":"task-1","agent":"work","step":"work","kind":"edit","attempt":1,"role":"worker","provider":"claude","model":"sonnet","effort":"medium","ok":false,"limit_hit":true,"error":"Not logged in · Please run /login","tokens":{},"duration_ms":1806}`,
+		`{"type":"decision","ts":"2026-10-05T05:18:11.5+02:00","session":"s1","cwd":"/work/repo","task_id":"task-1","agent":"work","step":"work","kind":"edit","attempt":2,"role":"worker","provider":"codex","model":"gpt-x","rule":"limit-fallback","fallback":true,"from":"claude"}`,
+		`{"type":"task_end","ts":"2026-10-05T05:18:11.9+02:00","session":"s1","cwd":"/work/repo","task":"Reply with exactly: hi","task_id":"task-1","mode":"routed","ok":false,"text":"0/1 subtasks ok; reviewer approved","tokens":{},"duration_ms":2865}`,
+		// rw now: the same, marked; and a real limit hit for contrast.
+		`{"type":"limit","ts":"2026-10-05T06:00:00+02:00","session":"s2","task_id":"task-1","agent":"a","provider":"codex","model":"gpt-x","text":"codex not found on PATH","until":"2026-10-05T18:00:00+02:00","unavailable":true}`,
+		`{"type":"agent_end","ts":"2026-10-05T06:00:00+02:00","session":"s2","task_id":"task-1","agent":"a","step":"a","attempt":1,"role":"worker","provider":"codex","model":"gpt-x","ok":false,"limit_hit":true,"unavailable":true,"error":"codex not found on PATH"}`,
+		`{"type":"limit","ts":"2026-10-05T07:00:00+02:00","session":"s2","task_id":"task-2","agent":"a","provider":"claude","model":"sonnet","text":"Claude AI usage limit reached|1791234675"}`,
+		`{"type":"agent_end","ts":"2026-10-05T07:00:00+02:00","session":"s2","task_id":"task-2","agent":"a","step":"a","attempt":1,"role":"worker","provider":"claude","model":"sonnet","effort":"medium","ok":false,"limit_hit":true,"error":"Claude AI usage limit reached|1791234675"}`,
+		`{"type":"decision","ts":"2026-10-05T07:00:01+02:00","session":"s2","task_id":"task-2","agent":"a","step":"a","kind":"edit","attempt":2,"role":"worker","provider":"codex","model":"gpt-x","rule":"limit-fallback","fallback":true,"from":"claude"}`,
+	}
+	os.WriteFile(filepath.Join(dir, "s.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	recs, err := ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := BuildDashboard(recs, DashboardOptions{Days: 7, Now: time.Date(2026, 10, 5, 12, 0, 0, 0, time.Local)})
+	cl, cx := d.Limits.PerProvider[event.Claude], d.Limits.PerProvider[event.Codex]
+	if cl == nil || cx == nil || cl.Hits != 1 || cl.Unavailable != 1 || cx.Hits != 0 || cx.Unavailable != 1 {
+		t.Fatalf("per provider: claude %+v, codex %+v; want 1 hit and 1 unavailable, 0 and 1", cl, cx)
+	}
+	if len(d.Limits.Hits) != 1 || len(d.Limits.Unavailable) != 2 || d.Limits.Unavailable[1].Text != "Not logged in · Please run /login" {
+		t.Errorf("hits %+v, unavailable %+v", d.Limits.Hits, d.Limits.Unavailable)
+	}
+	// The fallbacks: away from the logged-out Claude, then after its limit.
+	if sw := d.Limits.Switches; len(sw) != 2 || sw[0].Unavailable || !sw[1].Unavailable {
+		t.Errorf("switches %+v: want the older one marked unavailable", sw)
+	}
+	for _, r := range d.Routes {
+		if r.Route == "claude:sonnet:medium" && (r.LimitHits != 1 || r.Unavailable != 1 || r.Runs != 0) {
+			t.Errorf("claude:sonnet:medium: %d runs, %d limit hits, %d unavailable; want 0, 1, 1", r.Runs, r.LimitHits, r.Unavailable)
+		}
+	}
+	st := Aggregate(recs, Filter{})
+	for _, r := range st.Routes {
+		if r.Key == "claude:sonnet" && (r.LimitHits != 1 || r.Unavailable != 1) {
+			t.Errorf("rw stats claude:sonnet: %d limit hits, %d unavailable; want 1 and 1", r.LimitHits, r.Unavailable)
 		}
 	}
 }

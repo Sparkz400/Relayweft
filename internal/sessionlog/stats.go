@@ -24,6 +24,9 @@ type RouteStats struct {
 	Tokens    event.TokenUsage
 	Duration  time.Duration
 	Roles     map[string]int
+	// Unavailable are the runs whose CLI was logged out or missing (not
+	// in LimitHits).
+	Unavailable int
 }
 
 // ModeStats aggregates whole tasks per mode (routed vs single baseline).
@@ -189,7 +192,10 @@ func Aggregate(recs []Record, f Filter) Stats {
 			} else {
 				rs.Failed++
 			}
-			if r.LimitHit {
+			switch {
+			case r.LimitHit && IsUnavailable(r):
+				rs.Unavailable++
+			case r.LimitHit:
 				rs.LimitHits++
 			}
 			if r.Tokens != nil {
@@ -308,16 +314,34 @@ func (s Stats) Print(w io.Writer) {
 
 	fmt.Fprintln(w, "Usage per model")
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "  ROUTE\tCALLS\tOK\tFAIL\tLIMIT\tIN (FRESH)\tCACHED\tOUT\tAVG TIME\tROLES")
+	// The UNAVAIL column (a logged-out or missing CLI) only when there was one.
+	unavail := false
+	for _, r := range s.Routes {
+		unavail = unavail || r.Unavailable > 0
+	}
+	col := func(n int) string {
+		if !unavail {
+			return ""
+		}
+		return fmt.Sprintf("%d\t", n)
+	}
+	head := "LIMIT\t"
+	if unavail {
+		head += "UNAVAIL\t"
+	}
+	fmt.Fprintln(tw, "  ROUTE\tCALLS\tOK\tFAIL\t"+head+"IN (FRESH)\tCACHED\tOUT\tAVG TIME\tROLES")
 	for _, r := range s.Routes {
 		avg := time.Duration(0)
 		if r.Calls > 0 {
 			avg = r.Duration / time.Duration(r.Calls)
 		}
-		fmt.Fprintf(tw, "  %s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n", r.Key, r.Calls, r.OK, r.Failed, r.LimitHits,
+		fmt.Fprintf(tw, "  %s\t%d\t%d\t%d\t%d\t%s%s\t%s\t%s\t%s\t%s\n", r.Key, r.Calls, r.OK, r.Failed, r.LimitHits, col(r.Unavailable),
 			human(r.Tokens.Input-r.Tokens.Cached), human(r.Tokens.Cached), human(r.Tokens.Output), avg.Round(time.Second), roles(r.Roles))
 	}
 	tw.Flush()
+	if unavail {
+		fmt.Fprintln(w, "  UNAVAIL: the CLI was logged out or missing; rw routed around it as at a limit (run `rw doctor`)")
+	}
 
 	fmt.Fprintln(w, "\nRouting rules fired")
 	keys := make([]string, 0, len(s.Rules))

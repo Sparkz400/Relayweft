@@ -1669,9 +1669,6 @@ func (o *Orchestrator) mergeEvent(t *task, stepID string, ok bool, text string) 
 
 var reNumbers = regexp.MustCompile(`\d+`)
 
-// reAuth matches CLI errors that mean "not logged in".
-var reAuth = regexp.MustCompile(`(?i)(not logged in|please (log|sign) ?in|log ?in required|unauthori[sz]ed|\b401\b|authentication (failed|required)|token (has )?expired|codex login)`)
-
 // errorSignature normalizes an error so "the same error twice" ignores
 // timestamps, line numbers and durations.
 func errorSignature(s string) string {
@@ -1958,12 +1955,15 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 		}
 	}
 	why := "at usage limit"
-	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && (reAuth.MatchString(res.Err.Error()) || strings.Contains(res.Err.Error(), "not found on PATH")) {
+	unavailable := false
+	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && sessionlog.UnavailableError(res.Err.Error()) {
 		// A CLI that is logged out or missing is as unusable as one at its
-		// limit: route around it for the rest of the session.
+		// limit: route around it for the rest of the session. The log says
+		// which it was, so the dashboard does not call it a limit hit.
 		res.LimitHit = true
 		res.ResetAt = time.Now().Add(12 * time.Hour)
 		why = "unavailable (" + clip(res.Err.Error(), 120) + "; run `rw doctor`)"
+		unavailable = true
 	}
 	if res.LimitHit {
 		until := res.ResetAt
@@ -1971,12 +1971,13 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 			until = time.Now().Add(t.cfg.Providers[d.Provider].LimitCooldown.D())
 		}
 		o.opts.Tracker.MarkLimited(d.Provider, until)
-		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err), Until: &until})
+		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err), Until: &until,
+			Unavailable: unavailable})
 		o.emit(event.Event{Kind: event.ProviderState, Provider: d.Provider, Until: until, Text: fmt.Sprintf("%s %s until %s; /limit %s reset to retry", d.Provider, why, until.Format("15:04"), d.Provider)})
 	}
 	tk := res.Tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
-		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit,
+		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit, Unavailable: unavailable,
 		Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files, Text: clip(res.Final, 500)})
 	// Over budget now? Only noted: this agent's work is done, and a task
 	// whose last agent crossed a limit is finished, not stopped. The next
