@@ -864,13 +864,14 @@ func renderPRParts(st *orchestrator.TaskState, o prBodyOptions) prParts {
 
 // reCloseRef finds closing keywords (GitHub's and Gitea's, plus GitLab's
 // -ing forms and "implements") followed by an issue reference (#7,
-// owner/repo#7, group/sub/project#7 or an issues URL); reMention finds
+// owner/repo#7, group/sub/project#7, Azure Boards' AB#7 or an issues
+// URL); reMention finds
 // @user / @org/team and Azure DevOps' @<id>; reQuickAction finds GitLab
 // quick actions ("/merge",
 // "/approve" at the start of a line), which GitLab runs with the poster's
 // rights.
 var (
-	reCloseRef    = regexp.MustCompile(`(?i)\b(clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)(\s*:?\s*(?:[\w.-]+(?:/[\w.-]+)+)?#\d|\s*:?\s*https?://[^\s]*/issues/\d)`)
+	reCloseRef    = regexp.MustCompile(`(?i)\b(clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)(\s*:?\s*(?:[\w.-]+(?:/[\w.-]+)+|AB)?#\d|\s*:?\s*https?://[^\s]*/issues/\d)`)
 	reMention     = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9<])`)
 	reQuickAction = regexp.MustCompile(`(?m)^([ \t]*)/([A-Za-z])`)
 )

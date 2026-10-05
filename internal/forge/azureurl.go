@@ -67,8 +67,8 @@ func azLegacyOrg(host string) string {
 // azPath reads an Azure DevOps path (segments, after the host's prefix):
 // org, project and repository, and what follows the repository (a pull
 // request's "pullrequest/12"). On a host given as a URL with a path, pre
-// is that path ("tfs"); a server without one takes the two segments
-// before _git as collection and project.
+// is that path ("tfs"). More segments than collection and project mean a
+// path rw was not told about: refused, as the API would be guessed.
 func azPath(host string, segs []string, pre string) (org, project, repo string, rest []string, err error) {
 	bad := func() (string, string, string, []string, error) {
 		return "", "", "", nil, fmt.Errorf("want <org>/<project>/_git/<repo>")
@@ -120,9 +120,10 @@ func azPath(host string, segs []string, pre string) (org, project, repo string, 
 	switch {
 	case len(before) == 1:
 		org, project = before[0], repo
-	case len(before) == 2 || (len(before) > 2 && host != azureCloud):
-		// On a server, what comes before the collection is its path.
-		org, project = before[len(before)-2], before[len(before)-1]
+	case len(before) == 2:
+		org, project = before[0], before[1]
+	case host != azureCloud:
+		return "", "", "", nil, fmt.Errorf("want <collection>/<project>/_git/<repo>; for a server under a path set AZURE_DEVOPS_HOST to its URL (https://%s/%s)", host, strings.Join(before[:len(before)-2], "/"))
 	default:
 		return bad()
 	}
@@ -192,8 +193,8 @@ func parseAzureRef(u *url.URL, hosts Hosts, what string) (Ref, error) {
 			switch {
 			case org != "" && len(before) == 1:
 				project = before[0]
-			case org == "" && len(before) >= 2 && (len(before) == 2 || host != azureCloud):
-				org, project = before[len(before)-2], before[len(before)-1]
+			case org == "" && len(before) == 2:
+				org, project = before[0], before[1]
 			default:
 				return Ref{}, fmt.Errorf("issue %q: want https://dev.azure.com/<org>/<project>/_workitems/edit/<n>", u.String())
 			}

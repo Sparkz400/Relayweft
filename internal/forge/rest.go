@@ -182,6 +182,10 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s %s: %w", c.name(), method, path, err)
 	}
+	if c.keepToken && resp.StatusCode == http.StatusNonAuthoritativeInfo {
+		// Azure DevOps' sign-in page, not an answer.
+		resp.StatusCode = http.StatusUnauthorized
+	}
 	if resp.StatusCode == http.StatusUnauthorized && authed && method == http.MethodGet && !c.keepToken {
 		resp.Body.Close()
 		c.note("note: " + c.name() + " rejected the token (401); continuing without it")

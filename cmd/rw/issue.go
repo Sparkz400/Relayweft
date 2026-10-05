@@ -286,6 +286,9 @@ func (f *issueFlags) fetchOne(c forge.Client, repo forge.Repo, n int) (issueItem
 	closes := fmt.Sprintf("#%d", n)
 	if !f.origin.IsZero() && !repo.Same(f.origin) {
 		closes = fmt.Sprintf("%s#%d", repo, n)
+		if repo.Kind == forge.Azure {
+			closes = "" // a work item of another organization cannot be linked
+		}
 	}
 	return issueItem{repo: repo, client: c, issue: *is, task: issueTask(repo, *is, comments), closes: closes}, nil
 }

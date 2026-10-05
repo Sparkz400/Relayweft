@@ -53,6 +53,15 @@ type azure struct {
 	members map[string]map[string]bool // org/project -> team members' ids and unique names, lower case
 	wiProj  map[int]string             // work item -> its project
 	heads   map[string]azHead          // head commit -> the pull request read with it
+	ids     map[string]string          // unique name (lower case) -> identity id, as seen
+	me      *azSelf                    // the token's owner, once read
+}
+
+// azSelf is the token's owner: its identity id, and its name as Viewer
+// gives it (the Account property, else the id).
+type azSelf struct {
+	id, name string
+	err      error
 }
 
 // azHead is what FailedChecks needs from the pull request of a head
@@ -71,7 +80,7 @@ func newAzure(api, token string, notes io.Writer) *azure {
 		token = base64.StdEncoding.EncodeToString([]byte(":" + token))
 	}
 	a := &azure{rest: newRest(Azure, api, token, scheme, notes), ver: "6.0", preview: "6.0-preview.3",
-		members: map[string]map[string]bool{}, wiProj: map[int]string{}, heads: map[string]azHead{}}
+		members: map[string]map[string]bool{}, wiProj: map[int]string{}, heads: map[string]azHead{}, ids: map[string]string{}}
 	if u, err := url.Parse(api); err == nil && isAzureCloud(strings.ToLower(u.Hostname())) {
 		a.ver, a.preview = "7.1", "7.1-preview.4"
 	}
@@ -145,12 +154,33 @@ type azIdentity struct {
 }
 
 // login is how rw names an identity: its unique name (an email or
-// DOMAIN\user), which the token's owner is compared with.
+// DOMAIN\user), else its id; never the display name, which anyone may
+// share.
 func (u azIdentity) login() string {
 	if u.UniqueName != "" {
 		return u.UniqueName
 	}
-	return u.DisplayName
+	return u.ID
+}
+
+// author names an identity: the token's owner by the name Viewer gives
+// (on a server the Account is "jdoe" where comments say "CONTOSO\jdoe"),
+// matched by identity id; anyone else by login. It remembers the id, for
+// trusted.
+func (a *azure) author(u azIdentity) string {
+	if u.ID == "" {
+		return u.login()
+	}
+	if a.HasToken() {
+		if me, err := a.self(); err == nil && strings.EqualFold(me.id, u.ID) {
+			return me.name
+		}
+	}
+	if l := u.login(); l != "" {
+		a.ids[strings.ToLower(l)] = u.ID
+		return l
+	}
+	return u.ID
 }
 
 func (a *azure) DefaultBranch(r Repo) (string, error) {
@@ -182,6 +212,9 @@ type azWorkItem struct {
 		ReproSteps  string          `json:"Microsoft.VSTS.TCM.ReproSteps"`
 		Acceptance  string          `json:"Microsoft.VSTS.Common.AcceptanceCriteria"`
 	} `json:"fields"`
+	// Formats is "markdown" for a long text field written in Markdown
+	// (else it is HTML).
+	Formats map[string]string `json:"multilineFieldsFormat"`
 }
 
 // azClosed are the states of the default processes that mean done.
@@ -218,8 +251,13 @@ func (a *azure) issue(r Repo, w azWorkItem) Issue {
 		is.Author = s
 	}
 	var parts []string
-	for _, p := range []struct{ head, html string }{{"", f.Description}, {"Repro steps:\n", f.ReproSteps}, {"Acceptance criteria:\n", f.Acceptance}} {
-		if t := azText(p.html); t != "" {
+	for _, p := range []struct{ head, field, text string }{{"", "System.Description", f.Description},
+		{"Repro steps:\n", "Microsoft.VSTS.TCM.ReproSteps", f.ReproSteps}, {"Acceptance criteria:\n", "Microsoft.VSTS.Common.AcceptanceCriteria", f.Acceptance}} {
+		t := strings.TrimSpace(p.text)
+		if !strings.EqualFold(w.Formats[p.field], "markdown") {
+			t = azText(p.text)
+		}
+		if t != "" {
 			parts = append(parts, p.head+t)
 		}
 	}
@@ -276,6 +314,7 @@ func (a *azure) Comments(r Repo, n int) ([]Comment, error) {
 				CreatedBy   azIdentity `json:"createdBy"`
 				CreatedDate time.Time  `json:"createdDate"`
 				IsDeleted   bool       `json:"isDeleted"`
+				Format      azEnum     `json:"format"` // html, or markdown (7.1)
 			} `json:"comments"`
 			ContinuationToken string `json:"continuationToken"`
 		}
@@ -283,9 +322,14 @@ func (a *azure) Comments(r Repo, n int) ([]Comment, error) {
 			return nil, err
 		}
 		for _, c := range res.Comments {
-			if !c.IsDeleted {
-				out = append(out, Comment{ID: c.ID, Author: c.CreatedBy.login(), Body: azText(c.Text), Created: c.CreatedDate})
+			if c.IsDeleted {
+				continue
 			}
+			body := strings.TrimSpace(c.Text)
+			if !c.Format.is("markdown", 0) {
+				body = azText(c.Text)
+			}
+			out = append(out, Comment{ID: c.ID, Author: a.author(c.CreatedBy), Body: body, Created: c.CreatedDate})
 		}
 		if res.ContinuationToken == "" || res.ContinuationToken == cont || len(res.Comments) == 0 {
 			break
@@ -301,7 +345,9 @@ func (a *azure) Comments(r Repo, n int) ([]Comment, error) {
 	return out, nil
 }
 
-func (a *azure) CommentTrusted(r Repo, c Comment) (bool, error) { return a.trusted(r, "", c.Author) }
+func (a *azure) CommentTrusted(r Repo, c Comment) (bool, error) {
+	return a.trusted(r, a.ids[strings.ToLower(c.Author)], c.Author)
+}
 
 // wiqlString is s as a WIQL string literal.
 func wiqlString(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
@@ -337,13 +383,15 @@ func (a *azure) OpenIssues(r Repo, label string, max int) ([]Issue, error) {
 		var batch struct {
 			Value []azWorkItem `json:"value"`
 		}
-		path := fmt.Sprintf("%s/_apis/wit/workitems?ids=%s&fields=System.Id,System.Title,System.State,System.Tags,System.CreatedDate,System.CreatedBy,System.TeamProject", azProject(r), strings.Join(ids, ","))
+		path := fmt.Sprintf("%s/_apis/wit/workitems?ids=%s&fields=System.Id,System.Title,System.State,System.Tags,System.CreatedDate,System.CreatedBy,System.TeamProject&errorPolicy=omit", azProject(r), strings.Join(ids, ","))
 		if err := a.do(http.MethodGet, a.v(path), nil, &batch); err != nil {
 			return nil, err
 		}
 		byID := map[int]Issue{}
 		for _, w := range batch.Value {
-			byID[w.ID] = a.issue(r, w)
+			if w.ID != 0 { // a work item gone since the query is null
+				byID[w.ID] = a.issue(r, w)
+			}
 		}
 		// In the query's order; CONTAINS may match part of a tag.
 		for _, w := range chunk {
@@ -422,6 +470,15 @@ func (a *azure) OpenPulls(r Repo) ([]Pull, error) {
 			return nil, err
 		}
 		for _, p := range res.Value {
+			if utf16Len(p.Description) >= azListDescription {
+				// The list cuts descriptions, and the "Closes #N" line
+				// is at the end: read the whole one.
+				full, err := a.pr(r, p.ID)
+				if err != nil {
+					return nil, err
+				}
+				p = *full
+			}
 			out = append(out, p.pull(r))
 		}
 		if len(res.Value) < 100 {
@@ -431,10 +488,12 @@ func (a *azure) OpenPulls(r Repo) ([]Pull, error) {
 	return out, nil
 }
 
-// Azure DevOps' limits on a pull request's title and description.
+// Azure DevOps' limits on a pull request's title and description, and
+// the length a list of pull requests cuts descriptions to.
 const (
-	azMaxTitle       = 400
-	azMaxDescription = 4000
+	azMaxTitle        = 400
+	azMaxDescription  = 4000
+	azListDescription = 400
 )
 
 func (a *azure) CreatePull(r Repo, p NewPull) (*Pull, error) {
@@ -641,9 +700,11 @@ func (b azBuild) of(sha string, h azHead, known bool) bool {
 	if b.SourceVersion == sha || b.TriggerInfo["pr.sourceSha"] == sha {
 		return true
 	}
-	var params map[string]string
-	if json.Unmarshal([]byte(b.Parameters), &params) == nil && strings.EqualFold(params["system.pullRequest.sourceCommitId"], sha) {
-		return true
+	var params map[string]any
+	if json.Unmarshal([]byte(b.Parameters), &params) == nil {
+		if s, ok := params["system.pullRequest.sourceCommitId"].(string); ok && strings.EqualFold(s, sha) {
+			return true
+		}
 	}
 	return known && h.mergeCommit != "" && b.SourceVersion == h.mergeCommit && b.SourceBranch == fmt.Sprintf("refs/pull/%d/merge", h.n)
 }
@@ -703,32 +764,53 @@ func (a *azure) FailedChecks(r Repo, sha string, logTail int) ([]Check, error) {
 		}
 		out = append(out, a.buildChecks(r, b, logTail)...)
 	}
-	var st struct {
-		Value []struct {
-			ID          int64  `json:"id"`
-			State       azEnum `json:"state"` // notSet, pending, succeeded, failed, error, notApplicable
-			Description string `json:"description"`
-			TargetURL   string `json:"targetUrl"`
-			Context     struct {
-				Name  string `json:"name"`
-				Genre string `json:"genre"`
-			} `json:"context"`
-		} `json:"value"`
+	// Statuses other services post on the commit, and on the pull
+	// request (the newest per context).
+	paths := map[string]string{"status": a.v(fmt.Sprintf("%s/commits/%s/statuses?latestOnly=true", azGit(r), url.PathEscape(sha)))}
+	if h, ok := a.heads[sha]; ok {
+		paths["prstatus"] = a.v(fmt.Sprintf("%s/pullRequests/%d/statuses", azGit(r), h.n))
 	}
-	if err := a.do(http.MethodGet, a.v(fmt.Sprintf("%s/commits/%s/statuses?latestOnly=true", azGit(r), url.PathEscape(sha))), nil, &st); err != nil {
-		return nil, err
-	}
-	sort.Slice(st.Value, func(i, j int) bool { return st.Value[i].ID < st.Value[j].ID })
-	for _, s := range st.Value {
-		if !s.State.is("failed", 3) && !s.State.is("error", 4) {
+	for _, kind := range []string{"status", "prstatus"} {
+		path, ok := paths[kind]
+		if !ok {
 			continue
 		}
-		name := s.Context.Name
-		if s.Context.Genre != "" {
-			name = s.Context.Genre + "/" + name
+		var st struct {
+			Value []struct {
+				ID          int64  `json:"id"`
+				State       azEnum `json:"state"` // notSet, pending, succeeded, failed, error, notApplicable
+				Description string `json:"description"`
+				TargetURL   string `json:"targetUrl"`
+				Context     struct {
+					Name  string `json:"name"`
+					Genre string `json:"genre"`
+				} `json:"context"`
+			} `json:"value"`
 		}
-		out = append(out, Check{ID: fmt.Sprintf("status/%d", s.ID), Name: name, Conclusion: string(s.State),
-			Output: strings.TrimSpace(s.Description + "\n" + s.TargetURL)})
+		if err := a.do(http.MethodGet, path, nil, &st); err != nil {
+			return nil, err
+		}
+		sort.Slice(st.Value, func(i, j int) bool { return st.Value[i].ID > st.Value[j].ID })
+		seen := map[string]bool{}
+		var cs []Check
+		for _, s := range st.Value {
+			name := s.Context.Name
+			if s.Context.Genre != "" {
+				name = s.Context.Genre + "/" + name
+			}
+			if seen[name] {
+				continue // set again since
+			}
+			seen[name] = true
+			if !s.State.is("failed", 3) && !s.State.is("error", 4) {
+				continue
+			}
+			cs = append(cs, Check{ID: fmt.Sprintf("%s/%d", kind, s.ID), Name: name, Conclusion: string(s.State),
+				Output: strings.TrimSpace(s.Description + "\n" + s.TargetURL)})
+		}
+		for i := len(cs) - 1; i >= 0; i-- {
+			out = append(out, cs[i])
+		}
 	}
 	return out, nil
 }
@@ -910,6 +992,7 @@ func (a *azure) Feedback(r Repo, n int) ([]Feedback, error) {
 		if rv.Vote > -5 || rv.IsContainer {
 			continue
 		}
+		who := a.author(rv.azIdentity)
 		ok, err := a.trusted(r, rv.ID, rv.login())
 		if err != nil {
 			return nil, err
@@ -921,7 +1004,7 @@ func (a *azure) Feedback(r Repo, n int) ([]Feedback, error) {
 				id = fmt.Sprintf("review:%d", t.ID)
 			}
 		}
-		out = append(out, Feedback{ID: id, Review: true, Author: rv.login(), Trusted: ok})
+		out = append(out, Feedback{ID: id, Review: true, Author: who, Trusted: ok})
 	}
 	for _, t := range threads {
 		if t.IsDeleted || t.ThreadContext == nil || t.ThreadContext.FilePath == "" || !(t.Status.is("active", 1) || t.Status.is("pending", 6)) {
@@ -939,34 +1022,49 @@ func (a *azure) Feedback(r Repo, n int) ([]Feedback, error) {
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, Feedback{ID: fmt.Sprintf("comment:%d-%d", t.ID, c.ID), Author: c.Author.login(), Trusted: ok,
+			out = append(out, Feedback{ID: fmt.Sprintf("comment:%d-%d", t.ID, c.ID), Author: a.author(c.Author), Trusted: ok,
 				Body: c.Content, Path: strings.TrimPrefix(t.ThreadContext.FilePath, "/"), Line: line})
 		}
 	}
 	return out, nil
 }
 
+// Viewer is the token owner's Account (an email, or a server's user
+// name), else its identity id. Comments and votes of that identity carry
+// the same name (author).
 func (a *azure) Viewer() (string, error) {
+	me, err := a.self()
+	return me.name, err
+}
+
+// self reads the token's owner once.
+func (a *azure) self() (azSelf, error) {
+	if a.me != nil {
+		return *a.me, a.me.err
+	}
 	var cd struct {
 		AuthenticatedUser struct {
-			ProviderDisplayName string            `json:"providerDisplayName"`
-			Properties          map[string]azProp `json:"properties"`
+			ID         string            `json:"id"`
+			Properties map[string]azProp `json:"properties"`
 		} `json:"authenticatedUser"`
 	}
-	if err := a.do(http.MethodGet, "/_apis/connectionData", nil, &cd); err != nil {
-		return "", err
+	var me azSelf
+	switch err := a.do(http.MethodGet, "/_apis/connectionData", nil, &cd); {
+	case err != nil:
+		me.err = err
+	case a.Rejected() || !a.HasToken():
+		me.err = errors.New("the token was rejected by Azure DevOps")
+	case cd.AuthenticatedUser.ID == "":
+		me.err = errors.New("no user for the token on Azure DevOps")
+	default:
+		me.id = cd.AuthenticatedUser.ID
+		me.name = cd.AuthenticatedUser.Properties["Account"].String()
+		if me.name == "" {
+			me.name = me.id
+		}
 	}
-	if a.Rejected() {
-		return "", errors.New("the token was rejected by Azure DevOps")
-	}
-	u := cd.AuthenticatedUser
-	if acct := u.Properties["Account"].String(); acct != "" {
-		return acct, nil
-	}
-	if u.ProviderDisplayName == "" {
-		return "", errors.New("no user for the token on Azure DevOps")
-	}
-	return u.ProviderDisplayName, nil
+	a.me = &me
+	return me, me.err
 }
 
 // Diffs and reviews.
@@ -1004,8 +1102,12 @@ func (c azChange) kinds() (add, del, rename bool) {
 	return add, del, rename
 }
 
-// maxDiffFiles caps the files of a pull request rw diffs.
-const maxDiffFiles = 3000
+// maxDiffFiles caps the files of a pull request rw diffs, maxDiffFile the
+// size of a file version it diffs.
+const (
+	maxDiffFiles = 3000
+	maxDiffFile  = 1 << 20
+)
 
 // iteration is the pull request's latest iteration (push) and its files,
 // compared with the common commit of the two branches.
@@ -1104,14 +1206,21 @@ func (a *azure) PullDiff(r Repo, n int, max int64) (string, error) {
 				oldPath = strings.TrimPrefix(o, "/")
 			}
 		}
+		// A file too large to diff is shown like a binary one: only the
+		// diff as a whole counts against max.
 		var old, cur []byte
+		big := false
 		if !add {
-			if old, err = a.file(r, f.Item.OriginalObjectID, "/"+oldPath, base, max); err != nil {
+			old, err = a.file(r, f.Item.OriginalObjectID, "/"+oldPath, base, min(max, maxDiffFile))
+			big = big || errors.Is(err, ErrTooLarge)
+			if err != nil && !big {
 				return "", err
 			}
 		}
 		if !del {
-			if cur, err = a.file(r, f.Item.ObjectID, "/"+newPath, head, max); err != nil {
+			cur, err = a.file(r, f.Item.ObjectID, "/"+newPath, head, min(max, maxDiffFile))
+			big = big || errors.Is(err, ErrTooLarge)
+			if err != nil && !errors.Is(err, ErrTooLarge) {
 				return "", err
 			}
 		}
@@ -1123,7 +1232,7 @@ func (a *azure) PullDiff(r Repo, n int, max int64) (string, error) {
 		if del {
 			to = "/dev/null"
 		}
-		if isBinary(old) || isBinary(cur) {
+		if big || isBinary(old) || isBinary(cur) {
 			fmt.Fprintf(&b, "Binary files %s and %s differ\n", from, to)
 		} else if h := unifiedHunks(string(old), string(cur)); h != "" {
 			fmt.Fprintf(&b, "--- %s\n+++ %s\n%s", from, to, h)

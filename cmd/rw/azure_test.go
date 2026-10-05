@@ -92,7 +92,7 @@ func (f *azAPI) server(t *testing.T) string {
 			io.WriteString(w, `{"records":[{"id":"t1","type":"Task","name":"go test","result":"failed","log":{"id":3}}]}`)
 		case r.Method == "GET" && p == "/org/proj/_apis/build/builds/600/logs/3":
 			io.WriteString(w, "2026-10-05T10:00:00.0000000Z "+strings.Repeat("ok line\n", 50)+"\x1b[31mFAIL\x1b[0m TestShout\n"+injLog+"\n")
-		case r.Method == "GET" && strings.HasPrefix(p, git+"/commits/"):
+		case r.Method == "GET" && (strings.HasPrefix(p, git+"/commits/") || p == git+"/pullRequests/101/statuses"):
 			io.WriteString(w, `{"value":[]}`)
 		case r.Method == "GET" && p == git+"/pullRequests/101/threads":
 			io.WriteString(w, or(f.threads, `{"value":[]}`))
@@ -105,7 +105,7 @@ func (f *azAPI) server(t *testing.T) string {
 		case r.Method == "GET" && p == "/org/_apis/projects/proj/teams/t1/members":
 			io.WriteString(w, `{"value":[{"identity":{"id":"D1","uniqueName":"dev@x.com"}},{"identity":{"id":"M2","uniqueName":"mate@x.com"}}]}`)
 		case r.Method == "GET" && p == "/org/_apis/connectionData":
-			io.WriteString(w, `{"authenticatedUser":{"properties":{"Account":{"$value":"me@x.com"}}}}`)
+			io.WriteString(w, `{"authenticatedUser":{"id":"me1","properties":{"Account":{"$value":"me@x.com"}}}}`)
 		case r.Method == "GET" && p == "/org/_apis/wit/workitems/12":
 			io.WriteString(w, `{"id":12,"fields":{"System.Title":"Shout","System.State":"New","System.TeamProject":"proj"}}`)
 		case r.Method == "GET" && p == "/org/proj/_apis/wit/workItems/12/comments":
@@ -322,6 +322,10 @@ func TestCIFilesAzure(t *testing.T) {
 	if d := defuseRefs("ping @<6a5d-guid> and @bob"); reMention.MatchString(d) || !strings.Contains(d, "@\u2060<6a5d-guid>") {
 		t.Fatalf("defused %q", d)
 	}
+	// "Fixes AB#12" in a GitHub repository closes an Azure Boards work item.
+	if d := defuseRefs("Fixes AB#12, closes ab#3"); reCloseRef.MatchString(d) {
+		t.Fatalf("AB# not defused: %q", d)
+	}
 }
 
 // rw review --post on Azure DevOps Server (AZURE_DEVOPS_HOST with a path):
@@ -381,5 +385,14 @@ func TestAzureServerReview(t *testing.T) {
 	}
 	if want := srv.URL + "/tfs/Coll/proj/_git/app/pullrequest/12?discussionId=2"; !strings.Contains(out.String(), want) {
 		t.Fatalf("output lacks %s:\n%s", want, out.String())
+	}
+	// rw watch checks the folder's origin with the server's path, which
+	// the host name alone does not give.
+	repo := forge.Repo{Kind: forge.Azure, Host: "127.0.0.1", Owner: "Coll/proj", Name: "app", Web: srv.URL + "/tfs"}
+	if err := checkOrigin(dir, repo); err != nil {
+		t.Fatalf("checkOrigin: %v", err)
+	}
+	if e := (watchEntry{Forge: "azure", Host: "127.0.0.1", Web: srv.URL + "/tfs", Owner: "Coll/proj", Name: "app", Number: 12}); !watchMatches(e, srv.URL+"/tfs/Coll/proj/_git/app/pullrequest/12") {
+		t.Fatal("watchMatches: the pull request URL under the server's path")
 	}
 }

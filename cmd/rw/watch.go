@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -385,7 +386,7 @@ func watchMatches(e watchEntry, ref string) bool {
 		n, err := strconv.Atoi(ref[i+1:])
 		return err == nil && n == e.Number && strings.EqualFold(ref[:i], e.repo().String())
 	}
-	r, err := forge.ParsePullRef(ref, forge.Hosts{}.With(e.Host, e.repo().Kind))
+	r, err := forge.ParsePullRef(ref, forge.Hosts{}.With(cmp.Or(e.Web, e.Host), e.repo().Kind))
 	if err != nil || r.Number != e.Number {
 		return false
 	}
@@ -906,7 +907,8 @@ func checkOrigin(root string, repo forge.Repo) error {
 	if err != nil {
 		return fmt.Errorf("%s has no origin remote", root)
 	}
-	r, err := forge.ParseRemote(strings.TrimSpace(u), forge.Hosts{}.With(repo.Host, repo.Kind))
+	// The root URL keeps a path prefix (https://tfs.example.com/tfs).
+	r, err := forge.ParseRemote(strings.TrimSpace(u), forge.Hosts{}.With(cmp.Or(repo.Web, repo.Host), repo.Kind))
 	if err != nil || !r.Same(repo) {
 		return fmt.Errorf("origin of %s is not %s any more", root, repo)
 	}

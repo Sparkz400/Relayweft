@@ -20,7 +20,7 @@ Project and repository names may contain spaces. rw writes a repository as `<org
 
 ### Token
 
-Set `AZURE_DEVOPS_TOKEN` (or `AZURE_DEVOPS_EXT_PAT`, the variable of the `az devops` CLI). In PowerShell:
+Set `AZURE_DEVOPS_TOKEN`. For dev.azure.com, `AZURE_DEVOPS_EXT_PAT` (the variable of the `az devops` CLI) works too; it never goes to a server. In PowerShell:
 
 ```powershell
 $env:AZURE_DEVOPS_TOKEN = "<token>"
@@ -47,7 +47,7 @@ Azure DevOps refuses an expired token and a token that lacks a scope the same wa
 
 ### Azure DevOps Server
 
-Set `AZURE_DEVOPS_HOST` to the server's URL, with its path when it has one:
+Set `AZURE_DEVOPS_HOST` to the server's URL, with its path when it has one (a remote with a path rw was not told about is refused, so the API is never guessed):
 
 ```powershell
 $env:AZURE_DEVOPS_HOST = "https://tfs.example.com/tfs"
@@ -58,7 +58,7 @@ Several servers are separated by commas. When `AZURE_DEVOPS_HOST` is set, the to
 ## Work items as issues
 
 - `rw run --issue 42` reads work item 42. A work item URL (`https://dev.azure.com/<org>/<project>/_workitems/edit/42`) works too. Work item numbers count per organization, so a work item of another project in your organization is fine.
-- The task has the title, the description, and the repro steps and acceptance criteria when the work item has them. Their HTML becomes plain text.
+- The task has the title, the description, and the repro steps and acceptance criteria when the work item has them. Their HTML becomes plain text; Markdown stays as written.
 - `--issues label:rw` takes the open work items of the repository's project with the **tag** `rw` (a WIQL query), oldest first. Closed means the state Closed, Done, Removed, Resolved or Completed.
 - `--pr` opens a pull request whose description ends with `Closes #42`, and links work item 42 to it. Complete the pull request with "Complete associated work items" to close it. If Azure DevOps refuses the link (a work item the token cannot see), the pull request is opened without it.
 - The comment on the work item, and `--team` claims, are HTML comments. rw escapes its text, so nothing in it becomes markup or a mention. The claim's marker (`<!-- relayweft:queue ... -->`) shows as text.
@@ -72,14 +72,15 @@ Several servers are separated by commas. When `AZURE_DEVOPS_HOST` is set, the to
 
 ## rw watch
 
-- **Checks:** the failed builds of the head commit, the newest per pipeline: the pull request's build validation (it builds the merge commit) and builds of the branch. Each failed task is one item, with the tail of its log. A build that failed without a failed task (a YAML error) is one item with its message. Failed commit statuses from other services count too.
+- **Checks:** the failed builds of the head commit, the newest per pipeline: the pull request's build validation (it builds the merge commit) and builds of the branch. Each failed task is one item, with the tail of its log. A build that failed without a failed task (a YAML error) is one item with its message. Failed statuses other services post on the commit or the pull request count too (the newest per context).
 - **Reviews:** a vote of "Waiting for author" (-5) or "Rejected" (-10), and active comment threads on a line of a file. Only members of the project's teams count. Members given as a group in a team are not looked into, and service identities never count.
+- Your own votes and comments never count. rw knows them by your identity, not by name.
 - rw replies with one comment thread without a status, so it blocks nothing.
 - `rw watch` never pushes CI settings: `azure-pipelines*.yml` in any folder, and `.azuredevops/`, `.azure-pipelines/`, `.pipelines/`, `.vsts/`. A pipeline may name a YAML file anywhere; protect those with a branch policy.
 
 ## rw review --post
 
-- Azure DevOps has no diff API. rw reads the pull request's changed files and their two versions, and builds the diff itself.
+- Azure DevOps has no diff API. rw reads the pull request's changed files and their two versions, and builds the diff itself. A file version over 1 MB is shown like a binary file.
 - Each inline finding becomes an active comment thread on its line. Under the "Check for comment resolution" policy these must be resolved before completing, as with GitLab threads.
 - The rest goes into one comment thread without a status.
 

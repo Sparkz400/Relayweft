@@ -42,7 +42,6 @@ func TestParseAzureRemotes(t *testing.T) {
 		"ssh://tfs.example.com:22/tfs/Coll/Proj/_git/Repo":                      {Kind: Azure, Host: "tfs.example.com", Owner: "Coll/Proj", Name: "Repo", Web: "https://tfs.example.com/tfs"},
 		"ssh://tfs.example.com:22/Coll/Proj/_git/Repo":                          {Kind: Azure, Host: "tfs.example.com", Owner: "Coll/Proj", Name: "Repo", Web: "https://tfs.example.com/tfs"},
 		"https://ado.example.org/DefaultCollection/Proj/_git/Repo":              {Kind: Azure, Host: "ado.example.org", Owner: "DefaultCollection/Proj", Name: "Repo"},
-		"https://ado.example.org/tfs/DefaultCollection/Proj/_git/Repo":          {Kind: Azure, Host: "ado.example.org", Owner: "DefaultCollection/Proj", Name: "Repo"},
 		"https://dev.azure.com:443/org/proj/_git/app":                           cloud("org/proj", "app"),
 		"  https://dev.azure.com/org/proj/_git/app\n":                           cloud("org/proj", "app"),
 		"https://user:secret@org.visualstudio.com/DefaultCollection/_git/a%20b": cloud("org/a b", "a b"),
@@ -55,10 +54,15 @@ func TestParseAzureRemotes(t *testing.T) {
 	}
 	for _, bad := range []string{"https://dev.azure.com/org/proj/app", "https://dev.azure.com/org/proj/_git/", "https://dev.azure.com/a/b/c/_git/r",
 		"https://dev.azure.com/org/proj/_git/app/pullrequest/1", "git@ssh.dev.azure.com:v3/org/proj", "https://dev.azure.com/org/../_git/r",
-		"https://org.visualstudio.com/a/b/_git/r", "https://unknown.example/Coll/Proj/_git/Repo"} {
+		"https://org.visualstudio.com/a/b/_git/r", "https://unknown.example/Coll/Proj/_git/Repo",
+		// A server path rw was not told about: the API would be guessed.
+		"https://ado.example.org/tfs/DefaultCollection/Proj/_git/Repo"} {
 		if r, err := ParseRemote(bad, hosts); err == nil {
 			t.Errorf("%q: want error, got %+v", bad, r)
 		}
+	}
+	if _, err := ParseRemote("https://ado.example.org/tfs/Coll/Proj/_git/Repo", hosts); err == nil || !strings.Contains(err.Error(), "AZURE_DEVOPS_HOST to its URL (https://ado.example.org/tfs)") {
+		t.Errorf("server path without a hint: %v", err)
 	}
 	if _, err := ParseRemote("https://unknown.example/Coll/Proj/_git/Repo", hosts); err == nil || !strings.Contains(err.Error(), "GITEA_HOST=unknown.example; AZURE_DEVOPS_HOST") {
 		t.Errorf("unknown host error lacks a hint: %v", err)
@@ -156,14 +160,19 @@ func TestAzureTokenScope(t *testing.T) {
 		}
 	}
 	t.Setenv("AZURE_DEVOPS_HOST", "https://tfs.example.com/tfs")
-	if tok, _ := Token(Azure, "dev.azure.com"); tok != "" {
-		t.Errorf("a server's token went to dev.azure.com: %q", tok)
+	// AZURE_DEVOPS_TOKEN is the server's now; the az devops CLI's token
+	// stays dev.azure.com's and never goes to a server.
+	if tok, _ := Token(Azure, "dev.azure.com"); tok != "ext" {
+		t.Errorf("dev.azure.com got %q", tok)
 	}
 	if tok, _ := Token(Azure, "tfs.example.com"); tok != "ado" {
 		t.Errorf("server token %q", tok)
 	}
-	if tok, _ := Token(Azure, "evil.example.com"); tok != "" {
-		t.Errorf("token went to another host: %q", tok)
+	t.Setenv("AZURE_DEVOPS_TOKEN", "")
+	for _, h := range []string{"tfs.example.com", "evil.example.com"} {
+		if tok, _ := Token(Azure, h); tok != "" {
+			t.Errorf("token went to %s: %q", h, tok)
+		}
 	}
 }
 
@@ -204,7 +213,7 @@ func (f *fakeAzure) handler() http.Handler {
 		git  = proj + "/_apis/git/repositories/app"
 	)
 	blobs := map[string]string{"b-a0": "one\ntwo\nthree\n", "b-a1": "one\n2\nthree\n", "b-n1": "new\n", "b-g0": "bye",
-		"b-m0": "same\n", "b-m1": "same\n", "b-png": "\x89PNG\x00\x01"}
+		"b-m0": "same\n", "b-m1": "same\n", "b-png": "\x89PNG\x00\x01", "b-big": strings.Repeat("big\n", maxDiffFile/4+1)}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -242,7 +251,8 @@ func (f *fakeAzure) handler() http.Handler {
 				"System.Description":"<div>Steps:<br><ol><li>open &amp; run</li><li>see <b>crash</b></li></ol></div><!-- hidden -->",
 				"Microsoft.VSTS.TCM.ReproSteps":"<p>Run it&nbsp;twice</p>"}}`)
 		case r.Method == "GET" && p == org+"/_apis/wit/workitems/13":
-			write(`{"id":13,"fields":{"System.Title":"Old","System.State":"Done","System.TeamProject":"My Proj","System.CreatedBy":"Bob Old <CORP\\bob>"}}`)
+			write(`{"id":13,"fields":{"System.Title":"Old","System.State":"Done","System.TeamProject":"My Proj","System.CreatedBy":"Bob Old <CORP\\bob>",
+				"System.Description":"use ` + "`List<int>`" + ` &amp; <b>go</b>"},"multilineFieldsFormat":{"System.Description":"markdown"}}`)
 		case r.Method == "GET" && p == proj+"/_apis/wit/workItems/12/comments":
 			if q.Get("continuationToken") == "" {
 				var cs []string
@@ -250,6 +260,7 @@ func (f *fakeAzure) handler() http.Handler {
 					cs = append(cs, fmt.Sprintf(`{"id":%d,"text":%q,"createdBy":{"uniqueName":"me@x.com"},"createdDate":"2026-10-05T10:00:0%dZ"}`, 10+i, c, i))
 				}
 				write(`{"comments":[{"id":2,"text":"<p>second</p>","createdBy":{"uniqueName":"dev@x.com"},"createdDate":"2026-10-02T10:00:00Z"},` +
+					`{"id":4,"text":"use List<int> **now**","format":"markdown","createdBy":{"id":"ME1","uniqueName":"CONTOSO\\me"},"createdDate":"2026-10-03T10:00:00Z"},` +
 					`{"id":3,"text":"gone","isDeleted":true,"createdBy":{"uniqueName":"dev@x.com"},"createdDate":"2026-10-02T11:00:00Z"}` + strings.Repeat(",", min(len(cs), 1)) + strings.Join(cs, ",") + `],"continuationToken":"page2"}`)
 			} else {
 				write(`{"comments":[{"id":1,"text":"first &lt;b&gt;","createdBy":{"uniqueName":"ann@x.com"},"createdDate":"2026-10-01T10:00:00Z"}]}`)
@@ -278,7 +289,7 @@ func (f *fakeAzure) handler() http.Handler {
 		case r.Method == "GET" && p == proj+"/_apis/wit/workitems":
 			f.batches++
 			ids := strings.Split(q.Get("ids"), ",")
-			if len(ids) > 200 || !strings.Contains(q.Get("fields"), "System.Tags") {
+			if len(ids) > 200 || !strings.Contains(q.Get("fields"), "System.Tags") || q.Get("errorPolicy") != "omit" {
 				t.Errorf("batch %s", r.URL.RawQuery)
 			}
 			var out []string
@@ -289,6 +300,8 @@ func (f *fakeAzure) handler() http.Handler {
 					out = append(out, item(id, "rw-later", "New"))
 				case 3:
 					out = append(out, item(id, "rw", "Done"))
+				case 6:
+					out = append(out, "null") // deleted since the query
 				default:
 					out = append(out, item(id, "Rw; other", "Active"))
 				}
@@ -305,7 +318,7 @@ func (f *fakeAzure) handler() http.Handler {
 				}
 				write(`{"value":[` + strings.Join(ps, ",") + `]}`)
 			} else {
-				write(`{"value":[{"pullRequestId":7,"status":"active","description":"Closes #5"}]}`)
+				write(`{"value":[{"pullRequestId":7,"status":"active","description":"Closes #5"},{"pullRequestId":11,"status":"active","description":"` + strings.Repeat("x", 400) + `"}]}`)
 			}
 		case r.Method == "POST" && p == git+"/pullrequests":
 			f.created = append(f.created, in)
@@ -317,6 +330,8 @@ func (f *fakeAzure) handler() http.Handler {
 			write(`{"pullRequestId":21,"status":"active","isDraft":true,"sourceRefName":"refs/heads/rw/x","targetRefName":"refs/heads/main"}`)
 		case r.Method == "GET" && p == git+"/pullrequests/7":
 			write(`{"pullRequestId":7,"title":"Done","status":"completed","sourceRefName":"refs/heads/rw/a","lastMergeSourceCommit":{"commitId":"c7"}}`)
+		case r.Method == "GET" && p == git+"/pullrequests/11":
+			write(`{"pullRequestId":11,"status":"active","description":"` + strings.Repeat("x", 500) + `\n\nCloses #6\n"}`)
 		case r.Method == "GET" && p == git+"/pullrequests/8":
 			write(`{"pullRequestId":8,"status":2,"sourceRefName":"refs/heads/rw/b"}`)
 		case r.Method == "GET" && p == git+"/pullrequests/9":
@@ -325,7 +340,7 @@ func (f *fakeAzure) handler() http.Handler {
 			write(`{"pullRequestId":10,"title":"Fix","description":"d","status":"active","isDraft":false,"sourceRefName":"refs/heads/rw/x","targetRefName":"refs/heads/main",
 				"lastMergeSourceCommit":{"commitId":"abc"},"lastMergeCommit":{"commitId":"m1"},
 				"reviewers":[{"id":"R1","uniqueName":"dev@x.com","vote":-5},{"id":"R2","uniqueName":"dev@x.com","vote":10},
-					{"id":"R3","uniqueName":"drive@by.com","vote":-10},{"id":"G1","uniqueName":"[My Proj]\\Team","vote":-10,"isContainer":true}]}`)
+					{"id":"R3","uniqueName":"drive@by.com","vote":-10},{"id":"me1","uniqueName":"CONTOSO\\me","vote":-5},{"id":"G1","uniqueName":"[My Proj]\\Team","vote":-10,"isContainer":true}]}`)
 		case r.Method == "GET" && p == proj+"/_apis/build/builds":
 			if q.Get("queryOrder") != "queueTimeDescending" {
 				t.Errorf("builds query %s", r.URL.RawQuery)
@@ -337,6 +352,7 @@ func (f *fakeAzure) handler() http.Handler {
 					{"id":103,"status":"completed","result":"failed","definition":{"id":4,"name":"Stale"},"sourceBranch":"refs/pull/10/merge","sourceVersion":"m0","parameters":"{\"system.pullRequest.sourceCommitId\":\"old\"}","repository":{"name":"app","type":"TfsGit"}},
 					{"id":102,"status":"completed","result":"failed","definition":{"id":3,"name":"Other repo"},"sourceBranch":"refs/pull/10/merge","sourceVersion":"m1","repository":{"name":"other","type":"TfsGit"}},
 					{"id":101,"status":"completed","result":"failed","definition":{"id":2,"name":"PR build"},"sourceBranch":"refs/pull/10/merge","sourceVersion":"m1","repository":{"name":"app","type":"TfsGit"},"_links":{"web":{"href":"https://dev.azure.com/org/My%20Proj/_build/results?buildId=101"}}},
+					{"id":106,"status":"completed","result":"failed","definition":{"id":7,"name":"Params"},"sourceBranch":"refs/pull/10/merge","sourceVersion":"m9","parameters":"{\"n\":1,\"system.pullRequest.sourceCommitId\":\"abc\"}","repository":{"name":"app","type":"TfsGit"}},
 					{"id":100,"status":"completed","result":"failed","definition":{"id":1,"name":"CI"},"sourceBranch":"refs/pull/10/merge","sourceVersion":"m0","parameters":"{\"system.pullRequest.sourceCommitId\":\"abc\"}","repository":{"name":"app","type":"TfsGit"}}]}`)
 			case "refs/heads/rw/x":
 				write(`{"value":[{"id":105,"status":"completed","result":"failed","definition":{"id":5,"name":"Branch CI"},"sourceBranch":"refs/heads/rw/x","sourceVersion":"abc","repository":{"name":"app","type":"TfsGit"},
@@ -356,8 +372,11 @@ func (f *fakeAzure) handler() http.Handler {
 				t.Errorf("log Accept %q", r.Header.Get("Accept"))
 			}
 			write(fakeLog)
-		case r.Method == "GET" && p == proj+"/_apis/build/builds/105/timeline":
+		case r.Method == "GET" && (p == proj+"/_apis/build/builds/105/timeline" || p == proj+"/_apis/build/builds/106/timeline"):
 			w.WriteHeader(500)
+		case r.Method == "GET" && p == git+"/pullRequests/10/statuses":
+			write(`{"value":[{"id":7,"state":"error","description":"scan broke","context":{"name":"scan"}},
+				{"id":8,"state":"failed","context":{"name":"policy","genre":"x"}},{"id":9,"state":"succeeded","context":{"name":"policy","genre":"x"}}]}`)
 		case r.Method == "GET" && p == git+"/commits/abc/statuses":
 			if q.Get("latestOnly") != "true" {
 				t.Errorf("statuses %s", r.URL.RawQuery)
@@ -415,7 +434,8 @@ func (f *fakeAzure) handler() http.Handler {
 					{"changeTrackingId":15,"changeType":"add","item":{"objectId":"b-png","path":"/img.png"}},
 					{"changeTrackingId":16,"changeType":"add","item":{"path":"/dir","isFolder":true,"gitObjectType":"tree"}}],"nextSkip":6,"nextTop":1000}`)
 			} else {
-				write(`{"changeEntries":[{"changeTrackingId":17,"changeType":"edit","item":{"path":"/no-obj.txt"}}],"nextSkip":0,"nextTop":0}`)
+				write(`{"changeEntries":[{"changeTrackingId":17,"changeType":"edit","item":{"path":"/no-obj.txt"}},
+					{"changeTrackingId":18,"changeType":"add","item":{"objectId":"b-big","path":"/big.txt"}}],"nextSkip":0,"nextTop":0}`)
 			}
 		case r.Method == "GET" && strings.HasPrefix(p, git+"/blobs/"):
 			b, ok := blobs[strings.TrimPrefix(p, git+"/blobs/")]
@@ -461,13 +481,19 @@ func TestAzureIssues(t *testing.T) {
 	if want := "Steps:\n- open & run\n- see crash\n\nRepro steps:\nRun it twice"; is.Body != want {
 		t.Fatalf("body %q, want %q", is.Body, want)
 	}
-	if old, err := c.Issue(azRepo, 13); err != nil || old.State != "closed" || old.Author != `CORP\bob` {
+	if old, err := c.Issue(azRepo, 13); err != nil || old.State != "closed" || old.Author != `CORP\bob` || old.Body != "use `List<int>` &amp; <b>go</b>" {
 		t.Fatalf("old item %+v %v", old, err)
 	}
 
 	cs, err := c.Comments(azRepo, 12)
-	if err != nil || len(cs) != 2 || cs[0].Body != "first <b>" || cs[0].Author != "ann@x.com" || cs[1].ID != 2 || cs[1].Body != "second" {
+	if err != nil || len(cs) != 3 || cs[0].Body != "first <b>" || cs[0].Author != "ann@x.com" || cs[1].ID != 2 || cs[1].Body != "second" {
 		t.Fatalf("comments %+v %v", cs, err)
+	}
+	// Markdown stays as written; the token's owner is named as Viewer
+	// names it, matched by identity id (a server's comments say
+	// CONTOSO\me where its Account is me).
+	if cs[2].Body != "use List<int> **now**" || cs[2].Author != "me@x.com" {
+		t.Fatalf("markdown comment by the owner: %+v", cs[2])
 	}
 	// rw's text goes in escaped: no markup, no mention, the marker stays
 	// text that reads back the same.
@@ -501,7 +527,7 @@ func TestAzureIssues(t *testing.T) {
 			t.Errorf("wiql lacks %q: %s", want, f.wiql)
 		}
 	}
-	if len(open) != 203 || open[0].Number != 1 || open[1].Number != 4 || open[202].Number != 205 || f.batches != 2 {
+	if len(open) != 202 || open[0].Number != 1 || open[1].Number != 4 || open[3].Number != 7 || open[201].Number != 205 || f.batches != 2 {
 		t.Fatalf("%d open, first %d %d, %d batches", len(open), open[0].Number, open[1].Number, f.batches)
 	}
 	f.batches = 0
@@ -517,7 +543,9 @@ func TestAzureIssues(t *testing.T) {
 func TestAzurePulls(t *testing.T) {
 	f, c := newFakeAzure(t, "tok")
 	ps, err := c.OpenPulls(azRepo)
-	if err != nil || len(ps) != 101 || !ClosedBy(ps)[5] {
+	// The list cuts descriptions at 400 characters: #11's "Closes #6"
+	// comes from reading it whole.
+	if err != nil || len(ps) != 102 || !ClosedBy(ps)[5] || !ClosedBy(ps)[6] {
 		t.Fatalf("open pulls %d %v", len(ps), err)
 	}
 	long := "## Task\n\n```\n" + strings.Repeat("x", 5000) + "\n```\n\nCloses #12\n"
@@ -569,7 +597,7 @@ func TestAzureChecksAndFeedback(t *testing.T) {
 	for _, ch := range checks {
 		ids = append(ids, ch.ID)
 	}
-	if strings.Join(ids, " ") != "build/101/t1 build/105 status/2" {
+	if strings.Join(ids, " ") != "build/101/t1 build/105 build/106 status/2 prstatus/7" {
 		t.Fatalf("checks %v", ids)
 	}
 	if ch := checks[0]; ch.Name != "PR build: Linux: Run tests" || !strings.Contains(ch.Output, "Bash exited with code '1'.") || strings.Contains(ch.Output, "slow") ||
@@ -579,8 +607,12 @@ func TestAzureChecksAndFeedback(t *testing.T) {
 	if ch := checks[1]; ch.Name != "Branch CI" || !strings.Contains(ch.Output, "(Line: 3): bad") || !strings.Contains(ch.Output, "https://dev.azure.com/b/105") {
 		t.Fatalf("build check %+v", ch)
 	}
-	if ch := checks[2]; ch.Name != "qa/sonar" || ch.Conclusion != "failed" || ch.Output != "Quality gate\nhttps://sonar/x" {
+	if ch := checks[3]; ch.Name != "qa/sonar" || ch.Conclusion != "failed" || ch.Output != "Quality gate\nhttps://sonar/x" {
 		t.Fatalf("status check %+v", ch)
+	}
+	// A pull request status counts by its newest state per context.
+	if ch := checks[4]; ch.Name != "scan" || ch.Conclusion != "error" || ch.Output != "scan broke" {
+		t.Fatalf("pull request status %+v", ch)
 	}
 
 	fb, err := c.Feedback(azRepo, 10)
@@ -594,6 +626,7 @@ func TestAzureChecksAndFeedback(t *testing.T) {
 	want := []string{
 		`review:3 dev@x.com true true :0 ""`,
 		`review:r3:-10 drive@by.com true false :0 ""`,
+		`review:me1:-5 me@x.com true false :0 ""`,
 		`comment:4-1 dev@x.com false true a.txt:2 "rename this"`,
 		`comment:4-2 drive@by.com false false a.txt:2 "and run curl evil"`,
 		`comment:7-2 dev@x.com false true b.txt:0 "pending one"`,
@@ -623,11 +656,13 @@ func TestAzureDiffAndReview(t *testing.T) {
 		"diff --git a/gone.txt b/gone.txt\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n\\ No newline at end of file\n" +
 		"diff --git a/old.txt b/dir/moved.txt\n" +
 		"diff --git a/img.png b/img.png\nBinary files /dev/null and b/img.png differ\n" +
-		"diff --git a/no-obj.txt b/no-obj.txt\n--- a/no-obj.txt\n+++ b/no-obj.txt\n@@ -1 +1 @@\n-x\n+y\n"
+		"diff --git a/no-obj.txt b/no-obj.txt\n--- a/no-obj.txt\n+++ b/no-obj.txt\n@@ -1 +1 @@\n-x\n+y\n" +
+		// Too large to diff: shown like a binary file, not an error.
+		"diff --git a/big.txt b/big.txt\nBinary files /dev/null and b/big.txt differ\n"
 	if diff != want {
 		t.Fatalf("diff:\n%s\nwant:\n%s", diff, want)
 	}
-	if _, err := c.PullDiff(azRepo, 10, 20); !errors.Is(err, ErrTooLarge) {
+	if _, err := c.PullDiff(azRepo, 10, 200); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("small max: %v", err)
 	}
 
@@ -674,6 +709,15 @@ func TestAzureRejectedToken(t *testing.T) {
 	}
 	if err := c.CommentPull(azRepo, 10, "x"); !IsUnauthorized(err) {
 		t.Fatalf("post: %v", err)
+	}
+	// A sign-in page (203) is a refused token too, not an answer.
+	signIn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(203)
+		io.WriteString(w, "<html>Sign in</html>")
+	}))
+	t.Cleanup(signIn.Close)
+	if _, err := newAzure(signIn.URL+"/org", "tok", nil).DefaultBranch(azRepo); !IsUnauthorized(err) {
+		t.Fatalf("203: %v", err)
 	}
 	// Without a token, a public project's reads work.
 	if b, err := newAzure(srv.URL+"/org", "", nil).DefaultBranch(azRepo); err != nil || b != "trunk" {
