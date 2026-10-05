@@ -3,3 +3,5 @@
 *.sh text eol=lf
 packaging/aur/* text eol=lf
 packaging/aur/.SRCINFO text eol=lf
+# rw completion prints these on every OS.
+cmd/rw/completions/* text eol=lf

@@ -440,7 +440,7 @@ the checks and runs the task. An existing config is kept unless you agree
 to replace it (or pass --force); it is backed up first.
 `)
 	}
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}

@@ -20,11 +20,17 @@ jobs:
       # there, not skip (TestSandboxSelftest). Elsewhere it skips without
       # docker for Linux containers.
       RW_TEST_SANDBOX: ${{ matrix.os == 'ubuntu-latest' && 'require' || '' }}
+      # The shells TestCompletionInRealShells must find (it skips missing
+      # ones otherwise): macOS has bash 3.2, Windows PowerShell 5.1 too.
+      RW_TEST_SHELLS: ${{ matrix.os == 'ubuntu-latest' && 'bash,zsh,fish,pwsh' || matrix.os == 'windows-latest' && 'bash,pwsh,powershell' || 'bash,zsh,pwsh' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: zsh and fish for the completion tests
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh fish >/dev/null
       - name: git identity for tests
         run: |
           git config --global user.name ci

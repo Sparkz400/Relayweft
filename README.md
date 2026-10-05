@@ -231,9 +231,24 @@ rw selftest [--onedrive] [--keep]    automated Windows checks with a scripted ag
 rw health [--days 14] [--check]       crashes, hangs, unclean exits, load peaks and leftovers; is "2 weeks clean" met?
 rw init [--global] [--force] [--print]
 rw clean [--dir <path>] [--idle 72h]  remove this repo's pooled worktrees (or every repo's idle ones)
+rw completion bash|zsh|fish|powershell   Tab completion for your shell (see below)
 ```
 
 `rw run` exits 1 when the task fails, so it is scriptable. With `--pr`, a task that ends without its pull request (the push or the PR failed) counts as failed too, so a CI job goes red.
+
+### Tab completion
+
+`rw completion <shell>` prints a script that makes Tab complete subcommands, flags, provider names, models (`--route worker=claude:<Tab>`) and task ids (`rw resume <Tab>`, `rw undo <Tab>`). It reads only your config and task history: no agent, no git, no network. Install it once:
+
+- **PowerShell** (Windows PowerShell 5.1 and PowerShell 7; also for Scoop and winget installs): add this line to your profile (`notepad $PROFILE`):
+  ```powershell
+  rw completion powershell | Out-String | Invoke-Expression
+  ```
+- **bash**: `echo 'source <(rw completion bash)' >> ~/.bashrc` (Git Bash too)
+- **zsh**: `rw completion zsh > "${fpath[1]}/_rw"`, then open a new shell
+- **fish**: `rw completion fish > ~/.config/fish/completions/rw.fish`
+
+The `.deb`, `.rpm` and `.apk` packages and Homebrew install the bash, zsh and fish scripts for you.
 
 ### Undo: try anything, risk-free
 
@@ -517,7 +532,7 @@ The server listens on 127.0.0.1 only. Each link `rw` prints or opens works once,
 
 ## Configuration
 
-`rw` looks for `./relayweft.yaml`, then `<user config dir>/relayweft/relayweft.yaml`, then falls back to the built-in default (the file in this repo). Partial files work: anything you leave out keeps its default. See [`relayweft.yaml`](relayweft.yaml) for every option with comments.
+`rw` looks for `./relayweft.yaml`, then `<user config dir>/relayweft/relayweft.yaml`, then falls back to the built-in default (the file in this repo). Partial files work: anything you leave out keeps its default. **[docs/config.md](docs/config.md) lists every key** with its type, default, what it does and whether a repo file needs `rw trust` for it; [`relayweft.yaml`](relayweft.yaml) (or `rw init --print`) is the commented default file.
 
 A `./relayweft.yaml` may have come with a repository you cloned, so the settings in it that run commands or send data (the same list as for a repo file below: `verify`, `hooks`, `providers`, ...) apply only once trusted. Until then, `rw` uses your own config's (or the defaults) and says which it ignored. Files `rw` writes itself (`rw init`, `/save`, the model picker, `rw models --refresh`, settings saved in `rw web`) are trusted for you; after editing those settings by hand, run `rw trust`. Only what the file sets for them is trusted, so editing its routes or toggles needs no new `rw trust`. `--config <file>` and your user config always apply in full.
 
@@ -526,7 +541,7 @@ A `./relayweft.yaml` may have come with a repository you cloned, so the settings
 A `.relayweft.yaml` in a repository holds the settings for that repo (in the repo root, or in the project folder). It is layered over your own config: built-in defaults < your config < the repo file < command-line flags. It only needs what the repo cares about; roles merge per key, so `roles: {worker: {prefer: claude}}` keeps the worker's routes.
 
 - Create one with `rw init --repo`, which detects the test commands, or with `/save repo` from the TUI. Commit it to share.
-- **Commands need your trust.** The parts that run commands or reach other folders are ignored until you have reviewed them with `rw trust`: `verify`, `hooks`, `providers`, `log_dir`, `mcp`, `workspace`, `budget.team.dir` and `notify.webhooks` (they say where your task results are sent). A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `rw trust`. `rw trust --revoke` withdraws it. Routes, preferences and toggles always apply, except those that name a provider the untrusted file adds (`providers` covers `kind: generic` descriptions and `env` too).
+- **Commands need your trust.** The parts that run commands, reach other folders or send data somewhere (`verify`, `hooks`, `providers`, `mcp`, `workspace`, `notify.webhooks`, ...; the "In a repo file" column of [docs/config.md](docs/config.md) has each key) are ignored until you have reviewed them with `rw trust`. A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `rw trust`. `rw trust --revoke` withdraws it. Routes, preferences and toggles always apply, except those that name a provider the untrusted file adds (`providers` covers `kind: generic` descriptions and `env` too).
 
 ### The repo's own conventions
 
@@ -599,6 +614,7 @@ Each repo must be a git work tree of its own: not the primary's repo, not inside
 go test -race ./...          # unit + integration tests (real git repos, fake CLIs)
 go vet ./...
 GOOS=windows go build ./cmd/rw
+go generate ./internal/config   # after changing the config: rewrites docs/config.md (a test fails until you do)
 ```
 
 ```

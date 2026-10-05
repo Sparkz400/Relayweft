@@ -112,7 +112,7 @@ small test image). Your own repos and config are not touched. What is
 left to check by hand is printed at the end.
 `)
 	}
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}

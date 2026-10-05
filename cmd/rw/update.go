@@ -89,7 +89,7 @@ If Homebrew, Scoop, winget or a Linux package (.deb, .rpm, .apk, AUR)
 installed rw, it says how to update with that instead and changes nothing.
 `)
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	out := updateOut

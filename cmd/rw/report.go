@@ -36,8 +36,8 @@ environment values or credentials.
 	// Accept flags after the task id too (rw report <id> --open).
 	var id string
 	rest := args
-	for len(rest) > 0 {
-		fs.Parse(rest)
+	for { // parse at least once, also without arguments
+		parseFlags(fs, rest)
 		if fs.NArg() == 0 {
 			break
 		}

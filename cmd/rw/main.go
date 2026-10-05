@@ -41,12 +41,19 @@ func main() {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		sub, args = args[0], args[1:]
 	}
-	if sub == selftestAgentCmd {
+	switch sub {
+	case selftestAgentCmd:
 		cmdSelftestAgent()
 		return
+	case completeCmd:
+		// Shell completion on every Tab: no logs, no migration, no
+		// cleanup, quick, and quiet whatever happens.
+		cmdComplete(args)
+		return
 	}
-	switch sub {
-	case "version", "--version", "help", "-h", "--help":
+	cmd, known := findCommand(sub)
+	switch {
+	case cmd.builtin, sub == "completion":
 	default:
 		// Before anything creates rw's user folder (the debug log does).
 		migrateSwitchyard(os.Stderr)
@@ -55,69 +62,12 @@ func main() {
 	}
 	defer crashGuard()
 	cleanupOldBinary()
-	var err error
-	switch sub {
-	case "":
-		err = cmdTUI(args)
-	case "run":
-		err = cmdRun(args)
-	case "stats":
-		err = cmdStats(args)
-	case "doctor":
-		err = cmdDoctor(args)
-	case "models":
-		err = cmdModels(args)
-	case "init":
-		err = cmdInit(args)
-	case "setup":
-		err = cmdSetup(args)
-	case "clean":
-		err = cmdClean(args)
-	case "bugreport":
-		err = cmdBugreport(args)
-	case "health":
-		err = cmdHealth(args)
-	case "undo":
-		err = cmdUndo(args)
-	case "pr":
-		err = cmdPR(args)
-	case "watch":
-		err = cmdWatch(args)
-	case "notify":
-		err = cmdNotify(args)
-	case "review":
-		err = cmdReview(args)
-	case "bench":
-		err = cmdBench(args)
-	case "tune":
-		err = cmdTune(args)
-	case "history":
-		err = cmdHistory(args)
-	case "resume":
-		err = cmdResume(args)
-	case "update":
-		err = cmdUpdate(args)
-	case "trust":
-		err = cmdTrust(args)
-	case "schedule":
-		err = cmdSchedule(args)
-	case "web":
-		err = cmdWeb(args)
-	case "app":
-		err = cmdApp(args)
-	case "report":
-		err = cmdReport(args)
-	case "selftest":
-		err = cmdSelftest(args)
-	case "version", "--version":
-		fmt.Println("relayweft", version)
-	case "help", "-h", "--help":
-		usage()
-	default:
+	if !known {
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", sub)
 		usage()
 		os.Exit(2)
 	}
+	err := cmd.run(args)
 	diag.End(err)
 	if err != nil {
 		diag.Logf("exit with error: %v", err)
@@ -198,6 +148,7 @@ Usage:
   rw health [--days 14] [--json] [--check]   crashes, hangs, unclean exits, load peaks and leftovers
                              from the logs, and whether "2 weeks of daily use without a crash or hang" is met
   rw update [--check] [--yes]      update rw to the latest release
+  rw completion bash|zsh|fish|powershell   print a shell completion script (rw completion --help: how to install)
   rw version
 
 Flags (TUI and run):
@@ -418,7 +369,7 @@ func cmdTUI(args []string) error {
 	c.register(fs)
 	demo := fs.Bool("demo", false, "demo mode with fake agents")
 	speed := fs.Float64("speed", 1, "demo speed multiplier")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q (use `rw run \"task\"` for headless runs)", fs.Arg(0))
 	}
@@ -568,7 +519,7 @@ func cmdStats(args []string) error {
 	// Flags may follow the --merge files.
 	var files []string
 	for rest := args; ; rest = fs.Args()[1:] {
-		fs.Parse(rest)
+		parseFlags(fs, rest)
 		if fs.NArg() == 0 {
 			break
 		}
@@ -632,7 +583,7 @@ func cmdClean(args []string) error {
 	fs := flag.NewFlagSet("rw clean", flag.ExitOnError)
 	dir := fs.String("dir", ".", "project directory")
 	idle := fs.Duration("idle", 0, "instead: remove every repo's pool worktrees unused for this long (e.g. 72h)")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if *idle > 0 {
 		n, freed := orchestrator.PrunePools(*idle)
 		fmt.Printf("removed %d idle pooled worktree(s), freed %s\n", n, orchestrator.HumanBytes(freed))
@@ -652,7 +603,7 @@ func cmdClean(args []string) error {
 func cmdDoctor(args []string) error {
 	fs := flag.NewFlagSet("rw doctor", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "config file")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	return runDoctor(os.Stdout, *cfgPath)
 }
 
@@ -725,7 +676,7 @@ func cmdModels(args []string) error {
 	cfgPath := fs.String("config", "", "config file")
 	refresh := fs.Bool("refresh", false, "read the Codex catalog from `codex debug models` and save it")
 	all := fs.Bool("all", false, "with --refresh: include hidden models")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	cfg, path, err := config.Load(*cfgPath)
 	if err != nil {
 		return err
@@ -852,7 +803,7 @@ func cmdInit(args []string) error {
 	repo := fs.Bool("repo", false, "write a .relayweft.yaml for this repository (shared settings to commit)")
 	force := fs.Bool("force", false, "overwrite an existing file")
 	print := fs.Bool("print", false, "print the default config instead of writing it")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if *print {
 		os.Stdout.Write(config.DefaultYAML())
 		return nil

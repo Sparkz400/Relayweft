@@ -275,7 +275,7 @@ comments only reach the agents as quoted data.
 `)
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}

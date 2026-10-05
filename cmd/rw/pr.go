@@ -125,8 +125,8 @@ An opened pull request is followed up by rw watch (failed checks, reviews).
 	}
 	var id string
 	rest := args
-	for len(rest) > 0 {
-		fs.Parse(rest)
+	for { // parse at least once, also without arguments
+		parseFlags(fs, rest)
 		if fs.NArg() == 0 {
 			break
 		}
