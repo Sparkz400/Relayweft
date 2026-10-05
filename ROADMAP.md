@@ -31,6 +31,9 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - task queue
   - notifications
   - release pipeline with `sy update`
+  - a guided first run (`sy setup`)
+  - only the affected tests in fix rounds
+  - Homebrew, `.deb`/`.rpm`/`.apk` and AUR packages
 - **Phase 1 test items (done):**
   - parser fuzzing in CI (found and fixed 5 bugs)
   - a 30-minute stress test in CI on Linux and Windows
@@ -41,7 +44,8 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - `sy tune` (rule tuning, judge cost vs gain, models from your config)
   - context hand-off
   - cost per task and per day
-  - cost-aware model tiers (off by default; not yet measured)
+  - cost-aware model tiers (off by default; measured on the starter set)
+  - best of N for hard steps (off by default; not yet measured)
 - **Phase 4 (done; 4.3 more providers is in beta):**
   - `sy web` and `sy app`
   - per-repo `.switchyard.yaml` with `sy trust`
@@ -62,10 +66,14 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - GitLab and Gitea/Forgejo for `sy pr`, issues, `sy watch` and `sy review`
   - issue tasks in GitHub Actions and GitLab CI, without the forge token in agents
   - team mode: several machines share one issue label
+  - a dashboard in `sy web`
+  - a JetBrains plugin
+  - a container sandbox for agents (docker or podman)
 - **Release v0.1.0** (3 Oct 2026): six binaries plus checksums, built by the release workflow, MIT license, Scoop manifest filled in.
 - **Release v0.2.0** (4 Oct 2026): more providers, `sy health`, model tiers, CI and team mode, self-hosted forges, webhooks, `sy selftest` and the fixes from real use. `sy update` from v0.1.0 to v0.2.0 was run for real (checksum verified). Scoop manifest updated; winget manifests rendered.
   - The repository is public: release downloads, `sy update` and the Scoop install need no login.
   - winget needs the rendered manifests submitted to microsoft/winget-pkgs.
+- **Release v0.3.0** (5 Oct 2026): `sy setup`, best of N, affected tests in fix rounds, the container sandbox, the dashboard, the JetBrains plugin, Homebrew/`.deb`/`.rpm`/`.apk`/AUR packaging, Codex follow-ups in pool worktrees, saved half-done edits, macOS orphan cleanup, and `sy tune` thresholds that account for sample size. Every change had an independent adversarial review before merge.
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
@@ -80,6 +88,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - the TUI plan overlay, driven in the demo
 - **The starter bench checks:** all five fail on the untouched project and pass with reference solutions.
 - **A real benchmark with Claude Code:** 20 runs, all passed ([docs/bench](docs/bench/2026-10-03-starter-claude.md)).
+- **Model tiers, for real:** 19 Claude runs and 3 Codex runs, all passed ([docs/bench](docs/bench/2026-10-04-tiers-claude.md)).
 - **`sy web` in headless Chromium:** plan editing, hunk review, reload restore and the panels.
 - **A 3-minute stress run:** goroutines, file handles, heap and processes stayed flat over 1,750 tasks.
 
@@ -103,6 +112,11 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **Keep-awake on macOS:** a waiting `sy run --in` holds a `caffeinate -i -w <sy pid>` sleep assertion (seen in `pmset -g assertions`). It ends after Ctrl+C, and on its own when sy is killed. `--allow-sleep` takes none.
 - **`sy update` on macOS:** a 0.0.1 build updated itself to release 0.2.0, which starts.
 
+**Verified for real on 5 Oct 2026 (Windows 11, and Linux in Docker):**
+- **First run:** from the v0.2.0 download to a finished first task (Claude haiku explaining a small repo) in a fresh profile: 13 seconds of machine time and three answers.
+- **Linux packages and Homebrew:** the `.deb` (Ubuntu), `.rpm` (Fedora), `.apk` (Alpine) and the AUR PKGBUILD (Arch, makepkg and pacman) installed in Docker, and `sy update` named the package manager and changed nothing; the formula installed with Homebrew on Linux, and passed `brew test`, `style` and `audit --strict`.
+- **Affected tests on this repo:** 11 recent commits; with 5 fixes undone, the narrowed runs failed the same tests as the full suite.
+
 **Not verified yet:**
 - Codex: a usage-limit hit and a logged-out CLI.
 - Real daily use on your Windows PC.
@@ -111,6 +125,8 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - A macOS notification banner on screen: the runners' screenshots never show one (Notification Center logs it "as banner", but the runner's screen is shared, which may hide banners). Delivery itself is verified.
 - `sy app` in Edge on macOS and Linux (Chrome only), and on a real Linux desktop (GNOME/KDE) rather than Xvfb with fluxbox and dunst.
 - Webhooks to real Slack and Discord (payloads checked against their current docs only).
+- The container sandbox with Podman, with a signed-in Claude Code or Codex doing real work, and on Linux and macOS hosts outside CI.
+- Best of N and affected-test selection with real agents; the JetBrains plugin driven on Windows or macOS.
 
 **Open risk:** a full Windows freeze happened on 3 Oct while using `sy`.
 - The logs show the same unexplained hard resets since August, before Switchyard existed, with no blue screen and no disk or memory exhaustion.
@@ -152,12 +168,12 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 |---|---|---|
 | 2.1 | ✅ **Plan approval step**: the plan opens in the TUI (or on the terminal with `sy run --approve`). You can delete, reorder or edit subtasks, pin a role, or cancel. Turn it off with `/approve off`. | You stay in control of what runs, before any quota is spent. |
 | 2.2 | ✅ **Review the diff before it lands** (`review_changes`): a per-file diff view where you can accept, accept only some files, reject, or send it back with feedback (the agent continues in its worktree). Rejected work is kept on a branch. | Bad edits are rejected before they reach your tree, not undone after. |
-| 2.3 | ✅ **Agents can run tests safely**: `verify.commands`, detected by `sy init` (Go, npm/pnpm/yarn/bun, pytest, cargo, dotnet, Maven, Gradle). They become Claude `allowedTools`, are run by `sy` before the final review, and failures feed the fix round. Codex workers already run commands inside their workspace-write sandbox. | Today Claude workers can edit but cannot verify their own work. |
-| 2.4 | ✅ **Follow-up messages**: `@agent message` resumes that agent's CLI session (`codex exec resume`, `claude --resume`), falling back to a fresh agent with context. Finished agents only; a running agent is not interrupted. | Real work is iterative; today every follow-up starts a new task. |
+| 2.3 | ✅ **Agents can run tests safely**: `verify.commands`, detected by `sy init` (Go, npm/pnpm/yarn/bun, pytest, cargo, dotnet, Maven, Gradle). They become Claude `allowedTools`, are run by `sy` before the final review, and failures feed the fix round. Codex workers already run commands inside their workspace-write sandbox. After a fix round that is not the last (`max_fix_rounds` 2 or more), only the tests the changes affect run first (Go packages and their importers, jest/vitest related tests, pytest by imports, cargo crates, dotnet test projects, Maven and Gradle modules, or a `verify.affected_commands` template); the full checks always run before the final review, and anything sy cannot tell runs in full. Measured on this repo: the same failures caught, wall time 0-16% lower (the orchestrator tests dominate). | Today Claude workers can edit but cannot verify their own work. |
+| 2.4 | ✅ **Follow-up messages**: `@agent message` resumes that agent's CLI session (`codex exec resume`, `claude --resume`) in the pool worktree the agent ran in, falling back to a fresh agent with context. Finished agents only; a running agent is not interrupted. | Real work is iterative; today every follow-up starts a new task. |
 | 2.5 | ✅ **Task history and resume**: the state of every task is saved after each step. `sy history` / `/history` list tasks; `sy resume` / `/resume` continue an interrupted one, skipping finished steps. Diffs per task come from `sy undo --list`. | Closing the window or a reboot no longer loses progress. |
 | 2.6 | ✅ **Task queue**: submitting while a task runs queues it in the TUI (`/queue`). `sy run --file tasks.txt` runs a list overnight. Queued tasks run unattended. | Uses quota while you're away. |
 | 2.7 | ✅ **Notifications**: a desktop notification when a task finishes or fails, a limit is hit, or `sy` waits for you (Windows toast, macOS, notify-send). | You don't have to watch the terminal. |
-| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, and `sy update` (checksum-verified, swaps the running .exe safely on Windows). Code signing needs a certificate: see `packaging/README.md`. | Installing no longer needs Go or a build. |
+| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, a Homebrew tap in this repo (`brew install switchyard`), `.deb`, `.rpm` and `.apk` packages on each release (from v0.3.0), an AUR PKGBUILD (`switchyard-cli-bin`), and `sy update` (checksum-verified, swaps the running .exe safely on Windows, and points to the package manager that installed `sy` instead of replacing its binary). Code signing needs a certificate: see `packaging/README.md`. | Installing no longer needs Go or a build. |
 
 **Gaps closed since:**
 - Dependencies can be edited in the plan view (`x`).
@@ -167,23 +183,25 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - Follow-ups survive restarts and reach running agents.
 - A resumed step is told that it was interrupted.
 - A step that was running when `sy` died continues its agent's own session, in the folder it ran in, with its half-done edits. The session id is saved as soon as the CLI reports it. Without a usable session, a fresh agent takes over.
-- A follow-up to a Claude agent that ran in a pool worktree resumes it in that worktree.
+- A follow-up to an agent that ran in a pool worktree (Claude or Codex) resumes it in that worktree. A stopped follow-up's work is kept on a branch.
+- On macOS the agent of a killed `sy` is stopped by the next `sy` (it checks the process's start time), and the step continues in its own worktree.
+- The half-done edits of an interrupted step are saved on a branch (`sy/<task>/<step>-unfinished`) before its worktree is freed after 7 days or removed by `sy clean`. `sy history` and `sy resume` say where they are, with commands that work in Windows PowerShell 5.1 too.
+- A guided first run (`sy setup`): it finds the agent CLIs, checks versions and logins without using quota, says how to install or log in, writes the config with the ready ones and offers a read-only first task. `sy`, `sy run` and `sy web` start it when there is no config (not in CI, or with `SY_NO_SETUP=1`).
 - Codex resumes get an explicit sandbox.
 - The repo has an MIT license.
 
 **Remaining gaps:**
 - **2.3 Tests:** Codex runs commands in its own sandbox, not from an allowlist, so `verify.commands` can only restrict Claude. Codex offers no allowlist, so this is a limit of the CLI.
-- **2.4 Follow-ups:** a Codex agent that ran in a pool worktree is still resumed from the main tree (Codex finds its sessions anywhere). Its history names the worktree's paths.
-- **2.5 Resume:**
-  - Other tasks leave a worktree with half-done edits alone for 7 days, until its task is resumed or undone. After that, or after `sy clean`, the step starts over from the tree.
-  - On macOS the agent of a killed `sy` keeps running in its worktree. `sy` cannot safely stop it there, so the step starts over in another worktree.
+- **2.3 Affected tests:** only the Go selection was run for real (on this repo). The jest/vitest, pytest, cargo, dotnet, Maven and Gradle selections are tested on file trees, not yet on real projects.
+- **2.5 Resume:** on Linux and macOS the agent of a killed `sy` keeps running (and spending) until the next `sy` takes its worktree.
 - **2.8 Distribution:**
   - Code signing needs a certificate.
-  - The Scoop and winget manifests must be rendered after each release.
+  - The Scoop, winget, Homebrew and AUR manifests must be rendered (and the AUR one pushed) after each release.
+  - The Linux packages are unsigned, and there is no apt or dnf repository.
 
 **Exit criteria:**
 - You reach for `sy` before plain `codex` or `claude` for multi-step work.
-- A new user goes from install to first task in under 5 minutes.
+- ✅ A new user goes from install to first task in under 5 minutes. `sy setup` checks the CLIs and logins without quota, writes the config and runs a read-only first task. Measured on Windows: download 1.8s, setup 1.6s of sy's own time, first task with Claude haiku 8.8s (13s in all, plus three answers). `TestOnboarding` times it in CI on all three OSes with scripted agents.
 
 ---
 
@@ -199,7 +217,8 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 3.4 | ✅ **Judge model** (measurement): decisions record whether the judge ran, and `sy tune` compares judged with rule-routed steps to suggest `/judge on` or `/judge off`. | Spend quota only where it pays. |
 | 3.5 | ✅ **Context hand-off**: a repo map and notes from earlier tasks in the same repo go into planner and step prompts, and every writer gets what this task's read-only steps found. | Fewer tokens, faster workers. |
 | 3.6 | ✅ **Cost visibility**: fresh tokens per provider, Claude API-equivalent $, and limit before and after, in the TUI, `sy run` and `sy stats`, plus a per-day table in `sy stats`. | You can see what each task cost. |
-| 3.7 | ✅ **Cost-aware model tiers** (`routing.tiers: auto`, off by default): the rules still pick the role; a work step's model then comes from its estimated difficulty (role, files, prompt size, routine or hard words) and the quota left (the provider's reported limit, and the task, day and team budgets). The tiers reuse the explorer, worker and worker_high routes. Planner, reviewer, judge and explicitly set roles never move; risky steps keep their floor; a local model on standby keeps its route. Not yet measured: run `sy bench` with and without `--tiers`. | Easy steps stop paying for strong models, and a nearly spent quota stretches further. |
+| 3.7 | ✅ **Cost-aware model tiers** (`routing.tiers: auto`, off by default): the rules still pick the role; a work step's model then comes from its estimated difficulty (role, files, prompt size, routine or hard words) and the quota left (the provider's reported limit, and the task, day and team budgets). The tiers reuse the explorer, worker and worker_high routes. Planner, reviewer, judge and explicitly set roles never move; risky steps keep their floor; a local model on standby keeps its route. Measured on the starter set: the tiers kept Sonnet for 6 of 7 steps, and the cost stayed the same within noise. Routine words now count only in a step's title. | Easy steps stop paying for strong models, and a nearly spent quota stretches further. |
+| 3.8 | ✅ **Best of N for hard steps** (`routing.best_of`, off by default; `b` in the plan view): a writing step runs on two to four routes at once (default: its own route and the same role on the next provider), each in its own pool worktree from the same commit. `verify.commands` run in full in each worktree, one at a time. Passing checks win (not a candidate that changed nothing over one that changed something); otherwise the reviewer compares the diffs (untrusted, named A and B in shuffled order, not by provider); otherwise a fixed order (fewer failing checks, a change, the smaller diff, the cheaper run). The winner lands like any step and change review sees only it; every candidate's work is kept on a branch until the winner has landed. `when: hard` reuses the router's risk rules and the tiers' difficulty score. Providers at or near their limit are left out; candidates run at once only within `max_threads` and when the machine is not busy; the estimate counts every candidate. A best-of step that sy stopped before the pick runs again as a whole on resume; from the pick on, the winner resumes like any step. An untrusted repo file or `./switchyard.yaml` may lower `best_of`, not raise it. `best_of` records feed `sy tune` and the learned routes (a loss on checks or by the reviewer counts against the route); `sy bench` has a `routed-bestof` mode. Not yet measured. | A second opinion where it matters: on hard steps the checks, not one agent, decide which change lands. |
 
 **Gaps closed since:**
 - `sy tune` reads models, efforts and the fast tier from your config.
@@ -209,14 +228,19 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - Notes are dropped when they are older than 60 days or all their files are gone.
 - Bench runs no longer share the repo's history: `git log --all` or `git show <sha>` in a run found the solution of a history task. Each run now gets a standalone repository with one commit of the starting files.
 - `--own-tests` narrows a history task's check to the commit's own tests, so one long-failing test no longer fails every candidate.
+- `sy bench` no longer prints the Ctrl+C notice at a normal end.
+- `sy tune` counts an escalated step once, however often it repeats, and needs limit switches in two episodes 12 hours apart.
 
-**First measurements** ([docs/bench](docs/bench/2026-10-03-starter-claude.md)):
+**First measurements** ([docs/bench](docs/bench/2026-10-03-starter-claude.md), [tiers](docs/bench/2026-10-04-tiers-claude.md)):
 - On five small one-file tasks, a single Claude agent was about 3x faster and used half the tokens.
 - As a result, one-step plans now skip the plan review. That cut routed time by 32% and tokens by 23%.
+- With `--tiers`, 6 of 7 small work steps kept Sonnet and one went to Haiku. Cost and correctness were the same; the planner and reviewer are most of a routed task's cost. A single agent was still about 2x faster on these tasks.
 - Whether routing pays off on bigger tasks is still open (exit criterion below).
 
 **Remaining gaps:**
-- `sy tune`'s thresholds are first guesses. Adjust them once real logs exist.
+- `sy tune`'s rates now need a clear majority from few runs (90% confidence bound, on both sides when routed is compared with single): 3 failures in 5 runs, 4 in 10, 7 in 20. The rates themselves are still guesses: no real log has failures yet.
+- Whether tiers pay off on multi-file tasks: run `sy bench --from-history` with and without `--tiers`.
+- Whether best of N raises the pass rate: run `sy bench` with `routed-bestof` against `routed` and `single`.
 
 **Exit criteria:** on the benchmark, Switchyard beats a single agent on at least 2 of the 3 measures: correctness, wall time, and how quickly the limits are reached.
 
@@ -253,6 +277,9 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 4.25 | ✅ **Bench results feed learned routes**: a bench mode `routed:<role>=<provider:model[:effort]>` runs the routed pipeline with one role on another route, so the learner gets an alternative to compare with (single-agent runs never counted). `learn: true` in a bench file, or `--learn`, updates the repo's learned routes when the bench ends, with the same clear-evidence rules as `sy tune --apply`. `sy bench --from-history` writes `learn: true` and a worker variant on the other provider, so one bench of your own history can change the routing with no manual tuning. `--no-learn` and `routing.learn: off` keep the routes as they are; a cancelled bench learns nothing. |
 | 4.26 | ✅ **CI as an agent target** (`action.yml`, `ci/`, [docs/ci.md](docs/ci.md)): a GitHub Action, a GitLab job and a Forgejo/Gitea Actions workflow (`ci/forgejo-workflow.yml`) run `sy run --issue N --pr` or `--issues label:sy --pr` in CI (on a label, nightly or by hand), so tasks run without your PC. The action installs the release named by its ref (checksum-verified) or builds from source. Agents, verify commands, hooks and bench checks start without the forge and CI tokens; git pushes through a credential helper, not `.git/config`. Reports go to the job summary and an artifact; `sy history --json` lists a run's tasks. Tested locally (install against the real v0.1.0 release, the step scripts with a stub `sy`, token scrubbing); not yet run on real GitHub or GitLab runners. The Forgejo workflow ran on a real Forgejo 16 with forgejo-runner v12 in Docker, with sy (built from this change and from the v0.2.0 tag) and a scripted `claude` stand-in installed from a release on that Forgejo (checksum-verified): a labelled issue, a scheduled batch and a manual run each opened a pull request (`Closes #N`) and commented on the issue; the stand-in saw only its model key. sy finds the forge from the job's server, and the job's token never goes to GitHub. On a private repository the job's own token cannot open the pull request (Forgejo 16); a `SWITCHYARD_TOKEN` secret can. Not yet tried on Gitea or Codeberg. |
 | 4.27 | ✅ **Team mode: a shared issue queue**: `sy run --issues label:sy --pr --team [--every 10m]` on several machines pulls from the same label. Each issue is claimed with one comment right before it runs; the earliest live claim by a trusted author wins, the lease is renewed while the task runs (`--lease`), and the comment ends as done (PR link), failed or released. Failed issues wait for `--retry-failed`. Works on GitHub, GitLab and Gitea. Tested against fake forges, not yet with two real machines. |
+| 4.28 | ✅ **Container sandbox** (`sandbox:`, off by default; [docs/sandbox.md](docs/sandbox.md)): agents, the verify commands, `after_merge`/`after_task` hooks and bench checks run in a docker or podman container with only the step's folder writable. The repository's git folder is mounted read-only (a generated `.git` file for pool worktrees, a git config without remotes or helpers), each provider gets its own `HOME` so sessions resume (command-running settings files are cleared before each run), and `/work/...` paths are turned back into host paths. Only named variables and read-only credential files go in; sy's forge and CI tokens never do (also not through MCP configs). Every host git command in a folder an agent wrote to runs with `core.fsmonitor=false` and without submodule recursion, and a changed submodule `.git` fails the run, so files an agent writes cannot make git on the host run code. Project settings files an earlier agent changed (`.claude/settings*.json`, `.mcp.json`, `.codex/config.toml`) are shown to the next CLI in their starting version. Per provider and per role; a repo file may make it stricter without `sy trust`, never weaker. Cancel and timeouts `docker kill` the container, a wrapper ends it when sy dies, and a sweep removes leftovers. A missing runtime, image or CLI fails the step; nothing runs on the host instead. `sy doctor` checks it, `sy selftest --sandbox` runs it with a scripted agent (required in CI on Linux), and `packaging/sandbox` has the reference image. Two security reviews; run for real on Windows with Docker Desktop (pool worktrees, verify, timeout, hard kill, a planted submodule `.git`, real Claude Code without sign-in). |
+| 4.29 | ✅ **JetBrains plugin** (`editors/jetbrains`): a thin client for `sy web --client` in IntelliJ IDEA, PyCharm, GoLand, WebStorm, Rider and the other JetBrains IDEs (2025.2+), with the agent tree, the activity log and a prompt box in a tool window, plan approval (edit, add, delete, reorder), and hunk review in the IDE's diff viewer (gutter icons, strike-through, CRLF checkouts as whole files). Same login and security as the VS Code extension; settings are IDE-wide, never per project, and an untrusted project never starts `sy`. Unsaved edits are saved before `sy` applies changes. Tested against a fake server, a real sy with a scripted agent, and in a headless IDE; the Plugin Verifier passes on IDEA 2025.2, 2025.3 and 2026.2. A UI test drives it in a real IntelliJ IDEA on Xvfb (tool window, plan dialog, Review tab, diff, apply). Not on the Marketplace yet (needs an account; steps in its README). |
+| 4.30 | ✅ **Dashboard in `sy web`**: a panel over 7, 30 or 90 days, for this project or all. It shows tasks per day (done, failed, cancelled) with the success rate; fresh tokens per provider and API-equivalent $ per day against the daily and team budget; success, average tokens, $ and time per role and route, with escalations, rejected final reviews, decision flags and what `sy tune` flags; learned-route changes with their evidence; Claude's 5-hour and 7-day use, limit hits and switches per provider; and the `sy health` streak. One endpoint (`/api/dashboard`) aggregates on the server with the `sy stats`, `sy tune`, learn and health code, cached for a minute; the charts are inline SVG with table views, in both themes, and work at 480px. ~0.3 s for 2,900 tasks over 90 days. Tested with fixture and synthetic logs and in headless Chrome; not yet with real logs. |
 
 ---
 
@@ -282,7 +309,9 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 3. **Run `sy bench` on ~10 real, multi-file tasks from your own repos, with Codex.** This decides the Phase 3 exit criterion. In each repo, `sy bench --from-history` writes the tasks (it runs your tests on each candidate commit, which costs no quota). Read and reword the prompts, then run `sy bench --file bench-history.yaml`. After a week of use, run `sy tune`.
 4. **Releases:**
    - Submit the rendered winget manifests to microsoft/winget-pkgs (needs a fork of winget-pkgs on your account).
-   - After each release, render the manifests (`packaging/render-manifests.sh X.Y.Z`).
+   - After each release, render the manifests (`packaging/render-manifests.sh X.Y.Z`) and commit `packaging/scoop/sy.json`, `Formula/switchyard.rb`, `packaging/aur/PKGBUILD` and `packaging/aur/.SRCINFO`.
+  - Publish `switchyard-cli-bin` to the AUR (needs an AUR account; steps in `packaging/README.md`), then push the rendered PKGBUILD and .SRCINFO after each release.
+  - Install a `.deb`/`.rpm` from a release once, and `brew install switchyard` on a real Mac.
    - For signed binaries, buy a code-signing certificate (see `packaging/README.md`).
 5. **Open Phase 4 items:**
    - 4.3: record a Gemini run with an API key (`GEMINI_API_KEY`; personal Google sign-in is refused; the commands are in docs/providers.md) and a DeepSeek run, to turn them from beta into tested.
