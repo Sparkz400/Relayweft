@@ -1,9 +1,9 @@
 /// <reference types="mocha" />
-// The extension in a real VS Code, driving a real `sy web --client` (built
+// The extension in a real VS Code, driving a real `rw web --client` (built
 // from this repo) whose agent is the scripted CLI in fakeClaude.ts. The
 // tests run in order and share one workspace (a git repo made by
 // runTest.ts): start, a task with plan editing and hunk review, undo,
-// follow-up, cancel, stop, sy crashing, and a bad sy path.
+// follow-up, cancel, stop, rw crashing, and a bad rw path.
 //
 // Dialogs (quick picks, input boxes, messages) are answered by replacing
 // the vscode.window functions: the test file belongs to the extension's
@@ -19,9 +19,9 @@ import type { AgentsItem } from '../../tree';
 import type { StateView } from '../../types';
 import { EDITED_LINES, EDITED_PLAN_TEXT, edited, HANG, NOTES, NOTES_LINES, PLAN_TEXT } from './fakeClaude.consts';
 
-const REPO = process.env.SY_TEST_REPO!;
-const STATE = process.env.SY_TEST_STATE!;
-const SY = process.env.SY_TEST_SY!;
+const REPO = process.env.RW_TEST_REPO!;
+const STATE = process.env.RW_TEST_STATE!;
+const RW = process.env.RW_TEST_RW!;
 const TASK = 'Please edit the notes file in this repository and add a new file next to it with a greeting';
 
 // --- dialogs ------------------------------------------------------------------------
@@ -160,12 +160,12 @@ function readRepo(rel: string): string | undefined {
 }
 
 function reviewTabs(): vscode.Tab[] {
-  return vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((t) => t.input instanceof vscode.TabInputTextDiff && t.input.modified.scheme === 'switchyard-review');
+  return vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((t) => t.input instanceof vscode.TabInputTextDiff && t.input.modified.scheme === 'relayweft-review');
 }
 
 const origNotes = Array.from({ length: NOTES_LINES }, (_, i) => `line ${i + 1}`);
 
-describe('Switchyard in a real VS Code', () => {
+describe('Relayweft in a real VS Code', () => {
   let hooks: TestHooks;
   let leaveRunning = false;
   const st = (): StateView | undefined => hooks.model.state;
@@ -173,12 +173,12 @@ describe('Switchyard in a real VS Code', () => {
 
   before(async () => {
     installStubs();
-    assert.ok(REPO && STATE && SY, 'run through runTest.js (SY_TEST_* are not set)');
+    assert.ok(REPO && STATE && RW, 'run through runTest.js (RW_TEST_* are not set)');
   });
 
   afterEach(function () {
     if (this.currentTest?.state === 'failed') {
-      console.log('--- Switchyard output channel ---\n' + hooks?.log.join('\n'));
+      console.log('--- Relayweft output channel ---\n' + hooks?.log.join('\n'));
       console.log('--- messages ---\n' + ui.said.map((m) => `${m.level}: ${m.text}`).join('\n'));
       console.log('--- fake agent calls ---\n' + calls().map((c) => JSON.stringify(c)).join('\n'));
     }
@@ -188,7 +188,7 @@ describe('Switchyard in a real VS Code', () => {
   after(async () => {
     try {
       if (!leaveRunning) {
-        await vscode.commands.executeCommand('switchyard.stop');
+        await vscode.commands.executeCommand('relayweft.stop');
       }
     } finally {
       removeStubs();
@@ -196,25 +196,25 @@ describe('Switchyard in a real VS Code', () => {
   });
 
   it('activates in a trusted workspace without errors', async () => {
-    const ext = vscode.extensions.getExtension<TestHooks>('sparkz400.switchyard');
+    const ext = vscode.extensions.getExtension<TestHooks>('sparkz400.relayweft');
     assert.ok(ext, 'extension not found');
     hooks = (await ext.activate())!;
     assert.ok(hooks, 'activate returned no test hooks (extensionMode is not Test?)');
     assert.strictEqual(vscode.workspace.isTrusted, true);
     const cmds = await vscode.commands.getCommands(true);
-    for (const c of ['switchyard.start', 'switchyard.stop', 'switchyard.runTask', 'switchyard.review.submit', 'switchyard.agents.focus']) {
+    for (const c of ['relayweft.start', 'relayweft.stop', 'relayweft.runTask', 'relayweft.review.submit', 'relayweft.agents.focus']) {
       assert.ok(cmds.includes(c), 'missing command ' + c);
     }
     assert.strictEqual(hooks.running(), false);
-    // A command that needs sy says so (and the stubs see the extension's dialogs).
-    await vscode.commands.executeCommand('switchyard.cancelTask');
+    // A command that needs rw says so (and the stubs see the extension's dialogs).
+    await vscode.commands.executeCommand('relayweft.cancelTask');
     assert.match(errors().pop() ?? '', /not running/);
   });
 
-  it('starts sy web --client for the folder and connects', async () => {
-    await vscode.commands.executeCommand('switchyard.start');
+  it('starts rw web --client for the folder and connects', async () => {
+    await vscode.commands.executeCommand('relayweft.start');
     assert.ok(hooks.running(), 'no session after start: ' + hooks.log.join('\n'));
-    const pid = hooks.syPid()!;
+    const pid = hooks.rwPid()!;
     assert.ok(pid && alive(pid));
     const s = await waitFor('the first state', () => st());
     assert.strictEqual(path.resolve(s.dir).toLowerCase(), path.resolve(REPO).toLowerCase());
@@ -224,21 +224,21 @@ describe('Switchyard in a real VS Code', () => {
     assert.strictEqual(root[0].kind, 'status');
     const status = hooks.tree.getTreeItem(root[0]);
     assert.strictEqual(status.description, 'idle');
-    // Starting again does not start a second sy.
-    await vscode.commands.executeCommand('switchyard.start');
-    assert.strictEqual(hooks.syPid(), pid);
+    // Starting again does not start a second rw.
+    await vscode.commands.executeCommand('relayweft.start');
+    assert.strictEqual(hooks.rwPid(), pid);
     assert.match(ui.said.at(-1)?.text ?? '', /already running/);
   });
 
   it('opens the web UI with a single-use link', async () => {
-    await vscode.commands.executeCommand('switchyard.openInBrowser');
+    await vscode.commands.executeCommand('relayweft.openInBrowser');
     assert.match(ui.opened.pop() ?? '', /^http:\/\/127\.0\.0\.1:\d+\/#b=[0-9a-f]{64}$/);
   });
 
   it('runs a task; the plan waits and shows in the agent tree', async () => {
     ui.inputs.push(TASK);
-    await vscode.commands.executeCommand('switchyard.runTask');
-    assert.match(ui.said.find((m) => m.text.startsWith('Switchyard: ') && /start|queued|running/i.test(m.text))?.text ?? '', /Switchyard: /);
+    await vscode.commands.executeCommand('relayweft.runTask');
+    assert.match(ui.said.find((m) => m.text.startsWith('Relayweft: ') && /start|queued|running/i.test(m.text))?.text ?? '', /Relayweft: /);
     const plan = await waitFor('a plan approval', () => st()?.approvals?.find((a) => a.type === 'plan'));
     assert.strictEqual(plan.plan?.subtasks.length, 2);
     await waitFor('the tree to show it', () => {
@@ -253,7 +253,7 @@ describe('Switchyard in a real VS Code', () => {
 
   it('edits the plan as JSON and approves the edited plan', async () => {
     ui.picks.push(byLabel(/Edit the plan/));
-    await vscode.commands.executeCommand('switchyard.approvePlan');
+    await vscode.commands.executeCommand('relayweft.approvePlan');
     const ed = await waitFor('the plan editor', () => {
       const e = vscode.window.activeTextEditor;
       return e && e.document.uri.scheme === 'untitled' && e.document.getText().includes(PLAN_TEXT) ? e : undefined;
@@ -263,7 +263,7 @@ describe('Switchyard in a real VS Code', () => {
     const at = text.indexOf(PLAN_TEXT);
     const ok = await ed.edit((b) => b.replace(new vscode.Range(ed.document.positionAt(at), ed.document.positionAt(at + PLAN_TEXT.length)), EDITED_PLAN_TEXT));
     assert.ok(ok);
-    await vscode.commands.executeCommand('switchyard.plan.approveEdited');
+    await vscode.commands.executeCommand('relayweft.plan.approveEdited');
     await waitFor('the plan to be answered', () => !st()?.approvals?.some((a) => a.type === 'plan'));
     assert.match(ui.said.map((m) => m.text).join('\n'), /plan approved: 2 subtasks/);
     // The plan document was closed without a save prompt.
@@ -291,10 +291,10 @@ describe('Switchyard in a real VS Code', () => {
     await waitFor('the review view', () => hooks.review.pendingIds.includes(req.id));
 
     ui.picks.push(byLabel(new RegExp('^' + NOTES.replace('.', '\\.') + '$')));
-    await vscode.commands.executeCommand('switchyard.reviewChanges');
+    await vscode.commands.executeCommand('relayweft.reviewChanges');
     const ed = await waitFor('the diff editor', () => {
       const e = vscode.window.activeTextEditor;
-      return e && e.document.uri.scheme === 'switchyard-review' && /\/after\//.test(e.document.uri.path) ? e : undefined;
+      return e && e.document.uri.scheme === 'relayweft-review' && /\/after\//.test(e.document.uri.path) ? e : undefined;
     });
     // The whole file, not only the hunks (the base is the file on disk).
     const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
@@ -310,13 +310,13 @@ describe('Switchyard in a real VS Code', () => {
     // Reject the second hunk with the cursor in it, toggle the first off and on.
     const line2 = EDITED_LINES[1] - 1;
     ed.selection = new vscode.Selection(line2, 0, line2, 0);
-    await vscode.commands.executeCommand('switchyard.review.rejectHunk');
+    await vscode.commands.executeCommand('relayweft.review.rejectHunk');
     assert.match(String(setFile().description), /2 of 2 file\(s\), 1 partly/);
     const line1 = EDITED_LINES[0] - 1;
     ed.selection = new vscode.Selection(line1, 0, line1, 0);
-    await vscode.commands.executeCommand('switchyard.review.rejectHunk');
+    await vscode.commands.executeCommand('relayweft.review.rejectHunk');
     assert.match(String(setFile().description), /1 of 2 file\(s\)/);
-    await vscode.commands.executeCommand('switchyard.review.acceptHunk');
+    await vscode.commands.executeCommand('relayweft.review.acceptHunk');
     assert.match(String(setFile().description), /2 of 2 file\(s\), 1 partly/);
     // The Review view's hunk checkboxes agree.
     const fileItem = hooks.review.getChildren(setFile()).find((f) => f.label === NOTES)!;
@@ -327,7 +327,7 @@ describe('Switchyard in a real VS Code', () => {
     const titles = lenses.map((l) => l.command?.title ?? '');
     assert.ok(titles.some((t) => /hunk 1\/2 accepted/.test(t)) && titles.some((t) => /hunk 2\/2 rejected/.test(t)), titles.join(' | '));
 
-    await vscode.commands.executeCommand('switchyard.review.submit');
+    await vscode.commands.executeCommand('relayweft.review.submit');
     assert.match(ui.said.map((m) => m.text).join('\n'), /applying 2 file\(s\), 1 of them partly/);
     await waitFor('the review to end', () => !hooks.review.pendingIds.length);
     const s = await waitFor('the task to finish', () => (st() && !st()!.running && st()!.last ? st() : undefined), 120_000);
@@ -344,13 +344,13 @@ describe('Switchyard in a real VS Code', () => {
   });
 
   it('undoes the last task after showing what changes', async () => {
-    ui.answer = (m) => (m.modal && /Undo the last Switchyard task/.test(m.text) ? 'Undo' : undefined);
+    ui.answer = (m) => (m.modal && /Undo the last Relayweft task/.test(m.text) ? 'Undo' : undefined);
     try {
-      await vscode.commands.executeCommand('switchyard.undoLastTask');
+      await vscode.commands.executeCommand('relayweft.undoLastTask');
     } finally {
       ui.answer = () => undefined;
     }
-    const asked = ui.said.find((m) => m.modal && /Undo the last Switchyard task/.test(m.text));
+    const asked = ui.said.find((m) => m.modal && /Undo the last Relayweft task/.test(m.text));
     assert.ok(asked, 'no undo confirmation: ' + ui.said.slice(-3).map((m) => m.text).join(' | '));
     assert.strictEqual(readRepo(NOTES), origNotes.join('\n') + '\n');
     assert.strictEqual(readRepo('added.txt'), undefined);
@@ -369,17 +369,12 @@ describe('Switchyard in a real VS Code', () => {
       return it;
     });
     ui.inputs.push('please also double-check line three');
-    await vscode.commands.executeCommand('switchyard.followUp');
+    await vscode.commands.executeCommand('relayweft.followUp');
     const fu = await waitFor('the follow-up call', () => calls().slice(n).find((c) => c.prompt.includes('double-check line three')));
-    // sy resumes the agent's session, except a Claude session that ran in a
-    // pool worktree (Claude keys sessions by folder): then a fresh agent
-    // gets the earlier agent's context.
-    if (path.resolve(editCall.cwd).toLowerCase() === path.resolve(REPO).toLowerCase()) {
-      assert.strictEqual(fu.resumed, editCall.sid, 'the follow-up did not resume the session of the edit agent');
-    } else {
-      assert.strictEqual(fu.resumed, '');
-      assert.match(fu.prompt, /edit the notes|Edited the notes/, 'the fresh agent did not get the earlier context');
-    }
+    // rw resumes the edit agent's session in the folder it ran in: the repo,
+    // or its pool worktree (ROADMAP 2.5; Claude keys sessions by folder).
+    assert.strictEqual(fu.resumed, editCall.sid, 'the follow-up did not resume the session of the edit agent');
+    assert.strictEqual(path.resolve(fu.cwd).toLowerCase(), path.resolve(editCall.cwd).toLowerCase(), 'the follow-up ran in another folder');
     // (The fake call above means the follow-up task runs.)
     await waitFor('the follow-up to finish', () => st() && !st()!.running && hooks.model.nodes.get('edit')?.status === 'ok');
     assert.match(hooks.model.taskText, /follow-up to edit/);
@@ -387,15 +382,15 @@ describe('Switchyard in a real VS Code', () => {
 
   it('sends changes back with feedback, then rejects them all', async () => {
     ui.inputs.push(TASK + ' (second round)');
-    await vscode.commands.executeCommand('switchyard.runTask');
+    await vscode.commands.executeCommand('relayweft.runTask');
     await waitFor('a plan approval', () => st()?.approvals?.find((a) => a.type === 'plan'));
     ui.picks.push(byLabel(/Approve$/));
-    await vscode.commands.executeCommand('switchyard.approvePlan');
+    await vscode.commands.executeCommand('relayweft.approvePlan');
     const first = await waitFor('a change review', () => st()?.approvals?.find((a) => a.type === 'changes'), 120_000);
     assert.strictEqual(first.changes!.round, 1);
     await waitFor('the review view', () => hooks.review.pendingIds.includes(first.id));
     ui.inputs.push('use a friendlier greeting');
-    await vscode.commands.executeCommand('switchyard.review.feedback');
+    await vscode.commands.executeCommand('relayweft.review.feedback');
     assert.match(ui.said.map((m) => m.text).join('\n'), /sent back to the agent with your feedback/);
     const second = await waitFor('the second round', () => st()?.approvals?.find((a) => a.type === 'changes' && a.id !== first.id), 120_000);
     assert.strictEqual(second.changes!.round, 2);
@@ -403,7 +398,7 @@ describe('Switchyard in a real VS Code', () => {
     await waitFor('the review view', () => hooks.review.pendingIds.length === 1 && hooks.review.pendingIds[0] === second.id);
     ui.answer = (m) => (m.modal && /Reject every change/.test(m.text) ? 'Reject All' : undefined);
     try {
-      await vscode.commands.executeCommand('switchyard.review.rejectAll');
+      await vscode.commands.executeCommand('relayweft.review.rejectAll');
     } finally {
       ui.answer = () => undefined;
     }
@@ -416,10 +411,10 @@ describe('Switchyard in a real VS Code', () => {
   it('rejects a plan from the plan editor (the task is cancelled)', async () => {
     const n = calls().length;
     ui.inputs.push(TASK + ' (third time)');
-    await vscode.commands.executeCommand('switchyard.runTask');
+    await vscode.commands.executeCommand('relayweft.runTask');
     await waitFor('a plan approval', () => st()?.approvals?.find((a) => a.type === 'plan'));
     ui.picks.push(byLabel(/Edit the plan/));
-    await vscode.commands.executeCommand('switchyard.approvePlan');
+    await vscode.commands.executeCommand('relayweft.approvePlan');
     const ed = await waitFor('the plan editor', () => {
       const e = vscode.window.activeTextEditor;
       return e && e.document.uri.scheme === 'untitled' && e.document.getText().includes(PLAN_TEXT) ? e : undefined;
@@ -441,38 +436,38 @@ describe('Switchyard in a real VS Code', () => {
   it('cancels a running task (its agent is killed)', async () => {
     fs.rmSync(path.join(STATE, 'hang.pid'), { force: true });
     ui.inputs.push(HANG + ' wait here');
-    await vscode.commands.executeCommand('switchyard.runTask');
+    await vscode.commands.executeCommand('relayweft.runTask');
     const pid = await waitFor('the hanging agent', () => {
       const f = path.join(STATE, 'hang.pid');
       return fs.existsSync(f) ? Number(fs.readFileSync(f, 'utf8')) : undefined;
     });
     await waitFor('the task to run', () => st()?.running);
-    await vscode.commands.executeCommand('switchyard.cancelTask');
+    await vscode.commands.executeCommand('relayweft.cancelTask');
     await waitFor('the task to stop', () => st() && !st()!.running, 30_000);
     await waitFor('the agent process to exit', () => !alive(pid), 15_000);
-    assert.ok(hooks.running(), 'sy itself keeps running');
+    assert.ok(hooks.running(), 'rw itself keeps running');
   });
 
-  it('stops sy: no sy or agent process is left', async () => {
+  it('stops rw: no rw or agent process is left', async () => {
     fs.rmSync(path.join(STATE, 'hang.pid'), { force: true });
     ui.inputs.push(HANG + ' and again');
-    await vscode.commands.executeCommand('switchyard.runTask');
+    await vscode.commands.executeCommand('relayweft.runTask');
     const agent = await waitFor('the hanging agent', () => {
       const f = path.join(STATE, 'hang.pid');
       return fs.existsSync(f) ? Number(fs.readFileSync(f, 'utf8')) : undefined;
     });
-    const sy = hooks.syPid()!;
-    await vscode.commands.executeCommand('switchyard.stop');
+    const rw = hooks.rwPid()!;
+    await vscode.commands.executeCommand('relayweft.stop');
     assert.strictEqual(hooks.running(), false);
-    assert.strictEqual(alive(sy), false, 'sy still runs after stop');
-    await waitFor('the agent to exit with sy', () => !alive(agent), 15_000);
+    assert.strictEqual(alive(rw), false, 'rw still runs after stop');
+    await waitFor('the agent to exit with rw', () => !alive(agent), 15_000);
     assert.strictEqual(hooks.tree.connected, false);
     assert.ok(!ui.said.some((m) => /stopped unexpectedly/.test(m.text)), 'a requested stop is not a crash');
   });
 
-  it('notices when sy dies, and starts again', async () => {
-    await vscode.commands.executeCommand('switchyard.start');
-    const pid = hooks.syPid()!;
+  it('notices when rw dies, and starts again', async () => {
+    await vscode.commands.executeCommand('relayweft.start');
+    const pid = hooks.rwPid()!;
     await waitFor('the event stream', () => hooks.tree.connected);
     let restart = false;
     ui.answer = (m) => {
@@ -483,40 +478,40 @@ describe('Switchyard in a real VS Code', () => {
       return undefined;
     };
     process.kill(pid); // TerminateProcess on Windows: a crash
-    await waitFor('the crash message', () => ui.said.some((m) => m.level === 'error' && /sy stopped unexpectedly/.test(m.text)));
-    // "Restart" starts a new sy.
-    const again = await waitFor('the restarted sy', () => (hooks.running() && hooks.syPid() !== pid ? hooks.syPid() : undefined), 30_000);
+    await waitFor('the crash message', () => ui.said.some((m) => m.level === 'error' && /rw stopped unexpectedly/.test(m.text)));
+    // "Restart" starts a new rw.
+    const again = await waitFor('the restarted rw', () => (hooks.running() && hooks.rwPid() !== pid ? hooks.rwPid() : undefined), 30_000);
     assert.ok(alive(again));
     await waitFor('the event stream again', () => hooks.tree.connected);
     ui.answer = () => undefined;
-    await vscode.commands.executeCommand('switchyard.stop');
+    await vscode.commands.executeCommand('relayweft.stop');
     assert.strictEqual(alive(again), false);
   });
 
-  it('explains a switchyard.path that is not sy', async () => {
-    const cfg = vscode.workspace.getConfiguration('switchyard');
-    await cfg.update('path', path.join(REPO, 'no-such-sy.exe'), vscode.ConfigurationTarget.Global);
+  it('explains a relayweft.path that is not rw', async () => {
+    const cfg = vscode.workspace.getConfiguration('relayweft');
+    await cfg.update('path', path.join(REPO, 'no-such-rw.exe'), vscode.ConfigurationTarget.Global);
     try {
-      await vscode.commands.executeCommand('switchyard.start');
+      await vscode.commands.executeCommand('relayweft.start');
       assert.strictEqual(hooks.running(), false);
       assert.match(errors().pop() ?? '', /is not an executable file/);
     } finally {
-      await cfg.update('path', SY, vscode.ConfigurationTarget.Global);
+      await cfg.update('path', RW, vscode.ConfigurationTarget.Global);
     }
   });
 
-  it('leaves sy running with a working agent for the shutdown check', async () => {
+  it('leaves rw running with a working agent for the shutdown check', async () => {
     // runTest.ts checks after VS Code exits that closing the window took
-    // sy and its agent along (deactivate, or sy's stdin closing).
-    await vscode.commands.executeCommand('switchyard.start');
+    // rw and its agent along (deactivate, or rw's stdin closing).
+    await vscode.commands.executeCommand('relayweft.start');
     fs.rmSync(path.join(STATE, 'hang.pid'), { force: true });
     ui.inputs.push(HANG + ' until the window closes');
-    await vscode.commands.executeCommand('switchyard.runTask');
+    await vscode.commands.executeCommand('relayweft.runTask');
     const agent = await waitFor('the hanging agent', () => {
       const f = path.join(STATE, 'hang.pid');
       return fs.existsSync(f) ? Number(fs.readFileSync(f, 'utf8')) : undefined;
     });
-    fs.writeFileSync(path.join(STATE, 'shutdown.json'), JSON.stringify({ sy: hooks.syPid(), agent }));
+    fs.writeFileSync(path.join(STATE, 'shutdown.json'), JSON.stringify({ rw: hooks.rwPid(), agent }));
     leaveRunning = true;
   });
 });
