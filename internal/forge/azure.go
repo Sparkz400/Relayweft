@@ -162,7 +162,7 @@ func (a *azure) DefaultBranch(r Repo) (string, error) {
 	}
 	b := strings.TrimPrefix(out.DefaultBranch, "refs/heads/")
 	if b == "" {
-		return "", errors.New("Azure DevOps reported no default branch (is the repository empty?)")
+		return "", errors.New("no default branch on Azure DevOps (is the repository empty?)")
 	}
 	return b, nil
 }
@@ -211,7 +211,7 @@ func (a *azure) issue(r Repo, w azWorkItem) Issue {
 	} else {
 		// Older servers: "Name <DOMAIN\user>".
 		var s string
-		json.Unmarshal(f.CreatedBy, &s)
+		_ = json.Unmarshal(f.CreatedBy, &s) // "" when it is neither
 		if i, j := strings.LastIndex(s, "<"), strings.LastIndex(s, ">"); i >= 0 && j > i {
 			s = s[i+1 : j]
 		}
@@ -957,14 +957,14 @@ func (a *azure) Viewer() (string, error) {
 		return "", err
 	}
 	if a.Rejected() {
-		return "", errors.New("Azure DevOps rejected the token")
+		return "", errors.New("the token was rejected by Azure DevOps")
 	}
 	u := cd.AuthenticatedUser
 	if acct := u.Properties["Account"].String(); acct != "" {
 		return acct, nil
 	}
 	if u.ProviderDisplayName == "" {
-		return "", errors.New("Azure DevOps reported no user for the token")
+		return "", errors.New("no user for the token on Azure DevOps")
 	}
 	return u.ProviderDisplayName, nil
 }
@@ -1033,7 +1033,7 @@ func (a *azure) iteration(r Repo, n int) (id int, base, head string, files []azC
 		}
 	}
 	if id == 0 {
-		return 0, "", "", nil, fmt.Errorf("Azure DevOps reported no iterations for pull request %d", n)
+		return 0, "", "", nil, fmt.Errorf("no iterations of pull request %d on Azure DevOps", n)
 	}
 	for skip := 0; ; {
 		var res struct {
@@ -1064,10 +1064,10 @@ func (a *azure) raw(path string, max int64) ([]byte, error) {
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
 	if err != nil {
-		return nil, fmt.Errorf("Azure DevOps GET %s: %w", path, err)
+		return nil, fmt.Errorf("%s GET %s: %w", a.name(), path, err)
 	}
 	if int64(len(data)) > max {
-		return nil, fmt.Errorf("Azure DevOps GET %s: %w (over %d bytes)", path, ErrTooLarge, max)
+		return nil, fmt.Errorf("%s GET %s: %w (over %d bytes)", a.name(), path, ErrTooLarge, max)
 	}
 	return data, nil
 }
@@ -1129,7 +1129,7 @@ func (a *azure) PullDiff(r Repo, n int, max int64) (string, error) {
 			fmt.Fprintf(&b, "--- %s\n+++ %s\n%s", from, to, h)
 		}
 		if int64(b.Len()) > max {
-			return "", fmt.Errorf("Azure DevOps pull request %d: %w (over %d bytes)", n, ErrTooLarge, max)
+			return "", fmt.Errorf("pull request %d: %w (over %d bytes)", n, ErrTooLarge, max)
 		}
 	}
 	return b.String(), nil
@@ -1146,7 +1146,7 @@ func (a *azure) CommentReview(r Repo, n int, headSHA, body string, comments []In
 		return "", err
 	}
 	if p.LastSource == nil || p.LastSource.CommitID == "" {
-		return "", fmt.Errorf("Azure DevOps reported no head commit for %s", r.Ref(n))
+		return "", fmt.Errorf("no head commit for %s on Azure DevOps", r.Ref(n))
 	}
 	if headSHA != "" && p.LastSource.CommitID != headSHA {
 		return "", fmt.Errorf("%s has new commits since its diff was read; review it again", r.Ref(n))

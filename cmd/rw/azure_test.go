@@ -319,7 +319,7 @@ func TestCIFilesAzure(t *testing.T) {
 		t.Fatalf("ciFiles = %v", got)
 	}
 	// Azure DevOps mentions are @<id>: defused like @user.
-	if d := defuseRefs("ping @<6a5d-guid> and @bob"); reMention.MatchString(d) || !strings.Contains(d, "@⁠<6a5d-guid>") {
+	if d := defuseRefs("ping @<6a5d-guid> and @bob"); reMention.MatchString(d) || !strings.Contains(d, "@\u2060<6a5d-guid>") {
 		t.Fatalf("defused %q", d)
 	}
 }
