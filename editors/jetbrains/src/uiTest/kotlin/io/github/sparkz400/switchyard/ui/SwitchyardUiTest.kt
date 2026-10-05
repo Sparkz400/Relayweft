@@ -127,7 +127,8 @@ class SwitchyardUiTest {
             shot(frame, "2-plan-waiting")
 
             // The plan dialog: edit the second subtask's prompt, approve.
-            agents.getAllTexts { it.text.contains("Approve plan: 2 subtask") }.first().doubleClick()
+            agents.getAllTexts { it.text.contains("Approve plan: 2 subtask") }.first().click()
+            agents.keyboard { enter() }
             dialog({ contains(byTitle("Switchyard Plan")) }) {
                 val list = byName("Subtasks")
                 list.getAllTexts { it.text.contains("edit the notes") }.first().click()
