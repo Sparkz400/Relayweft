@@ -95,8 +95,15 @@ type probed struct{}
 
 // parseFlags parses a command's flags. Every command parses through it
 // (a test checks), before it does anything else, so commandFlags sees
-// every flag.
-func parseFlags(fs *flag.FlagSet, args []string) error {
+// every flag. Its FlagSets use flag.ExitOnError: a bad flag exits, so
+// there is no error to return. rw update (ContinueOnError) uses
+// parseFlagsErr.
+func parseFlags(fs *flag.FlagSet, args []string) {
+	_ = parseFlagsErr(fs, args)
+}
+
+// parseFlagsErr is parseFlags for a FlagSet that returns its errors.
+func parseFlagsErr(fs *flag.FlagSet, args []string) error {
 	if flagProbe != nil {
 		flagProbe(fs)
 		panic(probed{})

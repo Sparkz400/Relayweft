@@ -27,9 +27,6 @@ linters:
         # Parse exits on a bad flag and never returns an error. rw update
         # (ContinueOnError) checks it.
         - (*flag.FlagSet).Parse
-        # The same Parse, through the hook rw completion reads flags with
-        # (cmd/rw/commands.go).
-        - github.com/sparkz400/relayweft/cmd/rw.parseFlags
         # Killing a child that may have exited already; a Wait or a
         # liveness check follows wherever it matters.
         - (*os.Process).Kill
