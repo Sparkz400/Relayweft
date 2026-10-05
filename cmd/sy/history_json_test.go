@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,5 +41,29 @@ func TestPrintHistoryJSON(t *testing.T) {
 	}
 	if s := bytes.TrimSpace(b.Bytes()); string(s) != "[]" {
 		t.Errorf("empty history = %s", s)
+	}
+}
+
+// sy history says where saved half-done edits of unfinished steps are and
+// how to get them; a step that finished since needs no hint.
+func TestHistoryNamesSavedEdits(t *testing.T) {
+	sv := orchestrator.SavedEdits{Step: "c", Task: "t1", Branch: "sy/t1/c-unfinished", Base: "0123456789abcdef", Why: "sy clean removed its worktree"}
+	done := sv
+	done.Step, done.Branch = "d", "sy/t1/d-unfinished"
+	hist := []orchestrator.TaskState{{ID: "t1", Task: "x", Dir: "/r", Status: "failed", Saved: []orchestrator.SavedEdits{sv, done},
+		Results: map[string]orchestrator.StepState{"d": {OK: true}}}}
+	var b bytes.Buffer
+	printHistory(&b, hist, false)
+	out := b.String()
+	if !strings.Contains(out, "sy/t1/c-unfinished") || !strings.Contains(out, "git diff 0123456789ab sy/t1/c-unfinished") {
+		t.Errorf("no hint for c's saved edits:\n%s", out)
+	}
+	if strings.Contains(out, "d-unfinished") {
+		t.Errorf("a hint for d, which finished since:\n%s", out)
+	}
+	b.Reset()
+	printHistoryJSON(&b, hist)
+	if !strings.Contains(b.String(), `"branch": "sy/t1/c-unfinished"`) || strings.Contains(b.String(), "d-unfinished") {
+		t.Errorf("JSON:\n%s", b.String())
 	}
 }

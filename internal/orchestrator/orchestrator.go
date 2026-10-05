@@ -767,6 +767,9 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	if t.resumed && t.state.Plan != nil {
 		plan = *t.state.Plan
 		o.logf("%s", t.state.resumeSummary())
+		for _, s := range t.state.UnfinishedSaved() {
+			o.logf("%s; the step starts over from your tree", s.Hint())
+		}
 		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
 	} else if words := len(strings.Fields(t.text)); oc.SmallTaskWords > 0 && words < oc.SmallTaskWords && len(t.repos) == 0 {
 		small = true
@@ -1322,6 +1325,7 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 			o.logf("worktree for %s failed (%v); running in the main tree", st.ID, err)
 			return inMainTree()
 		}
+		o.slotNotes(t, s)
 	}
 	defer s.release()
 	loc := stepLoc{dir: slotWorkDir(s.path, rp.root, mainDir), slot: s.path, base: base}
@@ -1330,6 +1334,15 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		return r
 	}
 	return o.landSlot(ctx, t, rp, st, deps, loc, r, true)
+}
+
+// slotNotes passes on what finding a pool worktree did (slot.notes): to
+// the log on screen and the session log.
+func (o *Orchestrator) slotNotes(t *task, s *slot) {
+	for _, n := range s.notes {
+		o.logf("%s", n)
+		o.opts.Log.Write(sessionlog.Record{Type: "pool", TaskID: t.id, Text: n})
+	}
 }
 
 // slotWorkDir is where an agent works in a pool worktree: the same relative
@@ -1516,15 +1529,32 @@ func (o *Orchestrator) slotWarnings(t, rp *task, stepID string, sc slotCommit, a
 // without counting it as a conflict. Branches are only ever created, never
 // moved: an existing name gets a numbered suffix.
 func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
-	g := git{t.root}
-	base := "sy/" + refPart(o.opts.Log.Session()) + "/" + refPart(t.id) + "/" + refPart(stepID)
+	name, err := newBranch(git{t.root}, "sy/"+refPart(o.opts.Log.Session())+"/"+refPart(t.id)+"/"+refPart(stepID), commit)
+	if err != nil {
+		// Nothing references the commit now: say so loudly, with the
+		// full id, so the person can keep it before git gc deletes it.
+		msg := fmt.Sprintf("%s: commit %s could not be kept on a branch (%v); keep it now with `git branch <name> %s` in %s", stepID, commit, err, commit, t.root)
+		o.emit(event.Event{Kind: event.Error, AgentID: stepID, Text: msg})
+		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeMerge, TaskID: t.id, Step: stepID, OK: sessionlog.Bool(false), Text: msg})
+		diag.Logf("%s", msg)
+		return commit + " (not on a branch)"
+	}
+	return name
+}
+
+// newBranch creates a branch at commit named base, or base-2, base-3 ...
+// when that exists, and returns its name. When no branch can be created
+// (a branch named like a prefix of base, such as "sy", blocks them all),
+// the commit is kept under refs/switchyard/kept/<commit> and that ref is
+// returned. The error says that nothing references the commit.
+func newBranch(g git, base, commit string) (string, error) {
 	for i := 1; i <= 20; i++ {
 		name := base
 		if i > 1 {
 			name = fmt.Sprintf("%s-%d", base, i)
 		}
 		if created, exists := createBranch(g, name, commit); created {
-			return name
+			return name, nil
 		} else if !exists {
 			break
 		}
@@ -1532,10 +1562,17 @@ func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
 	// Last resort; the commit must stay referenced either way.
 	name := "sy/kept-" + commit[:min(12, len(commit))]
 	if created, _ := createBranch(g, name, commit); created {
-		return name
+		return name, nil
 	}
-	g.out("update-ref", "refs/switchyard/kept/"+commit, commit)
-	return commit[:min(12, len(commit))]
+	ref := "refs/switchyard/kept/" + commit
+	_, err := g.out("update-ref", ref, commit)
+	if got, verr := g.out("rev-parse", "-q", "--verify", ref+"^{commit}"); verr == nil && got == commit {
+		return ref, nil
+	}
+	if err == nil {
+		err = errors.New(ref + " does not point at it")
+	}
+	return "", fmt.Errorf("no branch or ref could be created for %s: %v", commit, err)
 }
 
 // createBranch creates refs/heads/name at commit unless it exists; a branch

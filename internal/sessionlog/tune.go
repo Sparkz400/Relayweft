@@ -2,9 +2,11 @@ package sessionlog
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/event"
@@ -26,17 +28,57 @@ const (
 )
 
 // Thresholds. A suggestion needs enough samples that one bad afternoon does
-// not rewrite the config; the rates are where a change is clearly worth it.
+// not rewrite the config. failFloor and rejectFloor are floors for the
+// lower end of the rate's confidence interval (clearlyAbove), not for the
+// rate itself: in the benchmarks and logs so far almost no run failed and
+// no review rejected, so a few failures in a handful of runs say little.
+// 5 runs need 3 failures to cross failFloor, 10 runs 4, 20 runs 7, 50
+// runs 14. Escalations keep a plain rate: minEscalations already guards
+// the small samples.
 const (
 	minRuns          = 5    // samples per group before any rate is trusted
 	minJudged        = 10   // judged decisions before judging the judge
-	failRateHigh     = 0.30 // route failure rate worth acting on
+	failFloor        = 0.20 // route failure rate worth acting on
 	escalateRate     = 0.20 // share of a role's steps that needed error-repeats
 	minEscalations   = 3
-	rejectRate       = 0.40 // final reviews rejected
+	rejectFloor      = 0.25 // final reviews rejected
 	minLimitSwitches = 5    // limit-fallback/quota-preempt away from one provider
+	minLimitEpisodes = 2    // ... in this many episodes: one limit hit moves many steps
+	limitEpisodeGap  = 12 * time.Hour
 	cheapTokens      = 30_000
 )
+
+// confZ is the z-score of the one-sided 90% bound clearlyAbove uses.
+const confZ = 1.2816
+
+// wilsonLower is the lower end of the Wilson score interval for k of n.
+// k is clamped to 0..n: 0 gives exactly 0, and a count above n (records
+// that do not match their total) counts as n of n, never as NaN.
+func wilsonLower(k, n int) float64 {
+	if n <= 0 || k <= 0 {
+		return 0
+	}
+	k = min(k, n)
+	nf, p, z2 := float64(n), float64(k)/float64(n), confZ*confZ
+	centre := p + z2/(2*nf)
+	margin := confZ * math.Sqrt(p*(1-p)/nf+z2/(4*nf*nf))
+	return (centre - margin) / (1 + z2/nf)
+}
+
+// wilsonUpper is the upper end of the interval: 1 minus the lower end for
+// the other outcome.
+func wilsonUpper(k, n int) float64 {
+	if n <= 0 {
+		return 1
+	}
+	return 1 - wilsonLower(n-k, n)
+}
+
+// clearlyAbove reports whether k of n is above floor with 90% confidence:
+// few samples need a clear majority, many need little more than floor.
+func clearlyAbove(k, n int, floor float64) bool {
+	return n >= minRuns && wilsonLower(k, n) >= floor
+}
 
 // cheapRoles are the roles that are fine on either provider, so they are
 // the first to move when one provider keeps running out of quota.
@@ -245,7 +287,7 @@ func (c Catalog) failingRoutes(recs []Record) []Suggestion {
 	for _, k := range keys {
 		g := groups[k]
 		rate := pct(g.fails, g.runs)
-		if g.runs < minRuns || rate < failRateHigh {
+		if !clearlyAbove(g.fails, g.runs, failFloor) {
 			continue
 		}
 		sev := SevMedium
@@ -276,20 +318,32 @@ func escalations(recs []Record) []Suggestion { return DefaultCatalog.escalations
 
 func (c Catalog) escalations(recs []Record) []Suggestion {
 	steps := map[string]int{}      // first-attempt decisions per role
-	esc := map[string]int{}        // error-repeats escalations away from a role
+	esc := map[string]int{}        // steps escalated away from a role
 	prov := map[string]counter{}   // where each role usually runs
 	routes := map[string]counter{} // full route per role
-	for _, r := range recs {
+	// A step is counted once, however often it repeated an error, and in
+	// the role it escalated from (it may have started on another one).
+	first := map[string]string{} // step -> role of its first attempt
+	escaped := map[string]string{}
+	for i, r := range recs {
 		if r.Type != TypeDecision || r.Role == "" {
 			continue
 		}
+		key := r.Session + "|" + r.TaskID + "|" + r.Step
+		if r.TaskID == "" && r.Step == "" {
+			key = fmt.Sprint("#", i) // no step to tell repeats apart
+		}
 		if m := escalateRe.FindStringSubmatch(r.Reason); m != nil {
-			esc[m[1]]++
+			if _, ok := escaped[key]; !ok {
+				escaped[key] = m[1]
+				esc[m[1]]++
+			}
 			continue
 		}
 		if r.Attempt > 1 {
 			continue
 		}
+		first[key] = r.Role
 		steps[r.Role]++
 		if prov[r.Role] == nil {
 			prov[r.Role], routes[r.Role] = counter{}, counter{}
@@ -298,6 +352,11 @@ func (c Catalog) escalations(recs []Record) []Suggestion {
 			prov[r.Role][r.Provider]++
 		}
 		routes[r.Role][routeSpec(r.Provider, r.Model, r.Effort)]++
+	}
+	for key, role := range escaped {
+		if first[key] != role && !strings.HasPrefix(key, "#") {
+			steps[role]++ // started elsewhere (e.g. worker_high), escalated as role
+		}
 	}
 	roles := make([]string, 0, len(esc))
 	for role := range esc {
@@ -351,7 +410,7 @@ func (c Catalog) finalReviews(recs []Record) []Suggestion {
 		}
 	}
 	rate := pct(rejected, n)
-	if n < minRuns || rate < rejectRate {
+	if !clearlyAbove(rejected, n, rejectFloor) {
 		return nil
 	}
 	sev := SevMedium
@@ -380,14 +439,17 @@ func (c Catalog) finalReviews(recs []Record) []Suggestion {
 func limitPressure(recs []Record) []Suggestion { return DefaultCatalog.limitPressure(recs) }
 
 func (c Catalog) limitPressure(recs []Record) []Suggestion {
-	away := map[string]int{}        // switches away from a provider
-	cheapOn := map[string]counter{} // cheap role -> preferred provider (non-fallback decisions)
+	away := map[string]int{}         // switches away from a provider
+	when := map[string][]time.Time{} // ... and when
+	cheapOn := map[string]counter{}  // cheap role -> preferred provider (non-fallback decisions)
 	for _, r := range recs {
 		if r.Type != TypeDecision {
 			continue
 		}
 		if r.Rule == "limit-fallback" || r.Rule == "quota-preempt" {
-			away[c.from(r)]++
+			from := c.from(r)
+			away[from]++
+			when[from] = append(when[from], r.TS)
 			continue
 		}
 		for _, c := range cheapRoles {
@@ -401,8 +463,11 @@ func (c Catalog) limitPressure(recs []Record) []Suggestion {
 	}
 	var out []Suggestion
 	for _, from := range event.ProvidersOf(away) {
-		n := away[from]
-		if n < minLimitSwitches {
+		// One limit hit moves every step until the reset: only a
+		// provider that runs out again, after a long gap, is short of
+		// quota (calendar days would count one evening past midnight twice).
+		n, eps := away[from], episodes(when[from], limitEpisodeGap)
+		if n < minLimitSwitches || eps < minLimitEpisodes {
 			continue
 		}
 		to := c.other(from)
@@ -419,12 +484,25 @@ func (c Catalog) limitPressure(recs []Record) []Suggestion {
 		out = append(out, Suggestion{
 			Severity: SevMedium,
 			Title:    fmt.Sprintf("%s keeps running out of quota", from),
-			Detail: fmt.Sprintf("%d steps were moved away from %s by limit-fallback/quota-preempt. Moving the cheap roles (%s) to %s saves %s's quota for planning and coding.",
-				n, from, strings.Join(moved, ", "), to, from),
+			Detail: fmt.Sprintf("%d steps were moved away from %s by limit-fallback/quota-preempt, at %d times at least 12 hours apart. Moving the cheap roles (%s) to %s saves %s's quota for planning and coding.",
+				n, from, eps, strings.Join(moved, ", "), to, from),
 			Commands: cmds,
 		})
 	}
 	return out
+}
+
+// episodes counts the groups of times that are more than gap apart.
+func episodes(ts []time.Time, gap time.Duration) int {
+	sorted := append([]time.Time(nil), ts...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Before(sorted[j]) })
+	n := 0
+	for i, t := range sorted {
+		if i == 0 || t.Sub(sorted[i-1]) > gap {
+			n++
+		}
+	}
+	return n
 }
 
 // isCheapModel reports whether a model is already fast-tier, by name, since
@@ -547,7 +625,7 @@ func judgeAdvice(recs []Record) []Suggestion {
 		costLine = fmt.Sprintf(" The judge used %s fresh tokens in %d calls; the failures it avoided would have cost about %s.", human(cost), judgeCalls, human(saved))
 	}
 	switch {
-	case jRuns == 0 && dRuns >= minRuns && dRate >= failRateHigh:
+	case jRuns == 0 && clearlyAbove(dFails, dRuns, failFloor):
 		return []Suggestion{{
 			Severity: SevMedium,
 			Title:    "turn on the judge for unclear worker steps",
@@ -607,7 +685,10 @@ func routedVsSingle(recs []Record) []Suggestion {
 		return nil
 	}
 	rr, sr := pct(ok["routed"], rt), pct(ok["single"], st)
-	if rr >= sr {
+	// Clearly lower: the top of routed's interval stays below the bottom
+	// of single's. Both are samples; with single at 5 of 5, one routed
+	// failure is not an alarm.
+	if wilsonUpper(ok["routed"], rt) >= wilsonLower(ok["single"], st) {
 		return nil
 	}
 	return []Suggestion{{

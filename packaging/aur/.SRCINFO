@@ -1,0 +1,23 @@
+pkgbase = switchyard-cli-bin
+	pkgdesc = Terminal app that routes coding work between the Codex CLI and Claude Code (sy)
+	pkgver = 0.2.0
+	pkgrel = 1
+	url = https://github.com/sparkz400/switchyard
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	depends = git
+	provides = sy
+	conflicts = sy
+	options = !strip
+	options = !debug
+	source = LICENSE-0.2.0::https://raw.githubusercontent.com/sparkz400/switchyard/v0.2.0/LICENSE
+	source = README-0.2.0.md::https://raw.githubusercontent.com/sparkz400/switchyard/v0.2.0/README.md
+	sha256sums = da2fcaa417d4f76ac3d9e60f933459c7ed80bbe60552e76dbcdc86201300a9e5
+	sha256sums = 443375897eb8d7af2381498deae525bfb9995fb1eabed1d4e3eb504889bf42ef
+	source_x86_64 = sy-0.2.0-x86_64::https://github.com/sparkz400/switchyard/releases/download/v0.2.0/sy-linux-amd64
+	sha256sums_x86_64 = 886463cc07f297a261d1ea2e22e0af9c451fab7f6839a60a2066db2365c137f2
+	source_aarch64 = sy-0.2.0-aarch64::https://github.com/sparkz400/switchyard/releases/download/v0.2.0/sy-linux-arm64
+	sha256sums_aarch64 = 4ff5f1019ea073adf30413c6d30976e312c9a9c08caa768a48330208efbd93ce
+
+pkgname = switchyard-cli-bin

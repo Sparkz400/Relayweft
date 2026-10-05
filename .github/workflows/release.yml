@@ -1,8 +1,10 @@
 name: release
 
-# Builds sy for every supported platform and publishes a GitHub release.
-# Asset names are a contract: `sy update`, the scoop manifest and the
-# winget manifests all look them up by name.
+# Builds sy for every supported platform, the Linux packages, and publishes
+# a GitHub release. Asset names are a contract: `sy update`, the scoop,
+# winget, Homebrew and AUR manifests and the CI install scripts all look
+# them up by name. Add new assets, never rename existing ones, and list
+# every asset in checksums.txt (packaging/README.md has the table).
 on:
   push:
     tags: ["v*"]
@@ -20,6 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Nothing here pushes with git (gh creates the release and tag),
+          # so the write token stays out of .git/config, out of reach of
+          # the tests and nfpm.
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -65,8 +72,18 @@ jobs:
             GOOS="$os" GOARCH="$arch" go build -trimpath \
               -ldflags "-s -w -X main.version=$VERSION" -o "$out" ./cmd/sy
           done
+
+      - name: linux packages
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        # .deb, .rpm and .apk for amd64 and arm64, built with a pinned and
+        # checksum-verified nfpm.
+        run: sh packaging/linux-packages.sh "$VERSION" dist
+
+      - name: checksums
+        run: |
           cd dist
-          sha256sum sy-* > checksums.txt
+          sha256sum sy-* switchyard-* > checksums.txt
           cat checksums.txt
 
       - name: create release

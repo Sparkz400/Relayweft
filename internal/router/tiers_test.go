@@ -74,6 +74,19 @@ func TestTiersByDifficulty(t *testing.T) {
 			event.RoleWorker, TierFast, event.RoleExplorer},
 		{"plain edit stays standard", Step{Kind: KindEdit, Title: "Add flag", Prompt: "add a --json flag to sy stats"},
 			event.RoleWorker, TierStandard, event.RoleWorker},
+		// Seen in the tiers bench: a planner's prompt for a logic fix
+		// that mentions a routine word in passing.
+		{"routine word in passing stays standard", Step{Kind: KindEdit, Title: "Keep trailing empty fields in parse_line",
+			Prompt: "parse_line in inventory/csvparse.py drops trailing empty fields. Change the split so that \"a,b,,\" gives four fields. " +
+				"Do not rename the function and keep its docstring. Add a unit test in tests/test_csvparse.py for the case.", Files: []string{"inventory/csvparse.py"}},
+			event.RoleWorker, TierStandard, event.RoleWorker},
+		{"routine word in a short prompt stays standard", Step{Kind: KindEdit, Title: "Fix off-by-one in pagination",
+			Prompt: "The last page repeats one item. Fix the loop bound in paginate, keep the comments."},
+			event.RoleWorker, TierStandard, event.RoleWorker},
+		{"routine title goes fast", Step{Kind: KindEdit, Title: "Fix the typos in the README",
+			Prompt: "The README has several spelling mistakes in the install and usage sections. Correct them without changing the meaning, " +
+				"the headings or the code blocks, and keep the line breaks as they are.", Files: []string{"README.md"}},
+			event.RoleWorker, TierFast, event.RoleExplorer},
 		{"long hard edit goes strong", Step{Kind: KindEdit, Title: "Fix the race", Prompt: "fix the race condition in the pool. " + long, Files: []string{"a.go", "b.go", "c.go"}},
 			event.RoleWorker, TierStrong, event.RoleWorkerHigh},
 		{"hard explore goes standard, not strong", Step{Kind: KindExplore, Prompt: "explain the scheduler and its concurrency model. " + long},

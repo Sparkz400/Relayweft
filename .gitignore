@@ -2,6 +2,7 @@
 /sy
 /sy.exe
 /dist/
+/build/
 *.test
 *.out
 

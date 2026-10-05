@@ -16,9 +16,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// writeAgentShim writes claude.cmd the way npm writes CLI shims: a batch
-// file that starts the real program with %*.
-func writeAgentShim(dir, bin string) (string, error) {
+// writeAgentShim writes <name>.cmd the way npm writes CLI shims: a batch
+// file that starts the real program with %*. A name other than claude is
+// passed on in SY_SELFTEST_AS.
+func writeAgentShim(dir, bin, name string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -26,8 +27,12 @@ func writeAgentShim(dir, bin string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	shim := filepath.Join(dir, "claude.cmd")
-	body := "@ECHO off\r\n\"%~dp0\\" + rel + "\" " + selftestAgentCmd + " %*\r\n"
+	shim := filepath.Join(dir, name+".cmd")
+	body := "@ECHO off\r\n"
+	if name != "claude" {
+		body += "set \"" + envSelftestAs + "=" + name + "\"\r\n"
+	}
+	body += "\"%~dp0\\" + rel + "\" " + selftestAgentCmd + " %*\r\n"
 	return shim, os.WriteFile(shim, []byte(body), 0o755)
 }
 

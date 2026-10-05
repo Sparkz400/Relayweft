@@ -60,18 +60,25 @@ tasks:
     check: "PY bench_checks/check_answer.py"
 `
 
+// starterPython is the command the starter checks run Python with.
+func starterPython() string {
+	if runtime.GOOS == "windows" {
+		return "python"
+	}
+	return "python3"
+}
+
+func onPath(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
 // writeStarter creates the starter repo in dir and commits it.
 func writeStarter(dir string) error {
 	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
 		return fmt.Errorf("%s exists and is not empty", dir)
 	}
-	py := "python3"
-	if runtime.GOOS == "windows" {
-		py = "python"
-	}
-	if _, err := exec.LookPath(py); err != nil {
-		fmt.Printf("note: %s is not on PATH; the starter checks need Python 3\n", py)
-	}
+	py := starterPython()
 	err := fs.WalkDir(starterFS, "starter", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
