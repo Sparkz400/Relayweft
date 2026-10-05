@@ -51,7 +51,7 @@ func (b *BenchWorkspace) Head() (string, error) { return git{b.root}.out("rev-pa
 
 // Dirty reports whether the user's tree has changes that HEAD does not.
 func (b *BenchWorkspace) Dirty() bool {
-	s, _ := git{b.root}.out("status", "--porcelain")
+	s, _ := git{b.root}.out("status", "--porcelain", "--ignore-submodules=all")
 	return s != ""
 }
 

@@ -71,6 +71,9 @@ if [ -n "$ro" ] && touch /work/.sy-probe 2>/dev/null; then
 fi
 
 case "$prompt" in
+*SANDBOX-SUBMODULE*) # write a submodule's .git: sy must undo it and fail the run
+	mkdir -p vendor/lib && printf 'gitdir: ../../elsewhere\n' >vendor/lib/.git || fail "cannot write vendor/lib/.git"
+	result "wrote vendor/lib/.git" ;;
 *"hang <<forever>>"* | *SANDBOX-HANG*) # a planned step, or a task small enough to skip planning
 	echo "$$" >"$HOME/hang.pid"
 	sleep 600

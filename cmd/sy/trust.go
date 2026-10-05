@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/sparkz400/switchyard/internal/config"
+	"github.com/sparkz400/switchyard/internal/proc"
 )
 
 // noteUntrustedLocal says which settings of an untrusted ./switchyard.yaml
@@ -181,7 +182,7 @@ func gitRoot(dir string) (string, error) {
 }
 
 func runGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", append(append([]string(nil), proc.GitGuard...), args...)...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	return string(out), err

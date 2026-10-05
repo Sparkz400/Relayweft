@@ -36,6 +36,11 @@ func doctorSandbox(w io.Writer, cfg *config.Config, dir string, ok func(bool) st
 		fmt.Fprintf(w, "%s sandbox     off: agents run on this machine with your permissions (docs/sandbox.md)\n", stMuted.Render("info"))
 		return 0
 	}
+	if s, on := c.CheckSandbox(); on {
+		fmt.Fprintf(w, "%s sandbox     verify commands, after_merge and after_task hooks and bench checks run in %s too; before_task hooks run here\n", stMuted.Render("info"), s.Mode)
+	} else {
+		fmt.Fprintf(w, "%s sandbox     only read-only roles run in a sandbox: verify commands and hooks run here\n", warn)
+	}
 	// One check per runtime and image.
 	type rtImage struct{ rt, image string }
 	images := map[rtImage][]string{}

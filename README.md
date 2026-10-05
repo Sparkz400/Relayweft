@@ -390,7 +390,7 @@ sandbox:
   mode: docker        # or podman; off by default
 ```
 
-Build the image once with `docker build -t switchyard-sandbox packaging/sandbox` (git, Node.js, Claude Code and Codex). sy's verify commands run in the container too. Only the API keys you name go in (each provider's `sandbox.env`; `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY` by default), never your home folder or sy's forge token. If Docker or the image is missing, the step fails with what to do; it never runs on your machine instead. `sy doctor` checks the setup. Details, the mount layout and the limits: [docs/sandbox.md](docs/sandbox.md).
+Build the image once with `docker build -t switchyard-sandbox packaging/sandbox` (git, Node.js, Claude Code and Codex). sy's verify commands, `after_merge`/`after_task` hooks and bench checks run in a container too, since they run the agents' code. Only the API keys you name go in (each provider's `sandbox.env`; `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY` by default), never your home folder or sy's forge token. If Docker or the image is missing, the step fails with what to do; it never runs on your machine instead. `sy doctor` checks the setup. Details, the mount layout and the limits: [docs/sandbox.md](docs/sandbox.md).
 
 ### When something goes wrong
 

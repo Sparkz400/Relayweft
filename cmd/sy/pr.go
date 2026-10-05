@@ -575,7 +575,9 @@ func writePRBody(body string) (string, error) {
 
 // prGit runs git in dir and returns its stdout unmodified.
 func prGit(dir string, env []string, stdin []byte, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	// Agents may have written dir: never let git act on a submodule's
+	// config there (proc.GitGuard).
+	cmd := exec.Command("git", append(append([]string(nil), proc.GitGuard...), args...)...)
 	cmd.Dir = dir
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)

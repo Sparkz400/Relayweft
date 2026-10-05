@@ -81,6 +81,28 @@ providers:
 	}
 }
 
+// The commands sy runs on agents' code use the top-level sandbox, else
+// that of a provider whose writers are sandboxed, without its sign-in.
+func TestCheckSandbox(t *testing.T) {
+	if _, on := Default().CheckSandbox(); on {
+		t.Error("on by default")
+	}
+	c, _ := parseFile("t.yaml", []byte("sandbox: {env: [MINE]}\nproviders: {codex: {sandbox: {mode: docker, image: cx, credentials: [~/.codex/auth.json]}}}\n"))
+	s, on := c.CheckSandbox()
+	if !on || s.Mode != "docker" || s.ImageName() != "cx" || len(s.Credentials) != 0 || !slices.Equal(s.Env, []string{"MINE"}) {
+		t.Errorf("provider writer sandbox: %v %+v", on, s)
+	}
+	// A provider sandboxed only for read-only roles writes nothing.
+	c, _ = parseFile("t.yaml", []byte("providers: {codex: {sandbox: {mode: docker, roles: [explorer]}}}\n"))
+	if _, on := c.CheckSandbox(); on {
+		t.Error("read-only sandbox counted")
+	}
+	c, _ = parseFile("t.yaml", []byte("sandbox: {mode: podman}\n"))
+	if s, on := c.CheckSandbox(); !on || s.Mode != "podman" {
+		t.Errorf("top-level: %v %+v", on, s)
+	}
+}
+
 // An untrusted repo file may make the sandbox stricter, never weaker: it
 // may turn it on (with your image) and cut its network, but not turn it
 // off, pick the image, or pass more of your environment or files in.

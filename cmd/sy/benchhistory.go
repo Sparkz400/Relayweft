@@ -314,7 +314,7 @@ func validateHistory(ctx context.Context, ws *orchestrator.BenchWorkspace, h his
 		note := prepareBenchRun(rctx, ws, base, o.setup, t)
 		ok, out := false, ""
 		if note == "" {
-			ok, out = benchCheck(rctx, ws, t)
+			ok, out = benchCheck(rctx, ws, t, nil)
 		}
 		switch {
 		case ctx.Err() != nil:

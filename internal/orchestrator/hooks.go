@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -27,17 +29,38 @@ func (o *Orchestrator) runHooks(ctx context.Context, t *task, which string, cmds
 	for k, v := range env {
 		base[k] = v
 	}
-	vars := proc.WithoutSecrets(os.Environ())
+	var sy []string
 	for k, v := range base {
-		vars = append(vars, k+"="+v)
+		sy = append(sy, k+"="+v)
 	}
+	vars := append(proc.WithoutSecrets(os.Environ()), sy...)
+	// after_merge and after_task run on code agents wrote (npm run lint
+	// runs their scripts): in the sandbox when agents write in one.
+	_, boxed := t.cfg.CheckSandbox()
+	boxed = boxed && which != "before_task"
 	for _, c := range cmds {
 		cctx, cancel := context.WithTimeout(ctx, timeout)
-		cmd := proc.Shell(cctx, c)
-		cmd.Dir = o.opts.Dir
-		cmd.Env = vars
 		start := time.Now()
-		out, err := cmd.CombinedOutput()
+		var out []byte
+		var err error
+		if boxed {
+			var cmd *exec.Cmd
+			var done func(error, []byte) string
+			if cmd, done, err = shellCmd(cctx, t.cfg, o.opts.Dir, c, sy); err == nil {
+				out, err = cmd.CombinedOutput()
+				if why := done(err, out); why != "" {
+					out = append(out, "\n"+why...)
+					if err == nil {
+						err = errors.New(why)
+					}
+				}
+			}
+		} else {
+			cmd := proc.Shell(cctx, c)
+			cmd.Dir = o.opts.Dir
+			cmd.Env = vars
+			out, err = cmd.CombinedOutput()
+		}
 		took := time.Since(start).Round(100 * time.Millisecond)
 		if cctx.Err() == context.DeadlineExceeded {
 			err = fmt.Errorf("timed out after %s", timeout)

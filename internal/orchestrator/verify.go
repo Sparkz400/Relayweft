@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -67,6 +68,9 @@ func (o *Orchestrator) verifyIn(ctx context.Context, t, r *task) (bool, string) 
 			out, err = cmd.CombinedOutput()
 			if why := done(err, out); why != "" {
 				out = append(out, "\n"+why...)
+				if err == nil {
+					err = errors.New(why) // it changed a submodule's .git
+				}
 			}
 		} else {
 			out = []byte(err.Error())

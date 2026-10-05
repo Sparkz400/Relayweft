@@ -54,6 +54,20 @@ func (t *selftest) sandboxScenario() {
 		t.check(markFail, "sandbox", "git remote add: %v %s", err, out)
 		return
 	}
+	// A submodule that is not checked out (as in every pool worktree): its
+	// .git lies in the work tree, and the sandbox must undo one an agent
+	// writes there.
+	head, _ := exec.Command("git", "-C", proj, "rev-parse", "HEAD").Output()
+	os.MkdirAll(filepath.Join(proj, "vendor", "lib"), 0o755)
+	for _, args := range [][]string{
+		{"update-index", "--add", "--cacheinfo", "160000," + strings.TrimSpace(string(head)) + ",vendor/lib"},
+		{"-c", "user.name=sy selftest", "-c", "user.email=selftest@localhost", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "a submodule"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", proj}, args...)...).CombinedOutput(); err != nil {
+			t.check(markFail, "sandbox", "git %s: %v %s", args[0], err, out)
+			return
+		}
+	}
 	cfgPath := filepath.Join(t.work, "sandbox.yaml")
 	writeCfg := func(orch map[string]any) error {
 		cfg := map[string]any{
@@ -106,7 +120,20 @@ func (t *selftest) sandboxScenario() {
 		return
 	}
 
-	// 2. A step stopped by its timeout.
+	// 2. An agent writes a submodule's .git, which git on this machine
+	// would follow: sy undoes it and the run fails.
+	if err := writeCfg(map[string]any{"approve_plan": false, "max_attempts": 1}); err != nil {
+		t.check(markFail, "sandbox", "%v", err)
+		return
+	}
+	out, err = t.sy(proj, "sandbox submodule", env, "run", "--config", cfgPath, "--provider", "claude", "SANDBOX-SUBMODULE: write it")
+	if _, statErr := os.Lstat(filepath.Join(proj, "vendor", "lib", ".git")); err == nil || !strings.Contains(out, "vendor/lib/.git") || statErr == nil {
+		t.check(markFail, "sandbox", "a submodule .git written in the container was not undone (%v, still there: %v):\n%s", err, statErr == nil, tailLines(out, 15))
+		return
+	}
+	t.check(markOK, "sandbox", "a submodule .git the agent wrote was removed and its run failed")
+
+	// 3. A step stopped by its timeout.
 	if err := writeCfg(map[string]any{"approve_plan": false, "agent_timeout": "8s", "max_attempts": 1}); err != nil {
 		t.check(markFail, "sandbox", "%v", err)
 		return
@@ -123,7 +150,7 @@ func (t *selftest) sandboxScenario() {
 	}
 	t.check(markOK, "sandbox", "a step's timeout stopped its container (%s)", time.Since(began).Round(100*time.Millisecond))
 
-	// 3. sy killed hard while its agent works in a container.
+	// 4. sy killed hard while its agent works in a container.
 	if err := writeCfg(map[string]any{"approve_plan": false}); err != nil {
 		t.check(markFail, "sandbox", "%v", err)
 		return
@@ -201,7 +228,7 @@ func (t *selftest) sandboxLog(name string) []string {
 	case "darwin":
 		cache = filepath.Join(t.profile, "Library", "Caches")
 	}
-	files, _ := filepath.Glob(filepath.Join(cache, "switchyard", "sandbox", "*", "home", name))
+	files, _ := filepath.Glob(filepath.Join(cache, "switchyard", "sandbox", "*", "claude", name))
 	var lines []string
 	for _, f := range files {
 		lines = append(lines, strings.Fields(fileText(f))...)

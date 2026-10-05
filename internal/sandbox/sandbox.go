@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -95,6 +96,10 @@ type Spec struct {
 	// Mounts are more read-only mounts (Claude's MCP config folder).
 	Mounts []Mount
 	Label  string // what runs (an agent id, "verify"), for the logs
+	// HomeName picks the project's home folder: one per provider, so an
+	// agent of one cannot leave files that another provider's CLI reads
+	// with that provider's credentials ("" = "checks", for verify and hooks).
+	HomeName string
 }
 
 // Mount is one bind mount.
@@ -113,6 +118,7 @@ type Box struct {
 	runDir  string
 	stdinW  io.Closer
 	once    sync.Once
+	links   map[string]linkState // submodules' .git before the run (Check)
 }
 
 // Command builds the command that runs s in a container. The caller sets
@@ -156,7 +162,7 @@ func Command(ctx context.Context, s Spec) (*exec.Cmd, *Box, error) {
 	if err != nil {
 		return fail(err)
 	}
-	home, err := projectHome(key)
+	home, err := projectHome(key, s.HomeName)
 	if err != nil {
 		return fail(err)
 	}
@@ -164,8 +170,12 @@ func Command(ctx context.Context, s Spec) (*exec.Cmd, *Box, error) {
 	if err != nil {
 		return fail(err)
 	}
+	resetHome(home, extra)
 	mounts := []Mount{{Source: dir, Target: Work, Writable: !s.ReadOnly}}
 	mounts = append(mounts, gm...)
+	if len(gm) > 0 {
+		mounts = append(mounts, b.guardLinks(s.ReadOnly)...)
+	}
 	mounts = append(mounts, Mount{Source: home, Target: Home, Writable: true}, Mount{Source: runDir, Target: runMount})
 	mounts = append(mounts, s.Mounts...)
 	mounts = append(mounts, extra...)
@@ -264,10 +274,16 @@ func hostPath(dir, p string) string {
 		return filepath.ToSlash(dir)
 	case strings.HasPrefix(p, Work+"/"):
 		rel := path.Clean(p[len(Work)+1:])
-		if rel == ".." || strings.HasPrefix(rel, "../") {
+		// A backslash is a plain character in the container but a
+		// separator on Windows: "/work/..\..\x" must not leave dir.
+		if rel == ".." || strings.HasPrefix(rel, "../") || strings.ContainsAny(rel, `\:`) {
 			return p
 		}
-		return filepath.ToSlash(filepath.Join(dir, filepath.FromSlash(rel)))
+		host := filepath.Join(dir, filepath.FromSlash(rel))
+		if r, err := filepath.Rel(dir, host); err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) || filepath.IsAbs(r) {
+			return p
+		}
+		return filepath.ToSlash(host)
 	}
 	return p
 }
@@ -342,7 +358,9 @@ type argSpec struct {
 
 // runArgs is the `docker run` command line (without the runtime itself).
 func runArgs(a argSpec) []string {
-	args := []string{"run", "--rm", "-i", "--init", "--name", a.name,
+	// --pull never: the image is built here; a name typed wrong must not
+	// fetch someone else's image from a registry.
+	args := []string{"run", "--rm", "-i", "--init", "--pull", "never", "--name", a.name,
 		"--label", "switchyard.sandbox=1", "--label", "switchyard.owner=" + a.owner,
 		"--label", "switchyard.what=" + labelValue(a.label),
 		// The agent needs no privileges: no capabilities, no setuid, a cap
@@ -520,7 +538,11 @@ func gitLayout(dir, runDir string) ([]Mount, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		return []Mount{{Source: dotgit, Target: Work + "/.git"}, {Source: cfg, Target: Work + "/.git/config"}}, dotgit, nil
+		more, err := moreConfigs(dotgit, Work+"/.git", runDir)
+		if err != nil {
+			return nil, "", err
+		}
+		return append([]Mount{{Source: dotgit, Target: Work + "/.git"}, {Source: cfg, Target: Work + "/.git/config"}}, more...), dotgit, nil
 	}
 	gitdir, err := readGitFile(dotgit)
 	if err != nil {
@@ -553,7 +575,11 @@ func gitLayout(dir, runDir string) ([]Mount, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	return []Mount{{Source: common, Target: gitMount}, {Source: cfg, Target: gitMount + "/config"}, {Source: gf, Target: Work + "/.git"}}, common, nil
+	more, err := moreConfigs(common, gitMount, runDir)
+	if err != nil {
+		return nil, "", err
+	}
+	return append([]Mount{{Source: common, Target: gitMount}, {Source: cfg, Target: gitMount + "/config"}, {Source: gf, Target: Work + "/.git"}}, more...), common, nil
 }
 
 // readGitFile reads a worktree's .git file ("gitdir: <path>").
@@ -576,14 +602,57 @@ func readGitFile(p string) (string, error) {
 // reSafeKey is the git config the container's git needs to read the
 // repository: its format and extensions. Remotes (URLs may hold tokens),
 // credential helpers, http headers, hooks and aliases stay out.
-var reSafeKey = regexp.MustCompile(`^(core\.(repositoryformatversion|bare|ignorecase|precomposeunicode|symlinks|filemode|autocrlf|eol)|extensions\.[a-z0-9]+)$`)
+var reSafeKey = regexp.MustCompile(`^(core\.(repositoryformatversion|bare|worktree|ignorecase|precomposeunicode|symlinks|filemode|autocrlf|eol)|extensions\.[a-z0-9]+)$`)
 
 // safeGitConfig writes the safe part of the repository's git config
 // (gitDir/config) into runDir and returns its path.
 func safeGitConfig(gitDir, runDir string) (string, error) {
+	p := filepath.Join(runDir, "gitconfig")
+	return p, safeConfigCopy(filepath.Join(gitDir, "config"), p)
+}
+
+// moreConfigs are the other git config files in the shared git folder
+// common: each submodule's (modules/**/config: its remote URL may hold a
+// token) and each worktree's config.worktree. They get safe copies over
+// them in the container, under root (the folder's place there).
+func moreConfigs(common, root, runDir string) ([]Mount, error) {
+	var found []string
+	filepath.WalkDir(filepath.Join(common, "modules"), func(p string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return nil
+		case d.IsDir() && (d.Name() == "objects" || d.Name() == "refs" || d.Name() == "logs" || d.Name() == "lfs"):
+			return filepath.SkipDir
+		case !d.IsDir() && (d.Name() == "config" || d.Name() == "config.worktree"):
+			found = append(found, p)
+		}
+		return nil
+	})
+	wts, _ := filepath.Glob(filepath.Join(common, "worktrees", "*", "config.worktree"))
+	found = append(found, wts...)
+	if _, err := os.Lstat(filepath.Join(common, "config.worktree")); err == nil {
+		found = append(found, filepath.Join(common, "config.worktree"))
+	}
+	var mounts []Mount
+	for i, p := range found {
+		rel, err := filepath.Rel(common, p)
+		if err != nil || strings.HasPrefix(rel, "..") || strings.ContainsAny(filepath.ToSlash(rel), `\,"`) {
+			continue
+		}
+		dst := filepath.Join(runDir, fmt.Sprintf("gitconfig-%d", i))
+		if err := safeConfigCopy(p, dst); err != nil {
+			return nil, err
+		}
+		mounts = append(mounts, Mount{Source: dst, Target: root + "/" + filepath.ToSlash(rel)})
+	}
+	return mounts, nil
+}
+
+// safeConfigCopy writes the safe part of the git config file src to dst.
+func safeConfigCopy(src, dst string) error {
 	var b strings.Builder
 	b.WriteString("# The repository's git config as the sandbox sees it (sy): format and extensions only.\n")
-	cmd := exec.Command("git", "config", "--file", filepath.Join(gitDir, "config"), "--get-regexp", `^(core|extensions)\.`)
+	cmd := exec.Command("git", "config", "--file", src, "--get-regexp", `^(core|extensions)\.`)
 	proc.Background(cmd)
 	out, _ := cmd.Output()
 	sections := map[string][]string{}
@@ -603,23 +672,31 @@ func safeGitConfig(gitDir, runDir string) (string, error) {
 			b.WriteString("[" + sec + "]\n" + strings.Join(sections[sec], ""))
 		}
 	}
-	p := filepath.Join(runDir, "gitconfig")
-	return p, os.WriteFile(p, []byte(b.String()), 0o644)
+	return os.WriteFile(dst, []byte(b.String()), 0o644)
 }
 
 // projectHome is the per-project HOME folder (session stores) for key.
-func projectHome(key string) (string, error) {
+func projectHome(key, name string) (string, error) {
 	// A worktree's .git file names the real path (macOS /private/var, a
 	// Windows long name) while the main tree may be reached another way
 	// (/var, an 8.3 short name, other letter case): one project, one home.
 	h := sha1.Sum([]byte(canon.Path(key)))
-	home := filepath.Join(stateRoot(), hex.EncodeToString(h[:])[:12], "home")
+	if name == "" {
+		name = "checks"
+	}
+	if !reHomeName.MatchString(name) {
+		return "", fmt.Errorf("home name %q", name)
+	}
+	home := filepath.Join(stateRoot(), hex.EncodeToString(h[:])[:12], name)
 	return home, os.MkdirAll(home, 0o700)
 }
 
+// reHomeName is a provider name (config validates them) or "checks".
+var reHomeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
 // ProjectHome is the HOME folder the containers of the project at dir get
-// (sy doctor, tests).
-func ProjectHome(dir string) (string, error) {
+// for a provider (name; "" = verify commands and hooks) (sy doctor, tests).
+func ProjectHome(dir, name string) (string, error) {
 	runDir, err := os.MkdirTemp("", "sy-sandbox-probe-")
 	if err != nil {
 		return "", err
@@ -629,7 +706,7 @@ func ProjectHome(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return projectHome(key)
+	return projectHome(key, name)
 }
 
 var runSweep sync.Once
@@ -666,6 +743,9 @@ func userMounts(cfg config.SandboxCfg, home string) ([]Mount, error) {
 		st, err := os.Stat(src)
 		if err != nil {
 			return fmt.Errorf("%s %s: %w", what, p, err)
+		}
+		if sock := holdsSocket(src); sock != "" {
+			return fmt.Errorf("%s %s holds %s, which would give the agent the container runtime and with it this machine", what, p, sock)
 		}
 		if target == "" {
 			rel, err := filepath.Rel(userHome, src)

@@ -119,6 +119,41 @@ func (s SandboxCfg) Covers(role string) bool {
 	return s.On() && (len(s.Roles) == 0 || slices.Contains(s.Roles, role))
 }
 
+// CheckSandbox is the sandbox for the commands sy runs on code agents
+// wrote (verify commands, after_merge and after_task hooks): the
+// top-level section when it is on, otherwise that of the first enabled
+// provider whose writing agents run in a sandbox, without that provider's
+// sign-in variables and credential files. false when no writing agent
+// runs in a sandbox: then those commands run on this machine, as before.
+func (c *Config) CheckSandbox() (SandboxCfg, bool) {
+	if c.Sandbox.On() {
+		return c.Sandbox, true
+	}
+	for _, p := range c.Enabled() {
+		s := c.ProviderSandbox(p)
+		if s.Covers(event.RoleWorker) || s.Covers(event.RoleWorkerHigh) {
+			s.Env, s.Credentials, s.Command, s.Roles = c.Sandbox.Env, nil, "", nil
+			return s, true
+		}
+	}
+	return SandboxCfg{}, false
+}
+
+// SecretVars lists the ${NAME}s the MCP server uses that are sy's forge or
+// CI tokens. In a sandbox the server runs in the container with the
+// values in its config file or environment, so the token would go in.
+func (s MCPServer) SecretVars() []string {
+	var out []string
+	s.Expanded(func(n string) (string, bool) {
+		if proc.IsChildSecret(n) && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+		return "", true
+	})
+	slices.Sort(out)
+	return out
+}
+
 // SandboxedProviders lists the enabled providers whose agents run in a
 // sandbox for at least one role, with that sandbox.
 func (c *Config) SandboxedProviders() map[string]SandboxCfg {

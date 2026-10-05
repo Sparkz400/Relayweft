@@ -87,7 +87,8 @@ func TestRunArgs(t *testing.T) {
 	linux.goos, linux.user = "linux", "1000:1000"
 	a := runArgs(linux)
 	for _, seq := range [][]string{
-		{"run", "--rm", "-i", "--init", "--name", "sy-1-2-ab"},
+		// --pull never: a mistyped image name never fetches a stranger's.
+		{"run", "--rm", "-i", "--init", "--pull", "never", "--name", "sy-1-2-ab"},
 		{"--cap-drop", "ALL"}, {"--security-opt", "no-new-privileges"},
 		{"--add-host", "host.docker.internal:host-gateway"},
 		{"--user", "1000:1000"},
@@ -156,6 +157,12 @@ func TestHostPath(t *testing.T) {
 		"/work/sub/../c.txt":    slash + "/c.txt",
 		"/work/./d.txt":         slash + "/d.txt",
 		"/work/a/../../outside": "/work/a/../../outside",
+		// Backslashes are plain characters in the container but
+		// separators on Windows: never a way out of dir.
+		`/work/..\..\x`:  `/work/..\..\x`,
+		`/work/\..\..\x`: `/work/\..\..\x`,
+		`/work/a\b.txt`:  `/work/a\b.txt`,
+		"/work/C:/x":     "/work/C:/x",
 	} {
 		if got := hostPath(dir, in); got != want {
 			t.Errorf("hostPath(%q) = %q, want %q", in, got, want)
@@ -274,8 +281,8 @@ func TestGitLayoutWorktree(t *testing.T) {
 	}
 	checkSafeConfig(t, cfg.Source)
 	// Both trees of one repository share the per-project home (sessions).
-	h1, _ := ProjectHome(repo)
-	h2, _ := ProjectHome(wt)
+	h1, _ := ProjectHome(repo, "claude")
+	h2, _ := ProjectHome(wt, "claude")
 	if h1 == "" || h1 != h2 {
 		t.Errorf("project homes differ: %s vs %s", h1, h2)
 	}

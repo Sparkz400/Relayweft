@@ -49,7 +49,8 @@ func TestSandboxSelftest(t *testing.T) {
 		t.Fatalf("sy selftest --sandbox only: %v\n%s", err, got)
 	}
 	for _, want := range []string{"finished the task with every agent and the verify command in a container",
-		"git worked read-only in pool worktrees", "timeout stopped its container", "sy killed hard"} {
+		"git worked read-only in pool worktrees", "submodule .git the agent wrote was removed",
+		"timeout stopped its container", "sy killed hard"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output lacks %q:\n%s", want, got)
 		}

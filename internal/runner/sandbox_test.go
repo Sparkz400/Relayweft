@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -50,6 +51,15 @@ func runFakeDocker() int {
 	data, _ := json.Marshal(map[string]any{"args": args, "env": env, "stdin": stdin})
 	os.WriteFile(dump, data, 0o600)
 	switch os.Getenv("SY_FAKE_DOCKER_MODE") {
+	case "tamper":
+		// Write a submodule's .git in /work, as an agent could.
+		for _, a := range args {
+			if src, ok := strings.CutPrefix(a, "type=bind,source="); ok && strings.HasSuffix(src, ",target=/work") {
+				src = strings.TrimSuffix(src, ",target=/work")
+				os.MkdirAll(filepath.Join(src, "sub"), 0o755)
+				os.WriteFile(filepath.Join(src, "sub", ".git"), []byte("gitdir: ../mine\n"), 0o644)
+			}
+		}
 	case "noimage":
 		fmt.Fprintln(os.Stderr, "Unable to find image 'switchyard-sandbox:latest' locally")
 		fmt.Fprintln(os.Stderr, "docker: Error response from daemon: pull access denied for switchyard-sandbox, repository does not exist or may require 'docker login'")
@@ -261,6 +271,52 @@ func hasSeq(args []string, seq ...string) bool {
 		}
 	}
 	return false
+}
+
+// An agent that writes a submodule's .git (git on this machine would
+// follow it) fails its run, and the file is gone, even though the CLI
+// itself reported success.
+func TestExecSandboxSubmoduleTamperFails(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("needs git")
+	}
+	x, _ := sandboxedClaude(t, "tamper")
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	head, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if out, err := exec.Command("git", "-C", dir, "update-index", "--add", "--cacheinfo", "160000,"+strings.TrimSpace(string(head))+",sub").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	var c collector
+	res := x.Run(context.Background(), Spec{AgentID: "a", Role: event.RoleWorker, Prompt: "p", Dir: dir}, c.emit)
+	if res.OK() || res.Err == nil || !strings.Contains(res.Err.Error(), "sub/.git") {
+		t.Errorf("result = %+v", res)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "sub", ".git")); !os.IsNotExist(err) {
+		t.Error("the agent's sub/.git is still there")
+	}
+}
+
+// An MCP server that names sy's forge token would take it into the
+// container (in its config file or environment): refused there.
+func TestExecSandboxRefusesMCPForgeToken(t *testing.T) {
+	x, dump := sandboxedClaude(t, "ok")
+	t.Setenv("GITHUB_TOKEN", "ghs_secret")
+	x.MCP = config.MCPCfg{Servers: map[string]config.MCPServer{"gh": {Command: "npx", Env: map[string]string{"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"}}}}
+	var c collector
+	res := x.Run(context.Background(), Spec{AgentID: "a", Role: event.RoleWorker, Prompt: "p", Dir: t.TempDir()}, c.emit)
+	if res.OK() || !strings.Contains(res.Err.Error(), "GITHUB_TOKEN") {
+		t.Errorf("result = %+v", res)
+	}
+	if _, err := os.Stat(dump); err == nil {
+		t.Error("the container was started")
+	}
 }
 
 // In sy's sandbox Codex's own sandbox is off: it needs kernel features

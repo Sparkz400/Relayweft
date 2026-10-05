@@ -189,6 +189,16 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	var mounts []sandbox.Mount
 	if boxed {
 		s.Sandboxed = true
+		if s.MCP != nil {
+			// An MCP server runs in the container with its values: a forge
+			// or CI token it names would go in with it.
+			for _, n := range s.MCP.Names {
+				if v := x.MCP.Servers[n].SecretVars(); len(v) > 0 {
+					return fail(fmt.Errorf("%s: MCP server %s uses ${%s}, sy's forge or CI token, which never goes into the sandbox: leave the server out for this provider (mcp.servers.%s.providers) or turn the sandbox off for it",
+						x.Provider, n, strings.Join(v, "}, ${"), n))
+				}
+			}
+		}
 		if s.MCP != nil && s.MCP.ConfigFile != "" {
 			// Claude's MCP config file, at its place in the container.
 			m := *s.MCP
@@ -217,7 +227,7 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		cli := sandbox.CLIName(sb, x.Cfg.Command)
 		var err error
 		cmd, box, err = sandbox.Command(ctx, sandbox.Spec{Cfg: sb, Dir: s.Dir, ReadOnly: s.ReadOnly, Argv: append([]string{cli}, argv...),
-			Stdin: s.Prompt, Env: childEnv, Mounts: mounts, Label: s.AgentID})
+			Stdin: s.Prompt, Env: childEnv, Mounts: mounts, Label: s.AgentID, HomeName: x.Provider})
 		if err != nil {
 			return fail(fmt.Errorf("%s: %w", x.Provider, err))
 		}
@@ -330,6 +340,9 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		boxErr = box.Explain(exitCode(cmd), stderr.String())
 	}
 	boxOK = waitErr == nil && ctx.Err() == nil
+	// Whatever the exit: a submodule .git the agent wrote is undone, and
+	// the run fails (sandbox.Box.Check).
+	escape := box.Check()
 	switch {
 	case ctx.Err() != nil:
 		res.Killed = true
@@ -369,6 +382,9 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 			}
 			emit(stamp(event.Event{Kind: event.LimitHit, Text: res.Err.Error()}))
 		}
+	}
+	if escape != nil {
+		res.Err, res.LimitHit, res.Killed, res.ResetAt = escape, false, false, time.Time{}
 	}
 	code := exitCode(cmd)
 	diag.Logf("exit agent=%s pid=%d code=%d after %s ok=%v killed=%v limit=%v tokens=%d err=%v stderr=%q",

@@ -25,9 +25,9 @@ func TestProjectHomeShortName(t *testing.T) {
 	if err != nil || n == 0 || strings.EqualFold(short, dir) {
 		t.Skipf("no 8.3 short names on this volume (%v)", err)
 	}
-	h1, err1 := ProjectHome(dir)
-	h2, err2 := ProjectHome(short)
-	h3, err3 := ProjectHome(strings.ToUpper(dir))
+	h1, err1 := ProjectHome(dir, "claude")
+	h2, err2 := ProjectHome(short, "claude")
+	h3, err3 := ProjectHome(strings.ToUpper(dir), "claude")
 	if err1 != nil || err2 != nil || err3 != nil || h1 != h2 || h1 != h3 {
 		t.Errorf("homes differ: %s (%s), %s (%s), %s", h1, dir, h2, short, h3)
 	}

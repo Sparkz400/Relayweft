@@ -331,7 +331,7 @@ func cmdBench(args []string) error {
 				fmt.Println("  =>", r.note)
 				continue
 			}
-			ok, out := benchCheck(rctx, ws, t)
+			ok, out := benchCheck(rctx, ws, t, runStore.Get())
 			cancel()
 			r.passed = ok
 			if !ok {
@@ -404,8 +404,10 @@ func prepareBenchRun(ctx context.Context, ws *orchestrator.BenchWorkspace, head,
 }
 
 // benchCheck runs a task's check, with its tests set to the reference
-// commit's version first and its placeholders filled in.
-func benchCheck(ctx context.Context, ws *orchestrator.BenchWorkspace, t benchTask) (bool, string) {
+// commit's version first and its placeholders filled in. With cfg, after
+// agents wrote the code, it runs in the sandbox when agents write in one
+// (orchestrator.RunCheck); nil runs it here (a commit of your history).
+func benchCheck(ctx context.Context, ws *orchestrator.BenchWorkspace, t benchTask, cfg *config.Config) (bool, string) {
 	if t.Tests != nil {
 		if err := ws.RestoreFiles(t.Tests.From, t.Tests.Files); err != nil {
 			return false, "restoring the tests: " + err.Error()
@@ -414,6 +416,9 @@ func benchCheck(ctx context.Context, ws *orchestrator.BenchWorkspace, t benchTas
 	check, err := expandTests(t.Check, ws.Path, t.Tests)
 	if err != nil {
 		return false, err.Error()
+	}
+	if cfg != nil {
+		return orchestrator.RunCheck(ctx, cfg, ws.Path, check)
 	}
 	return shell(ctx, ws.Path, check)
 }
