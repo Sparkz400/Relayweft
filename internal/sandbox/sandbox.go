@@ -52,6 +52,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sparkz400/switchyard/internal/canon"
 	"github.com/sparkz400/switchyard/internal/config"
 	"github.com/sparkz400/switchyard/internal/diag"
 	"github.com/sparkz400/switchyard/internal/proc"
@@ -608,17 +609,10 @@ func safeGitConfig(gitDir, runDir string) (string, error) {
 
 // projectHome is the per-project HOME folder (session stores) for key.
 func projectHome(key string) (string, error) {
-	k := key
-	// A worktree's .git file names the real path (macOS: /private/var),
-	// the main tree may be reached through a symlink (/var): one project,
-	// one home.
-	if real, err := filepath.EvalSymlinks(k); err == nil {
-		k = real
-	}
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-		k = strings.ToLower(k)
-	}
-	h := sha1.Sum([]byte(filepath.Clean(k)))
+	// A worktree's .git file names the real path (macOS /private/var, a
+	// Windows long name) while the main tree may be reached another way
+	// (/var, an 8.3 short name, other letter case): one project, one home.
+	h := sha1.Sum([]byte(canon.Path(key)))
 	home := filepath.Join(stateRoot(), hex.EncodeToString(h[:])[:12], "home")
 	return home, os.MkdirAll(home, 0o700)
 }
