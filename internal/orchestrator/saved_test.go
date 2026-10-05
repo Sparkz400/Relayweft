@@ -63,7 +63,7 @@ func checkSaved(t *testing.T, dir string, st *TaskState, base string) SavedEdits
 		t.Fatalf("the task's state records %d saved edits, want 1: %+v", len(after.Saved), after.Saved)
 	}
 	sv := after.Saved[0]
-	if sv.Step != "c" || sv.Task != st.ID || sv.Base != base || !strings.HasPrefix(sv.Branch, "sy/") {
+	if sv.Step != "c" || sv.Task != st.ID || sv.Base != base || !(strings.HasPrefix(sv.Branch, "sy/") || strings.HasPrefix(sv.Branch, "refs/switchyard/kept/")) {
 		t.Errorf("saved edits: %+v (base %s)", sv, base)
 	}
 	if _, ok := after.Running["c"]; ok {
@@ -76,7 +76,7 @@ func checkSaved(t *testing.T, dir string, st *TaskState, base string) SavedEdits
 	if names, _ := g.out("diff", "--name-only", sv.Base, sv.Branch); names != "c.txt" {
 		t.Errorf("git diff base %s names %q, want only c.txt", sv.Branch, names)
 	}
-	if h := sv.Hint(); !strings.Contains(h, sv.Branch) || !strings.Contains(h, "git diff "+sv.Base[:12]+" "+sv.Branch) {
+	if h := sv.Hint(); !strings.Contains(h, sv.Branch) || !strings.Contains(h, " diff "+sv.Base[:12]+" "+sv.Branch) {
 		t.Errorf("hint does not say where the edits are and how to get them: %s", h)
 	}
 	if u := after.UnfinishedSaved(); len(u) != 1 {

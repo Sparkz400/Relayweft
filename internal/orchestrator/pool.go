@@ -72,7 +72,7 @@ type slot struct {
 // running there (Unix), and unlocks it.
 func (s *slot) release() {
 	s.untrack()
-	proc.ReapOrphans(pidFile(s.path))
+	proc.ReapOwn(pidFile(s.path)) // recorded by this sy since it locked the slot
 	s.unlock()
 }
 

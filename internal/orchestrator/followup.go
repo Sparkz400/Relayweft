@@ -34,8 +34,12 @@ type AgentSession struct {
 	Dir       string // where it ran
 	// Slot is the pool worktree Dir is in ("" = the main tree): a
 	// follow-up resumes the session there (followUpSlot).
-	Slot  string `json:",omitempty"`
-	Final string // its last answer
+	Slot string `json:",omitempty"`
+	// Unlanded names the branch with what its last turn changed in Slot
+	// when that turn was stopped before its changes landed: they are not
+	// in the worktree any more, and the next follow-up tells the agent.
+	Unlanded string `json:",omitempty"`
+	Final    string // its last answer
 	Title string // the step it worked on
 	Task  string // the task it was part of
 	Ended time.Time
@@ -252,7 +256,10 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 		// all. The result lands like a step's.
 		var sl *slot
 		var loc stepLoc
-		inPool := s.Slot != "" || slotOf(t.root, s.Dir) != ""
+		// Only this repo's pool: an agent that ran in another repo's pool
+		// (a multi-repo task) cannot land here, and Codex resumes it by id
+		// as before.
+		inPool := slotOf(t.root, s.Dir) != "" || (s.Slot != "" && slotOf(t.root, s.Slot) != "")
 		if resumable && !samePath(s.Dir, o.opts.Dir) && (inPool || cfg.SessionPerDir(s.Provider)) {
 			var why string
 			if sl, loc, why = o.followUpSlot(t, s); sl == nil {
@@ -275,8 +282,14 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 			o.noteBudget(t, s.AgentID)
 			return r
 		}
+		msg := text
+		if s.Unlanded != "" {
+			// Its last turn was stopped before its changes landed.
+			msg = unlandedNote(s.Unlanded) + text
+		}
 		if resumable {
 			spec.Resume = s.SessionID
+			spec.Prompt = msg
 			res = run(label)
 		}
 		if !resumable || (!res.OK() && !res.Killed && !res.LimitHit && ctx.Err() == nil) {
@@ -286,18 +299,28 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 			// In a pool worktree the fresh agent works there too: what the
 			// failed resume changed is kept, and lands with its work.
 			spec.Resume = ""
-			spec.Prompt = followUpContext(s, text)
+			spec.Prompt = followUpContext(s, msg)
 			res = run(label + " (fresh)")
 		}
+		unlanded := ""
 		if sl != nil && res.OK() {
 			r := o.landSlot(ctx, t, t, Subtask{ID: "followup", Title: label}, nil, loc, stepResult{ok: true, final: res.Final, files: res.Files}, false)
 			if !r.ok {
 				res.Err = errors.New(r.err)
 			}
+		} else if sl != nil {
+			// Stopped (cancelled, a limit, the budget, a timeout) or
+			// failed: what it changed in the worktree did not land, and
+			// the worktree's next use resets it.
+			unlanded = o.keepFollowUpWork(t, s, loc, res, ctx.Err() != nil)
 		}
 		if res.SessionID != "" {
 			o.rememberSession(s.AgentID, AgentSession{Provider: s.Provider, Model: s.Model, Effort: s.Effort, Role: s.Role,
-				SessionID: res.SessionID, Dir: spec.Dir, Slot: loc.slot, Final: res.Final, Title: label, Task: s.Task + "\n\nFollow-up: " + text})
+				SessionID: res.SessionID, Dir: spec.Dir, Slot: loc.slot, Final: res.Final, Title: label, Task: s.Task + "\n\nFollow-up: " + text,
+				Unlanded: unlanded})
+		} else if unlanded != "" {
+			s.Unlanded = unlanded
+			o.rememberSession(s.AgentID, s)
 		}
 		tk := res.Tokens
 		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: s.AgentID, Step: "followup", Attempt: 1,
@@ -366,6 +389,45 @@ func (o *Orchestrator) followUpSlot(t *task, s AgentSession) (sl *slot, loc step
 		return nil, loc, err.Error()
 	}
 	return sl, stepLoc{dir: s.Dir, slot: path, base: t.snapshot}, ""
+}
+
+// keepFollowUpWork keeps what a follow-up that did not finish changed in
+// its pool worktree (loc): on a branch, like a step's half-done edits, and
+// says where. If it cannot be saved, the worktree is held instead, and the
+// next sy that looks at it saves it (the hold names no task state, so it
+// is given up only after saving). It returns the branch, or "".
+func (o *Orchestrator) keepFollowUpWork(t *task, s AgentSession, loc stepLoc, res runner.Result, cancelled bool) string {
+	why := errText(res.Err)
+	switch {
+	case cancelled:
+		why = "cancelled"
+	case res.LimitHit:
+		why = "usage limit"
+	case why == "":
+		why = "failed"
+	}
+	saved, err := saveSlotWork(loc.slot, loc.base, "sy/"+refPart(t.key)+"/followup-unfinished", "unfinished follow-up to "+s.AgentID)
+	if err != nil {
+		holdSlot(loc.slot, slotHold{Task: t.key, Step: "followup", Base: loc.base})
+		msg := fmt.Sprintf("the follow-up to %s stopped (%s); what it changed in %s could not be saved on a branch (%v), so that worktree is kept as it is: copy what you need from it", s.AgentID, clip(why, 120), loc.slot, err)
+		o.emit(event.Event{Kind: event.Error, AgentID: s.AgentID, Text: msg})
+		o.opts.Log.Write(sessionlog.Record{Type: "pool", TaskID: t.id, Text: msg})
+		return ""
+	}
+	if saved == nil {
+		return "" // it changed nothing
+	}
+	saved.Why = "the follow-up to " + s.AgentID + " stopped (" + clip(why, 120) + ")"
+	o.logf("%s", saved.Hint())
+	o.opts.Log.Write(sessionlog.Record{Type: "pool", TaskID: t.id, Text: saved.Hint()})
+	return saved.Branch
+}
+
+// unlandedNote tells a resumed agent that its last turn's changes are not
+// in its folder.
+func unlandedNote(branch string) string {
+	return "NOTE: your previous turn was stopped before its changes were applied. They are NOT in this folder any more (they are kept on git branch " +
+		branch + "). Check the current state of the files before you continue.\n\n"
 }
 
 // Tell queues a message for a running agent. It is delivered when the

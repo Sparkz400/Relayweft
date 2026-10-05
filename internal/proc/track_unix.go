@@ -14,9 +14,14 @@ func alive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
+// groupAlive reports whether a process group with this id still has a
+// process.
+func groupAlive(pid int) bool { return syscall.Kill(-pid, 0) == nil }
+
 // reap kills a leftover agent's process group. Agents run in their own
-// process group (Setpgid), so the group id is the recorded pid.
-func reap(pid int, stamp string) bool {
+// process group (Setpgid), so the group id is the recorded pid. own: this
+// sy recorded the pid since it took the directory (see ReapOwn).
+func reap(pid int, stamp string, own bool) bool {
 	leader := alive(pid)
 	group := syscall.Kill(-pid, 0) == nil
 	if !leader && !group {
@@ -30,6 +35,15 @@ func reap(pid int, stamp string) bool {
 		// that is still in use as a process group id be handed out again
 		// (Linux and macOS check it), so the agent's group is gone.
 		return true
+	}
+	if !leader && !own {
+		// The leader is gone but its group still runs. Probably what the
+		// agent started, but the group may also be a later program's that
+		// got the pid after the agent's group ended (the hold of a killed
+		// sy's worktree lasts days, and macOS reuses pids after 99999):
+		// nothing proves which, so nothing is killed. The slot is skipped
+		// and sy doctor lists the group.
+		return false
 	}
 	syscall.Kill(-pid, syscall.SIGKILL)
 	syscall.Kill(pid, syscall.SIGKILL)

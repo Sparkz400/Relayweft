@@ -17,6 +17,9 @@ import (
 // `codex exec resume` takes no -C, so the folder is the process's working
 // directory, and the sandbox comes through config. Both must be the
 // worktree's: workspace-write lets Codex write only below its folder.
+// This pins down runner behaviour the Codex follow-up fix relies on; it
+// passed before that fix too (the regression test is the orchestrator's
+// TestFollowUpResumesInPoolWorktree).
 func TestCodexResumeRunsInItsFolder(t *testing.T) {
 	pc, det := providerCfg(t, event.Codex)
 	dump := fakeExe(t, &pc, "codex_real_resume.jsonl", 0, "")

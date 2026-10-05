@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,9 @@ type slotHold struct {
 	Task  string `json:"task"`
 	Step  string `json:"step"`
 	Token string `json:"token,omitempty"`
+	// Base is the commit the slot was prepared at: what the run changed
+	// can still be told when its task's state is gone.
+	Base string `json:"base,omitempty"`
 }
 
 func holdPath(slot string) string { return slot + ".hold" }
@@ -214,9 +218,16 @@ type SavedEdits struct {
 	Repo string    `json:"repo,omitempty"` // the repository the branch is in
 	Why  string    `json:"why"`
 	When time.Time `json:"when"`
+	// Left are what the branch could not take: nested repositories the
+	// agent created, and files written outside a sparse checkout.
+	Left []string `json:"left,omitempty"`
 }
 
-// Hint says where the edits are and how to get them.
+// Hint says where the edits are and how to get them. The patch goes
+// through a file, not a pipe: Windows PowerShell 5.1 re-encodes piped
+// text (non-ASCII letters become "?", LF becomes CRLF), and git apply
+// would apply that without an error. It is applied from the repository's
+// top folder, so no path is skipped, and --binary keeps binary files.
 func (s SavedEdits) Hint() string {
 	what := "half-done edits"
 	if s.Step != "" {
@@ -225,13 +236,17 @@ func (s SavedEdits) Hint() string {
 	if s.Task != "" {
 		what += " (task " + s.Task + ")"
 	}
-	where := ""
+	gitC := "git"
 	if s.Repo != "" {
-		where = " in " + s.Repo
+		gitC = `git -C "` + s.Repo + `"`
 	}
 	base := s.Base[:min(12, len(s.Base))]
-	return fmt.Sprintf("%s were saved on branch %s%s when %s: `git diff %s %s` shows them, `git diff %s %s | git apply` puts them in your tree",
-		what, s.Branch, where, s.Why, base, s.Branch, base, s.Branch)
+	h := fmt.Sprintf("%s were saved on branch %s when %s. See them: `%s diff %s %s`. Put them in your tree: `%s diff --binary --no-ext-diff --no-color %s %s --output=sy-unfinished.patch`, then `%s apply sy-unfinished.patch` (add --3way if it does not apply), then delete sy-unfinished.patch",
+		what, s.Branch, s.Why, gitC, base, s.Branch, gitC, base, s.Branch, gitC)
+	if len(s.Left) > 0 {
+		h += ". Not on the branch (nested repositories, files outside the sparse checkout): " + strings.Join(s.Left, ", ")
+	}
+	return h
 }
 
 // saveHeldEdits saves what the step run that holds slot left there on a
@@ -241,67 +256,129 @@ func (s SavedEdits) Hint() string {
 // fails when the task is running in a sy right now: that sy owns its
 // state and may still claim the worktree.
 func saveHeldEdits(slot string, i holdInfo, why string) (*SavedEdits, error) {
-	if _, err := os.Lstat(filepath.Join(slot, ".git")); errors.Is(err, fs.ErrNotExist) {
-		return nil, nil // gone, or never prepared: nothing to save
-	}
 	task, step := i.hold.Task, i.hold.Step
-	var st *TaskState
 	if task != "" {
-		s, err := readTask(task)
-		switch {
-		case err == nil:
-			unlock, ok := proc.TryLock(filepath.Join(stateDir(), task+".lock"))
-			if !ok {
-				return nil, fmt.Errorf("task %s: %w", task, errTaskRunning)
-			}
-			defer unlock()
-			if s, err = readTask(task); err != nil { // as of now, under its lock
-				return nil, err
-			}
-			st = s
-		case !errors.Is(err, fs.ErrNotExist):
-			return nil, err
+		// (A hold without a task state, such as a stopped follow-up's,
+		// has no lock either; none is created for it.)
+		if _, err := readTask(task); err == nil && taskLocked(task) {
+			return nil, fmt.Errorf("task %s: %w", task, errTaskRunning)
 		}
 	}
-	wg := git{slot}
-	head, err := wg.out("rev-parse", "-q", "--verify", "HEAD")
-	if err != nil {
-		return nil, fmt.Errorf("%s has no HEAD: %v", slot, err)
-	}
-	base := head
-	if b := i.run.Base; b != "" && (b == head || wg.isAncestor(b, head)) {
-		base = b // the agent may have committed: that is part of its work
-	}
-	label := "unfinished work"
-	if step != "" {
-		label = "unfinished " + step + " of " + task
-	}
-	sc, err := wg.commitWork(head, "switchyard: "+label+" (saved from "+slot+" when "+why+")")
-	if err != nil {
-		return nil, err
-	}
-	if sc.Commit == base {
-		return nil, nil // the agent had not changed anything yet
+	base := i.run.Base
+	if base == "" {
+		base = i.hold.Base // the task's state is gone
 	}
 	name := "sy/unfinished-" + time.Now().Format("20060102") + "-" + refPart(filepath.Base(slot))
+	label := "unfinished work"
 	if task != "" {
 		name = "sy/" + refPart(task) + "/" + refPart(step) + "-unfinished"
+		label = "unfinished " + step + " of " + task
 	}
-	saved := &SavedEdits{Step: step, Task: task, Branch: newBranch(wg, name, sc.Commit), Base: base, Why: why, When: time.Now()}
-	if repo := slotRepo(slot); st == nil || !samePath(repo, st.Dir) {
-		saved.Repo = repo // another repo of a multi-repo task, or no state says
+	// The git work runs before the task's lock is taken: it can take a
+	// while in a big tree, and sy resume of the task must not find the
+	// lock taken meanwhile.
+	saved, err := saveSlotWork(slot, base, name, label+" (saved from "+slot+" when "+why+")")
+	if err != nil || saved == nil {
+		return nil, err
 	}
-	diag.Logf("pool: %s", saved.Hint())
-	if st != nil {
+	saved.Step, saved.Task, saved.Why = step, task, why
+	if task == "" {
+		diag.Logf("pool: %s", saved.Hint())
+		return saved, nil
+	}
+	if _, err := readTask(task); errors.Is(err, fs.ErrNotExist) {
+		diag.Logf("pool: %s", saved.Hint()) // no state to record it in
+		return saved, nil
+	}
+	// Recorded under the task's lock, so no sy runs the task meanwhile.
+	// Whatever goes wrong here, the branch is dropped again and the
+	// worktree stays held: the edits are still there.
+	unlock, ok := lockRetry(filepath.Join(stateDir(), task+".lock"))
+	if !ok {
+		dropRef(slot, saved.Branch)
+		return nil, fmt.Errorf("task %s: %w", task, errTaskRunning)
+	}
+	defer unlock()
+	st, err := readTask(task)
+	if err == nil {
 		stateMu.Lock()
 		st.Saved = append(st.Saved, *saved)
 		if r, ok := st.Running[step]; ok && samePath(r.Slot, slot) {
 			delete(st.Running, step) // its edits are on the branch now
 		}
 		stateMu.Unlock()
-		st.save()
+		err = st.saveErr()
 	}
+	if err != nil {
+		dropRef(slot, saved.Branch)
+		return nil, fmt.Errorf("the task's state could not be updated: %v", err)
+	}
+	diag.Logf("pool: %s", saved.Hint())
 	return saved, nil
+}
+
+// saveSlotWork commits what is in the pool worktree slot (the agent's own
+// commits included) and keeps it on a new branch named like name. base is
+// the commit the slot was prepared at ("" = unknown); the edits are the
+// difference between Base and Branch. A slot that is no longer a worktree,
+// or holds nothing new, gives nil. An error means nothing references the
+// work: the caller must not let the slot be reset.
+func saveSlotWork(slot, base, name, msg string) (*SavedEdits, error) {
+	if _, err := os.Lstat(filepath.Join(slot, ".git")); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil // gone, or never prepared: nothing to save
+	}
+	wg := git{slot}
+	head, err := wg.out("rev-parse", "-q", "--verify", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("%s has no HEAD: %v", slot, err)
+	}
+	if base != "" && base != head && !wg.isAncestor(base, head) {
+		base = "" // not where this slot came from: unknown
+	}
+	sc, err := wg.commitWork(head, "switchyard: "+msg)
+	if err != nil {
+		return nil, err
+	}
+	if base == "" {
+		// Unknown: HEAD may hold commits the agent made, which a reset
+		// would lose. They are new unless some ref has them already.
+		base = head
+		if refs, _ := wg.out("for-each-ref", "--count=1", "--contains", head, "--format=%(refname)"); refs == "" {
+			if mb, err := wg.out("merge-base", head, "main-worktree/HEAD"); err == nil && mb != "" && mb != head {
+				base = mb
+			} else if p, err := wg.out("rev-parse", "-q", "--verify", head+"^"); err == nil {
+				base = p
+			}
+		}
+	}
+	if sc.Commit == base {
+		return nil, nil // the agent had not changed anything yet
+	}
+	branch, err := newBranch(wg, name, sc.Commit)
+	if err != nil {
+		return nil, err
+	}
+	return &SavedEdits{Branch: branch, Base: base, Repo: slotRepo(slot), When: time.Now(), Left: append(sc.Nested, sc.Sparse...)}, nil
+}
+
+// dropRef deletes a branch (or ref) saveSlotWork just created.
+func dropRef(slot, name string) {
+	ref := name
+	if !strings.HasPrefix(ref, "refs/") {
+		ref = "refs/heads/" + name
+	}
+	git{slot}.out("update-ref", "-d", ref)
+}
+
+// lockRetry takes a lock file, trying for a moment while someone else has
+// it (another sy looking at it, or recording saved edits).
+func lockRetry(path string) (unlock func(), ok bool) {
+	for i := 0; ; i++ {
+		if unlock, ok = proc.TryLock(path); ok || i == 40 {
+			return unlock, ok
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // ownHold reports (as an error) whether the slot's mark is still the one

@@ -108,7 +108,7 @@ func (s *TaskState) setRunning(id string, r StepRun) {
 	s.save()
 	if r.Slot != "" {
 		// Keep its half-done edits there if sy dies (holds.go).
-		holdSlot(r.Slot, slotHold{Task: s.ID, Step: id, Token: r.Token})
+		holdSlot(r.Slot, slotHold{Task: s.ID, Step: id, Token: r.Token, Base: r.Base})
 	}
 }
 
@@ -186,8 +186,15 @@ func statePath(id string) string { return filepath.Join(stateDir(), id+".json") 
 
 // save writes the state atomically.
 func (s *TaskState) save() {
+	if err := s.saveErr(); err != nil {
+		diag.Logf("task state %s not saved: %v", s.ID, err)
+	}
+}
+
+// saveErr is save that returns the error.
+func (s *TaskState) saveErr() error {
 	if s == nil || s.ID == "" {
-		return
+		return nil
 	}
 	stateMu.Lock()
 	defer stateMu.Unlock()
@@ -195,11 +202,9 @@ func (s *TaskState) save() {
 	os.MkdirAll(stateDir(), 0o755)
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
-	if err := writeFileAtomic(statePath(s.ID), data); err != nil {
-		diag.Logf("task state %s not saved: %v", s.ID, err)
-	}
+	return writeFileAtomic(statePath(s.ID), data)
 }
 
 // setResult records a finished subtask. interrupted keeps its running
@@ -226,10 +231,12 @@ func (s *TaskState) setResult(id string, r stepResult, interrupted bool) {
 }
 
 // lock takes the task's lock file for as long as it runs; ok is false when
-// another sy holds it.
+// another sy holds it. Another sy may hold it for a moment without running
+// the task (checking a hold, recording saved edits), so it is retried
+// briefly.
 func (s *TaskState) lock() (unlock func(), ok bool) {
 	os.MkdirAll(stateDir(), 0o755)
-	return proc.TryLock(filepath.Join(stateDir(), s.ID+".lock"))
+	return lockRetry(filepath.Join(stateDir(), s.ID+".lock"))
 }
 
 // Interrupted reports whether the task stopped without finishing and no

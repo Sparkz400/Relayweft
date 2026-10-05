@@ -34,9 +34,12 @@ func procStamp(pid int) string {
 // reap only reports whether a recorded agent is still running: sy's job
 // object kills agents with sy, so a live one is rare, and the directory is
 // skipped rather than killing a process tree from the outside.
-func reap(pid int, stamp string) bool {
+func reap(pid int, stamp string, own bool) bool {
 	cur := procStamp(pid)
 	return cur == "" || (stamp != "" && cur != stamp)
 }
 
 func alive(pid int) bool { return procStamp(pid) != "" }
+
+// groupAlive: Windows has no process groups to outlive their leader here.
+func groupAlive(pid int) bool { return false }
