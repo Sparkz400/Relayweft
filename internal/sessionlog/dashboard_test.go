@@ -61,6 +61,8 @@ func TestBuildDashboard(t *testing.T) {
 	add(Record{Type: TypeDecision, TS: at(0, 10), TaskID: "t1", Step: "s1", Attempt: 2, Role: "worker_high", Provider: "claude", Model: "opus", Rule: "error-repeats",
 		Reason: "same error twice: worker -> worker_high; learned route claude:opus: succeeded 90% of 9 runs vs 50% of 8 on codex:gpt-x"})
 	add(Record{Type: TypeAgentEnd, TS: at(0, 10), TaskID: "t1", Step: "s1", Attempt: 2, Role: "worker_high", Provider: "claude", Model: "opus", OK: Bool(true), Tokens: tok(2000, 500, 0.40), DurationMS: 90_000})
+	// The same step repeating an error again is still one escalated step.
+	add(Record{Type: TypeDecision, TS: at(0, 10), TaskID: "t1", Step: "s1", Attempt: 3, Role: "worker_high", Provider: "claude", Model: "opus", Rule: "error-repeats", Reason: "same error twice: worker -> worker_high"})
 	add(Record{Type: TypeReview, TS: at(0, 11), TaskID: "t1", Step: "final", OK: Bool(false)})
 	add(Record{Type: TypeReview, TS: at(0, 11), TaskID: "t1", Step: "final", OK: Bool(true)})
 	end("t1", at(0, 12), true, "done", 1100, 2500, 0.40)

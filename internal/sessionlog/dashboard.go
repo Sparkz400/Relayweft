@@ -80,7 +80,8 @@ type RouteRow struct {
 	AvgUSD    float64 `json:"avg_usd"`
 	AvgMS     int64   `json:"avg_ms"`
 	// Escalated counts steps that hit the same error twice on this route and
-	// were moved up (the "error-repeats" rule).
+	// were moved up (the "error-repeats" rule). A step counts once, on the
+	// route of its first escalation, as `sy tune` counts it.
 	Escalated int `json:"escalated"`
 	// Reviews and Rejected count the final reviews of tasks this route
 	// wrote in (worker roles), and how many asked for changes.
@@ -228,6 +229,7 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 	extra := map[string]*DashDay{} // failed, cancelled and wall time
 	routes := map[string]*RouteRow{}
 	decisions := map[string]Record{}         // session|task|step|attempt -> decision
+	escalated := map[string]bool{}           // session|task|step counted already
 	wrote := map[string]map[*RouteRow]bool{} // session/task -> worker routes
 	type reviews struct{ n, rejected int }
 	finals := map[string]*reviews{}
@@ -294,8 +296,9 @@ func BuildDashboard(recs []Record, o DashboardOptions) Dashboard {
 			x.WallMS += r.DurationMS
 		case TypeDecision:
 			decisions[key(r, r.Attempt)] = r
-			if m := escalateRe.FindStringSubmatch(r.Reason); m != nil && r.Attempt > 1 {
+			if step := r.Session + "|" + r.TaskID + "|" + r.Step; escalateRe.MatchString(r.Reason) && r.Attempt > 1 && !escalated[step] {
 				if prev, ok := decisions[key(r, r.Attempt-1)]; ok {
+					escalated[step] = true
 					routeRow(routes, prev.Role, prev.Provider, prev.Model, prev.Effort).Escalated++
 				}
 			}
