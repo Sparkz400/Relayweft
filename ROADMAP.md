@@ -206,7 +206,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
   - Code signing of the Windows and macOS binaries needs a certificate (Authenticode, Apple notarization). Release integrity does not: from v0.4.0 every asset has GitHub build provenance, each binary a CycloneDX SBOM (attested), and `checksums.txt` a keyless Sigstore signature (`packaging/README.md`, "Verifying a release"). Verified on the published v0.4.0 release and in two signed dry runs.
   - `rw update` checks only the SHA-256; it prints the `gh attestation verify` command instead of verifying the signature itself (that would need sigstore-go and a fresh trust root).
   - The Scoop, winget, Homebrew and AUR manifests are rendered for v0.4.0; Homebrew and AUR now always install completion. Rendering remains necessary after each release. Winget and AUR publication still need their external submissions.
-  - Linux package and repository signing is configured. All six published v0.4.0 package signatures verified. The post-release PR tracks live feed deployment and client installation evidence; the first deployment exposed conflicting download Accept headers, now covered by HTTP regression tests.
+  - Linux package and repository signing is configured. All six published v0.4.0 package signatures verified. [The post-release PR](https://github.com/Sparkz400/Relayweft/pull/62) tracks live feed deployment and client installation evidence; the first deployment exposed conflicting download Accept headers, now covered by HTTP regression tests.
 
 **Exit criteria:**
 - You reach for `rw` before plain `codex` or `claude` for multi-step work.

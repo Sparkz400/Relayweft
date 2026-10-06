@@ -26,7 +26,7 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Fixed
 
-- The package repository publisher requests release asset bytes with a single `Accept` header; conflicting JSON and binary headers made the first signed feed deployment download metadata and fail its checksum check.
+- The package repository publisher requests release asset bytes with a single `Accept` header; conflicting JSON and binary headers made the first signed feed deployment download metadata and fail its checksum check. ([#62](https://github.com/Sparkz400/Relayweft/pull/62))
 
 ## [0.4.0] - 2026-10-06
 
