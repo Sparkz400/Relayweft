@@ -945,7 +945,8 @@ function renderComposer() {
   add('@', 'follow up / tell an agent');
   if (s.running) add('Ctrl+X', 'cancel task');
   add('Esc', 'close panel');
-  if (s.running) hints.append(h('span', null, 'A task typed now is queued and runs unattended afterwards.'));
+  if (s.fill && s.fill.on) hints.append(h('span', null, 'Fill is on: a task typed now goes to the day plan and runs unattended when a window has room.'));
+  else if (s.running) hints.append(h('span', null, 'A task typed now is queued and runs unattended afterwards.'));
 }
 async function submit() {
   const p = prompt();
@@ -1602,19 +1603,67 @@ function drawQueue(body) {
   };
   what.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
   body.append(h('div', { class: 'sched-form' }, when, what, h('button', { class: 'btn sm primary', onclick: go }, 'Schedule')));
-  if (refocus) {
-    const el = refocus === 'when' ? when : what;
+  const fillEls = drawFill(body);
+  const el = refocus === 'when' ? when : refocus === 'what' ? what : fillEls[refocus];
+  if (el) {
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
   }
   if (!q.length) { body.append(h('div', { class: 'empty-list' }, 'The queue is empty.')); return; }
   const list = h('div', { class: 'list' });
-  q.forEach((j, i) => list.append(h('div', { class: 'item', style: `animation-delay:${i * 30}ms` },
-    h('div', { class: 't' }, j.label),
-    h('div', { class: 'meta' }, h('span', { class: 'pill' }, j.at ? 'scheduled' : j.kind),
-      j.at ? 'at ' + new Date(Date.parse(j.at) + S.timeOffset).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '#' + (i + 1) + ' in line'),
-    h('div', { class: 'side' }, h('button', { class: 'btn sm', onclick: () => act('POST', '/api/queue/remove', { id: j.id }) }, icon('trash'), 'Remove')))));
+  q.forEach((j, i) => {
+    const p = j.plan;
+    let meta = j.at ? 'at ' + localClock(j.at) : '#' + (i + 1) + ' in line';
+    let pill = h('span', { class: 'pill' }, j.at ? 'scheduled' : j.kind);
+    if (p && p.skip) { pill = h('span', { class: 'pill interrupted' }, 'not planned'); meta = p.skip; }
+    else if (p && p.provider) { pill = h('span', { class: 'pill ' + p.provider }, p.provider); meta = localClock(p.start) + ' · ' + (p.notes || []).join(' · '); }
+    list.append(h('div', { class: 'item', style: `animation-delay:${i * 30}ms` },
+      h('div', { class: 't' }, j.label),
+      h('div', { class: 'meta' }, pill, meta),
+      h('div', { class: 'side' }, h('button', { class: 'btn sm', onclick: () => act('POST', '/api/queue/remove', { id: j.id }) }, icon('trash'), 'Remove'))));
+  });
   body.append(list);
+}
+
+// localClock shows a server time as a weekday and time of day.
+function localClock(t) {
+  return new Date(Date.parse(t) + S.timeOffset).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+// drawFill is the day planner's part of the Queue panel: fill on or off,
+// its time bounds, why the queue waits and the plan as text. It returns
+// its inputs, so a re-render keeps the focus.
+function drawFill(body) {
+  const f = (S.snap && S.snap.fill) || { on: false };
+  const ff = S.fillForm || (S.fillForm = { until: '', fresh: '' });
+  const until = h('input', { class: 'in when', placeholder: '07:00', value: ff.until, dataset: { sched: 'until' }, title: 'Start no task at or after this time (optional)' });
+  const fresh = h('input', { class: 'in when', placeholder: '09:00', value: ff.fresh, dataset: { sched: 'fresh' }, title: 'Open no usage window that would still run at this time, so both subscriptions start the day full (optional)' });
+  for (const [el, k] of [[until, 'until'], [fresh, 'fresh']]) el.addEventListener('input', () => { ff[k] = el.value; });
+  const set = async (on) => {
+    try {
+      const r = await api('POST', '/api/fill', on ? { on: true, until: ff.until, fresh_at: ff.fresh } : { on: false });
+      toast(r.message, 'ok');
+      S.fillPlan = null;
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  const show = async () => {
+    try { S.fillPlan = (await api('GET', '/api/fill')).lines; } catch (e) { toast(e.message, 'err'); return; }
+    if (S.drawer === 'queue') openDrawer('queue', true);
+  };
+  let state = 'Off: queued tasks run one after another.';
+  if (f.on) {
+    state = "On: each queued task runs when a subscription's 5-hour window has room, on the window that resets first; when all are full it waits for the next reset.";
+    if (f.until) state += ' Until ' + localClock(f.until) + '.';
+    if (f.fresh_at) state += ' Full windows at ' + localClock(f.fresh_at) + '.';
+  }
+  body.append(h('div', { class: 'fill-box' + (f.on ? ' on' : '') },
+    h('div', { class: 'toolbar' }, h('div', { class: 'grow' }, h('b', null, 'Fill windows'), h('div', { class: 'muted small' }, state)),
+      h('button', { class: 'btn sm', onclick: show, title: 'The day plan for the queued tasks' }, 'Plan'),
+      f.on ? h('button', { class: 'btn sm', onclick: () => set(false) }, 'Turn off') : ''),
+    f.hold ? h('div', { class: 'small fill-hold' }, f.hold.replace(/^fill: /, '')) : '',
+    h('div', { class: 'sched-form' }, h('label', { class: 'fill-field' }, 'until', until), h('label', { class: 'fill-field' }, 'full windows at', fresh), h('button', { class: 'btn sm primary', onclick: () => set(true) }, f.on ? 'Update' : 'Turn on')),
+    S.fillPlan ? h('pre', { class: 'fill-plan' }, S.fillPlan.join('\n')) : ''));
+  return { until, fresh };
 }
 
 async function drawHistory(body) {

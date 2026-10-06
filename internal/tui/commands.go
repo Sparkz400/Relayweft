@@ -31,6 +31,8 @@ var helpText = []string{
 	"/verify [<command>|clear]            list, add or clear the checks run before the final review",
 	"/queue · /queue clear · /queue rm <n>   tasks waiting to run",
 	"/schedule <02:30|in 2h|reset claude> <task> · /schedule · /schedule rm <n>   run a task later, unattended",
+	"/fill on [until 07:00] [fresh 09:00] · /fill off · /fill   day plan: queued tasks spend both subscriptions'",
+	"                                     5-hour windows, each on the window that resets first; waits for resets",
 	"/resume [<id>] · /history            continue an interrupted task · list the last 10 tasks",
 	"/threads <n> · /parallel on|off · /review on|off (reviewer checkpoints) · /judge on|off",
 	"/tiers on|off                        pick each work step's model from its difficulty and the quota left",
@@ -56,6 +58,10 @@ func (m *Model) command(line string) tea.Cmd {
 	}
 	if cmd == "schedule" {
 		m.scheduleCommand(args, say)
+		return nil
+	}
+	if cmd == "fill" {
+		m.fillCommand(args, say)
 		return nil
 	}
 	switch cmd {

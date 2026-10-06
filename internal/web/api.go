@@ -59,6 +59,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/approvals/{id}/budget", s.handleBudget)
 	mux.HandleFunc("POST /api/approvals/{id}/conflict", s.handleConflict)
 	mux.HandleFunc("POST /api/schedule", s.handleSchedule)
+	mux.HandleFunc("GET /api/fill", s.handleFill)
+	mux.HandleFunc("POST /api/fill", s.handleFill)
 	mux.HandleFunc("GET /api/routes", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.routes()) })
 	mux.HandleFunc("POST /api/routes", s.handleSetRoute)
 	mux.HandleFunc("POST /api/config/save", func(w http.ResponseWriter, r *http.Request) {

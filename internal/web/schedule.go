@@ -19,6 +19,9 @@ var scheduleTick = time.Second
 // a job without a start time, or a scheduled one whose time has come.
 func (s *Server) popDueLocked(now time.Time) *job {
 	for i, j := range s.queue {
+		if s.fill.on && j.plannable() {
+			continue // the day plan picks these (planQueue)
+		}
 		if j.at.IsZero() || !now.Before(j.at) {
 			s.queue = append(s.queue[:i:i], s.queue[i+1:]...)
 			return j
@@ -46,11 +49,12 @@ func (s *Server) scheduleLoop() {
 				s.launchLocked(next)
 			}
 		}
-		pending := s.current != nil && !s.current.at.IsZero()
+		pending := s.current != nil && !s.current.at.IsZero() || s.fillWaitingLocked()
 		for _, j := range s.queue {
 			pending = pending || !j.at.IsZero()
 		}
 		s.mu.Unlock()
+		s.planQueue(time.Now())
 		s.setAwake(pending && !s.opt.AllowSleep && !s.opt.Demo)
 		if next != nil {
 			s.notice("info", "starting scheduled task: "+oneLine(next.label(), 80))

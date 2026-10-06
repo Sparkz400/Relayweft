@@ -21,9 +21,13 @@ import (
 	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
-func testPlanner(tr *limits.Tracker, df dayFlags) *dayPlanner {
-	d := newDayPlanner(config.Default(), "", tr, df)
-	d.readLogs = func(time.Time) []sessionlog.Record { return nil }
+func testPlanner(t *testing.T, tr *limits.Tracker, df dayFlags) *dayplan.Live {
+	t.Helper()
+	d, err := newDayPlanner(config.Default(), "", tr, df)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.ReadLogs = func(time.Time) []sessionlog.Record { return nil }
 	return d
 }
 
@@ -41,7 +45,7 @@ func TestRunFillWaitsResumesAndLeans(t *testing.T) {
 	// for a moment.
 	tr.SetQuota(event.Codex, event.QuotaInfo{Utilization: 0.95, Window: "5h", ResetsAt: now.Add(time.Hour)})
 	tr.MarkLimited(event.Claude, now.Add(300*time.Millisecond))
-	d := testPlanner(tr, dayFlags{})
+	d := testPlanner(t, tr, dayFlags{})
 	loadTask = func(id string) (*orchestrator.TaskState, error) {
 		if id != "t1" {
 			return nil, errors.New("no such task")
@@ -91,7 +95,7 @@ func TestRunFillLeavesWhatDoesNotFit(t *testing.T) {
 	now := time.Now()
 	tr.MarkLimited(event.Claude, now.Add(time.Hour))
 	tr.MarkLimited(event.Codex, now.Add(2*time.Hour))
-	d := testPlanner(tr, dayFlags{until: now.Add(30 * time.Minute).Format(time.RFC3339)})
+	d := testPlanner(t, tr, dayFlags{until: now.Add(30 * time.Minute).Format(time.RFC3339)})
 	var out bytes.Buffer
 	ran, failed, left := runFill(context.Background(), &out, d, []string{"a", "b"}, func(int, orchestrator.TaskOptions) orchestrator.TaskResult {
 		t.Fatal("a task ran")
@@ -102,7 +106,7 @@ func TestRunFillLeavesWhatDoesNotFit(t *testing.T) {
 	}
 	// A real failure (no limit hit) is not retried.
 	tr = limits.NewTracker()
-	d = testPlanner(tr, dayFlags{})
+	d = testPlanner(t, tr, dayFlags{})
 	n := 0
 	ran, failed, _ = runFill(context.Background(), &out, d, []string{"a"}, func(_ int, o orchestrator.TaskOptions) orchestrator.TaskResult {
 		n++
@@ -124,9 +128,9 @@ func TestPrintDayPlan(t *testing.T) {
 	h := dayplan.Learn(nil, "")
 	tasks := []dayplan.Task{h.Task(queue[0]), h.Task(queue[1]), h.Task(queue[2])}
 	o := dayplan.Options{Now: now, Until: now.Add(10 * time.Minute)}
-	st := dayState{plan: dayplan.Make(tasks, provs, o), provs: provs, tasks: tasks, hist: h, opts: o}
+	st := dayplan.State{Plan: dayplan.Make(tasks, provs, o), Providers: provs, Tasks: tasks, History: h, Options: o}
 	var b bytes.Buffer
-	printDayPlan(&b, st, queue)
+	st.Write(&b, queue)
 	s := b.String()
 	for _, w := range []string{
 		"Day plan · 3 queued task(s) · now 23:00 · until 23:10",

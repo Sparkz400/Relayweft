@@ -26,7 +26,7 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Added
 
-- Day planner: `rw run --file tasks.txt --fill` spends both subscriptions' 5-hour usage windows overnight. Each task leans on the provider whose window resets first, rw waits for the next reset when every window is full, and a task a limit stopped resumes after it. `--until` and `--fresh-at` keep the morning free and both windows full; `rw dayplan` prints the plan. See `docs/dayplan.md`.
+- Day planner: `rw run --file tasks.txt --fill` spends both subscriptions' 5-hour usage windows overnight. Each task leans on the provider whose window resets first, rw waits for the next reset when every window is full, and a task a limit stopped resumes after it. `--until` and `--fresh-at` keep the morning free and both windows full; `rw dayplan` prints the plan. The TUI's queue (`/fill`) and `rw web`'s Queue panel (**Fill windows**) can use the same planner. See `docs/dayplan.md`.
 
 ### Fixed
 

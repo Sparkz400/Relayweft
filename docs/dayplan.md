@@ -41,6 +41,27 @@ The lean is only a preference. A provider at its limit, or at
 any run. `--provider` and roles you set explicitly (`--prefer`, `--route`,
 the repo file, session edits) are never moved.
 
+## In the TUI and in `rw web`
+
+The same planner runs the interactive queue:
+
+- **TUI:** `/fill on [until 07:00] [fresh 09:00]` turns it on, `/fill off`
+  turns it off, and `/fill` prints the plan for the queued tasks. While fill
+  is on, the header shows `fill`, or `fill waits to 02:30` while the queue
+  waits for a reset.
+- **`rw web`:** The Queue panel has a **Fill windows** box. It has the
+  optional "until" and "full windows at" times, **Turn on** / **Update** /
+  **Turn off**, and **Plan**, which shows the plan as text. Each queued task
+  shows its planned provider and start time, or why the plan does not reach
+  it.
+
+While fill is on, a task you type is queued even when nothing runs, and the
+plan decides when it starts. Like every queued task, it runs unattended (no
+approvals). Follow-ups (`@agent ...`) and `/schedule`d tasks keep their own
+order and start time. A task a limit stopped goes back to the front of the
+queue and is resumed when a window has room. The PC is kept awake while
+planned work waits or runs (`--allow-sleep` turns that off).
+
 ## Options
 
 | Flag | Meaning |
@@ -96,5 +117,8 @@ Day plan · 60 queued task(s) · now 20:24 · full windows at Wed 09:00
   in parallel.
 - Only enabled Claude and Codex providers are planned for. A provider with
   `only_preferred` (a local model) is left out.
-- `--fill` works on a task file or one task. It does not work with
+- `rw run --fill` works on a task file or one task. It does not work with
   `--issues`, `--team` or `--single`.
+- The TUI's and `rw web`'s fill setting lasts for that session only.
+  `until` and `full windows at` are fixed times: once they pass, the queue
+  holds until you change them or turn fill off.
