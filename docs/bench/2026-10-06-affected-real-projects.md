@@ -22,7 +22,7 @@ The same as the Go measurement in PR #36:
 Wall times are for one run each, measured around the command only. They
 are noisy: the machine ran other agents' work at the same time. The
 selection itself took under 0.4 s, except jest, which now asks jest for
-its configuration (0.8-2.9 s, see below).
+its configuration (0.7-2.9 s, see below).
 
 Where: Windows 11 for jest, pytest, cargo, dotnet and Maven (Docker was not
 running at first). The later runs went into Docker containers limited to
@@ -191,17 +191,25 @@ was up to date.
 
 ## Bugs found
 
-All four are fixed, each with a regression test from a small file tree
-that fails without the fix.
+All are fixed, each with a regression test from a small file tree that
+fails without the fix. An independent review of the fixes found more ways
+for jest and Gradle to miss tests; those are fixed too (marked "review").
 
-1. **jest's roots (silent miss).** `--findRelatedTests` drops a changed
-   file that is outside jest's `roots` or matches
-   `modulePathIgnorePatterns`, and `--passWithNoTests` makes "no tests" a
-   pass. Seen on dayjs; luxon has the same setting. rw now asks jest:
+1. **jest's index (silent miss).** `--findRelatedTests` only knows the
+   files jest indexes: under its `roots`, with an extension in
+   `moduleFileExtensions`, not matching `modulePathIgnorePatterns`. It drops
+   any other changed file, and `--passWithNoTests` makes "no tests" a pass.
+   Seen on dayjs; luxon has the same setting. rw now asks jest:
    `<runner> <the script's flags> --showConfig` (in the sandbox when it is
    on; jest's `cwd` maps the container's paths). It narrows only when every
-   jest project sees every changed file. This costs 0.8-1.3 s with a warm
-   disk cache, 2.9 s cold. `TestSelectJestRoots`, `TestJestShowConfigCommand`.
+   jest project indexes every changed file. Review: jest also follows
+   imports only through indexed files, so rw runs in full when an indexed
+   file imports, by a relative path, a file jest does not index (a test
+   that imports `../index.js` outside `roots: ["<rootDir>/src"]`). And below
+   the check folder jest compares paths case-sensitively (`<rootDir>/Src`
+   does not hold `src/a.js`). With react-hook-form this costs 0.7-0.9 s
+   warm, 2.1 s cold; luxon 2.9 s cold. `TestSelectJestRoots`,
+   `TestSelectJestIndex`, `TestJestShowConfigCommand`.
 2. **vitest before 1.2.2 (miss).** Older `vitest related` misses tests
    that reach a changed file through other files. rw reads the vitest
    version from `node_modules` (up to the repo's top folder) and runs in
@@ -215,7 +223,13 @@ that fails without the fix.
    Includes are now read across lines. Includes rw cannot read (names from
    variables, includes inside an `if` block such as mockito's Android
    projects, which exist only with an SDK) run in full: a task of a project
-   that is not there fails the run. `TestSelectGradleIncludeLines`.
+   that is not there fails the run. Review: rw now reads the settings
+   script with its comments, strings and blocks, so it also finds an
+   include after a byte order mark or after another statement on the line
+   (`include(":a"); include(":b")`), and an include inside a block runs in
+   full even when it starts at the line's beginning. An include rw sees but
+   did not read (in a comment, a string or after a dot) runs in full.
+   `TestSelectGradleIncludeLines`.
 4. **npx and flags.** After one of its own flags, `npx` reads every later
    flag as npm's: `npx --no jest --config x --showConfig` ran jest without
    either flag (npm 11.17). rw's narrowed vitest command only worked because

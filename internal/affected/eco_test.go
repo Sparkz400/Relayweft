@@ -70,12 +70,58 @@ func jestShows(roots [][]string, extra ...string) func(context.Context, string, 
 			for _, r := range rs {
 				abs = append(abs, filepath.Join(dir, filepath.FromSlash(r)))
 			}
-			cfg := map[string]any{"rootDir": dir, "roots": abs, "modulePathIgnorePatterns": extra}
+			cfg := map[string]any{"rootDir": dir, "roots": abs, "modulePathIgnorePatterns": extra, "moduleFileExtensions": jestExtensions}
 			configs = append(configs, cfg)
 		}
 		out, err := json.Marshal(map[string]any{"configs": configs})
 		return append([]byte("> npm noise\n"), out...), err
 	}
+}
+
+// jestExtensions is jest's default moduleFileExtensions.
+var jestExtensions = []string{"js", "mjs", "cjs", "jsx", "ts", "tsx", "json", "node"}
+
+// jestFake makes `jest --showConfig` print one project with these
+// moduleFileExtensions and roots (relative to where jest runs).
+func jestFake(exts []string, roots ...string) func(context.Context, string, []string) ([]byte, error) {
+	return func(_ context.Context, dir string, _ []string) ([]byte, error) {
+		var abs []string
+		for _, r := range roots {
+			abs = append(abs, filepath.Join(dir, filepath.FromSlash(r)))
+		}
+		return json.Marshal(map[string]any{"configs": []any{map[string]any{"cwd": dir, "roots": abs, "moduleFileExtensions": exts}}})
+	}
+}
+
+// Review findings: jest indexes only the extensions in
+// moduleFileExtensions, follows imports only through files it indexes,
+// and compares paths below the check folder case-sensitively. Each case
+// narrowed to a run that found no test.
+func TestSelectJestIndex(t *testing.T) {
+	defer func(old func(context.Context, string, []string) ([]byte, error)) { jestConfig = old }(jestConfig)
+	dir := tree(t, map[string]string{"package.json": `{"scripts":{"test":"jest"}}`, "src/a.js": "export const a = 1\n", "src/data.json": "{}",
+		"src/a.test.js": "import { a } from '../index.js'\n", "index.js": "export * from './src/a.js'\n", "jest.config.js": "module.exports = {}\n"})
+	narrowed := "npm test -- --findRelatedTests --passWithNoTests ./src/a.js"
+	// An extension jest does not index.
+	jestConfig = jestFake([]string{"ts", "tsx", "js"}, ".")
+	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js"), narrowed)
+	want(t, dir, "npm test", sel(t, dir, "npm test", "src/data.json"), "")
+	// index.js, outside the roots, links the test to src/a.js.
+	jestConfig = jestFake(jestExtensions, "src")
+	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js"), "")
+	if p := sel(t, dir, "npm test", "src/a.js"); !strings.Contains(p.Why, "index.js") {
+		t.Errorf("why: %q", p.Why)
+	}
+	// A file outside the roots that no file jest sees imports cannot link
+	// a test to anything.
+	os.WriteFile(filepath.Join(dir, "src/a.test.js"), []byte("import { a } from './a'\nimport s from './data.json'\n"), 0o644)
+	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js"), narrowed)
+	// A folder named like the import is no file.
+	os.MkdirAll(filepath.Join(dir, "src/a"), 0o755)
+	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js"), narrowed)
+	// Roots ["<rootDir>/Src"] do not hold src/a.js, on Windows too.
+	jestConfig = jestFake(jestExtensions, "Src")
+	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js"), "")
 }
 
 // jest's --findRelatedTests sees only files under its roots: a source
@@ -86,7 +132,7 @@ func TestSelectJestRoots(t *testing.T) {
 	dir := tree(t, map[string]string{"package.json": `{"scripts":{"test":"jest --ci"}}`, "src/a.js": "x", "test/a.test.js": "x", "lib/b.js": "x"})
 	jestConfig = jestShows([][]string{{"test"}})
 	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js"), "")
-	if p := sel(t, dir, "npm test", "src/a.js"); !strings.Contains(p.Why, "outside jest's roots") {
+	if p := sel(t, dir, "npm test", "src/a.js"); !strings.Contains(p.Why, "outside its roots") {
 		t.Errorf("why: %q", p.Why)
 	}
 	want(t, dir, "npm test", sel(t, dir, "npm test", "test/a.test.js"), "npm test -- --findRelatedTests --passWithNoTests ./test/a.test.js")
@@ -139,7 +185,7 @@ func TestJestShowConfigCommand(t *testing.T) {
 	var ran []string
 	exec := func(_ context.Context, _ string, argv []string) ([]byte, error) {
 		ran = append(ran, strings.Join(argv, " "))
-		return []byte(`{"configs":[{"cwd":"/work","rootDir":"/work","roots":["/work/src"]}]}`), nil
+		return []byte(`{"configs":[{"cwd":"/work","rootDir":"/work","roots":["/work/src"],"moduleFileExtensions":["js"]}]}`), nil
 	}
 	p := Select(context.Background(), "npm test", "", Input{Root: dir, Dir: dir, Files: []string{"src/a.js"}, Exec: exec})
 	if p.Full || len(ran) != 1 {
@@ -362,6 +408,14 @@ func TestSelectGradleIncludeLines(t *testing.T) {
 		"include(\"core\")\ninclude(\n    \"plugin\",\n    \"other\",\n)\n",
 		"include 'core',\n        'plugin', 'other'\n",
 		"include(\":core\", \":plugin\",\n  \":other\")\n",
+		"include(\n    \"core\", // the API\n    \"plugin\", /* uses core */\n    \"other\",\n)\n",
+		// Review findings: a byte order mark, and includes that are not
+		// first on their line.
+		"\xef\xbb\xbfinclude 'core', 'plugin', 'other'\n",
+		"include(\":core\"); include(\":plugin\"); include(\":other\")\n",
+		"rootProject.name = 'x'; include 'core', 'plugin', 'other'\n",
+		"/* projects */ include 'core', 'plugin', 'other'\r\n",
+		"pluginManagement {\n  repositories { gradlePluginPortal() }\n}\ninclude 'core'\ninclude 'plugin'\ninclude 'other'\n",
 	} {
 		files["settings.gradle"] = settings
 		dir := tree(t, files)
@@ -380,6 +434,12 @@ func TestSelectGradleIncludeLines(t *testing.T) {
 		"include \"core\", \"$name\"\n",
 		"include 'core' + 'x'\n",
 		"include(\"core\", \"plugin\"\n",
+		// Review findings: an include in a block or a comment that starts
+		// at the line's beginning.
+		"include 'core', 'other'\nif (hasSdk) {\ninclude 'plugin'\n}\n",
+		"include 'core', 'other'\n/*\ninclude 'plugin'\n*/\n",
+		"include 'core', 'other'\nval x = \"include('plugin')\"\n",
+		"include 'core', 'other'\nsettings.include('plugin')\n",
 	} {
 		files["settings.gradle"] = settings
 		dir := tree(t, files)

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sparkz400/relayweft/internal/proc"
 )
@@ -184,13 +185,14 @@ func selectJS(ctx context.Context, cmd string, f []string, c *change) Plan {
 	return Plan{Command: cmd, Run: []string{jsNarrow(cmd, js) + " " + q}, Why: js.kind + " tests related to the " + c.changedWhy()}
 }
 
-// jest only finds related tests among the files under its roots (and not
-// in modulePathIgnorePatterns): a changed file outside them is dropped
+// jest only finds related tests among the files it indexes: under its
+// roots, with an extension in moduleFileExtensions, not in
+// modulePathIgnorePatterns. A changed file it does not index is dropped
 // without a word, and --passWithNoTests turns "no tests" into a pass. Many
 // projects set roots: ["test"] or ["<rootDir>/src"]. rw asks jest for its
 // resolved configuration (it runs the project's jest config, as the tests
 // do) and runs the full command unless every project sees every changed
-// file.
+// file and every file that could link a test to one.
 
 // jestConfig runs `jest --showConfig` in dir (tests swap it). argv holds
 // only words that passed hasShellSyntax, so the shell sees them as typed.
@@ -216,6 +218,8 @@ func jestShowConfig(js jsCmd) []string {
 // changed files (dir-relative, "./" in front), or "".
 func jestSeesAll(ctx context.Context, js jsCmd, c *change, files []string) string {
 	argv := jestShowConfig(js)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute) // a config that waits for something
+	defer cancel()
 	var out []byte
 	var err error
 	if c.exec != nil {
@@ -227,47 +231,71 @@ func jestSeesAll(ctx context.Context, js jsCmd, c *change, files []string) strin
 		return "jest --showConfig failed, so rw cannot tell which files jest sees: " + clipStr(err.Error(), 200)
 	}
 	var shown struct {
-		Configs []struct {
-			Cwd                      string   `json:"cwd"`
-			Roots                    []string `json:"roots"`
-			ModulePathIgnorePatterns []string `json:"modulePathIgnorePatterns"`
-		} `json:"configs"`
+		Configs []jestProject `json:"configs"`
 	}
 	i := bytes.IndexByte(out, '{')
 	if i < 0 || json.NewDecoder(bytes.NewReader(out[i:])).Decode(&shown) != nil || len(shown.Configs) == 0 {
 		return "could not read jest --showConfig"
 	}
-	for _, cfg := range shown.Configs {
-		base := cfg.Cwd // where jest ran: the check folder, in the sandbox too
-		if base == "" {
+	for k := range shown.Configs {
+		p := &shown.Configs[k]
+		if p.Cwd == "" { // where jest ran: the check folder, in the sandbox too
 			if c.exec != nil {
 				return "this jest does not say which folder it ran in"
 			}
-			base = c.dir
+			p.Cwd = c.dir
 		}
-		for _, f := range files {
-			f = strings.TrimPrefix(f, "./")
-			seen := false
-			for _, r := range cfg.Roots {
-				if underRoot(base, r, f) {
-					seen = true
-					break
+		for _, s := range p.ModulePathIgnorePatterns {
+			re, err := regexp.Compile(s)
+			if err != nil {
+				return "rw cannot read jest's modulePathIgnorePatterns"
+			}
+			p.ignore = append(p.ignore, re)
+		}
+	}
+	for _, f := range files {
+		f = strings.TrimPrefix(f, "./")
+		for _, p := range shown.Configs {
+			if why := p.unseen(f); why != "" {
+				return fmt.Sprintf("jest does not see %s (%s), so it cannot find the tests that use it", f, why)
+			}
+		}
+	}
+	// jest follows imports only through the files it sees: a test that
+	// imports ../index.js, outside roots: ["<rootDir>/src"], which imports
+	// a changed src/a.js, is not related to src/a.js. So no file jest sees
+	// may import, by a relative path, a file it does not see.
+	unseen := func(f string) string {
+		for _, p := range shown.Configs {
+			if why := p.unseen(f); why != "" {
+				return why
+			}
+		}
+		return ""
+	}
+	code, ok := walk(c.dir, maxJSFiles, func(rel string, d os.DirEntry) bool { return jsCode[strings.ToLower(path.Ext(rel))] })
+	if !ok {
+		return "too many files to check what jest sees"
+	}
+	for _, f := range code {
+		if unseen(f) != "" {
+			continue
+		}
+		data, err := os.ReadFile(c.abs(f))
+		if err != nil {
+			return "could not read " + f
+		}
+		for _, m := range reJSRelImport.FindAllSubmatch(data, -1) {
+			target := path.Join(path.Dir(f), string(m[1]))
+			if target == ".." || strings.HasPrefix(target, "../") {
+				return fmt.Sprintf("%s imports %s, outside the check folder", f, m[1])
+			}
+			for _, cand := range jsImportCandidates(target) {
+				if st, err := os.Stat(c.abs(cand)); err != nil || st.IsDir() {
+					continue
 				}
-			}
-			if !seen {
-				return fmt.Sprintf("%s is outside jest's roots, so jest cannot find the tests that use it", f)
-			}
-			abs := strings.TrimRight(base, `/\`) + "/" + f
-			if strings.Contains(base, `\`) {
-				abs = strings.ReplaceAll(abs, "/", `\`)
-			}
-			for _, p := range cfg.ModulePathIgnorePatterns {
-				re, err := regexp.Compile(p)
-				if err != nil {
-					return "rw cannot read jest's modulePathIgnorePatterns"
-				}
-				if re.MatchString(abs) {
-					return fmt.Sprintf("%s matches jest's modulePathIgnorePatterns, so jest cannot find the tests that use it", f)
+				if why := unseen(cand); why != "" {
+					return fmt.Sprintf("%s imports %s, which jest does not see (%s), so it may miss tests that reach a change through it", f, cand, why)
 				}
 			}
 		}
@@ -275,9 +303,62 @@ func jestSeesAll(ctx context.Context, js jsCmd, c *change, files []string) strin
 	return ""
 }
 
+const maxJSFiles = 50000
+
+// reJSRelImport finds an import of a relative path (import, export ...
+// from, require, dynamic import); group 1 is the path.
+var reJSRelImport = regexp.MustCompile(`(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)['"` + "`" + `](\.\.?/[^'"` + "`" + `\n]*)`)
+
+// jsImportCandidates are the files an import of target can load.
+func jsImportCandidates(target string) []string {
+	out := []string{target}
+	for ext := range jsCode {
+		out = append(out, target+ext, target+"/index"+ext)
+	}
+	return append(out, target+".json")
+}
+
+// jestProject is one project of `jest --showConfig`.
+type jestProject struct {
+	Cwd                      string   `json:"cwd"`
+	Roots                    []string `json:"roots"`
+	ModulePathIgnorePatterns []string `json:"modulePathIgnorePatterns"`
+	ModuleFileExtensions     []string `json:"moduleFileExtensions"`
+	ignore                   []*regexp.Regexp
+}
+
+// unseen says why jest's index of this project leaves out the
+// dir-relative slash path f, or "".
+func (p jestProject) unseen(f string) string {
+	seen := false
+	for _, r := range p.Roots {
+		if underRoot(p.Cwd, r, f) {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		return "outside its roots"
+	}
+	if ext := strings.TrimPrefix(path.Ext(f), "."); !slices.Contains(p.ModuleFileExtensions, ext) {
+		return "." + ext + " is not in its moduleFileExtensions"
+	}
+	abs := strings.TrimRight(p.Cwd, `/\`) + "/" + f
+	if strings.Contains(p.Cwd, `\`) {
+		abs = strings.ReplaceAll(abs, "/", `\`)
+	}
+	for _, re := range p.ignore {
+		if re.MatchString(abs) {
+			return "it matches modulePathIgnorePatterns"
+		}
+	}
+	return ""
+}
+
 // underRoot reports whether the dir-relative slash path f lies under
 // root; root and base (the folder jest ran in) are absolute, as jest
-// prints them (Windows or slash paths).
+// prints them (Windows or slash paths). Below the check folder jest's
+// index is case-sensitive: roots ["<rootDir>/Src"] do not hold src/a.js.
 func underRoot(base, root, f string) bool {
 	norm := func(p string) string { return strings.TrimRight(strings.ReplaceAll(p, `\`, "/"), "/") + "/" }
 	b, r := norm(base), norm(root)
@@ -285,7 +366,7 @@ func underRoot(base, root, f string) bool {
 	case hasPrefixFold(b, r):
 		return true // the root holds the whole check folder
 	case hasPrefixFold(r, b):
-		return hasPrefixFold(f+"/", r[len(b):]) // r[len(b):] is "src/" or "packages/a/"
+		return strings.HasPrefix(f+"/", r[len(b):]) // r[len(b):] is "src/" or "packages/a/"
 	}
 	return false
 }
