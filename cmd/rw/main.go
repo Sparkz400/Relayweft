@@ -120,6 +120,10 @@ Usage:
                              start later, unattended (PC kept awake; --allow-sleep to opt out)
   rw schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)
   rw notify [--test]         show where notifications go; --test posts to every webhook (Slack, Discord, ntfy)
+  rw morning [--since 12h|18:00] [--here] [--all] [--json]   what ran unattended overnight (queued, scheduled,
+                             task files): results, usage, limits hit and what needs you (rw resume, rw report)
+  rw morning --send | --schedule [--at 07:30]   post it to notify.webhooks, or print a daily system task for that
+                             (or set notify.morning: "07:30" and a running rw posts it)
   rw history [--all] [-n 20] [--json]   recent tasks in this directory, with status and cost
   rw resume [task id]        continue an interrupted task (default: the last one here)
   rw report [task id] [--out f.html] [--md] [--open]   one shareable page per task (default: the last one here)
@@ -416,6 +420,11 @@ func cmdTUI(args []string) error {
 		DemoTask: map[bool]string{true: demoTask}[*demo], SessionLog: log.Path(), Version: version, Approver: ap,
 		AllowSleep: c.allowSleep,
 	})
+	mctx, mstop := context.WithCancel(context.Background())
+	defer mstop()
+	if !*demo {
+		startMorning(mctx, store.Get)
+	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, runErr := p.Run()
 	diag.Unwatch("tui")

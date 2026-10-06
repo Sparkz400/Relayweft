@@ -234,6 +234,9 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer h.close()
+	if unattended {
+		startMorning(h.ctx, func() *config.Config { return h.cfg }) // an overnight run posts the summary at notify.morning
+	}
 	if iss.active() {
 		if err := iss.checkWorkspace(c.workspace); err != nil {
 			return err

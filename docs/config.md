@@ -207,11 +207,12 @@ Desktop notifications (Windows toast, macOS, notify-send): a task finished or fa
 |---|---|---|---|---|
 | `notify.enabled` | bool | `true` | yes | desktop notifications (Windows toast, macOS, notify-send) |
 | `notify.min_task` | duration | `1m` | yes | skip "done" for tasks shorter than this |
-| `notify.webhooks` | list of sections | `[]` | needs trust | `webhooks` (Slack, Discord, ntfy or plain JSON) get done, failed, limit, waiting and watch messages: overnight runs, scheduled tasks and rw watch post here (rw notify --test sends a test message). |
+| `notify.webhooks` | list of sections | `[]` | needs trust | `webhooks` (Slack, Discord, ntfy or plain JSON) get done, failed, limit, waiting, watch and summary messages: overnight runs, scheduled tasks, the morning summary and rw watch post here (rw notify --test sends a test message). |
 | `notify.webhooks[].url` | string | - | needs trust | the webhook; ${VAR} is read from your environment |
 | `notify.webhooks[].kind` | string | - | needs trust | "" = from the URL's host |
 | `notify.webhooks[].token` | string | - | needs trust | ntfy access token, or json's bearer token |
-| `notify.webhooks[].events` | list of strings | - | needs trust | done, failed, limit, waiting, watch (default: all) |
+| `notify.webhooks[].events` | list of strings | - | needs trust | done, failed, limit, waiting, watch, summary (default: all) |
+| `notify.morning` | string | "" | yes | `morning` is a time of day ("07:30"): the summary of the unattended tasks since the same time the day before (queued, scheduled, task files) goes to the webhooks (event summary) and as a desktop notification, from an rw web, TUI or long rw run that is running then. "" = off; rw morning --schedule sets up a system task instead. |
 
 ## hooks
 

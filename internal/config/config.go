@@ -392,9 +392,16 @@ type NotifyCfg struct {
 	Enabled bool     `yaml:"enabled"`
 	MinTask Duration `yaml:"min_task"` // only tasks that ran at least this long
 	// Webhooks (Slack, Discord, ntfy or plain JSON) get done, failed,
-	// limit, waiting and watch messages: overnight runs, scheduled tasks
-	// and rw watch post here (rw notify --test sends a test message).
+	// limit, waiting, watch and summary messages: overnight runs,
+	// scheduled tasks, the morning summary and rw watch post here (rw
+	// notify --test sends a test message).
 	Webhooks []notify.Webhook `yaml:"webhooks,omitempty"`
+	// Morning is a time of day ("07:30"): the summary of the unattended
+	// tasks since the same time the day before (queued, scheduled, task
+	// files) goes to the webhooks (event summary) and as a desktop
+	// notification, from an rw web, TUI or long rw run that is running
+	// then. "" = off; rw morning --schedule sets up a system task instead.
+	Morning string `yaml:"morning,omitempty"`
 }
 
 // Redacted returns a copy for display (rw bugreport): webhook URLs and
@@ -775,6 +782,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Watch.MaxRounds < 0 {
 		errs = append(errs, "watch.max_rounds must be >= 0")
+	}
+	if m := c.Notify.Morning; m != "" {
+		if _, err := time.Parse("15:04", m); err != nil {
+			errs = append(errs, fmt.Sprintf("notify.morning %q: want a time of day like 07:30", m))
+		}
 	}
 	for i, w := range c.Notify.Webhooks {
 		if err := w.Validate(); err != nil {

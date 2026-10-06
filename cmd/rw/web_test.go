@@ -88,7 +88,7 @@ func TestWebDemoServer(t *testing.T) {
 func TestPrintNewLinks(t *testing.T) {
 	var out bytes.Buffer
 	n := 0
-	printNewLinks(strings.NewReader("\n\n"), &out, func() string { n++; return "L" + string(rune('0'+n)) })
+	printNewLinks(strings.NewReader("\n\n"), &out, func() string { n++; return "L" + string(rune('0'+n)) }, nil)
 	if out.String() != "open: L1\nopen: L2\n" {
 		t.Fatalf("output %q", out.String())
 	}

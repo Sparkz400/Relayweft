@@ -45,6 +45,7 @@ func init() {
 		{name: "review", run: cmdReview, desc: "agent review of a pull request"},
 		{name: "schedule", run: cmdSchedule, desc: "print a Task Scheduler / cron command"},
 		{name: "notify", run: cmdNotify, desc: "where notifications go"},
+		{name: "morning", run: cmdMorning, desc: "what ran unattended overnight, and what needs you"},
 		{name: "history", run: cmdHistory, desc: "recent tasks"},
 		{name: "resume", run: cmdResume, desc: "continue an interrupted task", args: argTask},
 		{name: "report", run: cmdReport, desc: "a shareable page about a task", args: argTask},

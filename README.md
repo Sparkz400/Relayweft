@@ -422,6 +422,8 @@ rw run --file tasks.txt --when-reset claude   # claude | codex | any
 
 In the TUI, `/schedule 02:30 <task>`, `/schedule in 2h <task>` or `/schedule reset claude <task>` puts the task in the queue with a start time; it runs when due, after any running task. `/schedule` lists them, `/schedule rm <n>` removes one. In `rw web`, the Queue panel has the same form, and scheduled items show their time and a remove button.
 
+**In the morning**, `rw morning` lists what ran unattended overnight: each task's result, what needs you (a failed task: `rw report`; an interrupted one: `rw resume`; a conflict kept on a branch), the tokens used and the limits hit. Set `notify.morning: "07:30"` and a running rw posts it to your webhooks every morning; `rw web` shows it in its **Overnight** panel. See [docs/unattended.md](docs/unattended.md).
+
 `rw schedule --file tasks.txt --at 02:30 [--daily]` prints a ready Windows Task Scheduler (`schtasks /create …`) or cron command, so the OS starts `rw` even when no terminal is open. It installs nothing.
 
 ### Protecting your machine
@@ -529,6 +531,12 @@ Build the image once with `docker build -t relayweft-sandbox packaging/sandbox` 
 **JetBrains IDEs.** `editors/jetbrains` is a plugin for IntelliJ IDEA, PyCharm, GoLand, WebStorm, Rider and the other JetBrains IDEs (2025.2 or newer), on the same engine: a Relayweft tool window with the agent tree, the activity log and a prompt box, plan approval, follow-ups, undo, and change review in the IDE's diff viewer with per-hunk accept/reject. See [editors/jetbrains/README.md](editors/jetbrains/README.md) to build and install it.
 
 The server listens on 127.0.0.1 only. Each link `rw` prints or opens works once, within 2 minutes; press Enter in `rw`'s terminal for a new one. The page trades the link for a session that lives only in that browser tab, and there are no cookies. Requests from other sites, other ports and other host names are refused.
+
+**On your phone.** The page works down to phone width. `rw web --phone` also serves it on this machine's Tailscale (or private network) address and prints a QR code to pair your phone, so you can approve plans and changes of queued and scheduled tasks away from the PC. A phone can answer approvals, pause and cancel. It cannot start tasks, edit plans, send feedback or change settings. See [docs/unattended.md](docs/unattended.md).
+
+| | |
+|---|---|
+| ![plan approval on a phone](docs/web/phone-plan.png) | ![change review on a phone](docs/web/phone-review.png) |
 
 | | |
 |---|---|

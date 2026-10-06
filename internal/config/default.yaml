@@ -368,7 +368,8 @@ notify:
   # discord, ntfy or json; it is read from the URL for hooks.slack.com,
   # discord.com/api/webhooks and ntfy.sh. url and token may use ${VAR}, so
   # the secret can stay in your environment. events (default: all): done,
-  # failed, limit (a provider's usage limit), waiting (rw needs you), watch.
+  # failed, limit (a provider's usage limit), waiting (rw needs you), watch,
+  # summary (the morning summary, see morning below).
   # Task summaries leave your machine: on ntfy.sh, anyone who knows the
   # topic can read them, so pick a long random one (or a token).
   # webhooks:
@@ -376,6 +377,7 @@ notify:
   #     events: [done, failed, watch]
   #   - url: ${RW_SLACK_WEBHOOK}
   #     kind: slack
+  # morning: "07:30"               # post what ran unattended overnight (rw morning) at this time
 
 # Spending caps (0 = off). tokens = fresh tokens on both providers; usd =
 # Claude's API-equivalent price (not billed on a subscription). Day totals

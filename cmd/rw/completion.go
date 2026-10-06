@@ -292,6 +292,7 @@ var flagValues = map[string]valueHint{
 	"prefer":           {kind: valRolePref},
 	"selftest sandbox": {kind: valChoice, choices: []string{"auto", "off", "only"}},
 	"schedule os":      {kind: valChoice, choices: []string{"windows", "darwin", "linux"}},
+	"morning os":       {kind: valChoice, choices: []string{"windows", "darwin", "linux"}},
 }
 
 // completeFreeFlags are the value flags that take free text (numbers,
@@ -300,7 +301,7 @@ var completeFreeFlags = []string{
 	"api", "at", "base", "branch", "budget-day-usd", "budget-task-tokens", "budget-task-usd",
 	"check", "check-timeout", "count", "days", "every", "files", "forget", "idle", "in",
 	"issue", "issues", "lease", "limit", "max-files", "max-lines", "min-files", "min-use",
-	"n", "name", "only", "port", "repo", "scan", "sessions", "setup", "since", "speed",
+	"n", "name", "only", "phone-addr", "port", "repo", "scan", "sessions", "setup", "since", "speed",
 	"threads", "title",
 }
 

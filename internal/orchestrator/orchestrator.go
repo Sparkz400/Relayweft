@@ -624,9 +624,11 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	if o.opts.Bench == "" && o.opts.Mode != "demo" {
 		t.state = opts.Resume
 		if t.state == nil {
-			t.state = &TaskState{ID: t.key, Task: text, Dir: o.opts.Dir, Mode: o.opts.Mode, Created: time.Now(), UndoKey: t.key, Repos: o.Repos()}
+			t.state = &TaskState{ID: t.key, Task: text, Dir: o.opts.Dir, Mode: o.opts.Mode, Created: time.Now(), UndoKey: t.key, Repos: o.Repos(),
+				Unattended: opts.Unattended}
 		} else {
 			t.resumed = true
+			t.state.Unattended = t.state.Unattended || opts.Unattended
 		}
 		// The lock comes first: two rw processes must never run one task.
 		unlock, ok := t.state.lock()
@@ -753,6 +755,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 			s.UndoKey = res.UndoKey // a resume that never ran keeps the task's key
 		}
 		s.Summary, s.CostLine = res.Summary, res.Cost.Summary()
+		s.Kept = res.Kept
 		s.save()
 		pruneStates()
 	}

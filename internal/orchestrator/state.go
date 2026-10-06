@@ -114,6 +114,11 @@ type TaskState struct {
 	// Saved are half-done edits of interrupted steps, saved on a branch
 	// when the pool worktree that held them was given up (holds.go).
 	Saved []SavedEdits `json:"saved,omitempty"`
+	// Unattended: the task ran without anyone to ask (queued, scheduled, a
+	// task file); rw morning summarizes these.
+	Unattended bool `json:"unattended,omitempty"`
+	// Kept are the branches kept because a merge conflict was not resolved.
+	Kept []string `json:"kept,omitempty"`
 }
 
 // setRunning records that a subtask's agent starts.
