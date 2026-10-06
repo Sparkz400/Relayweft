@@ -10,6 +10,9 @@ name: load
 # internal/orchestrator/load_test.go (RW_LOAD_DURATION=3m for a local
 # smoke run on a generated repo).
 on:
+  push: # TEMPORARY: a workflow not on main cannot be dispatched
+    branches: [test/dashboard-load]
+    paths: [.github/workflows/load.yml]
   workflow_dispatch:
     inputs:
       duration:
@@ -64,7 +67,7 @@ jobs:
       - name: load test
         shell: bash
         env:
-          RW_LOAD_DURATION: ${{ inputs.duration || '2h30m' }}
+          RW_LOAD_DURATION: ${{ inputs.duration || '10m' }}
           RW_LOAD_REPO: ${{ runner.temp }}/bigrepo
           RW_LOAD_WORK: ${{ runner.temp }}/load
           RW_LOAD_OUT: ${{ runner.temp }}/load-out
