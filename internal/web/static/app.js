@@ -1662,7 +1662,8 @@ async function drawStats(body) {
     const tbl = h('table', { class: 'tbl' }, h('tr', null, ['Route', 'Calls', 'OK', 'Fail', 'Limit', 'Fresh in', 'Out', 'Avg'].map((x, i) => h('th', { class: i ? 'num' : '' }, x))));
     for (const r of st.Routes) {
       tbl.append(h('tr', null, h('td', null, h('span', { class: 'now', style: `--c:var(--${r.Provider})` }, r.Key)),
-        h('td', { class: 'num' }, r.Calls), h('td', { class: 'num' }, r.OK), h('td', { class: 'num' }, r.Failed), h('td', { class: 'num' }, r.LimitHits),
+        h('td', { class: 'num' }, r.Calls), h('td', { class: 'num' }, r.OK), h('td', { class: 'num' }, r.Failed),
+        h('td', { class: 'num', title: r.Unavailable ? `${r.Unavailable} run${r.Unavailable === 1 ? '' : 's'} with the CLI logged out or missing (not a limit)` : '' }, r.LimitHits + (r.Unavailable ? ` +${r.Unavailable} n/a` : '')),
         h('td', { class: 'num' }, human((r.Tokens.input || 0) - (r.Tokens.cached || 0))), h('td', { class: 'num' }, human(r.Tokens.output)),
         h('td', { class: 'num' }, r.Calls ? dur(r.Duration / 1e6 / r.Calls) : '-')));
     }
@@ -2038,7 +2039,8 @@ function renderDashboard(body, v) {
         h('td', { class: 'num' }, r.escalated || '-'),
         h('td', { class: 'num', title: r.reviews ? `${r.rejected} of ${r.reviews} final reviews of tasks this route wrote in asked for changes` : '' }, r.reviews ? `${r.rejected}/${r.reviews} rejected` : '-'),
         h('td', null, h('div', { class: 'chips', style: 'margin:0' }, dec)),
-        h('td', { class: 'num' }, r.limit_hits || '-'),
+        h('td', { class: 'num', title: r.unavailable ? `${r.unavailable} run${r.unavailable === 1 ? '' : 's'} with the CLI logged out or missing: rw routed around it, but it was no limit` : '' },
+          (r.limit_hits || (r.unavailable ? 0 : '-')) + (r.unavailable ? ` +${r.unavailable} n/a` : '')),
         h('td', null, (r.suggested || []).map((i) => sugs[i] ? h('span', { class: 'sev ' + sugs[i].Severity, title: sugs[i].Title }, `#${i + 1} ${SEV_LABEL[sugs[i].Severity] || ''}`) : ''))));
     }
     rc.append(h('div', { class: 'tbl-wrap' }, tbl));
@@ -2099,14 +2101,17 @@ function renderDashboard(body, v) {
   }
   const lp = provOrder(per);
   if (lp.length) {
-    lm.append(h('table', { class: 'tbl', style: 'margin-top:10px' }, h('tr', null, ['Provider', 'Limit hits', 'Switched before', 'Fell back after'].map((x, i) => h('th', { class: i ? 'num' : '' }, x))),
-      lp.map((p) => h('tr', null, h('td', null, h('span', { class: 'prov-head', style: `--c:${provColor(p)}` }, h('i'), p)), h('td', { class: 'num' }, per[p].hits), h('td', { class: 'num' }, per[p].preempts), h('td', { class: 'num' }, per[p].fallbacks)))));
+    const na = lp.some((p) => per[p].unavailable);
+    lm.append(h('table', { class: 'tbl', style: 'margin-top:10px' }, h('tr', null, ['Provider', 'Limit hits', 'Switched before', 'Fell back after', ...(na ? ['Unavailable'] : [])].map((x, i) => h('th', { class: i ? 'num' : '', title: x === 'Unavailable' ? 'its CLI was logged out or missing: rw routed around it, but it was no limit' : null }, x))),
+      lp.map((p) => h('tr', null, h('td', null, h('span', { class: 'prov-head', style: `--c:${provColor(p)}` }, h('i'), p)), h('td', { class: 'num' }, per[p].hits), h('td', { class: 'num' }, per[p].preempts), h('td', { class: 'num' }, per[p].fallbacks),
+        na ? h('td', { class: 'num' }, per[p].unavailable || 0) : ''))));
   } else lm.append(h('div', { class: 'muted small', style: 'margin-top:8px' }, `No limit hits or switches in the last ${ndays} days.`));
-  const recent = [...(lim.hits || []).map((x) => ({ ...x, k: 'hit' })), ...(lim.switches || []).map((x) => ({ ...x, k: 'switch' }))].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 8);
+  const recent = [...(lim.hits || []).map((x) => ({ ...x, k: 'hit' })), ...(lim.unavailable || []).map((x) => ({ ...x, k: 'na' })), ...(lim.switches || []).map((x) => ({ ...x, k: 'switch' }))]
+    .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 8);
   if (recent.length) {
     lm.append(h('div', { class: 'dash-sub muted small' }, 'Recent'), h('ul', { class: 'events' }, recent.map((x) => h('li', null, h('span', { class: 'mono small muted' }, when(x.ts)), ' ',
-      x.k === 'hit' ? [h('b', null, x.provider), ' hit its limit', x.until ? ` (until ${when(x.until)})` : '', x.text ? h('div', { class: 'muted small ell', title: x.text }, x.text) : '']
-        : [x.role ? String(x.role).replace('_', ' ') + ': ' : '', h('b', null, x.provider), ' → ', h('b', null, x.to), x.rule === 'quota-preempt' ? ' before the limit' : ' after a limit hit']))));
+      x.k !== 'switch' ? [h('b', null, x.provider), x.k === 'hit' ? ' hit its limit' : ' was unavailable (logged out or not installed; rw doctor)', x.until ? ` (until ${when(x.until)})` : '', x.text ? h('div', { class: 'muted small ell', title: x.text }, x.text) : '']
+        : [x.role ? String(x.role).replace('_', ' ') + ': ' : '', h('b', null, x.provider), ' → ', h('b', null, x.to), x.rule === 'quota-preempt' ? ' before the limit' : x.unavailable ? ' while it was unavailable' : ' after a limit hit']))));
   }
   const hc = card('Health streak', 'toward the Phase 1 exit criterion');
   const H = v.health;
