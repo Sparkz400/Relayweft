@@ -321,7 +321,9 @@ func gradleShape(f []string) int {
 }
 
 var (
-	reGradleQuoted  = regexp.MustCompile(`["']([^"']+)["']`)
+	// An include statement (not includeBuild or includeFlat); group 1 is
+	// its indentation.
+	reGradleInclude = regexp.MustCompile(`(?m)^([ \t]*)include\b`)
 	reGradleProject = regexp.MustCompile(`project\(\s*(?:path\s*[:=]\s*)?["'](:[^"']*)["']`)
 	reGradleUnsure  = regexp.MustCompile(`projectDir|includeBuild|includeFlat|\.each\b|forEach|for\s*\(|file\(|rootProject\.children|projects\.\w`)
 )
@@ -344,17 +346,24 @@ func gradleProjects(dir string) (map[string]string, string) {
 		return nil, name + " places projects in a way rw does not follow"
 	}
 	projects := map[string]string{}
-	for _, line := range strings.Split(string(data), "\n") {
-		t := strings.TrimSpace(line)
-		if !strings.HasPrefix(t, "include") {
-			continue
+	src := string(data)
+	for _, m := range reGradleInclude.FindAllStringSubmatchIndex(src, -1) {
+		if m[3] > m[2] {
+			// Indented: inside an if or a function, which may not run
+			// (Android projects only with an SDK). A task of a project
+			// that is not there fails the run.
+			return nil, name + " includes projects inside a block, which rw cannot evaluate"
 		}
-		for _, m := range reGradleQuoted.FindAllStringSubmatch(t, -1) {
-			p := ":" + strings.TrimPrefix(m[1], ":")
+		names, ok := gradleIncludeArgs(src[m[1]:])
+		if !ok {
+			return nil, name + " includes projects in a way rw does not follow"
+		}
+		for _, n := range names {
+			p := ":" + strings.TrimPrefix(n, ":")
 			if !plainGradleName(p) {
 				// Task names become command arguments and allow rules
 				// (comma-joined for Claude): letters, digits, . _ - : only.
-				return nil, fmt.Sprintf("%s names project %q, which rw does not pass on", name, m[1])
+				return nil, fmt.Sprintf("%s names project %q, which rw does not pass on", name, n)
 			}
 			projects[p] = strings.ReplaceAll(strings.TrimPrefix(p, ":"), ":", "/")
 		}
@@ -363,6 +372,62 @@ func gradleProjects(dir string) (map[string]string, string) {
 		return nil, "the project has no subprojects"
 	}
 	return projects, ""
+}
+
+// gradleIncludeArgs reads the project names of one include statement; s
+// starts right after the word. It follows string literals only, on one
+// line or several: `include 'a', 'b'`, `include 'a',\n 'b'`,
+// `include(\n "a",\n "b",\n)`.
+func gradleIncludeArgs(s string) ([]string, bool) {
+	i := 0
+	skip := func(newlines bool) {
+		for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || newlines && s[i] == '\n') {
+			i++
+		}
+	}
+	skip(false)
+	paren := i < len(s) && s[i] == '('
+	if paren {
+		i++
+	}
+	var names []string
+	for {
+		// Inside parentheses and after a comma the next name may be on
+		// the next line.
+		skip(paren || len(names) > 0)
+		if paren && len(names) > 0 && i < len(s) && s[i] == ')' {
+			return names, true // a trailing comma
+		}
+		if i >= len(s) || (s[i] != '\'' && s[i] != '"') {
+			return nil, false // a variable, a list, a spread
+		}
+		q := s[i]
+		j := strings.IndexByte(s[i+1:], q)
+		if j < 0 {
+			return nil, false
+		}
+		lit := s[i+1 : i+1+j]
+		if strings.ContainsAny(lit, "$\n") {
+			return nil, false // an interpolated name
+		}
+		names = append(names, lit)
+		i += j + 2
+		skip(paren)
+		if i < len(s) && s[i] == ',' {
+			i++
+			continue
+		}
+		if paren {
+			return names, i < len(s) && s[i] == ')'
+		}
+		// Without parentheses the statement ends with the line.
+		rest := s[i:]
+		if k := strings.IndexByte(rest, '\n'); k >= 0 {
+			rest = rest[:k]
+		}
+		rest = strings.TrimSpace(rest)
+		return names, rest == "" || rest == ";" || strings.HasPrefix(rest, "//")
+	}
 }
 
 func plainGradleName(p string) bool {
