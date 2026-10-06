@@ -489,15 +489,10 @@ func (a *applier) stillOurs(paths []string) error {
 	return nil
 }
 
-// restorePaths writes paths as they are in source, through git's checkout
-// filters. The paths go in on stdin.
-func (g git) restorePaths(source string, paths []string) error {
-	return g.restorePathsChecked(source, paths, nil)
-}
-
-// restorePathsChecked is restorePaths that calls check before every run of
-// restore: one that found another git's lock taken runs again, but only if
-// check still passes.
+// restorePathsChecked writes paths as they are in source, through git's
+// checkout filters (the paths go in on stdin). check runs before every run
+// of restore: one that found another git's lock taken runs again, but only
+// if check still passes.
 func (g git) restorePathsChecked(source string, paths []string, check func() error) error {
 	if len(paths) == 0 {
 		return nil
