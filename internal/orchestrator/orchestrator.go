@@ -524,6 +524,11 @@ func (o *Orchestrator) snapshotBefore(t *task) {
 	}
 	t.useGit = true
 	t.snapshot, t.start = snap, snap
+	if t.keepBefore {
+		t.tokensMu.Lock()
+		git{root}.keepAgentFiles(t.key, &t.agentFiles)
+		t.tokensMu.Unlock()
+	}
 	if o.opts.Bench == "" && !t.keepBefore {
 		if err := (git{root}).recordSnapshot(t.key, "before", snap); err != nil {
 			o.logf("warning: could not record the start state of this task, so rw undo cannot undo it: %v", err)

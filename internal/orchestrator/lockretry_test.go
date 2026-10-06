@@ -2,9 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -122,6 +124,67 @@ func TestSnapshotReadsTheTreeAgain(t *testing.T) {
 	}
 	if out, _ := (git{dir}).out("show", snap+":busy.txt"); out != "x" {
 		t.Errorf("busy.txt in the snapshot = %q", out)
+	}
+}
+
+// Found by the load test: after a resume, the task's end state listed only
+// the files of the steps that ran in the resumed run, so an agent-files
+// undo left the earlier steps' changes in place (and rw pr would call them
+// unreported).
+func TestResumeKeepsEarlierAgentFiles(t *testing.T) {
+	dir := gitRepo(t)
+	var failB atomic.Bool
+	failB.Store(true)
+	set := both(func(s runner.Spec) runner.Result {
+		switch {
+		case strings.Contains(s.Prompt, runner.MarkerPlan) && !strings.Contains(s.Prompt, runner.MarkerPlanReview):
+			return runner.Result{Final: planJSON(
+				map[string]any{"id": "a", "title": "write a", "kind": "edit", "prompt": "write a.txt", "files": []string{"a.txt"}},
+				map[string]any{"id": "b", "title": "write b", "kind": "edit", "prompt": "write b.txt", "files": []string{"b.txt"}, "depends_on": []string{"a"}},
+			)}
+		case strings.Contains(s.Prompt, "write a.txt"):
+			os.WriteFile(filepath.Join(s.Dir, "a.txt"), []byte("a\n"), 0o644)
+			return runner.Result{Final: "wrote a", Files: []string{"a.txt"}}
+		case strings.Contains(s.Prompt, "write b.txt"):
+			if failB.Load() {
+				return runner.Result{Err: errors.New("b failed: disk on fire")}
+			}
+			os.WriteFile(filepath.Join(s.Dir, "b.txt"), []byte("b\n"), 0o644)
+			return runner.Result{Final: "wrote b", Files: []string{"b.txt"}}
+		}
+		return approve()
+	})
+	o, _ := newOrc(t, dir, set, func(c *config.Config) {
+		c.Orchestrator.ReviewBeforeDone = false
+		c.Orchestrator.ReviewOnRepeatError = false
+		c.Orchestrator.MaxAttempts = 1
+	})
+	res := o.Run(context.Background(), "write a and then b, the second one after the first one is done")
+	if res.OK {
+		t.Fatalf("first run should fail at b: %+v", res)
+	}
+	st, err := LoadTask(res.UndoKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failB.Store(false)
+	if res := o.RunWith(context.Background(), "", TaskOptions{Resume: st, Force: true}); !res.OK {
+		t.Fatalf("resume: %+v", res)
+	}
+	plan, err := PreviewUndo(dir, st.UndoKey, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Unreported) != 0 {
+		t.Errorf("unreported after the resume: %v (changes %v)", plan.Unreported, plan.Changes)
+	}
+	if _, err := Undo(dir, st.UndoKey, false, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"a.txt", "b.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			t.Errorf("%s is still there after an agent-files undo", f)
+		}
 	}
 }
 

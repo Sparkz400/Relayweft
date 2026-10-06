@@ -382,6 +382,9 @@ func TestLoad(t *testing.T) {
 		}
 		break
 	}
+	for len(errc) > 0 { // the other writers' errors, if any
+		t.Error(<-errc)
+	}
 	m.quietPoint("end", writers)
 	m.report(writers, events.Load())
 }

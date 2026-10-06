@@ -417,6 +417,11 @@ func (o *Orchestrator) snapshotExtra(t, r *task) error {
 	}
 	r.useGit = true
 	r.snapshot, r.start = snap, snap
+	if t.keepBefore && t.key != "" {
+		t.tokensMu.Lock()
+		git{root}.keepAgentFiles(t.key, &r.agentFiles)
+		t.tokensMu.Unlock()
+	}
 	if o.opts.Bench == "" && !t.keepBefore && t.key != "" {
 		if err := (git{root}).recordSnapshot(t.key, "before", snap); err != nil {
 			o.logf("warning: repo %s: could not record the start state, so rw undo cannot undo this task there: %v", r.repoName, err)

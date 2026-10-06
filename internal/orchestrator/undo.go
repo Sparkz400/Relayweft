@@ -189,6 +189,19 @@ func findTask(dir, key string, undone bool) (UndoTask, string, error) {
 // agentFiles reads the agent-reported files from an after snapshot; ok is
 // false for snapshots that carry no list.
 func (g git) agentFiles(after string) (map[string]bool, bool) {
+	list, ok := g.agentFileList(after)
+	if !ok {
+		return nil, false
+	}
+	set := map[string]bool{}
+	for _, l := range list {
+		set[agentKey(l)] = true
+	}
+	return set, true
+}
+
+// agentFileList is the agent files of an after snapshot as written.
+func (g git) agentFileList(after string) ([]string, bool) {
 	msg, err := g.run(nil, nil, "log", "-1", "--format=%B", after)
 	if err != nil {
 		return nil, false
@@ -197,13 +210,30 @@ func (g git) agentFiles(after string) (map[string]bool, bool) {
 	if i < 0 {
 		return nil, false
 	}
-	set := map[string]bool{}
+	var list []string
 	for _, l := range strings.Split(msg[i+len(agentFilesMark):], "\n") {
 		if l = strings.TrimSpace(l); l != "" {
-			set[agentKey(l)] = true
+			list = append(list, l)
 		}
 	}
-	return set, true
+	return list, true
+}
+
+// keepAgentFiles adds the agent files of the task's end state so far (an
+// interrupted run's after snapshot) to files: a resumed task's after
+// snapshot must list the files of the steps before the interruption too,
+// or an agent-files-only undo leaves them, and rw pr calls them unreported.
+func (g git) keepAgentFiles(key string, files *map[string]bool) {
+	list, ok := g.agentFileList(undoPrefix(g.dir) + key + "/after")
+	if !ok {
+		return
+	}
+	if *files == nil {
+		*files = map[string]bool{}
+	}
+	for _, l := range list {
+		(*files)[l] = true
+	}
 }
 
 // agentKey is how an agent-reported path is compared with git's: noteFiles
