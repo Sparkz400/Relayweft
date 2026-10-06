@@ -156,6 +156,9 @@ func (g git) lockBusy(msg string) bool {
 	return time.Since(fi.ModTime()) < lockRetryFor
 }
 
+// lockWaited is called (in tests) when a command waits for a lock.
+var lockWaited func()
+
 // lockWait paces the runs of a command that found a lock taken.
 type lockWait struct {
 	began time.Time
@@ -172,6 +175,9 @@ func (w *lockWait) again(g git, msg string) bool {
 		return false
 	}
 	diag.Logf("git in %s: a lock is taken, trying again in %s: %s", g.dir, w.wait, clip(msg, 300))
+	if lockWaited != nil {
+		lockWaited()
+	}
 	time.Sleep(w.wait)
 	w.wait = min(2*w.wait, time.Second)
 	return true

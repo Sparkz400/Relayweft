@@ -85,12 +85,21 @@ func TestApplyWaitingForALockKeepsUserEdits(t *testing.T) {
 	os.WriteFile(p, []byte("base\n"), 0o644)
 	lock := filepath.Join(dir, ".git", "index.lock")
 	os.WriteFile(lock, nil, 0o644)
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		os.WriteFile(p, []byte("the user's edit\n"), 0o644)
-		os.Remove(lock)
-	}()
+	// While restore waits for the lock, the user saves and the other git
+	// lets go.
+	waited := 0
+	lockWaited = func() {
+		if waited++; waited == 1 {
+			os.WriteFile(p, []byte("the user's edit\n"), 0o644)
+			os.Remove(lock)
+		}
+	}
+	defer func() { lockWaited = nil }()
 	err = g.applyDiff(from, to)
+	if waited == 0 {
+		os.Remove(lock)
+		t.Fatalf("restore did not wait for the lock (%v)", err)
+	}
 	if err == nil {
 		t.Fatal("the merge went on although the file changed while it waited")
 	}

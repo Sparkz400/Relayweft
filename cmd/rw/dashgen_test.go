@@ -615,7 +615,7 @@ func TestDashboardMatchesCLI(t *testing.T) {
 				got = "cancelled"
 			}
 			if got != tk.want {
-				t.Fatalf("task %d [%s]: %s (%q), want %s", n, tk.spec, got, summary, tk.want)
+				t.Fatalf("task %d [%s]: %s (%q), want %s; its log:\n%s", n, tk.spec, got, summary, tk.want, dashTaskLog(profile, n))
 			}
 			want.tasks++
 			switch got {
@@ -927,6 +927,35 @@ func sameCriterion(a, b json.RawMessage) bool {
 	xb, _ := json.Marshal(x)
 	yb, _ := json.Marshal(y)
 	return bytes.Equal(xb, yb)
+}
+
+// dashTaskLog is the session log records of task n, shortened.
+func dashTaskLog(profile string, n int) string {
+	var b strings.Builder
+	filepath.WalkDir(profile, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(p) != ".jsonl" || filepath.Base(filepath.Dir(p)) != "sessions" {
+			return nil
+		}
+		data, _ := os.ReadFile(p)
+		id := ""
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, fmt.Sprintf("dashboard check task %d:", n)) && strings.Contains(line, `"type":"task_start"`) {
+				var r struct {
+					TaskID string `json:"task_id"`
+				}
+				json.Unmarshal([]byte(line), &r)
+				id = r.TaskID
+			}
+			if id != "" && strings.Contains(line, `"task_id":"`+id+`"`) {
+				if len(line) > 400 {
+					line = line[:400] + "..."
+				}
+				b.WriteString(line + "\n")
+			}
+		}
+		return nil
+	})
+	return b.String()
 }
 
 // runRW runs the built rw in the test profile and returns its stdout.
