@@ -11,3 +11,10 @@
 
 # editors/jetbrains ui tests (IDE Starter output)
 /out/
+
+# the docs site (website/build.sh)
+/_site/
+/website/_gen/
+/website/resources/
+/website/.hugo_build.lock
+/website/public/

@@ -10,7 +10,9 @@ rw web        # the same engine in your browser (rw app: in its own window)
 rw --demo     # see the whole thing animate with fake agents (no CLIs, no quota)
 ```
 
-![rw web: agent tree and live activity](docs/web/running.png)
+![rw: plan approval with an edit, two agents in parallel, change review of one hunk, done with the cost, then rw undo](docs/demo/demo.gif)
+
+The real `rw`, with scripted agents ([how it is made](docs/demo/demo.tape)). **Documentation: <https://sparkz400.github.io/Relayweft/>**
 
 Out of the box Relayweft uses **subscriptions only**: it drives the official `codex` and `claude` CLIs exactly as you would, with their normal login, and never touches model API keys (only the optional GitHub features use a GitHub token). The [extra providers](docs/providers.md) are opt-in; one that needs an API key (DeepSeek) reads it from your environment, and rw never stores it or puts it on a command line.
 
