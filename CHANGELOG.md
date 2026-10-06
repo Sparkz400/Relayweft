@@ -24,8 +24,15 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0] - 2026-10-06
+
 ### Added
 
+- Bitbucket Cloud: pull requests, issues as tasks, review follow-ups and team queues with `BITBUCKET_TOKEN`. See `docs/bitbucket.md`. ([#55](https://github.com/Sparkz400/Relayweft/pull/55))
+- A searchable documentation site with command and config references at https://sparkz400.github.io/Relayweft/. ([#52](https://github.com/Sparkz400/Relayweft/pull/52))
+- Signed `.deb`, `.rpm` and `.apk` packages and apt, dnf and apk repositories on the documentation site. See `packaging/README.md` for installation and key verification. ([#54](https://github.com/Sparkz400/Relayweft/pull/54))
 - Azure DevOps: `rw pr`, work items as tasks (`--issue`, `--issues label:<tag>`, `--team`), `rw watch` and `rw review --post` work on dev.azure.com, `*.visualstudio.com` and Azure DevOps Server (`AZURE_DEVOPS_HOST`), with `AZURE_DEVOPS_TOKEN`. See `docs/azure-devops.md`. ([#57](https://github.com/Sparkz400/Relayweft/pull/57))
 - Resolve steps: when two agents' changes conflict, or an agent's change overlaps with your own uncommitted edits, an agent merges both in a pool worktree (never in your folder); rw checks for leftover markers and runs `verify.commands` before it lands, and asks first for your own edits. `orchestrator.conflicts: auto|resolve|ask|fail`, `max_resolve_rounds`, `resolve_role`, `/conflicts` in the TUI; see docs/conflicts.md. ([#56](https://github.com/Sparkz400/Relayweft/pull/56))
 - `rw mcp`: an MCP server, so Claude Code or Codex can hand a multi-step task to rw from inside their own session and follow it (status, plan approval, change review, result, undo). It works only in the folder it was started in, and refuses tasks under rw's own agents. Set-up: `docs/mcp.md`; `rw doctor` checks it. ([#58](https://github.com/Sparkz400/Relayweft/pull/58))
@@ -40,6 +47,7 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Fixed
 
+- Affected test selection falls back to the full suite when Jest does not index the changed files or Vitest is older than 1.2.2; it reads multiline Gradle includes and passes runner flags correctly through `npx`. ([#59](https://github.com/Sparkz400/Relayweft/pull/59))
 - On Linux and macOS, killing rw now also stops its agents and their children in the same process group; resume keeps their half-done work. ([#53](https://github.com/Sparkz400/Relayweft/pull/53))
 - A user edit merged with an agent's change could lose the end of the agent's file when the disk was full; it now counts as a conflict and leaves the file as it was. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
 - `rw bench` blamed "another rw bench" for a workspace folder it could not create. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
@@ -145,7 +153,8 @@ The first release, as Switchyard (`sy`).
 - Plan approval, change review by file or hunk, verify commands, follow-ups (`@agent`), history and resume, a task queue, notifications, `sy tune`, per-repo `.switchyard.yaml` with `sy trust`, hooks, `sy web` and `sy app`, and `sy update`. ([#5](https://github.com/Sparkz400/Relayweft/pull/5))
 - Release binaries for Windows, Linux and macOS with checksums, under the MIT license. ([#5](https://github.com/Sparkz400/Relayweft/pull/5))
 
-[Unreleased]: https://github.com/Sparkz400/Relayweft/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Sparkz400/Relayweft/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Sparkz400/Relayweft/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Sparkz400/Relayweft/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Sparkz400/Relayweft/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Sparkz400/Relayweft/releases/tag/v0.1.0

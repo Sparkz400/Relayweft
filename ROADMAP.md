@@ -78,7 +78,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **Release v0.3.0** (5 Oct 2026), built with Go 1.26.8. v0.3.0 brings:
   - the **rename to Relayweft (`rw`)**. On its first start, rw copies the Switchyard user folder once. `sy update` cannot install v0.3.0, so v0.2.0 users reinstall once (README, "Upgrading from Switchyard").
   - `rw setup`, best of N, affected tests in fix rounds, the container sandbox, the dashboard, the JetBrains plugin, Homebrew/`.deb`/`.rpm`/`.apk`/AUR packaging, Codex follow-ups in pool worktrees, saved half-done edits, macOS orphan cleanup, and `rw tune` thresholds that account for sample size. Every change had an independent adversarial review before merge, and the 30-minute stress test passes on Ubuntu and Windows.
-- **Next: v0.4.0** (prepared): `rw completion` for bash, zsh, fish and PowerShell; a generated config reference (`docs/config.md`); release provenance, SBOMs and a signed `checksums.txt`; gofmt, golangci-lint and govulncheck in CI; CHANGELOG, CONTRIBUTING, a PR template and a Code of Conduct.
+- **Next: v0.4.0** (release candidate; publication pending): Bitbucket Cloud and Azure DevOps, conflict resolution, `rw mcp`, shell completion, a generated config reference, the documentation site, signed Linux packages and package repositories, release provenance and SBOMs, and fixes to process cleanup, affected tests, concurrent git and resume. See [CHANGELOG.md](CHANGELOG.md) and [the release notes](packaging/release-notes/v0.4.0.md). The live forge and daily-use gaps below still apply.
 
 **Verified:**
 - Unit and integration tests (real git repos, fake CLIs, recorded output from the real CLIs).
@@ -121,6 +121,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - **First run:** from the v0.2.0 download (`sy`) to a finished first task (Claude haiku explaining a small repo) in a fresh profile: 13 seconds of machine time and three answers.
 - **Linux packages and Homebrew:** the `.deb` (Ubuntu), `.rpm` (Fedora), `.apk` (Alpine) and the AUR PKGBUILD (Arch, makepkg and pacman) installed in Docker, and `sy update` named the package manager and changed nothing; the formula (then `switchyard`) installed with Homebrew on Linux, and passed `brew test`, `style` and `audit --strict`.
 - **Affected tests on this repo:** 11 recent commits; with 5 fixes undone, the narrowed runs failed the same tests as the full suite.
+- **Affected tests on real projects (6 Oct):** the recorded Jest, Vitest, pytest, Cargo, dotnet, Maven and Gradle runs covered 36 fix commits with their fixes undone; every full-run failure also failed the narrowed run. The findings fixed Jest index coverage, old Vitest versions, multiline Gradle includes and npx flag handling. See [the measurements and limits](docs/bench/2026-10-06-affected-real-projects.md).
 
 **Not verified yet:**
 - Codex: a usage-limit hit and a logged-out CLI.
@@ -178,7 +179,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 | 2.5 | ✅ **Task history and resume**: the state of every task is saved after each step. `rw history` / `/history` list tasks; `rw resume` / `/resume` continue an interrupted one, skipping finished steps. Diffs per task come from `rw undo --list`. | Closing the window or a reboot no longer loses progress. |
 | 2.6 | ✅ **Task queue**: submitting while a task runs queues it in the TUI (`/queue`). `rw run --file tasks.txt` runs a list overnight. Queued tasks run unattended. | Uses quota while you're away. |
 | 2.7 | ✅ **Notifications**: a desktop notification when a task finishes or fails, a limit is hit, or `rw` waits for you (Windows toast, macOS, notify-send). | You don't have to watch the terminal. |
-| 2.8 | ✅ **Distribution** (pipeline built, not yet run): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, a Homebrew tap in this repo (`brew install relayweft`), `.deb`, `.rpm` and `.apk` packages on each release (from v0.3.0), an AUR PKGBUILD (`relayweft-bin`), and `rw update` (checksum-verified, swaps the running .exe safely on Windows, and points to the package manager that installed `rw` instead of replacing its binary). Code signing needs a certificate: see `packaging/README.md`. Releases carry build provenance, SBOMs and a Sigstore-signed `checksums.txt` (from v0.4.0). | Installing no longer needs Go or a build. |
+| 2.8 | ✅ **Distribution** (release pipeline used for v0.1.0 through v0.3.0): a tag builds release binaries for Windows, Linux and macOS with checksums. There are Scoop and winget manifests, a Homebrew tap in this repo (`brew install relayweft`), `.deb`, `.rpm` and `.apk` packages on each release (from v0.3.0), an AUR PKGBUILD (`relayweft-bin`), and `rw update` (checksum-verified, swaps the running .exe safely on Windows, and points to the package manager that installed `rw` instead of replacing its binary). Code signing needs a certificate: see `packaging/README.md`. Releases carry build provenance, SBOMs and a Sigstore-signed `checksums.txt` (from v0.4.0). | Installing no longer needs Go or a build. |
 
 **Gaps closed since:**
 - Dependencies can be edited in the plan view (`x`).
@@ -198,12 +199,12 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 **Remaining gaps:**
 - **2.3 Tests:** Codex runs commands in its own sandbox, not from an allowlist, so `verify.commands` can only restrict Claude. Codex offers no allowlist, so this is a limit of the CLI.
-- **2.3 Affected tests:** only the Go selection was run for real (on this repo). The jest/vitest, pytest, cargo, dotnet, Maven and Gradle selections are tested on file trees, not yet on real projects.
+- **2.3 Affected tests:** real-project coverage is recorded in `docs/bench/2026-10-06-affected-real-projects.md`; its monorepo, alias and custom Gradle layout limitations remain open.
 - **2.8 Distribution:**
   - Code signing of the Windows and macOS binaries needs a certificate (Authenticode, Apple notarization). Release integrity does not: from v0.4.0 every asset has GitHub build provenance, each binary a CycloneDX SBOM (attested), and `checksums.txt` a keyless Sigstore signature (`packaging/README.md`, "Verifying a release"). Not yet seen on a real release until v0.4.0 is cut; a dry run passed.
   - `rw update` checks only the SHA-256; it prints the `gh attestation verify` command instead of verifying the signature itself (that would need sigstore-go and a fresh trust root).
   - The Scoop, winget, Homebrew and AUR manifests must be rendered (and the AUR one pushed) after each release. Once they name v0.4.0 or later, drop the `version >= 0.4.0` completion guards in the Homebrew and AUR templates.
-  - The Linux packages have no GPG/apk signature (provenance and the signed checksums cover them), and there is no apt or dnf repository.
+  - Linux package and repository signing is implemented, the package keys are configured and Pages is enabled. A signed v0.4.0 release and its live apt, dnf and apk installation checks are pending.
 
 **Exit criteria:**
 - You reach for `rw` before plain `codex` or `claude` for multi-step work.
@@ -311,10 +312,7 @@ The rules every change follows are in [CONTRIBUTING.md](CONTRIBUTING.md#rules): 
    Send the files; they become test fixtures.
 3. **Run `rw bench` on ~10 real, multi-file tasks from your own repos, with Codex.** This decides the Phase 3 exit criterion. In each repo, `rw bench --from-history` writes the tasks (it runs your tests on each candidate commit, which costs no quota). Read and reword the prompts, then run `rw bench --file bench-history.yaml`. After a week of use, run `rw tune`.
 4. **Releases:**
-   - Before you release v0.3.0:
-     1. Delete the old `v0.3.0` tag on GitHub: `git push origin :refs/tags/v0.3.0`. It points at e8ea295, from before the rename.
-     2. Tag the merged rename.
-     3. After the release, render the manifests for 0.3.0. The `packaging` checks skip until you do.
+   - Prepare the changelog and release notes in a PR, pass CI and a signed release dry run on the merged commit, then tag that exact commit. Keep published tags fixed. See `packaging/README.md`.
    - Submit the rendered winget manifests to microsoft/winget-pkgs (needs a fork of winget-pkgs on your account).
    - After each release, render the manifests (`packaging/render-manifests.sh X.Y.Z`) and commit `packaging/scoop/rw.json`, `Formula/relayweft.rb`, `packaging/aur/PKGBUILD` and `packaging/aur/.SRCINFO`.
   - Publish `relayweft-bin` to the AUR (needs an AUR account; steps in `packaging/README.md`), then push the rendered PKGBUILD and .SRCINFO after each release.
