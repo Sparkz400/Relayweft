@@ -119,6 +119,10 @@ Usage:
   rw run --at 02:30 | --in 3h | --when-reset <provider>|any  [--file tasks.txt | "task"]
                              start later, unattended (PC kept awake; --allow-sleep to opt out)
   rw schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)
+  rw dayplan [--file tasks.txt] [--until 07:00] [--fresh-at 09:00]   plan a task file over both subscriptions'
+                             5-hour windows: which task runs when, on which provider, where it waits for a reset
+  rw run --file tasks.txt --fill [--until 07:00] [--fresh-at 09:00]   run it that way overnight: plans again
+                             before each task, leans each on the window that resets first, waits when all are full
   rw notify [--test]         show where notifications go; --test posts to every webhook (Slack, Discord, ntfy)
   rw history [--all] [-n 20] [--json]   recent tasks in this directory, with status and cost
   rw resume [task id]        continue an interrupted task (default: the last one here)

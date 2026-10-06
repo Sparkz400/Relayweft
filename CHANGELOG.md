@@ -24,6 +24,10 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- Day planner: `rw run --file tasks.txt --fill` spends both subscriptions' 5-hour usage windows overnight. Each task leans on the provider whose window resets first, rw waits for the next reset when every window is full, and a task a limit stopped resumes after it. `--until` and `--fresh-at` keep the morning free and both windows full; `rw dayplan` prints the plan. See `docs/dayplan.md`.
+
 ### Fixed
 
 - Homebrew makes the downloaded `rw` binary executable before running it to generate completion scripts during installation. ([#62](https://github.com/Sparkz400/Relayweft/pull/62))

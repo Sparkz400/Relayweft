@@ -168,10 +168,19 @@ func cmdRun(args []string) error {
 	file := fs.String("file", "", "run the tasks in this file one after another, unattended (one per line, or blocks separated by a line with ---)")
 	approve := fs.Bool("approve", false, "ask on the terminal before a plan runs (and per change when orchestrator.review_changes is on)")
 	estimate := fs.Bool("estimate", false, "plan only: print the plan with its estimated tokens, time and $, then stop (nothing runs, the tree is untouched)")
+	fill := fs.Bool("fill", false, "day plan: spend both subscriptions' usage windows - each task leans on the provider whose window resets first, and when none has room rw waits for the next reset (see rw dayplan)")
 	iss := registerIssueFlags(fs)
 	var sf scheduleFlags
 	sf.register(fs)
+	var df dayFlags
+	df.register(fs)
 	parseFlags(fs, args)
+	if df.set() && !*fill {
+		return errors.New("--until and --fresh-at go with --fill")
+	}
+	if *fill && (iss.active() || *single != "") {
+		return errors.New("--fill runs a task file or a task, not issues or --single")
+	}
 	var tasks []string
 	if iss.active() {
 		if *file != "" {
@@ -206,7 +215,7 @@ func cmdRun(args []string) error {
 		return err
 	}
 	if *estimate {
-		if *file != "" || *single != "" || sf.set() || iss.active() || len(tasks) != 1 {
+		if *file != "" || *single != "" || sf.set() || *fill || iss.active() || len(tasks) != 1 {
 			return errors.New(`--estimate takes one task: rw run --estimate "task"`)
 		}
 		return runEstimate(&c, *quiet, tasks[0])
@@ -224,7 +233,7 @@ func cmdRun(args []string) error {
 	}
 	// Task files and scheduled runs are unattended: nobody is there to
 	// answer, so they never ask (a budget limit stops them).
-	unattended := *file != "" || sf.set() || iss.batch()
+	unattended := *file != "" || sf.set() || iss.batch() || *fill
 	var ap orchestrator.Approver
 	if *approve && !unattended {
 		ap = newTermApprover(os.Stdin, os.Stdout)
@@ -255,6 +264,12 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer release()
+	if *fill {
+		if !sf.set() && !c.allowSleep {
+			defer proc.KeepAwake()() // waits for resets: the PC must not sleep through them
+		}
+		return runFillCmd(h, tasks, df)
+	}
 	runOne := func(task string) orchestrator.TaskResult {
 		var res orchestrator.TaskResult
 		if single0.prov != "" {

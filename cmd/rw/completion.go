@@ -298,10 +298,10 @@ var flagValues = map[string]valueHint{
 // durations, names, URLs, commands): nothing to complete.
 var completeFreeFlags = []string{
 	"api", "at", "base", "branch", "budget-day-usd", "budget-task-tokens", "budget-task-usd",
-	"check", "check-timeout", "count", "days", "every", "files", "forget", "idle", "in",
+	"check", "check-timeout", "count", "days", "every", "files", "forget", "fresh-at", "idle", "in",
 	"issue", "issues", "lease", "limit", "max-files", "max-lines", "min-files", "min-use",
 	"n", "name", "only", "port", "repo", "scan", "sessions", "setup", "since", "speed",
-	"threads", "title",
+	"threads", "title", "until",
 }
 
 func hintFor(cmd command, name string) valueHint {

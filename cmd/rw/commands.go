@@ -44,6 +44,7 @@ func init() {
 		{name: "watch", run: cmdWatch, desc: "follow up on the PRs rw opened"},
 		{name: "review", run: cmdReview, desc: "agent review of a pull request"},
 		{name: "schedule", run: cmdSchedule, desc: "print a Task Scheduler / cron command"},
+		{name: "dayplan", run: cmdDayplan, desc: "plan a task file over both subscriptions' usage windows"},
 		{name: "notify", run: cmdNotify, desc: "where notifications go"},
 		{name: "history", run: cmdHistory, desc: "recent tasks"},
 		{name: "resume", run: cmdResume, desc: "continue an interrupted task", args: argTask},

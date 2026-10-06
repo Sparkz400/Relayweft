@@ -81,6 +81,9 @@ type TaskOptions struct {
 	// its TaskStart event. A task refused at once (its state is locked by
 	// another rw, or a resume that no longer applies) never calls it.
 	Started func(id string)
+	// Lean sends the task's work to one provider while it runs (the day
+	// planner, rw run --fill): see router.Lean.
+	Lean router.Lean
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -590,6 +593,10 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	o.taskSeq++
 	seq := o.taskSeq
 	o.mu.Unlock()
+	if opts.Lean.Provider != "" {
+		o.router.SetLean(opts.Lean)
+		defer o.router.SetLean(router.Lean{})
+	}
 	finished := false
 	defer func() { // panics only; the normal path clears it before TaskDone
 		r := recover()
