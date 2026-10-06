@@ -92,6 +92,7 @@ type landState struct {
 	stepRef        string // its branch's name in its repo
 	attempt        string // the last resolve attempt (a commit), if any
 	resolved       []string
+	resolution     string // the last resolution (a commit), once one was made
 }
 
 // mergeLand merges commit (st's work against base) into rp's integration
@@ -127,13 +128,12 @@ func (o *Orchestrator) mergeLand(ctx context.Context, t, rp *task, st Subtask, l
 			}
 			base, commit = res.onto, res.commit
 			ls.resolved = append(ls.resolved, res.how)
+			ls.resolution = res.commit
 			continue
 		}
 		merged, err := g.commitTree(tree, []string{rp.snapshot, commit}, "relayweft: merge "+st.ID)
 		if err != nil {
-			o.mergeEvent(t, st.ID, false, err.Error())
-			r.ok, r.err = false, err.Error()
-			return r
+			return o.mergeFailed(t, rp, st, r, ls, "git commit-tree failed ("+err.Error()+")", err.Error())
 		}
 		skipped, err := g.applyDiffReport(rp.snapshot, merged)
 		var ye errYourEdits
@@ -148,6 +148,7 @@ func (o *Orchestrator) mergeLand(ctx context.Context, t, rp *task, st Subtask, l
 			if !ok {
 				return o.conflictFailed(ctx, t, rp, st, r, cf, ls, why)
 			}
+			ls.resolution = res.commit
 			// From your tree as it was snapshotted to the resolution: what
 			// you changed since is 3-way merged again, or nothing is
 			// written.
@@ -202,6 +203,10 @@ func (o *Orchestrator) mergeLand(ctx context.Context, t, rp *task, st Subtask, l
 // conflict an agent could take on: the step's work is kept on a branch.
 func (o *Orchestrator) mergeFailed(t, rp *task, st Subtask, r stepResult, ls *landState, what, why string) stepResult {
 	branch := o.keepStep(t, rp, st, ls)
+	if ls.resolution != "" {
+		// A conflict was resolved before this: that is paid-for work too.
+		branch += ", its conflict resolution on " + o.saveBranchIn(rp, st.ID+"-resolve-attempt", ls.resolution)
+	}
 	o.mergeEvent(t, st.ID, false, what+"; kept on "+branch)
 	t.addNote(fmt.Sprintf("%s was NOT applied (%s); its changes are on branch %s", st.ID, what, branch))
 	r.ok, r.err = false, why
@@ -253,15 +258,13 @@ func (o *Orchestrator) conflictFailed(ctx context.Context, t, rp *task, st Subta
 		with = "changes that landed before it"
 	}
 	files := clip(strings.Join(cf.paths, ", "), 300)
-	gitC := "git"
-	if rp.repoName != "" {
-		gitC = `git -C "` + rp.root + `"`
-	}
+	// -C: run from a subfolder, git apply would skip what is outside it.
+	gitC := `git -C "` + rp.root + `"`
 	base := ls.origBase[:min(12, len(ls.origBase))]
 	patch := "rw-" + refPart(st.ID) + ".patch"
 	// Through a file, not a pipe: Windows PowerShell 5.1 re-encodes piped
 	// text (SavedEdits.Hint).
-	msg := fmt.Sprintf("%s conflicts with %s in %s and was NOT applied: %s. Its change is on %s%s. To apply it by hand: `%s diff --binary --no-ext-diff --no-color %s %s --output=%s`, then `%s apply --reject %s` (what does not fit goes to .rej files next to the files), then delete %s",
+	msg := fmt.Sprintf("%s conflicts with %s in %s and was NOT applied: %s. Its change is on %s%s. To apply it by hand: `%s diff --binary --no-ext-diff --no-color %s %s --output=%s`, then `%s apply --reject %s` (what does not fit goes to .rej files next to the files), then delete %s there",
 		st.ID, with, files, why, branch, sides, gitC, base, ls.stepRef, patch, gitC, patch, patch)
 	o.mergeEvent(t, st.ID, false, msg)
 	t.addNote(fmt.Sprintf("%s conflicted with %s in %s and was NOT applied (%s); its changes are on branch %s", st.ID, with, files, why, branch))
@@ -401,7 +404,7 @@ func (o *Orchestrator) resolveConflict(ctx context.Context, t, rp *task, st Subt
 	// The agent cannot know the hunks' line numbers otherwise; the files
 	// are read once, before it edits them.
 	hunks := conflictHunks(loc.slot, files, 12_000)
-	q := ConflictQuestion{StepID: st.ID, Title: st.Title, With: cf.with, Files: cf.paths, Yours: cf.yours}
+	q := ConflictQuestion{StepID: st.ID, Title: st.Title, With: cf.with, Files: cf.paths, Yours: cf.yours || cf.unknown}
 	problem := ""
 	baseFail := -1 // checks failing before the merge (-1: not run yet)
 	feedback := 0  // your feedback rounds on the resolution
@@ -436,6 +439,9 @@ func (o *Orchestrator) resolveConflict(ctx context.Context, t, rp *task, st Subt
 			problem = "the agent failed: " + clip(errText(res.Err), 300)
 			continue
 		}
+		// `git merge --abort` (or a reset) also undoes what merged cleanly:
+		// whatever the agent wrote afterwards, the step's change is gone.
+		aborted := mergeAborted(wg, onto, cf.theirs)
 		sc, err := wg.commitWork(onto, "relayweft: resolve "+st.ID+" (attempt "+strconv.Itoa(attempt)+")")
 		if err != nil {
 			return resolution{}, "could not commit the resolution: " + err.Error(), false
@@ -444,8 +450,8 @@ func (o *Orchestrator) resolveConflict(ctx context.Context, t, rp *task, st Subt
 		if sc.Changed {
 			ls.attempt = sc.Commit
 		}
-		if !sc.Changed {
-			problem = "the result is the tree as it was before the merge: " + st.ID + "'s change is dropped as a whole (was the merge aborted?). rw started the merge again"
+		if !sc.Changed || aborted {
+			problem = "the merge was aborted (or the result is the tree as it was before the merge): " + st.ID + "'s change would be dropped. rw started the merge again"
 			// The next attempt gets the conflict again, not a clean tree.
 			if _, err := startMerge(loc.slot, onto, cf.theirs, st.ID); err != nil {
 				return resolution{}, "git merge in " + loc.slot + " failed: " + err.Error(), false
@@ -668,6 +674,18 @@ func (f conflictFile) kind(step, with string) string {
 		return "only in " + step + "'s version (renamed or deleted in " + with + "'s)"
 	}
 	return "deleted on both sides (renamed differently)"
+}
+
+// mergeAborted reports whether the merge rw started in a resolve worktree
+// is gone while HEAD is still onto: the agent aborted or reset it. (An
+// agent that committed the merge moved HEAD; its files are taken.)
+func mergeAborted(wg git, onto, theirs string) bool {
+	head, err := wg.out("rev-parse", "-q", "--verify", "HEAD")
+	if err != nil || head != onto {
+		return false
+	}
+	mh, err := wg.out("rev-parse", "-q", "--verify", "MERGE_HEAD")
+	return err != nil || mh != theirs
 }
 
 // conflictEnv is the identity git merge may want.

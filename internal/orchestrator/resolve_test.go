@@ -236,7 +236,9 @@ func TestResolveMarkersLeftFallsBack(t *testing.T) {
 			msg = e.Text
 		}
 	}
-	for _, want := range []string{"NOT applied", "conflict markers are left", "git diff --binary --no-ext-diff --no-color", "--output=rw-" + second + ".patch", "apply --reject"} {
+	// Always with -C: from a subfolder git apply skips the rest (second review).
+	root, _ := repoRoot(dir)
+	for _, want := range []string{"NOT applied", "conflict markers are left", `git -C "` + root + `" diff --binary --no-ext-diff --no-color`, "--output=rw-" + second + ".patch", `git -C "` + root + `" apply --reject`} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the conflict message lacks %q: %s", want, msg)
 		}

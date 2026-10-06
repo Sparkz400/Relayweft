@@ -1338,8 +1338,21 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		if prev.Slot != "" {
 			unholdSlot(prev.Slot, t.state.ID, st.ID)
 		}
-		if r, ok := o.landKept(ctx, t, rp, st, deps, prev, mainDir, errors.New("rw stopped while an agent resolved its merge conflict with "+prev.Resolve.With)); ok {
-			return r
+		landed, ok := func() (stepResult, bool) {
+			if !rp.useWT {
+				// Writers take turns in your tree: the landing writes
+				// there. (Released before a fresh start below takes it.)
+				select {
+				case rp.writeSem <- struct{}{}:
+					defer func() { <-rp.writeSem }()
+				case <-ctx.Done():
+					return stepResult{err: "cancelled"}, true
+				}
+			}
+			return o.landKept(ctx, t, rp, st, deps, prev, mainDir, errors.New("rw stopped while an agent resolved its merge conflict with "+prev.Resolve.With))
+		}()
+		if ok {
+			return landed
 		}
 	}
 	if prev, ok := t.interruptedRun(st.ID); ok && prev.Slot != "" {

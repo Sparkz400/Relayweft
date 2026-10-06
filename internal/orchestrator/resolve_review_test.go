@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/event"
 	"github.com/sparkz400/relayweft/internal/runner"
 )
 
@@ -81,7 +83,9 @@ func TestResolveCancelAtQuestionThenResume(t *testing.T) {
 }
 
 // An agent that aborts the merge leaves a clean tree; the next attempt
-// gets the conflict again instead of nothing to resolve.
+// gets the conflict again instead of nothing to resolve. Second review:
+// one that aborts and then writes some other file must not land as a
+// resolution (the step's change was silently dropped).
 func TestResolveAbortedMergeStartsAgain(t *testing.T) {
 	dir := gitRepo(t)
 	c := newConflictTest(t, dir)
@@ -90,8 +94,9 @@ func TestResolveAbortedMergeStartsAgain(t *testing.T) {
 		if !strings.Contains(read(t, path), "<<<<<<<") {
 			t.Error("an attempt without a conflict in its worktree")
 		}
-		if !strings.Contains(s.Prompt, "merge aborted") {
+		if !strings.Contains(s.Prompt, "merge was aborted") {
 			tgit(t, s.Dir, "merge", "--abort")
+			os.WriteFile(filepath.Join(s.Dir, "notes.txt"), []byte("gave up\n"), 0o644)
 			return runner.Result{Final: "aborted"}
 		}
 		os.WriteFile(path, []byte("x and y\n"), 0o644)
@@ -100,6 +105,52 @@ func TestResolveAbortedMergeStartsAgain(t *testing.T) {
 	res, _ := c.run(context.Background())
 	if !res.OK || len(c.resolves) != 2 || read(t, filepath.Join(dir, "shared.txt")) != "x and y\n" {
 		t.Fatalf("%+v, %d attempts", res, len(c.resolves))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "notes.txt")); err == nil {
+		t.Error("the aborted attempt's file landed")
+	}
+}
+
+// Second review: a resolution whose landing then fails (here: you edit the
+// file between rw's check and its write) is paid-for work: it is kept on a
+// branch, and the message names it.
+func TestResolveLandingFailsKeepsResolution(t *testing.T) {
+	dir := gitRepo(t)
+	c := newConflictTest(t, dir)
+	var mu sync.Mutex
+	resolved := false
+	c.resolve = func(_ context.Context, s runner.Spec) runner.Result {
+		os.WriteFile(filepath.Join(s.Dir, "shared.txt"), []byte("x and y\n"), 0o644)
+		mu.Lock()
+		resolved = true
+		mu.Unlock()
+		return runner.Result{Final: "kept both"}
+	}
+	applyHook = func(stage string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if stage == "checked" && resolved {
+			os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("you, right now\n"), 0o644)
+		}
+	}
+	defer func() { applyHook = nil }()
+	res, rec := c.run(context.Background())
+	if res.OK || len(res.Kept) != 1 {
+		t.Fatalf("%+v", res)
+	}
+	second := c.second()
+	if !hasBranchSuffix(branchList(t, dir), "/"+second+"-resolve-attempt") {
+		t.Errorf("the resolution is not kept: %s", branchList(t, dir))
+	}
+	found := false
+	for _, e := range rec.all() {
+		found = found || (e.Kind == event.Merge && !e.OK && strings.Contains(e.Text, "its conflict resolution on "))
+	}
+	if !found {
+		t.Error("the message does not name the kept resolution")
+	}
+	if got := read(t, filepath.Join(dir, "shared.txt")); got != "you, right now\n" {
+		t.Errorf("your edit was overwritten: %q", got)
 	}
 }
 
