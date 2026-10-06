@@ -26,6 +26,7 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Added
 
+- Resolve steps: when two agents' changes conflict, or an agent's change overlaps with your own uncommitted edits, an agent merges both in a pool worktree (never in your folder); rw checks for leftover markers and runs `verify.commands` before it lands, and asks first for your own edits. `orchestrator.conflicts: auto|resolve|ask|fail`, `max_resolve_rounds`, `resolve_role`, `/conflicts` in the TUI; see docs/conflicts.md. ([#56](https://github.com/Sparkz400/Relayweft/pull/56))
 - `rw completion bash|zsh|fish|powershell`: Tab completion for subcommands, flags, provider names, models and task ids (Windows PowerShell 5.1 and PowerShell 7 too). The .deb/.rpm/.apk packages, Homebrew and the AUR package install it. ([#49](https://github.com/Sparkz400/Relayweft/pull/49))
 - `docs/config.md`: every config key with its type, default, description and whether a repo's `.relayweft.yaml` needs `rw trust` for it; generated from the code, and CI fails when it is out of date. ([#49](https://github.com/Sparkz400/Relayweft/pull/49))
 - `CONTRIBUTING.md`, a pull request template and a Code of Conduct. ([#45](https://github.com/Sparkz400/Relayweft/pull/45))
