@@ -34,8 +34,10 @@ import (
 //   - The difference between the old and new integration commit is applied to
 //     the main working tree (apply.go), so the user sees results as soon as
 //     each agent finishes.
-//   - On a conflict the agent's commit is kept on branch rw/<session>/<step>
-//     and the reviewer is told; nothing is half-applied.
+//   - On a conflict an agent may resolve it in a pool worktree first
+//     (resolve.go). Otherwise, or when that fails, the agent's commit is
+//     kept on branch rw/<session>/<step> and the reviewer is told; nothing
+//     is half-applied.
 
 type git struct{ dir string }
 
@@ -709,19 +711,25 @@ func (g git) mergeTree(ours, theirs string) (tree string, clean bool, info strin
 // since base on both sides; with base, a change already in ours (merged
 // before rw stopped) is not applied twice.
 func (g git) mergeTreeBase(base, ours, theirs string) (tree string, clean bool, info string, err error) {
-	if base == "" || base == ours || g.isAncestor(base, ours) {
-		return g.mergeTree(ours, theirs)
-	}
-	// ours' tree on top of base: base becomes the merge base of the two.
-	ot, err := g.out("rev-parse", ours+"^{tree}")
-	if err != nil {
-		return "", false, "", err
-	}
-	o2, err := g.commitTree(ot, []string{base}, "relayweft: tree on top of the step's base")
+	o2, err := g.onBase(base, ours)
 	if err != nil {
 		return "", false, "", err
 	}
 	return g.mergeTree(o2, theirs)
+}
+
+// onBase is ours when it is built on base, else a commit with ours' tree on
+// top of base: merged with work that started from base, base is then the
+// merge base of the two (mergeTreeBase, resolve.go).
+func (g git) onBase(base, ours string) (string, error) {
+	if base == "" || base == ours || g.isAncestor(base, ours) {
+		return ours, nil
+	}
+	ot, err := g.out("rev-parse", ours+"^{tree}")
+	if err != nil {
+		return "", err
+	}
+	return g.commitTree(ot, []string{base}, "relayweft: tree on top of the step's base")
 }
 
 // isAncestor reports whether commit a is an ancestor of commit b.

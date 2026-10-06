@@ -270,6 +270,11 @@ type stepResult struct {
 	files  []string
 	tokens event.TokenUsage // of every attempt
 	bestOf string           // how a best-of step's winner was picked (bestof.go)
+	// dec is the route of the agent whose work this is (a resolve step
+	// runs on it by default, resolve.go).
+	dec event.Decision
+	// resolved says how the step's merge conflicts were resolved.
+	resolved string
 }
 
 // task is the per-run state.
@@ -283,6 +288,9 @@ type task struct {
 	snapshot string // integration commit (snapshot + merges)
 	start    string // snapshot at execute start, for the final diff
 	mergeMu  sync.Mutex
+	// landings are the steps whose work landed in this repo, in order
+	// (guarded by mergeMu): the other side of a later conflict (resolve.go).
+	landings []landing
 	mainProv string
 	tokensMu sync.Mutex
 	tokens   event.TokenUsage
@@ -797,7 +805,11 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		o.logf("%s", t.state.resumeSummary())
 		for _, s := range t.state.UnfinishedSaved() {
 			if r, ok := t.state.runningStep(s.Step); ok && r.Kept != "" {
-				o.logf("%s; the step lands its best-of winner's kept work", s.Hint())
+				what := "its best-of winner's kept work"
+				if r.Resolve != nil {
+					what = "its kept work and resolves its merge conflict anew"
+				}
+				o.logf("%s; the step lands %s", s.Hint(), what)
 				continue
 			}
 			o.logf("%s; the step starts over from your tree", s.Hint())
@@ -1276,7 +1288,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				case bestOf:
 				case st.Kind.ReadOnly():
 					r = o.runStep(ctx, t, st, deps, stepLoc{dir: dir}, "")
-				case rp.useWT || prev.Slot != "":
+				case rp.useWT || prev.Slot != "" || prev.Resolve != nil:
 					r = o.runInWorktree(ctx, t, st, deps, "")
 				default:
 					writeSem := writeSem
@@ -1341,6 +1353,32 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		return o.runStep(ctx, t, st, deps, stepLoc{dir: mainDir}, prompt)
 	}
 	var s *slot
+	if prev, ok := t.interruptedRun(st.ID); ok && prev.Resolve != nil && prev.Kept != "" && rp.useGit {
+		// rw stopped while an agent resolved the step's merge conflict
+		// (resolve.go): its work is kept as a commit. It lands again, and
+		// the conflict is resolved anew; the worktree it held is not
+		// needed for that.
+		t.takeInterrupted(st.ID)
+		if prev.Slot != "" {
+			unholdSlot(prev.Slot, t.state.ID, st.ID)
+		}
+		landed, ok := func() (stepResult, bool) {
+			if !rp.useWT {
+				// Writers take turns in your tree: the landing writes
+				// there. (Released before a fresh start below takes it.)
+				select {
+				case rp.writeSem <- struct{}{}:
+					defer func() { <-rp.writeSem }()
+				case <-ctx.Done():
+					return stepResult{err: "cancelled"}, true
+				}
+			}
+			return o.landKept(ctx, t, rp, st, deps, prev, mainDir, errors.New("rw stopped while an agent resolved its merge conflict with "+prev.Resolve.With))
+		}()
+		if ok {
+			return landed
+		}
+	}
 	if prev, ok := t.interruptedRun(st.ID); ok && prev.Slot != "" {
 		// rw stopped while this step's agent worked in a pool worktree:
 		// its half-done edits are there, as changes against prev.Base.
@@ -1528,53 +1566,7 @@ func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask
 		}
 		break
 	}
-	rp.mergeMu.Lock()
-	defer rp.mergeMu.Unlock()
-	tree, clean, info, err := g.mergeTreeBase(base, rp.snapshot, commit)
-	if err != nil || !clean {
-		reason := info
-		if err != nil {
-			reason = err.Error()
-		}
-		branch := o.keepBranchIn(t, rp, st.ID, commit)
-		o.mergeEvent(t, st.ID, false, fmt.Sprintf("conflict in %s; kept on %s", reason, branch))
-		t.addNote(fmt.Sprintf("%s conflicted (%s) and was NOT applied; its changes are on branch %s", st.ID, reason, branch))
-		r.ok, r.err = false, "merge conflict: "+reason
-		return r
-	}
-	merged, err := g.commitTree(tree, []string{rp.snapshot, commit}, "relayweft: merge "+st.ID)
-	if err != nil {
-		o.mergeEvent(t, st.ID, false, err.Error())
-		r.ok, r.err = false, err.Error()
-		return r
-	}
-	skipped, err := g.applyDiffReport(rp.snapshot, merged)
-	if len(skipped) > 0 {
-		o.logf("%s: submodule changes are not applied to your tree: %s", st.ID, strings.Join(skipped, ", "))
-		t.addNote(fmt.Sprintf("%s changed submodule(s) %s; Relayweft does not apply submodule changes", st.ID, strings.Join(skipped, ", ")))
-	}
-	if err != nil {
-		branch := o.keepBranchIn(t, rp, st.ID, commit)
-		o.mergeEvent(t, st.ID, false, fmt.Sprintf("could not apply to working tree (%v); kept on %s", err, branch))
-		t.addNote(fmt.Sprintf("%s could not be applied to the working tree; its changes are on branch %s", st.ID, branch))
-		r.ok, r.err = false, "apply failed"
-		return r
-	}
-	var landed []string
-	if names, err := g.out("diff", "--name-only", "-z", rp.snapshot, merged); err == nil {
-		var paths []string
-		for _, p := range strings.Split(names, "\x00") {
-			if p != "" {
-				paths = append(paths, filepath.Join(rp.root, filepath.FromSlash(p)))
-			}
-		}
-		t.noteFiles(rp.root, paths)
-		landed = paths
-	}
-	rp.snapshot = merged
-	o.mergeEvent(t, st.ID, true, fmt.Sprintf("merged %d file(s)%s", len(r.files), repoTag(rp)))
-	o.afterMerge(ctx, t, st.ID, landed)
-	return r
+	return o.mergeLand(ctx, t, rp, st, loc, r, base, commit)
 }
 
 // slotWarnings reports what an agent did in its worktree that Relayweft
@@ -1758,7 +1750,7 @@ func (o *Orchestrator) runStepAs(ctx context.Context, t *task, st Subtask, deps 
 		}
 		d, res := o.runAgentAt(ctx, t, step, agentID, AgentMain, loc, p, attempt, nil)
 		used = used.Add(res.Tokens)
-		r := stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: used}
+		r := stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: used, dec: d}
 		if res.Err != nil {
 			r.err = res.Err.Error()
 		}
@@ -1837,7 +1829,7 @@ func (o *Orchestrator) resumeStep(ctx context.Context, t *task, step router.Step
 	o.logf("%s: continuing its agent's %s session, interrupted when rw stopped", st.ID, prev.Provider)
 	rp := t.repoOf(st)
 	d, res := o.runAgentAt(ctx, t, step, st.ID, AgentMain, loc, resumePrompt(st, rp.cfg.Verify.Commands), max(1, prev.Attempt), &prev)
-	r := resumedRun{stepResult: stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: res.Tokens}, killed: res.Killed}
+	r := resumedRun{stepResult: stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: res.Tokens, dec: d}, killed: res.Killed}
 	if res.Err != nil {
 		r.err = res.Err.Error()
 	}

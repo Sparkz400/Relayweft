@@ -288,9 +288,10 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
     if (!e) {
       return [...this.reviews.entries()].map(([id, r]) => {
         const it = new ReviewItem('set', id, -1, -1, `${r.cv.step_id}: ${r.cv.title}`, vscode.TreeItemCollapsibleState.Expanded);
-        it.description = `round ${r.cv.round} · ${selectionSummary(r.cv.files, r.sel)}`;
-        it.tooltip = new vscode.MarkdownString(`**${escapeMd(r.cv.title)}**\n\n${escapeMd(r.cv.summary ?? '')}`);
-        it.iconPath = new vscode.ThemeIcon('git-pull-request');
+        it.description = `${r.cv.conflict ? 'conflict resolution · ' : ''}round ${r.cv.round} · ${selectionSummary(r.cv.files, r.sel)}`;
+        const conflict = r.cv.conflict ? `*Conflict resolution: ${escapeMd(r.cv.conflict)}*\n\n` : '';
+        it.tooltip = new vscode.MarkdownString(`**${escapeMd(r.cv.title)}**\n\n${conflict}${escapeMd(r.cv.summary ?? '')}`);
+        it.iconPath = new vscode.ThemeIcon(r.cv.conflict ? 'git-merge' : 'git-pull-request');
         it.contextValue = 'reviewSet';
         return it;
       });
@@ -424,7 +425,7 @@ export class ReviewController implements vscode.TextDocumentContentProvider, vsc
       opts.selection = new vscode.Range(rg.start, 0, rg.start, 0);
     }
     const note = d.whole ? '' : ' (hunks only)';
-    await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(f.path)} — ${r.cv.step_id} review${note}`, opts);
+    await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(f.path)} — ${r.cv.step_id} ${r.cv.conflict ? 'conflict resolution ' : ''}review${note}`, opts);
     if (!d.whole) {
       void vscode.window.setStatusBarMessage('Relayweft: the file in your folder is not the agent\'s base (or the patch is truncated): showing the hunks only', 6000);
     }

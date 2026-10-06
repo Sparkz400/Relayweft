@@ -62,6 +62,8 @@ Marketplace yet.
      **Decide Later**.
    - **Changes** (with "review changes" on): see below.
    - **Budget**: go on past the limit or stop the task.
+   - **Merge conflict**: let an agent resolve it (you then review its
+     resolution like any change set) or keep the change on a branch.
 5. **Follow Up with Agent…** (toolbar, or double-click an agent) sends
    `@agent message` to a finished agent (it resumes its session) or to a
    running one (delivered when its turn ends).
@@ -109,7 +111,7 @@ hunks (the VS Code extension had this bug once; the tests here cover it).
 |---|---|---|
 | rw executable | empty | Path to `rw` / `rw.exe`; empty searches as above. |
 | Extra arguments | empty | For `rw web --client`, one per line, e.g. `--threads` and `2`, `--provider` and `claude`, or `--demo` to try it with fake agents. Nothing is shell-quoted. |
-| Notify when a plan, a change set or a budget question waits | on | |
+| Notify when a plan, a change set, a budget or a merge conflict question waits | on | |
 | Notify when a task is done or failed | on | |
 
 The settings live in the IDE's own configuration (`relayweft.xml`, not

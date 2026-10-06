@@ -70,6 +70,8 @@ Codex starts MCP servers with only a few environment variables (`PATH`, your hom
 
 One task runs at a time. The plan approval and change review follow your config (`orchestrator.approve_plan`, on by default, and `orchestrator.review_changes`, off by default) unless `run_task` sets them. A one-step task skips the planner, so it has no plan to approve.
 
+Conflict resolutions follow `orchestrator.conflicts`. When resolution needs your approval (`ask`, or `auto` for your own edits), MCP keeps the change on a branch and reports the conflict: no MCP tool can answer that question. Resolutions allowed automatically by your config still run, and change review marks them with `changes.conflict`.
+
 ## An example session
 
 You, in Claude Code:

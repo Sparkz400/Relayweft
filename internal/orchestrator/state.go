@@ -40,6 +40,9 @@ type StepState struct {
 	Err   string `json:"err,omitempty"`
 	// BestOf says how a best-of step's winner was picked (bestof.go).
 	BestOf string `json:"best_of,omitempty"`
+	// Resolved says how a merge conflict of the step was resolved
+	// (resolve.go).
+	Resolved string `json:"resolved,omitempty"`
 }
 
 // StepRun is a subtask's agent that was started and has not finished: if
@@ -67,6 +70,21 @@ type StepRun struct {
 	// BestOf how it was picked, for the step's result.
 	Kept   string `json:"kept,omitempty"`
 	BestOf string `json:"best_of,omitempty"`
+	// Resolve is set while an agent resolves the step's merge conflict
+	// (resolve.go): Kept is then the step's work against Base, and a
+	// resume lands it again, resolving the conflict anew.
+	Resolve *ResolveRun `json:"resolve,omitempty"`
+}
+
+// ResolveRun is a resolve step in progress.
+type ResolveRun struct {
+	Agent string    `json:"agent"`           // the resolve agent's id
+	With  string    `json:"with"`            // what the step's change conflicts with
+	Paths []string  `json:"paths,omitempty"` // the conflicted files
+	Yours bool      `json:"yours,omitempty"` // with your own uncommitted edits
+	Since time.Time `json:"since"`
+	// Summary is what the step's agent reported about its change.
+	Summary string `json:"summary,omitempty"`
 }
 
 // TaskState is the persisted progress of one task.
@@ -230,7 +248,7 @@ func (s *TaskState) setResult(id string, r stepResult, interrupted bool) {
 	if bestOf == "" {
 		bestOf = run.BestOf // a best-of winner that finished through a resume
 	}
-	s.Results[id] = StepState{OK: r.ok, Final: clip(r.final, 4000), Err: clip(r.err, 1000), BestOf: clip(bestOf, 600)}
+	s.Results[id] = StepState{OK: r.ok, Final: clip(r.final, 4000), Err: clip(r.err, 1000), BestOf: clip(bestOf, 600), Resolved: clip(r.resolved, 600)}
 	if !interrupted {
 		delete(s.Running, id)
 	}

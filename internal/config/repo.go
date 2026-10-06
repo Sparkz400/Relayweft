@@ -141,6 +141,12 @@ func ApplyRepo(c *Config, dir string) (RepoInfo, error) {
 		c.Routing.BestOf = guarded.Routing.BestOf
 		info.Ignored = append(info.Ignored, bestOfKey)
 	}
+	// So does a resolve agent, which may also write into files you edit:
+	// an untrusted file may make conflicts stricter, not looser.
+	if !info.Trusted && conflictsLoosened(guarded.Orchestrator, c.Orchestrator) {
+		c.Orchestrator.Conflicts, c.Orchestrator.MaxResolveRounds = guarded.Orchestrator.Conflicts, guarded.Orchestrator.MaxResolveRounds
+		info.Ignored = append(info.Ignored, conflictsKey)
+	}
 	// A repo file may tighten your budget, never loosen it (trusted or not).
 	c.Budget = stricterBudget(guarded.Budget, c.Budget)
 	// Likewise the follow-up rounds rw watch may run unattended.
@@ -242,6 +248,10 @@ func bestOfRaised(before, after BestOfCfg) bool {
 	}
 	return rank[after.When] > rank[before.When] || after.Count() > before.Count() || !slices.Equal(after.Routes, before.Routes)
 }
+
+// conflictsKey names orchestrator.conflicts and max_resolve_rounds when an
+// untrusted repo file tried to loosen them.
+const conflictsKey = "orchestrator.conflicts"
 
 // teamDirKey is the one budget setting that needs trust.
 const teamDirKey = "budget.team.dir"
@@ -362,6 +372,15 @@ func trustSubset(data []byte) (map[string]any, error) {
 	if r, ok := raw["routing"].(map[string]any); ok {
 		if b, ok := r["best_of"]; ok {
 			out[bestOfKey] = b // raising it needs trust (guardLocal)
+		}
+	}
+	if o, ok := raw["orchestrator"].(map[string]any); ok {
+		// Loosening them needs trust (guardLocal).
+		if v, ok := o["conflicts"]; ok {
+			out[conflictsKey] = v
+		}
+		if v, ok := o["max_resolve_rounds"]; ok {
+			out["orchestrator.max_resolve_rounds"] = v
 		}
 	}
 	return out, nil

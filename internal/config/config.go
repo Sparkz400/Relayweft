@@ -301,6 +301,49 @@ type OrchestratorCfg struct {
 	PoolWarnGB        float64  `yaml:"pool_warn_gb"`
 	PoolMaxIdle       Duration `yaml:"pool_max_idle"`
 	SnapshotMaxFileMB int      `yaml:"snapshot_max_file_mb"`
+	// Conflicts is what happens when a step's change conflicts with another
+	// step's or with your own uncommitted edits: auto (an agent resolves
+	// conflicts between steps; rw asks before one resolves a conflict with
+	// your edits), resolve, ask, or fail (keep the change on a branch).
+	Conflicts string `yaml:"conflicts"`
+	// MaxResolveRounds caps the resolve agent's attempts per conflict (0 = 2).
+	MaxResolveRounds int `yaml:"max_resolve_rounds"`
+	// ResolveRole is the resolve agent's role (worker or worker_high); "" =
+	// the route that wrote the later change.
+	ResolveRole string `yaml:"resolve_role"`
+}
+
+// Conflict modes (orchestrator.conflicts).
+const (
+	ConflictsAuto    = "auto"
+	ConflictsResolve = "resolve"
+	ConflictsAsk     = "ask"
+	ConflictsFail    = "fail"
+	// MaxResolveRounds is the most attempts max_resolve_rounds allows.
+	MaxResolveRounds = 5
+)
+
+// ConflictMode is orchestrator.conflicts ("" = auto).
+func (o OrchestratorCfg) ConflictMode() string {
+	if o.Conflicts == "" {
+		return ConflictsAuto
+	}
+	return o.Conflicts
+}
+
+// ResolveRounds is orchestrator.max_resolve_rounds (default 2).
+func (o OrchestratorCfg) ResolveRounds() int {
+	if o.MaxResolveRounds <= 0 {
+		return 2
+	}
+	return min(o.MaxResolveRounds, MaxResolveRounds)
+}
+
+// conflictsLoosened reports whether after resolves more conflicts with an
+// agent, or with more attempts, than before.
+func conflictsLoosened(before, after OrchestratorCfg) bool {
+	rank := map[string]int{ConflictsFail: 0, ConflictsAsk: 1, ConflictsAuto: 2, ConflictsResolve: 3}
+	return rank[after.ConflictMode()] > rank[before.ConflictMode()] || after.ResolveRounds() > before.ResolveRounds()
 }
 
 // VerifyCfg lists the repo's own checks (tests, build, lint). Agents may
@@ -607,6 +650,11 @@ func guardLocal(c *Config, data []byte, own []string) []string {
 		c.Routing.BestOf = base.Routing.BestOf
 		ignored = append(ignored, bestOfKey)
 	}
+	// So does a resolve agent, which may also write into files you edit.
+	if conflictsLoosened(base.Orchestrator, c.Orchestrator) {
+		c.Orchestrator.Conflicts, c.Orchestrator.MaxResolveRounds = base.Orchestrator.Conflicts, base.Orchestrator.MaxResolveRounds
+		ignored = append(ignored, conflictsKey)
+	}
 	set, err := trustSubset(data)
 	if err != nil {
 		return append(changed, ignored...) // unreadable as a plain mapping: report all
@@ -777,6 +825,19 @@ func (c *Config) Validate() error {
 		if p, _, _ := strings.Cut(strings.TrimSpace(r), ":"); p == "" {
 			errs = append(errs, fmt.Sprintf("routing.best_of.routes: %q needs a provider (provider[:model[:effort]])", r))
 		}
+	}
+	switch c.Orchestrator.Conflicts {
+	case "", ConflictsAuto, ConflictsResolve, ConflictsAsk, ConflictsFail:
+	default:
+		errs = append(errs, "orchestrator.conflicts must be auto, resolve, ask or fail")
+	}
+	if n := c.Orchestrator.MaxResolveRounds; n < 0 || n > MaxResolveRounds {
+		errs = append(errs, fmt.Sprintf("orchestrator.max_resolve_rounds must be between 0 and %d (0 = 2)", MaxResolveRounds))
+	}
+	switch c.Orchestrator.ResolveRole {
+	case "", "worker", "worker_high":
+	default:
+		errs = append(errs, "orchestrator.resolve_role must be worker or worker_high (empty = the route that wrote the later change)")
 	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))

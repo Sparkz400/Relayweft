@@ -420,11 +420,15 @@ class Extension {
           action = 'Review Plan';
           break;
         case 'changes':
-          msg = `Relayweft: review the changes of ${a.changes?.step_id ?? ''} (${a.changes?.files.length ?? 0} file(s))`;
+          msg = `Relayweft: review the ${a.changes?.conflict ? 'conflict resolution' : 'changes'} of ${a.changes?.step_id ?? ''} (${a.changes?.files.length ?? 0} file(s))`;
           action = 'Review Changes';
           break;
         case 'budget':
           msg = 'Relayweft: ' + (a.budget?.text ?? 'budget reached');
+          action = 'Decide';
+          break;
+        case 'conflict':
+          msg = 'Relayweft: merge conflict: ' + (a.conflict?.text ?? '');
           action = 'Decide';
           break;
       }
@@ -529,6 +533,9 @@ class Extension {
       case 'budget':
         await this.answerBudget(req);
         break;
+      case 'conflict':
+        await this.answerConflict(req);
+        break;
     }
   }
 
@@ -545,6 +552,26 @@ class Extension {
       return;
     }
     const r = await s.api.call<{ message: string }>('POST', `/api/approvals/${encodeURIComponent(req.id)}/budget`, { ok: pick.ok });
+    void vscode.window.showInformationMessage('Relayweft: ' + r.message);
+  }
+
+  private async answerConflict(req: ApprovalRequest): Promise<void> {
+    const s = this.need();
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: '$(git-merge) Let an agent resolve it', description: 'in a separate worktree; you review the result', ok: true },
+        {
+          label: '$(git-branch) Keep it on a branch',
+          description: req.conflict?.yours ? 'the step fails; your files stay as they are' : 'the step fails',
+          ok: false,
+        },
+      ],
+      { title: 'Relayweft: ' + (req.conflict?.text ?? 'merge conflict'), placeHolder: req.conflict?.hint, ignoreFocusOut: true },
+    );
+    if (!pick) {
+      return;
+    }
+    const r = await s.api.call<{ message: string }>('POST', `/api/approvals/${encodeURIComponent(req.id)}/conflict`, { ok: pick.ok });
     void vscode.window.showInformationMessage('Relayweft: ' + r.message);
   }
 

@@ -71,6 +71,7 @@ type ChangesView struct {
 	Title     string     `json:"title"`
 	Summary   string     `json:"summary,omitempty"`
 	Round     int        `json:"round"`
+	Conflict  string     `json:"conflict,omitempty"`
 	Files     []FileView `json:"files"`
 	Truncated bool       `json:"truncated,omitempty"` // patches were shortened
 }
@@ -414,7 +415,7 @@ func waitingView(r *web.Request) Waiting {
 	case "changes":
 		w.Answer = "apply (all files, or the ones you name) or reject (with feedback: the agent tries again; without: nothing lands, the work is kept on a branch)"
 		if c := r.Changes; c != nil {
-			cv := &ChangesView{Step: c.StepID, Title: c.Title, Summary: oneLine(c.Summary, 600), Round: c.Round, Files: []FileView{}}
+			cv := &ChangesView{Step: c.StepID, Title: c.Title, Summary: oneLine(c.Summary, 600), Round: c.Round, Conflict: c.Conflict, Files: []FileView{}}
 			total := 0
 			for _, f := range c.Files {
 				fv := FileView{Path: f.Path, Status: f.Status, Added: f.Added, Deleted: f.Deleted, Binary: f.Binary}

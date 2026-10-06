@@ -293,7 +293,11 @@ func (v *reviewOverlay) view(m *Model, W, H int) string {
 	w := W
 	iw := w - 4
 	var lines []string
-	title := th.bold(th.Main).Render("REVIEW CHANGES") + th.fg(th.Muted).Render(" · "+v.cs.StepID+" · "+oneLine(v.cs.Title, 0))
+	head := "REVIEW CHANGES"
+	if v.cs.Conflict != "" {
+		head = "REVIEW CONFLICT RESOLUTION"
+	}
+	title := th.bold(th.Main).Render(head) + th.fg(th.Muted).Render(" · "+v.cs.StepID+" · "+oneLine(v.cs.Title, 0))
 	if v.cs.Round > 1 {
 		title += th.fg(th.Warn).Render(fmt.Sprintf(" · round %d (after your feedback)", v.cs.Round))
 	}
@@ -301,6 +305,9 @@ func (v *reviewOverlay) view(m *Model, W, H int) string {
 		title += th.fg(th.Muted).Render(fmt.Sprintf(" · %d more waiting", n-1))
 	}
 	lines = append(lines, fit(title, iw))
+	if v.cs.Conflict != "" {
+		lines = append(lines, fit(th.fg(th.Warn).Render("conflict: "+oneLine(v.cs.Conflict, 0)+" · an agent merged both; this is what lands"), iw))
+	}
 	if v.cs.Summary != "" {
 		lines = append(lines, fit(th.fg(th.Muted).Render("agent: "+oneLine(v.cs.Summary, 0)), iw))
 	}

@@ -23,6 +23,39 @@ type Approver interface {
 	ApproveBudget(ctx context.Context, r BudgetRequest) bool
 }
 
+// ConflictApprover is an Approver that can also ask whether an agent may
+// resolve a merge conflict (orchestrator.conflicts: ask, and a conflict
+// with your own edits in auto). Approvers without it are never asked: the
+// conflicting change is kept on a branch, as when you say no.
+type ConflictApprover interface {
+	ApproveResolve(ctx context.Context, q ConflictQuestion) bool
+}
+
+// ConflictQuestion describes a conflict a resolve step could take on.
+type ConflictQuestion struct {
+	Task   string   `json:"task"`
+	StepID string   `json:"step_id"`
+	Title  string   `json:"title"`
+	With   string   `json:"with"` // e.g. "step a (Add the flag)" or "your uncommitted edits"
+	Files  []string `json:"files"`
+	// Yours: the conflict is with your own uncommitted edits.
+	Yours bool `json:"yours,omitempty"`
+}
+
+// String is the question in one line.
+func (q ConflictQuestion) String() string {
+	return fmt.Sprintf("%s conflicts with %s in %s", q.StepID, q.With, clip(strings.Join(q.Files, ", "), 200))
+}
+
+// Hint says what each answer does.
+func (q ConflictQuestion) Hint() string {
+	h := "Yes: an agent merges both changes in a separate worktree; rw checks the result before it lands. No: the change is kept on a branch and the step fails."
+	if q.Yours {
+		h = "Yes: an agent merges the change with your edits in a separate worktree (never in your folder); rw checks the result, keeps your version on a branch and lands it without overwriting edits you make meanwhile. No: your files stay as they are and the change is kept on a branch."
+	}
+	return h
+}
+
 // FileChange is one file in a change set.
 type FileChange struct {
 	Path    string
@@ -40,6 +73,11 @@ type ChangeSet struct {
 	Summary string // the agent's own summary
 	Round   int    // 1 for the first review, 2+ after a rerun with feedback
 	Files   []FileChange
+	// Conflict is set when this is an agent's resolution of a merge
+	// conflict: what conflicted, e.g. "b conflicted with step a in
+	// shared.txt". The files show what lands: the step's change with the
+	// conflict resolved.
+	Conflict string
 }
 
 // ChangeDecision is the person's answer.

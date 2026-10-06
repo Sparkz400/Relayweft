@@ -1001,7 +1001,7 @@ function syncApprovals() {
   for (const a of list) {
     if (!S.seenApprovals.has(a.id)) {
       S.seenApprovals.add(a.id);
-      notify('Relayweft needs you', a.type === 'plan' ? 'Approve the plan: ' + oneLine(a.task, 120) : a.type === 'budget' ? 'Budget reached: ' + a.budget.text : 'Review the changes of ' + a.changes.step_id);
+      notify('Relayweft needs you', a.type === 'plan' ? 'Approve the plan: ' + oneLine(a.task, 120) : a.type === 'budget' ? 'Budget reached: ' + a.budget.text : a.type === 'conflict' ? 'Merge conflict: ' + a.conflict.text : (a.changes.conflict ? 'Review the conflict resolution of ' : 'Review the changes of ') + a.changes.step_id);
       if (!S.openApproval && !$('#modal').dataset.busy) openApproval(a);
     }
   }
@@ -1034,6 +1034,7 @@ function openApproval(a) {
   card.className = 'modal-card';
   if (a.type === 'plan') planEditor(a, card);
   else if (a.type === 'budget') budgetPanel(a, card);
+  else if (a.type === 'conflict') conflictPanel(a, card);
   else reviewPanel(a, card);
   $('#modal').hidden = false;
   renderBanner();
@@ -1042,6 +1043,8 @@ function openApproval(a) {
 function approvalTitle(a) {
   if (a.type === 'plan') return 'A plan is waiting for your approval';
   if (a.type === 'budget') return 'Budget reached: ' + a.budget.text + ' - continue?';
+  if (a.type === 'conflict') return 'Merge conflict: ' + a.conflict.text + ' - let an agent resolve it?';
+  if (a.changes.conflict) return `The conflict resolution of ${a.changes.step_id} is waiting for your review`;
   return `Changes of ${a.changes.step_id} are waiting for your review`;
 }
 
@@ -1074,6 +1077,40 @@ function budgetPanel(a, card) {
       h('button', { class: 'btn ghost', onclick: hideApproval, title: 'Hide (the question keeps waiting)' }, 'Later'),
       h('button', { class: 'btn danger', onclick: () => answer(false) }, 'Stop the task'),
       h('button', { class: 'btn primary', onclick: () => answer(true), title: 'Ctrl+Enter' }, icon('play'), 'Continue', h('kbd', null, 'Ctrl ↵'))));
+  card._submit = () => answer(true);
+}
+
+// Merge conflict question: let an agent resolve it in a separate worktree,
+// or keep the change on a branch (the step fails).
+function conflictPanel(a, card) {
+  const c = a.conflict;
+  const err = h('div', { class: 'm-err' });
+  async function answer(ok) {
+    err.textContent = '';
+    try {
+      $('#modal').dataset.busy = '1';
+      const r = await api('POST', `/api/approvals/${a.id}/conflict`, { ok });
+      toast(r.message, ok ? 'ok' : 'warn');
+      closeModal();
+    } catch (e) {
+      err.textContent = e.message;
+    } finally {
+      delete $('#modal').dataset.busy;
+    }
+  }
+  card.append(
+    h('div', { class: 'm-head' },
+      h('div', { class: 'm-kicker' }, h('span', { class: 'pip' }), 'Merge conflict'),
+      h('div', { class: 'm-title' }, h('span', { class: 'mono', style: 'color:var(--muted)' }, c.step_id + '  '), c.title || ''),
+      h('div', { class: 'm-sub' }, oneLine(a.task, 160))),
+    h('div', { class: 'm-body' },
+      h('p', { class: 'budget-q' }, c.text + '.'),
+      (c.files || []).length ? h('p', { class: 'mono small' }, c.files.join(', ')) : '',
+      h('p', { class: 'muted small' }, c.hint + (c.yours ? ' Keeping it on a branch leaves your files as they are.' : ''))),
+    h('div', { class: 'm-foot' }, err, h('span', { class: 'grow' }),
+      h('button', { class: 'btn ghost', onclick: hideApproval, title: 'Hide (the question keeps waiting)' }, 'Later'),
+      h('button', { class: 'btn danger', onclick: () => answer(false) }, 'Keep it on a branch'),
+      h('button', { class: 'btn primary', onclick: () => answer(true), title: 'Ctrl+Enter' }, icon('play'), 'Let an agent resolve it', h('kbd', null, 'Ctrl ↵'))));
   card._submit = () => answer(true);
 }
 
@@ -1363,9 +1400,10 @@ function reviewPanel(a, card) {
   renderAll();
   card.append(
     h('div', { class: 'm-head' },
-      h('div', { class: 'm-kicker' }, h('span', { class: 'pip' }), 'Review changes',
+      h('div', { class: 'm-kicker' }, h('span', { class: 'pip' }), cs.conflict ? 'Review conflict resolution' : 'Review changes',
         cs.round > 1 ? h('span', { style: 'color:var(--warn)' }, ` · round ${cs.round} (after your feedback)`) : ''),
       h('div', { class: 'm-title' }, h('span', { class: 'mono', style: 'color:var(--muted)' }, cs.step_id + '  '), cs.title || ''),
+      cs.conflict ? h('div', { class: 'm-sub', style: 'color:var(--warn)' }, 'Conflict resolution: ' + cs.conflict) : '',
       cs.summary ? h('div', { class: 'm-sub' }, 'agent: ' + cs.summary) : ''),
     h('div', { class: 'm-body', style: 'padding:0' }, h('div', { class: 'review' }, filesEl, diffEl)),
     h('div', { class: 'm-foot' }, h('div', { class: 'grow', style: 'display:flex;gap:8px;align-items:flex-end' }, fb, fbBtn),

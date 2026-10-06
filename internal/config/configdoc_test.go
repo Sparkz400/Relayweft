@@ -60,7 +60,7 @@ func TestConfigDocTrustKeys(t *testing.T) {
 	for i := 0; i < ct.NumField(); i++ {
 		keys[yamlName(ct.Field(i))] = true
 	}
-	for _, k := range append(append([]string{}, commandKeys...), sandboxKey, strings.Split(bestOfKey, ".")[0], strings.Split(teamDirKey, ".")[0], strings.Split(webhooksKey, ".")[0]) {
+	for _, k := range append(append([]string{}, commandKeys...), sandboxKey, strings.Split(bestOfKey, ".")[0], strings.Split(conflictsKey, ".")[0], strings.Split(teamDirKey, ".")[0], strings.Split(webhooksKey, ".")[0]) {
 		if !keys[k] {
 			t.Errorf("trust rules name %q, which is not a config key", k)
 		}
@@ -330,6 +330,8 @@ func trustRule(key string) string {
 		return "stricter only, until trusted"
 	case under(bestOfKey):
 		return "lower only, until trusted"
+	case under(conflictsKey), under("orchestrator.max_resolve_rounds"):
+		return "stricter only, until trusted"
 	// ApplyRepo: a repo file may tighten the budget and lower rw watch's
 	// rounds, never the other way, trusted or not.
 	case under("budget"), under("watch.max_rounds"):

@@ -184,6 +184,9 @@ Each role has a route on every provider (see providers: below). `prefer` picks w
 | `orchestrator.pool_warn_gb` | number | `20` | yes | warn when this repo's worktree pool grows beyond this |
 | `orchestrator.pool_max_idle` | duration | `336h` | yes | pool worktrees unused this long are removed (14 days; 0 = keep) |
 | `orchestrator.snapshot_max_file_mb` | integer | `100` | yes | untracked files bigger than this are left out of snapshots and worktrees (0 = no limit) |
+| `orchestrator.conflicts` | string | `auto` | stricter only, until trusted | `conflicts` is what happens when a step's change conflicts with another step's or with your own uncommitted edits: auto (an agent resolves conflicts between steps; rw asks before one resolves a conflict with your edits), resolve, ask, or fail (keep the change on a branch). |
+| `orchestrator.max_resolve_rounds` | integer | `2` | stricter only, until trusted | `max_resolve_rounds` caps the resolve agent's attempts per conflict (0 = 2). |
+| `orchestrator.resolve_role` | string | "" | yes | `resolve_role` is the resolve agent's role (worker or worker_high); "" = the route that wrote the later change. |
 
 ## verify
 

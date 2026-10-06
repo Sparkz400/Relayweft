@@ -254,7 +254,7 @@ func (g git) applyDiffReport(from, to string, only ...string) (skipped []string,
 		merged[e.path] = &mergedFile{content: out, orig: orig, stat: stats[e.path]}
 	}
 	if len(conflicts) > 0 {
-		return skipped, fmt.Errorf("you changed %s while agents were working and the edits overlap", strings.Join(conflicts, ", "))
+		return skipped, errYourEdits{conflicts}
 	}
 	if applyHook != nil {
 		applyHook("checked")
@@ -298,6 +298,14 @@ type mergedFile struct {
 	orig    []byte
 	stat    fileStat
 	done    bool
+}
+
+// errYourEdits: files the user changed overlap with the change; nothing
+// was written (a resolve step may merge them, resolve.go).
+type errYourEdits struct{ paths []string }
+
+func (e errYourEdits) Error() string {
+	return "you changed " + strings.Join(e.paths, ", ") + " while agents were working and the edits overlap"
 }
 
 // errEditedDuringApply: the user changed a file between the check and the

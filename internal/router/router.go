@@ -73,6 +73,7 @@ const (
 	RuleJudge       = "judge"
 	RuleForced      = "forced"
 	RuleBestOf      = "best-of"
+	RuleResolve     = "conflict-resolve"
 )
 
 // Router applies the rules to the live config.

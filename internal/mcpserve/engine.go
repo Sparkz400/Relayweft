@@ -142,8 +142,9 @@ func New(o Options) (*Engine, error) {
 	return e, nil
 }
 
-// Approver is the web approver, except that a budget question is answered
-// "stop": the budget is the person's limit, not the calling agent's.
+// Approver is the web approver, except that budget and conflict questions
+// are declined: the calling agent cannot approve spending past a budget
+// or resolving the person's edits, and MCP has no tool for those answers.
 type Approver struct{ *web.Approver }
 
 // NewApprover returns the approver to pass to the orchestrator.
@@ -151,6 +152,10 @@ func NewApprover() *Approver { return &Approver{Approver: web.NewApprover()} }
 
 // ApproveBudget implements orchestrator.Approver: never go past a budget.
 func (a *Approver) ApproveBudget(context.Context, orchestrator.BudgetRequest) bool { return false }
+
+// ApproveResolve keeps the work on a branch when a conflict needs consent.
+// Automatic resolutions allowed by the person's config do not ask here.
+func (a *Approver) ApproveResolve(context.Context, orchestrator.ConflictQuestion) bool { return false }
 
 // RunOptions are what the calling agent may set for one task.
 type RunOptions struct {

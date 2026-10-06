@@ -27,6 +27,7 @@ var helpText = []string{
 	"/limit <codex|claude> [reset|set]    clear or set a provider's usage-limit state",
 	"/approve on|off                      show the plan for editing before anything runs",
 	"/review-changes on|off               show each agent's changes (per file or hunk) before they land",
+	"/conflicts auto|resolve|ask|fail     when changes conflict: an agent resolves it (auto asks first for your own edits), ask, or keep it on a branch",
 	"/verify [<command>|clear]            list, add or clear the checks run before the final review",
 	"/queue · /queue clear · /queue rm <n>   tasks waiting to run",
 	"/schedule <02:30|in 2h|reset claude> <task> · /schedule · /schedule rm <n>   run a task later, unattended",

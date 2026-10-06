@@ -55,6 +55,9 @@ const (
 	// MarkerBestOf starts the reviewer's prompt that picks one of a
 	// best-of step's candidates.
 	MarkerBestOf = "[RW:BEST-OF]"
+	// MarkerResolve starts the prompt of an agent that resolves a merge
+	// conflict between two changes.
+	MarkerResolve = "[RW:RESOLVE]"
 )
 
 func (f *Fake) sleep(ctx context.Context, min, max time.Duration) bool {
