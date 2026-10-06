@@ -30,14 +30,15 @@ import (
 )
 
 // rw watch follows up on the pull requests rw opened, on GitHub, GitLab
-// (merge requests) and Gitea/Forgejo (forge.Client):
+// (merge requests), Gitea/Forgejo and Bitbucket Cloud (forge.Client):
 //
 //   - rw pr (and rw run --issue(s) --pr) records every pull request it
 //     opens in <user config dir>/relayweft/watch.json: the repository,
 //     its folder, the number, branch, head commit and task.
 //   - A pass reads each recorded pull request. A merged or closed one is
 //     dropped. New items are failed checks on the current head commit
-//     (GitHub check runs, GitLab pipeline jobs, Gitea commit statuses),
+//     (GitHub check runs, GitLab pipeline jobs, Gitea commit statuses,
+//     Bitbucket pipeline steps and commit statuses),
 //     inline review comments, and reviews that request changes, by people
 //     who may direct work on the repository (forge.Feedback.Trusted: the
 //     owner, members, collaborators or developers; not bots, not other
@@ -88,8 +89,8 @@ func ownComment(body string) bool {
 
 // watchEntry is one watched pull request.
 type watchEntry struct {
-	// Forge is gitlab or gitea; "" is GitHub (lists from before GitLab and
-	// Gitea have none).
+	// Forge is gitlab, gitea or bitbucket; "" is GitHub (lists from before
+	// GitLab and Gitea have none).
 	Forge string `json:"forge,omitempty"`
 	Root  string `json:"root"` // the repository's folder
 	Host  string `json:"host"`
@@ -261,8 +262,9 @@ func cmdWatch(args []string) error {
 		fmt.Fprint(os.Stderr, `Usage: rw watch [--every 15m] [--dir repo] | --list | --forget <n>
 
 Follows up on the pull requests rw pr opened (GitHub, GitLab merge requests,
-Gitea/Forgejo). Each pass reads every watched pull request: merged or closed
-ones are dropped; failed checks (or pipeline jobs) on its head commit,
+Gitea/Forgejo, Bitbucket Cloud). Each pass reads every watched pull
+request: merged or closed ones are dropped; failed checks (or pipeline jobs)
+on its head commit,
 review comments and reviews requesting changes (by the repository's owner,
 members and collaborators; not your own, not bots) start one follow-up task
 on the PR's branch. It runs in a separate checkout (your
@@ -275,7 +277,7 @@ comments only reach the agents as quoted data.
 `)
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
@@ -670,7 +672,7 @@ func (w *watcher) round(ctx context.Context, e watchEntry, client forge.Client, 
 		return e
 	}
 	fetchRef := "refs/relayweft/watch/" + slugify(fmt.Sprintf("%s-%s-%d", e.Owner, e.Name, e.Number), 60)
-	defer prGit(e.Root, nil, nil, "update-ref", "-d", fetchRef)
+	defer prGit(e.Root, nil, nil, "update-ref", "-d", fetchRef) //nolint:errcheck // cleanup; a leftover ref is harmless
 	head, err := w.fetch(e.Root, e.Branch, fetchRef)
 	if err != nil {
 		w.note(&e, "skipped: %v", err)
@@ -685,7 +687,7 @@ func (w *watcher) round(ctx context.Context, e watchEntry, client forge.Client, 
 		w.note(&e, "skipped: checkout of %s: %v", short(head), err)
 		return e
 	}
-	defer co.Remove()
+	defer co.Remove() //nolint:errcheck // cleanup; NewCheckout replaces a leftover
 
 	fmt.Fprintf(w.out, "%s: follow-up round %d of %d for %d item(s) on %s at %s\n", e, e.Rounds+1, cfg.Watch.MaxRounds, len(items), e.Branch, short(head))
 	log, err := sessionlog.Open(cfg.SessionDir(), co.Dir)
@@ -797,11 +799,11 @@ func (w *watcher) land(e watchEntry, co *orchestrator.Checkout, res orchestrator
 
 // CI and forge settings that rw watch never pushes, on any forge: GitHub
 // Actions and settings, GitLab CI, Gitea and Forgejo Actions, Woodpecker
-// (Codeberg's CI) and Drone.
+// (Codeberg's CI), Drone and Bitbucket Pipelines.
 var (
 	ciDirs   = []string{".github/", ".gitlab/", ".gitea/", ".forgejo/", ".woodpecker/"}
-	ciNames  = []string{".gitlab-ci.yml", ".gitlab-ci.yaml", ".woodpecker.yml", ".woodpecker.yaml", ".drone.yml", ".drone.yaml"}
-	ciPlaces = ".github/, .gitlab-ci.yml, .gitlab/, .gitea/, .forgejo/, .woodpecker, .drone.yml"
+	ciNames  = []string{".gitlab-ci.yml", ".gitlab-ci.yaml", ".woodpecker.yml", ".woodpecker.yaml", ".drone.yml", ".drone.yaml", "bitbucket-pipelines.yml"}
+	ciPlaces = ".github/, .gitlab-ci.yml, .gitlab/, .gitea/, .forgejo/, .woodpecker, .drone.yml, bitbucket-pipelines.yml"
 )
 
 // ciFiles are the CI and forge settings files among buildPRCommit's files
@@ -835,7 +837,7 @@ var errBranchMoved = errors.New("the branch moved on the remote since rw read it
 // is still an ancestor of it, and never forced.
 func (w *watcher) push(e watchEntry, commit string) error {
 	ref := "refs/relayweft/watch/" + slugify(fmt.Sprintf("%s-%s-%d-push", e.Owner, e.Name, e.Number), 70)
-	defer prGit(e.Root, nil, nil, "update-ref", "-d", ref)
+	defer prGit(e.Root, nil, nil, "update-ref", "-d", ref) //nolint:errcheck // cleanup; a leftover ref is harmless
 	now, err := w.fetch(e.Root, e.Branch, ref)
 	if err != nil {
 		return err

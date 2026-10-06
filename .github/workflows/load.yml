@@ -1,0 +1,84 @@
+name: load
+
+# Heavy-load test (ROADMAP "Not verified yet"): a big real repo (shallow
+# clone, plus a commit with Git LFS files), three rw writers in parallel
+# sharing its worktree pool, with cancels, resumes, undos and redos, for
+# hours. Checks at quiet points that every edit is where it belongs and
+# that goroutines, open handles, leftover processes, the heap and refs stay
+# flat; records the pool's disk use and rw's CPU time. Manual only; the
+# results (summary.txt, samples.csv) are uploaded as artifacts. See
+# internal/orchestrator/load_test.go (RW_LOAD_DURATION=3m for a local
+# smoke run on a generated repo).
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "How long to run (Go duration, at most 3h15m)"
+        required: false
+        default: "2h30m"
+      repo:
+        description: "The big repo to clone (shallow)"
+        required: false
+        default: "https://github.com/golang/go"
+      os:
+        description: 'Runners (JSON list)'
+        required: false
+        default: '["ubuntu-latest","windows-latest"]'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  load:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os || '["ubuntu-latest","windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: git identity and LFS
+        shell: bash
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@example.com
+          git config --global core.longpaths true
+          git lfs version
+      - name: clone the big repo
+        shell: bash
+        env:
+          REPO: ${{ inputs.repo || 'https://github.com/golang/go' }}
+        run: |
+          start=$(date +%s)
+          git clone -q --depth 1 --single-branch "$REPO" "$RUNNER_TEMP/bigrepo"
+          echo "cloned in $(( $(date +%s) - start ))s: $(git -C "$RUNNER_TEMP/bigrepo" ls-files | wc -l) files, $(du -sh "$RUNNER_TEMP/bigrepo" | cut -f1)"
+          df -h "$RUNNER_TEMP" || true
+      - name: load test
+        shell: bash
+        env:
+          RW_LOAD_DURATION: ${{ inputs.duration || '2h30m' }}
+          RW_LOAD_REPO: ${{ runner.temp }}/bigrepo
+          RW_LOAD_WORK: ${{ runner.temp }}/load
+          RW_LOAD_OUT: ${{ runner.temp }}/load-out
+        run: |
+          mkdir -p "$RW_LOAD_WORK"
+          go test -run '^TestLoad$' -v -count=1 -timeout 3h45m ./internal/orchestrator
+      - name: summary
+        if: always()
+        shell: bash
+        run: |
+          cat "$RUNNER_TEMP/load-out/summary.txt" >> "$GITHUB_STEP_SUMMARY" || true
+          df -h "$RUNNER_TEMP" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: load-${{ matrix.os }}
+          path: ${{ runner.temp }}/load-out/

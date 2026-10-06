@@ -487,15 +487,7 @@ func (g *gitlab) CommentReview(r Repo, n int, headSHA, body string, comments []I
 			missed = append(missed, c) // GitLab could not place it on the line
 		}
 	}
-	if len(missed) > 0 {
-		var b strings.Builder
-		b.WriteString(body)
-		b.WriteString("\n\nComments GitLab could not place on their line:\n\n")
-		for _, c := range missed {
-			fmt.Fprintf(&b, "- `%s:%d`: %s\n", strings.ReplaceAll(c.Path, "`", "'"), c.Line, strings.ReplaceAll(c.Body, "\n", "\n  "))
-		}
-		body = b.String()
-	}
+	body = withMissed(body, "GitLab", missed)
 	var note struct {
 		ID int64 `json:"id"`
 	}

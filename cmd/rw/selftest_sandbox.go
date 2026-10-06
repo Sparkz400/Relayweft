@@ -58,7 +58,7 @@ func (t *selftest) sandboxScenario() {
 	// .git lies in the work tree, and the sandbox must undo one an agent
 	// writes there.
 	head, _ := exec.Command("git", "-C", proj, "rev-parse", "HEAD").Output()
-	os.MkdirAll(filepath.Join(proj, "vendor", "lib"), 0o755)
+	_ = os.MkdirAll(filepath.Join(proj, "vendor", "lib"), 0o755) // the git commands below report it
 	for _, args := range [][]string{
 		{"update-index", "--add", "--cacheinfo", "160000," + strings.TrimSpace(string(head)) + ",vendor/lib"},
 		{"-c", "user.name=rw selftest", "-c", "user.email=selftest@localhost", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "a submodule"},
@@ -211,7 +211,7 @@ func (t *selftest) sandboxKill(proj, bin, cfgPath string, env, before []string) 
 	if left := waitContainersGone(bin, before, 20*time.Second); len(left) > 0 {
 		t.check(markFail, "sandbox", "container %v still runs 20s after rw was killed", left)
 		for _, n := range left {
-			exec.Command(bin, "rm", "-f", n).Run()
+			_ = exec.Command(bin, "rm", "-f", n).Run() // cleanup after the failure above
 		}
 		return
 	}

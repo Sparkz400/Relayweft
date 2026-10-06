@@ -26,7 +26,7 @@ func cmdHealth(args []string) error {
 	check := fs.Bool("check", false, "exit with status 1 when the criterion is not met")
 	verbose := fs.Bool("v", false, "list every incident, not only the last 10")
 	logs := fs.String("logs", "", "log directory to read (default this machine's; e.g. the logs folder of an unzipped rw bugreport)")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	r, err := health.Build(health.Options{Dir: *logs, Days: *days, MinUseDays: *minUse, NoLeftovers: *logs != ""})
 	if err != nil {
 		return err

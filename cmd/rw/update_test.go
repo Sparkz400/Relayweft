@@ -57,7 +57,8 @@ type fakeRelease struct {
 	tag     string
 	binary  []byte
 	sum     string
-	status  int // non-zero: the API answers with this status
+	status  int  // non-zero: the API answers with this status
+	signed  bool // the release has checksums.txt.sigstore.json (v0.4.0 and later)
 	gotAuth string
 }
 
@@ -77,13 +78,18 @@ func (f *fakeRelease) start(t *testing.T) *httptest.Server {
 				w.WriteHeader(f.status)
 				return
 			}
+			assets := []ghAsset{
+				{Name: name, BrowserDownloadURL: srv.URL + "/dl/" + name},
+				{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/dl/checksums.txt"},
+			}
+			if f.signed {
+				// Never downloaded: rw update does not verify it.
+				assets = append(assets, ghAsset{Name: signatureAsset, BrowserDownloadURL: srv.URL + "/dl/" + signatureAsset})
+			}
 			json.NewEncoder(w).Encode(ghRelease{
 				TagName: f.tag,
 				HTMLURL: srv.URL + "/notes",
-				Assets: []ghAsset{
-					{Name: name, BrowserDownloadURL: srv.URL + "/dl/" + name},
-					{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/dl/checksums.txt"},
-				},
+				Assets:  assets,
 			})
 		case "/dl/" + name:
 			w.Write(f.binary)
@@ -193,6 +199,11 @@ func TestUpdateReplacesBinary(t *testing.T) {
 	if !strings.Contains(out.String(), "sha256 verified") {
 		t.Errorf("output:\n%s", out)
 	}
+	// A release from before signing (v0.3.0 and older) updates as before,
+	// without a provenance hint.
+	if strings.Contains(out.String(), "attestation") {
+		t.Errorf("unsigned release got a provenance hint:\n%s", out)
+	}
 	if _, err := os.Stat(exe + ".new"); !os.IsNotExist(err) {
 		t.Error(".new left behind")
 	}
@@ -204,6 +215,35 @@ func TestUpdateReplacesBinary(t *testing.T) {
 		if _, err := os.Stat(exe + ".old"); !os.IsNotExist(err) {
 			t.Error("cleanupOldBinary left .old")
 		}
+	}
+}
+
+func TestUpdateSignedReleaseHint(t *testing.T) {
+	f := &fakeRelease{tag: "v2.0.0", binary: []byte("signed release"), signed: true}
+	srv := f.start(t)
+	exe, out := withUpdater(t, srv, "1.0.0", "y\n")
+	if err := cmdUpdate(nil); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := readFile(t, exe); got != "signed release" {
+		t.Fatalf("binary = %q", got)
+	}
+	// The command checks the installed file, with the path as it is (no
+	// doubled backslashes on Windows).
+	want := `gh attestation verify "` + exe + `" --repo Sparkz400/Relayweft`
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+
+	// The signature changes nothing about the checksum check.
+	f2 := &fakeRelease{tag: "v2.0.0", binary: []byte("tampered"), sum: strings.Repeat("ab", 32), signed: true}
+	srv2 := f2.start(t)
+	exe2, out2 := withUpdater(t, srv2, "1.0.0", "y\n")
+	if err := cmdUpdate(nil); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("err = %v", err)
+	}
+	if readFile(t, exe2) != "old binary" || strings.Contains(out2.String(), "attestation") {
+		t.Errorf("a mismatch replaced the binary or printed the hint:\n%s", out2)
 	}
 }
 
@@ -278,6 +318,7 @@ func fakeOwners(t *testing.T, owners map[string]string) *[]string {
 	t.Helper()
 	old := updateOwnerQuery
 	t.Cleanup(func() { updateOwnerQuery = old })
+	fakeRepoFiles(t)
 	var asked []string
 	updateOwnerQuery = func(name string, args ...string) (string, error) {
 		asked = append(asked, name+" "+strings.Join(args, " "))
@@ -379,6 +420,69 @@ func TestPackageManagerByOwner(t *testing.T) {
 	}
 }
 
+// fakeRepoFiles points the repository setup files into a temp dir, where
+// none exist yet, and returns that dir.
+func fakeRepoFiles(t *testing.T) string {
+	t.Helper()
+	oldApt, oldDnf, oldZypper, oldApk := aptRepoFiles, dnfRepoFiles, zypperRepoFiles, apkRepositories
+	t.Cleanup(func() {
+		aptRepoFiles, dnfRepoFiles, zypperRepoFiles, apkRepositories = oldApt, oldDnf, oldZypper, oldApk
+	})
+	dir := t.TempDir()
+	aptRepoFiles = []string{filepath.Join(dir, "relayweft.list"), filepath.Join(dir, "relayweft.sources")}
+	dnfRepoFiles = []string{filepath.Join(dir, "yum.repos.d", "relayweft.repo")}
+	zypperRepoFiles = []string{filepath.Join(dir, "zypp", "relayweft.repo")}
+	apkRepositories = filepath.Join(dir, "repositories")
+	return dir
+}
+
+// With the Relayweft repository set up, rw update names the package
+// manager's upgrade command; without it, the release's package and the
+// repository setup.
+func TestPackageManagerWithRepository(t *testing.T) {
+	write := func(p, s string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		tool, owner string
+		setUp       func(dir string)
+		want        string
+	}{
+		{"dpkg-query", "relayweft: /usr/bin/rw", nil, "sudo apt install ./relayweft-linux-amd64.deb` (or add the Relayweft apt repository once: " + repoSetupURL},
+		{"dpkg-query", "relayweft: /usr/bin/rw", func(d string) { write(filepath.Join(d, "relayweft.list"), "deb ...") }, "run `sudo apt update && sudo apt install --only-upgrade relayweft`"},
+		{"dpkg-query", "relayweft: /usr/bin/rw", func(d string) { write(filepath.Join(d, "relayweft.sources"), "Types: deb") }, "sudo apt install --only-upgrade relayweft"},
+		{"rpm", "relayweft", nil, "sudo dnf install ./relayweft-linux-amd64.rpm` (or add the Relayweft rpm repository once"},
+		{"rpm", "relayweft", func(d string) { write(filepath.Join(d, "yum.repos.d", "relayweft.repo"), "[relayweft]") }, "run `sudo dnf upgrade relayweft`"},
+		{"rpm", "relayweft", func(d string) { write(filepath.Join(d, "zypp", "relayweft.repo"), "[relayweft]") }, "run `sudo zypper update relayweft`"},
+		{"apk", "relayweft", nil, "sudo apk add --allow-untrusted ./relayweft-linux-amd64.apk` (or add the Relayweft apk repository once"},
+		{"apk", "relayweft", func(d string) {
+			write(filepath.Join(d, "repositories"), "https://dl-cdn.alpinelinux.org/alpine/v3.22/main\nhttps://sparkz400.github.io/Relayweft/apk\n")
+		}, "run `sudo apk update && sudo apk upgrade relayweft`"},
+		// A commented-out line and a folder named like the list do not count.
+		{"apk", "relayweft", func(d string) {
+			write(filepath.Join(d, "repositories"), "#https://sparkz400.github.io/Relayweft/apk\n")
+		}, "--allow-untrusted"},
+		{"dpkg-query", "relayweft: /usr/bin/rw", func(d string) { write(filepath.Join(d, "relayweft.list", "x"), "") }, "sudo apt install ./"},
+	}
+	for i, c := range cases {
+		fakeOwners(t, map[string]string{c.tool: c.owner})
+		dir := fakeRepoFiles(t)
+		if c.setUp != nil {
+			c.setUp(dir)
+		}
+		pm, ok := packageManager("/usr/bin/rw", "amd64")
+		if !ok || !strings.Contains(pm.how, c.want) {
+			t.Errorf("case %d (%s): got %q, %v; want it to contain %q", i, c.tool, pm.how, ok, c.want)
+		}
+	}
+}
+
 // A Scoop installed to a custom root ($SCOOP, $SCOOP_GLOBAL).
 func TestPackageManagerScoopRoots(t *testing.T) {
 	fakeOwners(t, nil)
@@ -449,6 +553,15 @@ func TestUpdateLeavesLinuxPackagesAlone(t *testing.T) {
 	err := cmdUpdate([]string{"--yes"})
 	if err == nil || !strings.Contains(err.Error(), "an .rpm package (relayweft)") || !strings.Contains(err.Error(), "dnf install") {
 		t.Fatalf("want a refusal for the rpm package, got %v", err)
+	}
+	// With the repository set up, the refusal names dnf's upgrade.
+	dnfRepoFiles = []string{filepath.Join(t.TempDir(), "relayweft.repo")}
+	if err := os.WriteFile(dnfRepoFiles[0], []byte("[relayweft]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = cmdUpdate([]string{"--yes"})
+	if err == nil || !strings.Contains(err.Error(), "sudo dnf upgrade relayweft") || strings.Contains(err.Error(), "dnf install") {
+		t.Fatalf("want a refusal naming `sudo dnf upgrade relayweft`, got %v", err)
 	}
 }
 

@@ -80,5 +80,6 @@ func (o *Orchestrator) runHooks(ctx context.Context, t *task, which string, cmds
 
 // afterMerge runs the after_merge hooks for a step's landed files.
 func (o *Orchestrator) afterMerge(ctx context.Context, t *task, stepID string, files []string) {
-	o.runHooks(ctx, t, "after_merge", t.cfg.Hooks.AfterMerge, map[string]string{"RW_STEP": stepID, "RW_FILES": strings.Join(files, "\n")})
+	// runHooks shows and logs a failure itself; it does not undo the merge.
+	_ = o.runHooks(ctx, t, "after_merge", t.cfg.Hooks.AfterMerge, map[string]string{"RW_STEP": stepID, "RW_FILES": strings.Join(files, "\n")})
 }

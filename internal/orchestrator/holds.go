@@ -70,7 +70,11 @@ func newToken() string {
 // held).
 func holdSlot(slot string, h slotHold) {
 	if data, err := json.Marshal(h); err == nil {
-		writeFileAtomic(holdPath(slot), data)
+		if err := writeFileAtomic(holdPath(slot), data); err != nil {
+			// Without the mark a later rw may reuse the slot; nothing here
+			// can do better than record why.
+			diag.Logf("pool: cannot mark %s as held: %v", slot, err)
+		}
 	}
 }
 
@@ -381,7 +385,7 @@ func dropRef(slot, name string) {
 	if !strings.HasPrefix(ref, "refs/") {
 		ref = "refs/heads/" + name
 	}
-	git{slot}.out("update-ref", "-d", ref)
+	_, _ = git{slot}.out("update-ref", "-d", ref) // g.run logs a failure
 }
 
 // lockRetry takes a lock file, trying for a moment while someone else has

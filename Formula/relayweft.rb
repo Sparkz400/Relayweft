@@ -8,23 +8,23 @@ class Relayweft < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/sparkz400/relayweft/releases/download/v0.2.0/rw-darwin-arm64"
-      sha256 "0ea4bf554df324bfc3020804098ee097f6c35640351c6c00c1a8fb432041b747"
+      url "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-darwin-arm64"
+      sha256 "d0cdec8d4a50346ddd1c9a5a2ac37aa3f59759d1a72b03332b1316fd17d55329"
     end
     on_intel do
-      url "https://github.com/sparkz400/relayweft/releases/download/v0.2.0/rw-darwin-amd64"
-      sha256 "9556c5529ddde942be22a4481749cb33669ba4152544f208b92dce17accfb3c1"
+      url "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-darwin-amd64"
+      sha256 "9d97104d3d82818152215bc893d6bb568a23de19968e8a73d057fdf6358dfc3e"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/sparkz400/relayweft/releases/download/v0.2.0/rw-linux-arm64"
-      sha256 "4ff5f1019ea073adf30413c6d30976e312c9a9c08caa768a48330208efbd93ce"
+      url "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-linux-arm64"
+      sha256 "2a65fa42c4f61b0b3a7e99cd301d03d50233d80ddb8d869e61ca2d1e2937a0e8"
     end
     on_intel do
-      url "https://github.com/sparkz400/relayweft/releases/download/v0.2.0/rw-linux-amd64"
-      sha256 "886463cc07f297a261d1ea2e22e0af9c451fab7f6839a60a2066db2365c137f2"
+      url "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-linux-amd64"
+      sha256 "610a21696b116519b592ce1a0a3f2f2ab4515f66ee442e6535f1d1d7d6158784"
     end
   end
 
@@ -32,6 +32,8 @@ class Relayweft < Formula
     os = OS.mac? ? "darwin" : "linux"
     arch = Hardware::CPU.arm? ? "arm64" : "amd64"
     bin.install "rw-#{os}-#{arch}" => "rw"
+    # `rw completion` arrived in v0.4.0.
+    generate_completions_from_executable(bin/"rw", "completion") if version >= "0.4.0"
   end
 
   def caveats

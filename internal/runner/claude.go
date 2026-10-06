@@ -210,7 +210,7 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 			}
 		case "permission_denied":
 			var why string
-			json.Unmarshal(l.Message, &why)
+			_ = json.Unmarshal(l.Message, &why) // no reason given: why stays empty
 			return p.deny(l.ToolUseID, l.ToolName, "", why)
 		}
 	case "rate_limit_event":

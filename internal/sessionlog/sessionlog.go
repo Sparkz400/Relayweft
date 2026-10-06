@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
@@ -80,10 +81,41 @@ type Record struct {
 	Passed     *bool             `json:"passed,omitempty"`
 	Quota      *event.QuotaInfo  `json:"quota,omitempty"` // quota
 	Until      *time.Time        `json:"until,omitempty"` // limit: limited until (the reset time when known)
+
+	// Unavailable says whether a limit record (and its agent_end) was no
+	// usage limit: the CLI was logged out or missing, and rw routed around
+	// it the same way. Always set on those records, so nil means a log from
+	// before the field (see IsUnavailable).
+	Unavailable *bool `json:"unavailable,omitempty"`
 }
 
 // Bool returns a pointer for Record.OK.
 func Bool(b bool) *bool { return &b }
+
+// reUnavailable matches CLI errors that mean "not logged in" or "not
+// installed".
+var reUnavailable = regexp.MustCompile(`(?i)(not logged in|please (log|sign) ?in|log ?in required|unauthori[sz]ed|\b401\b|authentication (failed|required)|token (has )?expired|codex login|not found on PATH)`)
+
+// UnavailableError reports whether an agent's error means its CLI is
+// logged out or missing: rw routes around it like a provider at its limit.
+func UnavailableError(msg string) bool { return reUnavailable.MatchString(msg) }
+
+// IsUnavailable reports whether a limit record, or an agent_end with a
+// limit hit, was a logged-out or missing CLI rather than a usage limit.
+// Logs written before Record.Unavailable (sy, rw 0.3) are told by the
+// error text.
+func IsUnavailable(r Record) bool {
+	if r.Unavailable != nil {
+		return *r.Unavailable
+	}
+	switch {
+	case r.Type == TypeLimit:
+		return UnavailableError(r.Text)
+	case r.Type == TypeAgentEnd && r.LimitHit:
+		return UnavailableError(r.Error)
+	}
+	return false
+}
 
 // Writer appends records to one session file. A nil *Writer discards.
 type Writer struct {
@@ -157,7 +189,7 @@ func (w *Writer) Write(r Record) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.f.Write(append(b, '\n'))
+	_, _ = w.f.Write(append(b, '\n')) // a failed log write has nowhere to go
 }
 
 // Close closes the file.

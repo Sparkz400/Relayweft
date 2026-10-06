@@ -10,7 +10,9 @@ rw web        # the same engine in your browser (rw app: in its own window)
 rw --demo     # see the whole thing animate with fake agents (no CLIs, no quota)
 ```
 
-![rw web: agent tree and live activity](docs/web/running.png)
+![rw: plan approval with an edit, two agents in parallel, change review of one hunk, done with the cost, then rw undo](docs/demo/demo.gif)
+
+The real `rw`, with scripted agents ([how it is made](docs/demo/demo.tape)). **Documentation: <https://sparkz400.github.io/Relayweft/>**
 
 Out of the box Relayweft uses **subscriptions only**: it drives the official `codex` and `claude` CLIs exactly as you would, with their normal login, and never touches model API keys (only the optional GitHub features use a GitHub token). The [extra providers](docs/providers.md) are opt-in; one that needs an API key (DeepSeek) reads it from your environment, and rw never stores it or puts it on a command line.
 
@@ -29,7 +31,7 @@ Out of the box Relayweft uses **subscriptions only**: it drives the official `co
 3. **Install Relayweft**, one of:
    - Download `rw-windows-amd64.exe` from the [latest release](https://github.com/sparkz400/relayweft/releases/latest), rename it to `rw.exe` and put it on your PATH. Later, `rw update` replaces it with the newest release (checksum-verified).
    - Scoop: `scoop install https://raw.githubusercontent.com/sparkz400/relayweft/main/packaging/scoop/rw.json`. winget follows once the package is accepted into winget-pkgs; see `packaging/README.md`.
-   - macOS and Linux: `brew tap sparkz400/relayweft https://github.com/Sparkz400/Relayweft && brew install relayweft`. From v0.3.0 each release also has `relayweft-linux-amd64.deb`, `.rpm` and `.apk` (`sudo apt install ./relayweft-linux-amd64.deb`, `sudo dnf install ./relayweft-linux-amd64.rpm`), and `packaging/aur` has the PKGBUILD of the AUR package `relayweft-bin` (not yet published). `rw update` tells you to use the package manager that installed `rw`.
+   - macOS and Linux: `brew tap sparkz400/relayweft https://github.com/Sparkz400/Relayweft && brew install relayweft`. From v0.3.0 each release also has `relayweft-linux-amd64.deb`, `.rpm` and `.apk` (`sudo apt install ./relayweft-linux-amd64.deb`, `sudo dnf install ./relayweft-linux-amd64.rpm`). Once its signing keys are set up, the project site also has apt, dnf and apk repositories (one-time setup in `packaging/README.md`), and `packaging/aur` has the PKGBUILD of the AUR package `relayweft-bin` (not yet published). `rw update` tells you to use the package manager that installed `rw`.
    - From source with **Go 1.24+**:
      ```powershell
      git clone https://github.com/sparkz400/relayweft
@@ -215,6 +217,7 @@ rw tune [--here] [--since 7d]         routing suggestions from your own logs, as
 rw tune --apply | --learned | --reset   update, show or forget this repo's learned routes
 rw update [--check] [--yes]           update rw to the latest GitHub release (checksum-verified)
 rw web / rw app [--port N] [--demo]   the browser UI / the same in its own window
+rw mcp [--dir <path>]                 an MCP server: Claude Code or Codex hand tasks to rw (docs/mcp.md)
 rw init --repo                        write this repo's .relayweft.yaml (shared settings)
 rw trust [--revoke]                   review and trust the commands in this repo's .relayweft.yaml (and ./relayweft.yaml)
 rw undo [--list] [--redo] [--yes] [task]   revert a task's changes (preview first), or put them back
@@ -231,9 +234,24 @@ rw selftest [--onedrive] [--keep]    automated Windows checks with a scripted ag
 rw health [--days 14] [--check]       crashes, hangs, unclean exits, load peaks and leftovers; is "2 weeks clean" met?
 rw init [--global] [--force] [--print]
 rw clean [--dir <path>] [--idle 72h]  remove this repo's pooled worktrees (or every repo's idle ones)
+rw completion bash|zsh|fish|powershell   Tab completion for your shell (see below)
 ```
 
 `rw run` exits 1 when the task fails, so it is scriptable. With `--pr`, a task that ends without its pull request (the push or the PR failed) counts as failed too, so a CI job goes red.
+
+### Tab completion
+
+`rw completion <shell>` prints a script that makes Tab complete subcommands, flags, provider names, models (`--route worker=claude:<Tab>`) and task ids (`rw resume <Tab>`, `rw undo <Tab>`). It reads only your config and task history: no agent, no git, no network. Install it once:
+
+- **PowerShell** (Windows PowerShell 5.1 and PowerShell 7; also for Scoop and winget installs): add this line to your profile (`notepad $PROFILE`):
+  ```powershell
+  rw completion powershell | Out-String | Invoke-Expression
+  ```
+- **bash**: `echo 'source <(rw completion bash)' >> ~/.bashrc` (Git Bash too)
+- **zsh**: `rw completion zsh > "${fpath[1]}/_rw"`, then open a new shell
+- **fish**: `rw completion fish > ~/.config/fish/completions/rw.fish`
+
+The `.deb`, `.rpm` and `.apk` packages and Homebrew install the bash, zsh and fish scripts for you.
 
 ### Undo: try anything, risk-free
 
@@ -246,7 +264,7 @@ Every task in a git repo records the working tree before and after it ran. The s
 
 ### GitHub, GitLab and Gitea: issues in, PRs out
 
-- Everything below works on **GitHub** (and GitHub Enterprise), **GitLab** (gitlab.com and self-managed; there a PR is a merge request, `!12`) and **Gitea or Forgejo** (Codeberg and self-hosted). The host of your `origin` remote picks the forge: github.com, gitlab.com and codeberg.org are known. For a self-hosted one, set `GH_HOST`, `GITLAB_HOST` or `GITEA_HOST` (also `FORGEJO_HOST`) to its host name, or to its URL when it uses another port, plain http or a path prefix (`GITEA_HOST=http://git.lan:3000`, `GITLAB_HOST=https://example.com/gitlab`; `host:3000` without a scheme drops the port); `GITLAB_HOST` and `GITEA_HOST` take a comma-separated list. In a Forgejo or Gitea Actions job, the job's own server counts as named in `GITEA_HOST`. Plain http is used only for a host named this way or a localhost remote, so a token never travels unencrypted by default. `--api` overrides the API URL (`https://<host>/api/v3` GitHub Enterprise, `/api/v4` GitLab, `/api/v1` Gitea) and also marks the remote's host as that forge.
+- Everything below works on **GitHub** (and GitHub Enterprise), **GitLab** (gitlab.com and self-managed; there a PR is a merge request, `!12`) and **Gitea or Forgejo** (Codeberg and self-hosted), and on **Bitbucket Cloud** (bitbucket.org; token, scopes and what maps to what in [docs/bitbucket.md](docs/bitbucket.md)). The host of your `origin` remote picks the forge: github.com, gitlab.com, codeberg.org and bitbucket.org are known. For a self-hosted one, set `GH_HOST`, `GITLAB_HOST` or `GITEA_HOST` (also `FORGEJO_HOST`) to its host name, or to its URL when it uses another port, plain http or a path prefix (`GITEA_HOST=http://git.lan:3000`, `GITLAB_HOST=https://example.com/gitlab`; `host:3000` without a scheme drops the port); `GITLAB_HOST` and `GITEA_HOST` take a comma-separated list. In a Forgejo or Gitea Actions job, the job's own server counts as named in `GITEA_HOST`. Plain http is used only for a host named this way or a localhost remote, so a token never travels unencrypted by default. `--api` overrides the API URL (`https://<host>/api/v3` GitHub Enterprise, `/api/v4` GitLab, `/api/v1` Gitea) and also marks the remote's host as that forge.
 - `rw pr` turns the last finished task (or `rw pr <task>` from `rw history`) into a pull request. The commit holds exactly the task's changes (its undo snapshots), so edits you made before the task stay out. It is built on top of `HEAD` on a temporary index: your index, working tree and current branch are not touched. If the changes no longer apply cleanly to `HEAD`, nothing is created.
 - It creates the branch `rw/<task>` (or `--branch`; an existing branch is never overwritten), runs `git push -u origin <branch>` with your own git credentials (never forced) and opens the PR through the GitHub API. The body has the task, the plan with each step's role and result, checks, cost and the undo key. A task that did not finish ok is marked and opened as a draft. You see a preview first (`--yes` skips it); `--no-push` only creates the local branch.
 - The token comes from `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`. Without one, rw writes the PR text to a file and prints the compare URL to open it in the browser. GitHub Enterprise: set `GH_HOST` (or `--api https://<host>/api/v3`); the token then comes from `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` or `gh auth token --hostname <host>`, never from the github.com variables.
@@ -262,7 +280,7 @@ Every task in a git repo records the working tree before and after it ran. The s
 
 - **`rw watch`** follows up on the pull requests `rw pr` opened (also from `--issue(s) --pr`). For each one it looks at failed checks on the current head and at review comments and "changes requested" reviews from the repository's owner, members and collaborators (not you, not bots). New items get one follow-up task on the PR's branch, in a separate checkout under rw's cache folder: your working tree, index and branches are not touched. The result is pushed to the PR branch (never forced; refused if the branch moved in the meantime, and then the items stay new for the next pass) and rw replies once on the PR. Each item runs once; `watch.max_rounds` (default 3, 0 = report only) caps the rounds per PR, and merged or closed PRs are dropped.
   - `rw watch` makes one pass; `rw watch --every 15m` keeps going, unattended (a budget limit stops it), and keeps the PC awake. Combine with `rw schedule` for a cron or Task Scheduler line.
-  - CI logs and comments reach the agents only as fenced, untrusted text, and the unattended rule of `rw pr` applies: nothing is pushed if a file changed that no agent reported changing, or if the change touches CI or forge settings (`.github/`, `.gitlab-ci.yml`, `.gitlab/`, `.gitea/`, `.forgejo/`, `.woodpecker`, `.drone.yml`).
+  - CI logs and comments reach the agents only as fenced, untrusted text, and the unattended rule of `rw pr` applies: nothing is pushed if a file changed that no agent reported changing, or if the change touches CI or forge settings (`.github/`, `.gitlab-ci.yml`, `.gitlab/`, `.gitea/`, `.forgejo/`, `.woodpecker`, `.drone.yml`, `bitbucket-pipelines.yml`).
   - **GitLab:** the checks are the failed jobs of the newest pipeline (per ref) on the head commit, with each job's log tail; jobs allowed to fail are skipped. The comments are unresolved diff comments by members with at least Developer access (not project or group token bots). GitLab's API has no "request changes" review state, so resolve-or-comment on the diff is what counts. The reply is a note on the merge request.
   - **Gitea and Forgejo:** the checks are failed commit statuses (with their link; Gitea serves no job logs), plus reviews requesting changes and unresolved review comments by people with write access (or, when your token may not read permissions, collaborators and members of the owning organization). The Actions bot never counts.
   - `rw watch --list` shows the watched PRs; `--forget <n>` stops watching one (`group/project!n` for GitLab). It needs a token (see above).
@@ -517,7 +535,7 @@ The server listens on 127.0.0.1 only. Each link `rw` prints or opens works once,
 
 ## Configuration
 
-`rw` looks for `./relayweft.yaml`, then `<user config dir>/relayweft/relayweft.yaml`, then falls back to the built-in default (the file in this repo). Partial files work: anything you leave out keeps its default. See [`relayweft.yaml`](relayweft.yaml) for every option with comments.
+`rw` looks for `./relayweft.yaml`, then `<user config dir>/relayweft/relayweft.yaml`, then falls back to the built-in default (the file in this repo). Partial files work: anything you leave out keeps its default. **[docs/config.md](docs/config.md) lists every key** with its type, default, what it does and whether a repo file needs `rw trust` for it; [`relayweft.yaml`](relayweft.yaml) (or `rw init --print`) is the commented default file.
 
 A `./relayweft.yaml` may have come with a repository you cloned, so the settings in it that run commands or send data (the same list as for a repo file below: `verify`, `hooks`, `providers`, ...) apply only once trusted. Until then, `rw` uses your own config's (or the defaults) and says which it ignored. Files `rw` writes itself (`rw init`, `/save`, the model picker, `rw models --refresh`, settings saved in `rw web`) are trusted for you; after editing those settings by hand, run `rw trust`. Only what the file sets for them is trusted, so editing its routes or toggles needs no new `rw trust`. `--config <file>` and your user config always apply in full.
 
@@ -526,7 +544,7 @@ A `./relayweft.yaml` may have come with a repository you cloned, so the settings
 A `.relayweft.yaml` in a repository holds the settings for that repo (in the repo root, or in the project folder). It is layered over your own config: built-in defaults < your config < the repo file < command-line flags. It only needs what the repo cares about; roles merge per key, so `roles: {worker: {prefer: claude}}` keeps the worker's routes.
 
 - Create one with `rw init --repo`, which detects the test commands, or with `/save repo` from the TUI. Commit it to share.
-- **Commands need your trust.** The parts that run commands or reach other folders are ignored until you have reviewed them with `rw trust`: `verify`, `hooks`, `providers`, `log_dir`, `mcp`, `workspace`, `budget.team.dir` and `notify.webhooks` (they say where your task results are sent). A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `rw trust`. `rw trust --revoke` withdraws it. Routes, preferences and toggles always apply, except those that name a provider the untrusted file adds (`providers` covers `kind: generic` descriptions and `env` too).
+- **Commands need your trust.** The parts that run commands, reach other folders or send data somewhere (`verify`, `hooks`, `providers`, `mcp`, `workspace`, `notify.webhooks`, ...; the "In a repo file" column of [docs/config.md](docs/config.md) has each key) are ignored until you have reviewed them with `rw trust`. A repo file's `budget` can only tighten yours. A repo file comes from whoever pushed to the repo, so this works like direnv: any change to the file needs a new `rw trust`. `rw trust --revoke` withdraws it. Routes, preferences and toggles always apply, except those that name a provider the untrusted file adds (`providers` covers `kind: generic` descriptions and `env` too).
 
 ### The repo's own conventions
 
@@ -543,7 +561,7 @@ They run in the project folder through the system shell. They get `RW_TASK`, `RW
 
 ### MCP servers
 
-Give the agents [MCP](https://modelcontextprotocol.io) servers (docs search, a database, an issue tracker...) on both CLIs:
+Give the agents [MCP](https://modelcontextprotocol.io) servers (docs search, a database, an issue tracker...) on both CLIs. (The other way round, Claude Code or Codex handing tasks to rw through `rw mcp`, is in [docs/mcp.md](docs/mcp.md).)
 
 ```yaml
 mcp:
@@ -595,10 +613,13 @@ Each repo must be a git work tree of its own: not the primary's repo, not inside
 
 ## Development
 
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and send a change. [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
+
 ```
 go test -race ./...          # unit + integration tests (real git repos, fake CLIs)
 go vet ./...
 GOOS=windows go build ./cmd/rw
+go generate ./internal/config   # after changing the config: rewrites docs/config.md (a test fails until you do)
 ```
 
 ```
@@ -616,4 +637,4 @@ internal/proc/          process-tree kill (Unix process groups, Windows taskkill
 internal/tui/           Bubble Tea model, views, model picker, commands
 ```
 
-See [plan.md](plan.md) for the original design and [ROADMAP.md](ROADMAP.md) for what comes next.
+See [docs/plan.md](docs/plan.md) for the original design and [ROADMAP.md](ROADMAP.md) for what comes next.

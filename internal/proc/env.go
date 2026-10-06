@@ -25,6 +25,8 @@ var childSecrets = []string{
 	"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN",
 	// Gitea / Forgejo
 	"GITEA_TOKEN", "FORGEJO_TOKEN",
+	// Bitbucket, and Bitbucket Pipelines' OpenID Connect token
+	"BITBUCKET_TOKEN", "BITBUCKET_STEP_OIDC_TOKEN",
 	// GitHub Actions runner tokens; Forgejo and Gitea runners set the same
 	// ones, plus GITHUB_TOKEN and FORGEJO_TOKEN (GITEA_TOKEN) to the job's
 	// token. A registration token lets anyone register a runner and take

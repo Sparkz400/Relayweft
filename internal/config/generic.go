@@ -57,20 +57,22 @@ type GenericCfg struct {
 
 // UsagePatterns find token counts in a text CLI's output.
 type UsagePatterns struct {
-	Input  string `yaml:"input,omitempty"`
-	Cached string `yaml:"cached,omitempty"`
-	Output string `yaml:"output,omitempty"`
+	Input  string `yaml:"input,omitempty"`  // input tokens
+	Cached string `yaml:"cached,omitempty"` // cached input tokens
+	Output string `yaml:"output,omitempty"` // output tokens
 }
 
 // JSONRule reads one kind of output line. A rule applies when every Match
 // path has its value ("*" = present); every rule that matches applies. A
 // path is dot-separated keys and array indexes (message.content.0.text).
 type JSONRule struct {
+	// Match: the rule applies to a line where every path has this value
+	// ("*" = present).
 	Match map[string]string `yaml:"match,omitempty"`
-	// Each applies Rules to every element of the array at this path
+	// Each applies rules to every element of the array at this path
 	// (Claude-style content blocks).
 	Each  string     `yaml:"each,omitempty"`
-	Rules []JSONRule `yaml:"rules,omitempty"`
+	Rules []JSONRule `yaml:"rules,omitempty"` // the rules for each element
 
 	Session  string `yaml:"session,omitempty"`  // the session id
 	Text     string `yaml:"text,omitempty"`     // assistant text
@@ -82,16 +84,16 @@ type JSONRule struct {
 	// command... is shown, and is the edited file for edit_tools.
 	ToolInput string `yaml:"tool_input,omitempty"`
 	// Error is an error message. It fails the run when the run ends
-	// without an answer, or always with Fatal.
+	// without an answer, or always with fatal.
 	Error string `yaml:"error,omitempty"`
-	Fatal bool   `yaml:"fatal,omitempty"`
+	Fatal bool   `yaml:"fatal,omitempty"` // the error fails the run
 	// Limit: a matching line means the usage limit was hit (the error text,
 	// if any, may say when it resets).
 	Limit bool `yaml:"limit,omitempty"`
 
-	InputTokens  string `yaml:"input_tokens,omitempty"`
-	CachedTokens string `yaml:"cached_tokens,omitempty"`
-	OutputTokens string `yaml:"output_tokens,omitempty"`
+	InputTokens  string `yaml:"input_tokens,omitempty"`  // the path of the input token count
+	CachedTokens string `yaml:"cached_tokens,omitempty"` // the path of the cached input token count
+	OutputTokens string `yaml:"output_tokens,omitempty"` // the path of the output token count
 }
 
 // Generic output formats.

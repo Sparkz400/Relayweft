@@ -100,8 +100,8 @@ func cmdReview(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage: rw review <PR number|URL> [--provider <name>] [--post] [--yes]
 
-Has one agent review a pull request (GitHub, a GitLab merge request or
-Gitea/Forgejo) read-only and prints its findings
+Has one agent review a pull request (GitHub, a GitLab merge request,
+Gitea/Forgejo or Bitbucket Cloud) read-only and prints its findings
 (file, line, severity). By default the reviewer is the provider that did not
 write the change, when rw opened the pull request; otherwise the reviewer
 role as configured. --post publishes them as one comment review (never an
@@ -112,8 +112,8 @@ rest into the review text. The review is shown before it is posted.
 	}
 	var ref string
 	rest := args
-	for len(rest) > 0 {
-		fs.Parse(rest)
+	for { // parse at least once, also without arguments
+		parseFlags(fs, rest)
 		if fs.NArg() == 0 {
 			break
 		}

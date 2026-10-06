@@ -30,7 +30,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		data, _ := fs.ReadFile(static, "index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(data)
+		_, _ = w.Write(data)
 	})
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(static))))
 
@@ -97,13 +97,13 @@ func (s *Server) Handler() http.Handler {
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v) // a write error: the client went away
 }
 
 func fail(w http.ResponseWriter, code int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) // a write error: the client went away
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -134,7 +134,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.hub.unsubscribe(c)
 	// The stream is long-lived: no read deadline for it.
-	http.NewResponseController(w).SetReadDeadline(time.Time{})
+	_ = http.NewResponseController(w).SetReadDeadline(time.Time{}) // fails only for a writer without deadlines (a test recorder)
 	var buf bytes.Buffer
 	buf.WriteString("retry: 1500\n\n")
 	buf.Write(frame("state", s.snapshot()))

@@ -36,7 +36,7 @@ and the webhooks in notify.webhooks (Slack, Discord, ntfy or plain JSON).
 `)
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}

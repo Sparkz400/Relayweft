@@ -23,6 +23,7 @@ type rest struct {
 	http     *http.Client
 	notes    io.Writer
 	rejected bool
+	keep     bool // a 401 answers the request; it does not drop the token
 }
 
 func newRest(kind Kind, base, token, scheme string, notes io.Writer) *rest {
@@ -171,7 +172,7 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s %s: %w", c.name(), method, path, err)
 	}
-	if resp.StatusCode == http.StatusUnauthorized && authed && method == http.MethodGet {
+	if resp.StatusCode == http.StatusUnauthorized && authed && method == http.MethodGet && !c.keep {
 		resp.Body.Close()
 		c.note("note: " + c.name() + " rejected the token (401); continuing without it")
 		c.rejected = true
@@ -197,6 +198,9 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 			}
 		case http.StatusForbidden:
 			ae.Hint = "The token may lack the needed permission (api scope on GitLab; repository and issue write on Gitea)"
+			if c.kind == Bitbucket {
+				ae.Hint = "The token may lack a scope this needs (docs/bitbucket.md lists them)"
+			}
 		}
 		return nil, ae
 	}
@@ -205,11 +209,12 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 
 // restMessage reads an error body: GitLab's {"message": "..."},
 // {"message": {"field": ["..."]}} or {"error": "..."}, Gitea's
-// {"message": "...", "errors": [...]}.
+// {"message": "...", "errors": [...]}, Bitbucket's {"error": {"message":
+// "...", "detail": "..."}}.
 func restMessage(data []byte) string {
 	var e struct {
 		Message json.RawMessage `json:"message"`
-		Error   string          `json:"error"`
+		Error   json.RawMessage `json:"error"`
 		Errors  []string        `json:"errors"`
 	}
 	if json.Unmarshal(data, &e) != nil {
@@ -234,8 +239,30 @@ func restMessage(data []byte) string {
 			parts = append(parts, k+" "+strings.Join(fields[k], ", "))
 		}
 	}
-	if e.Error != "" {
-		parts = append(parts, e.Error)
+	var bb struct {
+		Message string                     `json:"message"`
+		Detail  json.RawMessage            `json:"detail"`
+		Fields  map[string]json.RawMessage `json:"fields"`
+	}
+	switch {
+	case json.Unmarshal(e.Error, &s) == nil:
+		parts = append(parts, s)
+	case json.Unmarshal(e.Error, &bb) == nil:
+		parts = append(parts, bb.Message)
+		var d string
+		if json.Unmarshal(bb.Detail, &d) == nil {
+			parts = append(parts, d)
+		} else if len(bb.Detail) > 0 && string(bb.Detail) != "null" {
+			parts = append(parts, string(bb.Detail))
+		}
+		keys := make([]string, 0, len(bb.Fields))
+		for k := range bb.Fields {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			parts = append(parts, k+" "+strings.Trim(string(bb.Fields[k]), `[]"`))
+		}
 	}
 	parts = append(parts, e.Errors...)
 	var out []string

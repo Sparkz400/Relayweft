@@ -121,7 +121,7 @@ func runWeb(name string, args []string, app bool) error {
 	if !app {
 		fs.BoolVar(&client, "client", false, "editor client mode: no browser; print one JSON hello line (address, bootstrap) on stdout, stop when stdin closes")
 	}
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q (type tasks in the page)", fs.Arg(0))
 	}

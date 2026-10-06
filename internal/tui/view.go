@@ -624,7 +624,8 @@ func easeInOut(t float64) float64 {
 	if t < 0.5 {
 		return 2 * t * t
 	}
-	return 1 - math.Pow(-2*t+2, 2)/2
+	u := -2*t + 2
+	return 1 - u*u/2
 }
 
 func (m *Model) viewMain(cw int) string {

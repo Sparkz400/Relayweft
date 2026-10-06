@@ -120,7 +120,7 @@ func cmdBench(args []string) error {
 	fs.BoolVar(&ho.hidden, "hidden-tests", false, "--from-history: keep the commit's tests from the agents until the check (default: in place from the start)")
 	fs.BoolVar(&ho.noValidate, "no-validate", false, "--from-history: skip running the check on each commit and its parent")
 	fs.DurationVar(&ho.timeout, "check-timeout", 15*time.Minute, "--from-history: time limit per validation check")
-	fs.Parse(args)
+	parseFlags(fs, args)
 
 	if *starter != "" {
 		if py := starterPython(); !onPath(py) {

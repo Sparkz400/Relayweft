@@ -261,7 +261,7 @@ func removeContainer(bin, name string) {
 	cmd := exec.CommandContext(ctx, bin, "rm", "-f", name)
 	proc.Background(cmd)
 	cmd.Env = proc.WithoutSecrets(os.Environ())
-	cmd.Run() // "No such container" when --rm was first
+	_ = cmd.Run() // "No such container" when --rm was first
 }
 
 // kill stops the container at once (cancel, timeout).
@@ -428,7 +428,7 @@ func mountArg(m Mount) string {
 	}
 	var b strings.Builder
 	w := csv.NewWriter(&b)
-	w.Write(fields)
+	_ = w.Write(fields) // a strings.Builder does not fail
 	w.Flush()
 	return strings.TrimRight(b.String(), "\r\n")
 }
@@ -634,7 +634,7 @@ func safeGitConfig(gitDir, runDir string) (string, error) {
 // them in the container, under root (the folder's place there).
 func moreConfigs(common, root, runDir string) ([]Mount, error) {
 	var found []string
-	filepath.WalkDir(filepath.Join(common, "modules"), func(p string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(filepath.Join(common, "modules"), func(p string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
 			return nil

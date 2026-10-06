@@ -31,7 +31,7 @@ func cmdTune(args []string) error {
 	learned := fs.Bool("learned", false, "show this repo's learned routes and their evidence")
 	reset := fs.Bool("reset", false, "forget this repo's learned routes")
 	dirFlag := fs.String("dir", "", "project directory (default current directory)")
-	fs.Parse(args)
+	parseFlags(fs, args)
 	if n := countTrue(*apply, *learned, *reset); n > 1 {
 		return errors.New("give one of --apply, --learned or --reset")
 	}

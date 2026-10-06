@@ -1,60 +1,138 @@
 name: release
 
-# Builds rw for every supported platform, the Linux packages, and publishes
-# a GitHub release. Asset names are a contract: `rw update`, the scoop,
-# winget, Homebrew and AUR manifests and the CI install scripts all look
-# them up by name. Add new assets, never rename existing ones, and list
-# every asset in checksums.txt (packaging/README.md has the table).
+# Builds rw for every supported platform, the Linux packages and an SBOM
+# per binary, attests and signs them, and publishes a GitHub release.
+# Asset names are a contract: `rw update`, the scoop, winget, Homebrew and
+# AUR manifests and the CI install scripts all look them up by name. Add
+# new assets, never rename existing ones, and list every asset in
+# checksums.txt (packaging/README.md has the table; the signature bundle
+# of checksums.txt is the one asset that cannot be in it).
+#
+# Jobs, each with only the permissions it needs:
+#   build       contents: read. Tests, binaries, packages, SBOMs,
+#               checksums.txt. It runs the repo's code, so it gets no
+#               OIDC token and cannot write anything. Its "linux
+#               packages" step gets the package signing keys (secrets),
+#               except in a pull request's run.
+#   attest      id-token + attestations: write. Build provenance for every
+#               asset, a keyless cosign signature of checksums.txt, and
+#               checks both before anything is published.
+#   attest-sbom the same permissions; one SBOM attestation per binary.
+#   publish     contents: write. Creates the tag and the release, then
+#               starts pages.yml (actions: write) for the package repositories.
+#
+# Runs:
+#   - a v* tag, or Run workflow on main: the full release.
+#   - Run workflow with "dry run": everything but publishing, on any branch.
+#     The attestations and the signature are real (Sigstore's public
+#     transparency log has them), for binaries nobody downloads.
+#   - a pull request that changes the release: build, SBOMs and checksums,
+#     and cosign signs and verifies with a throwaway key and no
+#     transparency log ("test" job). No OIDC token, no attestations.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release, e.g. 1.2.3 (the tag v1.2.3 is created on the selected ref)"
+        description: "Version to release, e.g. 1.2.3 (the tag v1.2.3 is created on the selected ref, which must be main unless this is a dry run)"
         required: true
+      dry_run:
+        description: "Dry run: build, attest, sign and verify, but create no tag and no release"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "packaging/linux-packages.sh"
+      - "packaging/nfpm.yaml"
+      - "packaging/sbom.sh"
+      - "packaging/verify-packages.sh"
 
-permissions:
-  contents: write
+permissions: {}
+
+env:
+  # The identity in the Sigstore certificate of a published release:
+  # this workflow, run from a v* tag or from main. packaging/README.md
+  # documents the same expression for `cosign verify-blob`.
+  RELEASE_IDENTITY_REGEXP: '^https://github\.com/Sparkz400/Relayweft/\.github/workflows/release\.yml@refs/(tags/v[0-9][^/]*|heads/main)$'
+  OIDC_ISSUER: https://token.actions.githubusercontent.com
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      mode: ${{ steps.v.outputs.mode }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Nothing here pushes with git (gh creates the release and tag),
-          # so the write token stays out of .git/config, out of reach of
-          # the tests and nfpm.
+          # so the token stays out of .git/config, out of reach of the
+          # tests and nfpm.
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # No module or build cache: a release is built from nothing that
+          # another workflow could have left behind.
+          cache: false
 
-      - name: resolve version
+      - name: resolve version and mode
         id: v
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            raw="$INPUT_VERSION"
-          else
-            raw="$GITHUB_REF_NAME"
-          fi
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              raw="0.0.0-pr.$PR_NUMBER"
+              mode=test
+              ;;
+            workflow_dispatch)
+              raw="$INPUT_VERSION"
+              mode=publish
+              if [ "$INPUT_DRY_RUN" = "true" ]; then mode=dry-run; fi
+              ;;
+            *)
+              raw="$GITHUB_REF_NAME"
+              mode=publish
+              ;;
+          esac
           version="${raw#v}"
           if ! printf '%s' "$version" | grep -Eq '^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$'; then
             echo "::error::'$raw' is not a version like 1.2.3"
             exit 1
           fi
+          # A published release is signed by this workflow on a v* tag or
+          # on main; that is the identity users check (RELEASE_IDENTITY_REGEXP).
+          if [ "$mode" = publish ]; then
+            case "$GITHUB_REF" in
+              refs/tags/v*|refs/heads/main) ;;
+              *)
+                echo "::error::releases are published only from a v* tag or from main, not $GITHUB_REF; tick \"dry run\" to test a branch"
+                exit 1
+                ;;
+            esac
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "version $version, mode $mode"
 
       - name: git identity for tests
+        if: steps.v.outputs.mode != 'test'
         run: |
           git config --global user.name ci
           git config --global user.email ci@example.com
 
+      # The ci workflow tests pull requests already.
       - name: test
+        if: steps.v.outputs.mode != 'test'
         run: go test ./...
 
       - name: build
@@ -76,9 +154,50 @@ jobs:
       - name: linux packages
         env:
           VERSION: ${{ steps.v.outputs.version }}
+          # The package signing keys (packaging/README.md, "Signing keys"),
+          # never in a pull request's run. Without them the packages are
+          # unsigned, with a notice. Once packaging/keys/ has the public
+          # keys, publishing this repository's release without them fails.
+          PACKAGE_GPG_KEY: ${{ steps.v.outputs.mode != 'test' && secrets.PACKAGE_GPG_KEY || '' }}
+          PACKAGE_APK_KEY: ${{ steps.v.outputs.mode != 'test' && secrets.PACKAGE_APK_KEY || '' }}
+          PACKAGE_SIGNING_REQUIRED: ${{ github.repository == 'Sparkz400/Relayweft' && steps.v.outputs.mode == 'publish' }}
         # .deb, .rpm and .apk for amd64 and arm64, built with a pinned and
-        # checksum-verified nfpm.
-        run: sh packaging/linux-packages.sh "$VERSION" dist
+        # checksum-verified nfpm, then signed and each signature checked
+        # (rpmkeys checks the .rpm ones). With the keys it also writes
+        # relayweft-signing-key.asc and relayweft-apk.rsa.pub.
+        run: |
+          if [ -n "$PACKAGE_GPG_KEY" ] && ! command -v rpmkeys >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends rpm >/dev/null
+          fi
+          sh packaging/linux-packages.sh "$VERSION" dist
+
+      - name: SBOMs
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        # rw-<os>-<arch>.cdx.json for each binary, with a pinned and
+        # checksum-verified cyclonedx-gomod.
+        run: |
+          sh packaging/sbom.sh "$VERSION" dist
+          # Each SBOM must describe its binary: the same SHA-256, target
+          # and version.
+          for sbom in dist/rw-*.cdx.json; do
+            target="${sbom#dist/rw-}"
+            target="${target%.cdx.json}"
+            bin="dist/rw-$target"
+            [ -f "$bin" ] || bin="$bin.exe"
+            want="$(sha256sum "$bin" | cut -d' ' -f1)"
+            jq -e --arg sha "$want" --arg os "${target%-*}" --arg arch "${target#*-}" --arg v "v$VERSION" '
+              .bomFormat == "CycloneDX"
+              and .metadata.component.version == $v
+              and (.metadata.component.purl | contains("goarch=" + $arch) and contains("goos=" + $os))
+              and ([.metadata.properties[] | select(.name == "cdx:gomod:binary:hash:SHA-256") | .value] == [$sha])
+              and ([.metadata.properties[] | select(.name == "cdx:gomod:build:env:GOOS") | .value] == [$os])
+              and ([.metadata.properties[] | select(.name == "cdx:gomod:build:env:GOARCH") | .value] == [$arch])
+              and ([.components[] | select(.name == "std")] | length == 1)
+            ' "$sbom" > /dev/null || { echo "::error::$sbom does not describe $bin"; exit 1; }
+            echo "$sbom: $(jq '.components | length' "$sbom") components"
+          done
 
       - name: checksums
         run: |
@@ -86,10 +205,226 @@ jobs:
           sha256sum rw-* relayweft-* > checksums.txt
           cat checksums.txt
 
+      - name: check the assets
+        # Every name in the contract (packaging/README.md) is there, every
+        # file is in checksums.txt, and every hash matches.
+        run: |
+          cd dist
+          for a in \
+            rw-windows-amd64.exe rw-windows-arm64.exe rw-linux-amd64 rw-linux-arm64 rw-darwin-amd64 rw-darwin-arm64 \
+            relayweft-linux-amd64.deb relayweft-linux-arm64.deb relayweft-linux-amd64.rpm relayweft-linux-arm64.rpm \
+            relayweft-linux-amd64.apk relayweft-linux-arm64.apk \
+            rw-windows-amd64.cdx.json rw-windows-arm64.cdx.json rw-linux-amd64.cdx.json rw-linux-arm64.cdx.json \
+            rw-darwin-amd64.cdx.json rw-darwin-arm64.cdx.json \
+            checksums.txt; do
+            [ -f "$a" ] || { echo "::error::missing release asset $a"; exit 1; }
+          done
+          for f in *; do
+            [ "$f" = checksums.txt ] && continue
+            awk -v n="$f" '$2 == n { found = 1 } END { exit !found }' checksums.txt \
+              || { echo "::error::$f is not in checksums.txt"; exit 1; }
+          done
+          sha256sum -c checksums.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Pull requests: cosign signs checksums.txt with a throwaway key and no
+  # transparency log, then checks that the bundle verifies and that a
+  # changed checksums.txt does not. Keyless signing and the attestations
+  # need the OIDC token, which pull requests do not get here; a dry run
+  # tests those.
+  test:
+    needs: build
+    if: needs.build.outputs.mode == 'test'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist
+          path: dist
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: sign and verify with a throwaway key
+        env:
+          COSIGN_PASSWORD: ""
+        run: |
+          cd "$RUNNER_TEMP"
+          cosign generate-key-pair --output-key-prefix throwaway
+          # A signing config without a transparency log: nothing leaves
+          # the runner.
+          cosign signing-config create --out no-tlog.json
+          cosign sign-blob --yes --key throwaway.key --signing-config no-tlog.json \
+            --bundle "$GITHUB_WORKSPACE/dist/checksums.txt.sigstore.json" "$GITHUB_WORKSPACE/dist/checksums.txt"
+          cd "$GITHUB_WORKSPACE/dist"
+          jq -e '.mediaType | startswith("application/vnd.dev.sigstore.bundle")' checksums.txt.sigstore.json
+          cosign verify-blob --key "$RUNNER_TEMP/throwaway.pub" --insecure-ignore-tlog=true \
+            --bundle checksums.txt.sigstore.json checksums.txt
+          { cat checksums.txt; echo "0000  extra-file"; } > "$RUNNER_TEMP/tampered.txt"
+          if cosign verify-blob --key "$RUNNER_TEMP/throwaway.pub" --insecure-ignore-tlog=true \
+            --bundle checksums.txt.sigstore.json "$RUNNER_TEMP/tampered.txt"; then
+            echo "::error::a changed checksums.txt verified"
+            exit 1
+          fi
+          echo "the bundle verifies, and a changed checksums.txt does not"
+
+  attest:
+    needs: build
+    if: needs.build.outputs.mode != 'test'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write     # the OIDC token Sigstore's certificate is issued for
+      attestations: write # store the attestations in this repository
+    env:
+      MODE: ${{ needs.build.outputs.mode }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist
+          path: dist
+      - name: check the download
+        run: cd dist && sha256sum -c checksums.txt
+
+      # SLSA build provenance for every asset: binaries, packages, SBOMs
+      # and checksums.txt itself.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: sign checksums.txt (keyless)
+        run: |
+          cosign sign-blob --yes --bundle dist/checksums.txt.sigstore.json dist/checksums.txt
+          echo "certificate identity:"
+          jq -r '.verificationMaterial.certificate.rawBytes' dist/checksums.txt.sigstore.json \
+            | base64 -d | openssl x509 -inform DER -noout -ext subjectAltName
+
+      - name: verify the signature
+        run: |
+          cd dist
+          # This run's own identity.
+          cosign verify-blob --bundle checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" \
+            --certificate-oidc-issuer "$OIDC_ISSUER" checksums.txt
+          # A release must also pass the check packaging/README.md tells
+          # users to run; otherwise it is not published.
+          if [ "$MODE" = publish ]; then
+            cosign verify-blob --bundle checksums.txt.sigstore.json \
+              --certificate-identity-regexp "$RELEASE_IDENTITY_REGEXP" \
+              --certificate-oidc-issuer "$OIDC_ISSUER" checksums.txt
+          fi
+          { cat checksums.txt; echo "0000  extra-file"; } > "$RUNNER_TEMP/tampered.txt"
+          if cosign verify-blob --bundle checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" \
+            --certificate-oidc-issuer "$OIDC_ISSUER" "$RUNNER_TEMP/tampered.txt"; then
+            echo "::error::a changed checksums.txt verified"
+            exit 1
+          fi
+          if cosign verify-blob --bundle checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/Sparkz400/Relayweft/.github/workflows/other.yml@$GITHUB_REF" \
+            --certificate-oidc-issuer "$OIDC_ISSUER" checksums.txt; then
+            echo "::error::the signature verified for another workflow's identity"
+            exit 1
+          fi
+          echo "the signature verifies; a changed file and another identity do not"
+
+      - name: verify the provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in dist/*; do
+            [ "$f" = dist/checksums.txt.sigstore.json ] && continue
+            echo "== $f"
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "$GITHUB_REF" --format json \
+              | jq -r '.[0].verificationResult.signature.certificate.subjectAlternativeName'
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-signature
+          path: dist/checksums.txt.sigstore.json
+          if-no-files-found: error
+          retention-days: 7
+
+  attest-sbom:
+    needs: build
+    if: needs.build.outputs.mode != 'test'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      matrix:
+        include:
+          - { bin: rw-windows-amd64.exe, sbom: rw-windows-amd64.cdx.json }
+          - { bin: rw-windows-arm64.exe, sbom: rw-windows-arm64.cdx.json }
+          - { bin: rw-linux-amd64, sbom: rw-linux-amd64.cdx.json }
+          - { bin: rw-linux-arm64, sbom: rw-linux-arm64.cdx.json }
+          - { bin: rw-darwin-amd64, sbom: rw-darwin-amd64.cdx.json }
+          - { bin: rw-darwin-arm64, sbom: rw-darwin-arm64.cdx.json }
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist
+          path: dist
+      - name: check the download
+        run: cd dist && sha256sum -c checksums.txt
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ matrix.bin }}
+          sbom-path: dist/${{ matrix.sbom }}
+      - name: verify the SBOM attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BIN: ${{ matrix.bin }}
+        run: |
+          gh attestation verify "dist/$BIN" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "$GITHUB_REF" --predicate-type https://cyclonedx.org/bom > /dev/null
+          echo "SBOM attestation of $BIN verified"
+
+  publish:
+    needs: [build, attest, attest-sbom]
+    if: needs.build.outputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write # start pages.yml after the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist
+          path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-signature
+          path: dist
+      - name: check the download
+        run: |
+          cd dist
+          sha256sum -c checksums.txt
+          test -s checksums.txt.sigstore.json
+
       - name: create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.v.outputs.tag }}
+          TAG: ${{ needs.build.outputs.tag }}
         # A tag with a suffix (v1.2.0-rc1) becomes a pre-release, which the
         # releases/latest API (and so `rw update`) skips.
         run: |
@@ -102,3 +437,21 @@ jobs:
             notes=(--notes-file "packaging/release-notes/$TAG.md")
           fi
           gh release create "$TAG" dist/* --generate-notes "${notes[@]}" --target "$GITHUB_SHA" --title "Relayweft $TAG" $pre
+
+      - name: update the package repositories
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        # pages.yml rebuilds the site with the apt, rpm and apk repositories
+        # (packaging/repo/build-pages.sh). A release made with GITHUB_TOKEN
+        # triggers no workflow, so start it here. Pre-releases are not in
+        # the repositories.
+        run: |
+          case "$TAG" in *-*) echo "pre-release: the package repositories stay as they are"; exit 0 ;; esac
+          if [ ! -f .github/workflows/pages.yml ]; then
+            echo "::notice::no .github/workflows/pages.yml: the package repositories are not updated"
+            exit 0
+          fi
+          gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          echo "started pages.yml on $BRANCH"

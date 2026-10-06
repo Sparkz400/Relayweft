@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -176,9 +175,6 @@ type claim struct {
 	mu      sync.Mutex // serialises edits of the comment
 	ended   bool
 }
-
-// errLost means another machine holds the issue.
-var errLost = errors.New("another machine holds this issue")
 
 // take claims issue n, or says why not (skip: someone else has it, or it
 // failed before).

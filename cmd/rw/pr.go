@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,8 +22,8 @@ import (
 )
 
 // rw pr turns a finished task into a branch, a commit and a pull request
-// on GitHub, GitLab (a merge request) or Gitea/Forgejo, whichever hosts the
-// origin remote (forge.go):
+// on GitHub, GitLab (a merge request), Gitea/Forgejo or Bitbucket Cloud,
+// whichever hosts the origin remote (forge.go):
 //
 //   - The change is the task's own: its undo "after" snapshot against its
 //     "before" snapshot (refs/relayweft/tasks/...), so edits you made
@@ -35,7 +36,8 @@ import (
 //     `git push -u origin <branch>` (never forced) using your git remote and
 //     credentials.
 //   - The pull request is opened through the forge's REST API with its
-//     token (forge.Token: GITHUB_TOKEN, GITLAB_TOKEN, GITEA_TOKEN, ...);
+//     token (forge.Token: GITHUB_TOKEN, GITLAB_TOKEN, GITEA_TOKEN,
+//     BITBUCKET_TOKEN, ...);
 //     without one, rw writes the body to a file and prints the compare URL
 //     instead.
 //   - An opened pull request is recorded for rw watch (watch.go), which
@@ -109,14 +111,16 @@ func cmdPR(args []string) error {
 
 Turns a finished task (default: the newest finished task in this directory,
 see rw history) into a branch, a commit and a pull request on GitHub,
-GitLab (a merge request) or Gitea/Forgejo: whichever hosts origin.
+GitLab (a merge request), Gitea/Forgejo or Bitbucket Cloud: whichever
+hosts origin.
 
 The commit holds exactly the task's changes (its undo snapshots), applied
 on top of HEAD without touching your index, working tree or current branch;
 if they do not apply cleanly to HEAD, nothing is created. The branch
 (rw/<task>) must not exist yet and is pushed with git push -u origin (never
 forced). The PR is opened with the forge's token (GitHub: GITHUB_TOKEN,
-GH_TOKEN or `+"`gh auth token`"+`; GitLab: GITLAB_TOKEN or glab; Gitea: GITEA_TOKEN);
+GH_TOKEN or `+"`gh auth token`"+`; GitLab: GITLAB_TOKEN or glab; Gitea: GITEA_TOKEN;
+Bitbucket: BITBUCKET_TOKEN);
 without one the body is written to a file and the compare URL is printed.
 Self-hosted forges: set GH_HOST, GITLAB_HOST or GITEA_HOST to the host. A task that did not finish ok is opened as a draft.
 A multi-repo task gets one PR per repo: --repo <name> picks an extra repo.
@@ -125,8 +129,8 @@ An opened pull request is followed up by rw watch (failed checks, reviews).
 	}
 	var id string
 	rest := args
-	for len(rest) > 0 {
-		fs.Parse(rest)
+	for { // parse at least once, also without arguments
+		parseFlags(fs, rest)
 		if fs.NArg() == 0 {
 			break
 		}
@@ -468,8 +472,10 @@ func aheadCount(root, base string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("no origin/%s to compare HEAD with (git fetch origin)", base)
 	}
-	var n int
-	fmt.Sscanf(strings.TrimSpace(s), "%d", &n)
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list --count: %w", err)
+	}
 	return n, nil
 }
 
@@ -519,7 +525,7 @@ func unattendedPRCheck(st *orchestrator.TaskState, base string, unreported []str
 }
 
 // apiFlagHelp is the --api flag's text.
-const apiFlagHelp = "forge API base URL (GitHub Enterprise: https://<host>/api/v3, GitLab: https://<host>/api/v4, Gitea: https://<host>/api/v1; GH_HOST, GITLAB_HOST and GITEA_HOST also work)"
+const apiFlagHelp = "forge API base URL (GitHub Enterprise: https://<host>/api/v3, GitLab: https://<host>/api/v4, Gitea: https://<host>/api/v1, Bitbucket Cloud: https://api.bitbucket.org/2.0; GH_HOST, GITLAB_HOST and GITEA_HOST also work)"
 
 // forgeName is the kind stored in rw watch's list ("" for GitHub, as in
 // lists from before GitLab and Gitea).
@@ -858,27 +864,41 @@ func renderPRParts(st *orchestrator.TaskState, o prBodyOptions) prParts {
 }
 
 // reCloseRef finds closing keywords (GitHub's and Gitea's, plus GitLab's
-// -ing forms and "implements") followed by an issue reference (#7,
-// owner/repo#7, group/sub/project#7 or an issues URL); reMention finds
-// @user / @org/team; reQuickAction finds GitLab quick actions ("/merge",
-// "/approve" at the start of a line), which GitLab runs with the poster's
-// rights.
+// -ing forms and "implements", and Bitbucket's other issue commands:
+// reopen, hold, wontfix, invalidate) followed by an issue reference (#7,
+// issue #7, bug #7, owner/repo#7, group/sub/project#7 or an issues URL);
+// reMention finds @user, @org/team and Bitbucket's @{account}; reQuickAction
+// finds GitLab quick actions ("/merge", "/approve" at the start of a line),
+// which GitLab runs with the poster's rights. reJiraKey finds a Jira issue
+// key: with one in the text, "#word" may be a Jira smart commit command
+// (PROJ-12 #close, #time 2h, #comment) that Bitbucket and GitHub run for
+// a linked Jira as the pusher, so reSmartCommand breaks those.
+//
+// Spaces include the Unicode ones (no-break space and others) and \v,
+// which \s alone leaves out.
 var (
-	reCloseRef    = regexp.MustCompile(`(?i)\b(clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)(\s*:?\s*(?:[\w.-]+(?:/[\w.-]+)+)?#\d|\s*:?\s*https?://[^\s]*/issues/\d)`)
-	reMention     = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9])`)
-	reQuickAction = regexp.MustCompile(`(?m)^([ \t]*)/([A-Za-z])`)
+	reCloseRef = regexp.MustCompile(strings.ReplaceAll(`(?i)\b(clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?|reopen(?:s|ed|ing)?|hold(?:s|ing)?|wontfix|invalidat(?:e[sd]?|ing))(SP*:?SP*(?:(?:issue|bug|ticket)SP*)?(?:[\w.-]+(?:/[\w.-]+)+)?#\d|SP*:?SP*https?://[^\s]*/issues/\d)`,
+		"SP", `[\s\v\p{Z}]`))
+	reMention      = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9{])`)
+	reQuickAction  = regexp.MustCompile(`(?m)^([ \t]*)/([A-Za-z])`)
+	reJiraKey      = regexp.MustCompile(`\b[A-Z][A-Z0-9_]+-\d+\b`)
+	reSmartCommand = regexp.MustCompile(`#([A-Za-z])`)
 )
 
 // defuseRefs stops text written by others (an issue's body, a task, CI
 // output) from closing issues, notifying people or running GitLab quick
 // actions when it lands in a commit message, a PR title, a comment or a
 // squash commit built from the PR body: a word joiner (U+2060, invisible)
-// breaks the keyword, the @ and the /. The text reads the same.
+// breaks the keyword, the @, the / and a smart commit's #. The text reads
+// the same.
 func defuseRefs(s string) string {
 	s = reCloseRef.ReplaceAllStringFunc(s, func(m string) string {
 		return m[:1] + "\u2060" + m[1:]
 	})
 	s = reQuickAction.ReplaceAllString(s, "${1}/\u2060${2}")
+	if reJiraKey.MatchString(s) {
+		s = reSmartCommand.ReplaceAllString(s, "#\u2060${1}")
+	}
 	return reMention.ReplaceAllString(s, "${1}@\u2060${2}")
 }
 
