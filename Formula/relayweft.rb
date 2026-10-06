@@ -32,6 +32,8 @@ class Relayweft < Formula
     os = OS.mac? ? "darwin" : "linux"
     arch = Hardware::CPU.arm? ? "arm64" : "amd64"
     bin.install "rw-#{os}-#{arch}" => "rw"
+    # Make the raw download executable before generating completion.
+    chmod 0755, bin/"rw"
     generate_completions_from_executable(bin/"rw", "completion")
   end
 
@@ -44,5 +46,8 @@ class Relayweft < Formula
 
   test do
     assert_equal "relayweft #{version}", shell_output("#{bin}/rw version").strip
+    assert_path_exists bash_completion/"rw"
+    assert_path_exists zsh_completion/"_rw"
+    assert_path_exists fish_completion/"rw.fish"
   end
 end
