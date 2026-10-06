@@ -10,7 +10,7 @@ name: load
 # internal/orchestrator/load_test.go (RW_LOAD_DURATION=3m for a local
 # smoke run on a generated repo).
 on:
-  push: # TEMPORARY (removed before merge): a workflow not on main cannot be dispatched
+  push: # TEMPORARY (removed before merging): a workflow not on main cannot be dispatched
     branches: [test/dashboard-load]
     paths: [.github/workflows/load.yml]
   workflow_dispatch:
