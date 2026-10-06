@@ -109,14 +109,16 @@ else
   done
   # The token goes to curl on stdin, not on its command line.
   api() {
+    accept="$1"
+    shift
     if [ -n "$token" ]; then
       printf 'Authorization: Bearer %s\n' "$token" |
-        curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" -H @- "$@"
+        curl -fsSL --retry 3 -H "Accept: $accept" -H @- "$@"
     else
-      curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" "$@"
+      curl -fsSL --retry 3 -H "Accept: $accept" "$@"
     fi
   }
-  api "https://api.github.com/repos/$github/releases?per_page=100" > "$work/releases.json" ||
+  api application/vnd.github+json "https://api.github.com/repos/$github/releases?per_page=100" > "$work/releases.json" ||
     die "cannot list the releases of $github"
   want="$(assets | jq -R . | jq -s .)"
   # Published releases (no drafts or pre-releases) with every package,
@@ -132,7 +134,7 @@ else
       # The asset's API URL works for private repositories too.
       asset_url="$(jq -r --arg t "v$v" --arg n "$name" \
         '.[] | select(.tag_name == $t) | .assets[] | select(.name == $n) | .url' "$work/releases.json")"
-      api -H "Accept: application/octet-stream" -o "$work/in/$v/$name" "$asset_url" ||
+      api application/octet-stream -o "$work/in/$v/$name" "$asset_url" ||
         die "cannot download $name of v$v"
     done
   done

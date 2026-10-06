@@ -1,17 +1,17 @@
 {
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Windows-first terminal app that routes coding work between the Codex CLI and Claude Code.",
     "homepage": "https://github.com/sparkz400/relayweft",
     "license": "MIT",
     "notes": "Run `rw doctor` to check the codex and claude CLIs. Update with `scoop update rw`. Tab completion: add `rw completion powershell | Out-String | Invoke-Expression` to your PowerShell profile ($PROFILE).",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-windows-amd64.exe#/rw.exe",
-            "hash": "a8c0d80702f0ec05f01ab67eb6e07fd1b578677ced41bca0e5fb7a481f5c880b"
+            "url": "https://github.com/sparkz400/relayweft/releases/download/v0.4.0/rw-windows-amd64.exe#/rw.exe",
+            "hash": "6c4ea4516a17f8b63f4e73b5be3a25221e8c2ba904716b002a01c5c0f8198d7b"
         },
         "arm64": {
-            "url": "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-windows-arm64.exe#/rw.exe",
-            "hash": "654b2b62fbfa3f0ef57c299483ed3791096670c0ce553947b91e7bcd079d495f"
+            "url": "https://github.com/sparkz400/relayweft/releases/download/v0.4.0/rw-windows-arm64.exe#/rw.exe",
+            "hash": "72f1fb1f9d643e0bf4705907d231beadaf14e8c06ae4f53d9eaa900386dc7d44"
         }
     },
     "bin": "rw.exe",

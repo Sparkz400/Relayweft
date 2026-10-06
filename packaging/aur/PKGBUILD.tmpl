@@ -24,10 +24,7 @@ package() {
   install -Dm755 "rw-$pkgver-$CARCH" "$pkgdir/usr/bin/rw"
   install -Dm644 "LICENSE-$pkgver" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 "README-$pkgver.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
-  # `rw completion` arrived in v0.4.0.
-  if [ "$(vercmp "$pkgver" 0.4.0)" -ge 0 ]; then
-    "$pkgdir/usr/bin/rw" completion bash | install -Dm644 /dev/stdin "$pkgdir/usr/share/bash-completion/completions/rw"
-    "$pkgdir/usr/bin/rw" completion zsh | install -Dm644 /dev/stdin "$pkgdir/usr/share/zsh/site-functions/_rw"
-    "$pkgdir/usr/bin/rw" completion fish | install -Dm644 /dev/stdin "$pkgdir/usr/share/fish/vendor_completions.d/rw.fish"
-  fi
+  "$pkgdir/usr/bin/rw" completion bash | install -Dm644 /dev/stdin "$pkgdir/usr/share/bash-completion/completions/rw"
+  "$pkgdir/usr/bin/rw" completion zsh | install -Dm644 /dev/stdin "$pkgdir/usr/share/zsh/site-functions/_rw"
+  "$pkgdir/usr/bin/rw" completion fish | install -Dm644 /dev/stdin "$pkgdir/usr/share/fish/vendor_completions.d/rw.fish"
 }

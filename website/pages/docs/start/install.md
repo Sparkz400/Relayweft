@@ -24,11 +24,19 @@ brew install relayweft
 
 **Debian, Ubuntu, Fedora, RHEL, openSUSE, Alpine:** each release from v0.3.0 has `.deb`, `.rpm` and `.apk` packages for amd64 and arm64.
 
+From v0.4.0, use the [signed apt, dnf or apk repository](../project/packaging.md#apt-dnf-and-apk-repositories) to receive updates through your package manager. For a standalone package, [verify the release](../project/packaging.md#verifying-a-release), then install it:
+
 ```sh
 curl -fsSLO https://github.com/Sparkz400/Relayweft/releases/latest/download/relayweft-linux-amd64.deb
 sudo apt install ./relayweft-linux-amd64.deb
 # Fedora and friends: relayweft-linux-amd64.rpm, then sudo dnf install ./relayweft-linux-amd64.rpm
-# Alpine: relayweft-linux-amd64.apk, then sudo apk add --allow-untrusted ./relayweft-linux-amd64.apk
+```
+
+On Alpine, also download `relayweft-apk.rsa.pub` from the same release, then:
+
+```sh
+sudo install -m 0644 relayweft-apk.rsa.pub /etc/apk/keys/relayweft-apk.rsa.pub
+sudo apk add ./relayweft-linux-amd64.apk
 ```
 
 **Arch Linux:** `packaging/aur` has the PKGBUILD of the AUR package `relayweft-bin`. It is not published yet.
