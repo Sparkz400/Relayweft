@@ -24,7 +24,10 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- Homebrew makes the downloaded `rw` binary executable before running it to generate completion scripts during installation. ([#62](https://github.com/Sparkz400/Relayweft/pull/62))
+- The package repository publisher requests release asset bytes with a single `Accept` header; conflicting JSON and binary headers made the first signed feed deployment download metadata and fail its checksum check. ([#62](https://github.com/Sparkz400/Relayweft/pull/62))
 
 ## [0.4.0] - 2026-10-06
 

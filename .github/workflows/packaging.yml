@@ -168,6 +168,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: release asset downloads
+        run: python3 packaging/repo/download_test.py
       - name: packaging/repo/test.sh
         env:
           # Read-only token against the GitHub API's rate limit for the

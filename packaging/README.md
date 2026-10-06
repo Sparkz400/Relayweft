@@ -227,9 +227,8 @@ release's `checksums.txt`).
 ### apt, dnf and apk repositories
 
 The project's GitHub Pages site has an apt, an rpm and an apk repository
-with the packages of the last three signed releases (once the
-[signing keys](#signing-keys) are set up and Pages is on; the first
-release after that is the first one in them). Set one up once; after that
+with the packages of the last three signed releases, starting with
+v0.4.0. Set one up once; after that
 the package manager updates `rw` like everything else.
 
 Debian, Ubuntu:
@@ -267,12 +266,16 @@ index's and each package's. The key files are the release's
 unarmored) and `relayweft-apk.rsa.pub`, and they are committed in
 `packaging/keys/`.
 
-Without a repository, download a package from the release:
+Without a repository, download a package from the release and follow
+[Verifying a release](#verifying-a-release). For Alpine, also download
+`relayweft-apk.rsa.pub` from the same release and install it before the
+package, so apk can check its signature:
 
 ```sh
 sudo apt install ./relayweft-linux-amd64.deb
 sudo dnf install ./relayweft-linux-amd64.rpm
-sudo apk add --allow-untrusted ./relayweft-linux-amd64.apk
+sudo install -m 0644 relayweft-apk.rsa.pub /etc/apk/keys/relayweft-apk.rsa.pub
+sudo apk add ./relayweft-linux-amd64.apk
 ```
 
 `repo/build-pages.sh SITE-DIR` builds the repositories into
@@ -372,9 +375,9 @@ brew upgrade relayweft
 
 `brew update` fetches the committed formula, so render and commit after
 each release. The formula installs the bash, zsh and fish completion with
-`generate_completions_from_executable` for releases that have
-`rw completion` (v0.4.0 on; the version check can go once the manifests
-name v0.4.0 or later). The AUR `PKGBUILD` does the same in `package()`.
+`generate_completions_from_executable`. The AUR `PKGBUILD` does the same
+in `package()`. These templates require v0.4.0 or later, which provides
+`rw completion`.
 
 ## AUR
 

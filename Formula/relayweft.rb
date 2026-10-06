@@ -8,23 +8,23 @@ class Relayweft < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-darwin-arm64"
-      sha256 "d0cdec8d4a50346ddd1c9a5a2ac37aa3f59759d1a72b03332b1316fd17d55329"
+      url "https://github.com/sparkz400/relayweft/releases/download/v0.4.0/rw-darwin-arm64"
+      sha256 "a859dbffc58be99a6bc6d220505c6995ba3586f3d83c795f25617aa3fee3078a"
     end
     on_intel do
-      url "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-darwin-amd64"
-      sha256 "9d97104d3d82818152215bc893d6bb568a23de19968e8a73d057fdf6358dfc3e"
+      url "https://github.com/sparkz400/relayweft/releases/download/v0.4.0/rw-darwin-amd64"
+      sha256 "664cb40a9deb98717e98ae0a9cfe7d3de3080ca1df22ce9c890639ae629f454f"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-linux-arm64"
-      sha256 "2a65fa42c4f61b0b3a7e99cd301d03d50233d80ddb8d869e61ca2d1e2937a0e8"
+      url "https://github.com/sparkz400/relayweft/releases/download/v0.4.0/rw-linux-arm64"
+      sha256 "06ec4f60b076fb1e07bbde21a128ee15f1b4044846db63bb0915da7570961276"
     end
     on_intel do
-      url "https://github.com/sparkz400/relayweft/releases/download/v0.3.0/rw-linux-amd64"
-      sha256 "610a21696b116519b592ce1a0a3f2f2ab4515f66ee442e6535f1d1d7d6158784"
+      url "https://github.com/sparkz400/relayweft/releases/download/v0.4.0/rw-linux-amd64"
+      sha256 "5142e3b15fa70284593d61bbfa87b58a0fe5382de0560ef4ab792926d55735e9"
     end
   end
 
@@ -32,8 +32,9 @@ class Relayweft < Formula
     os = OS.mac? ? "darwin" : "linux"
     arch = Hardware::CPU.arm? ? "arm64" : "amd64"
     bin.install "rw-#{os}-#{arch}" => "rw"
-    # `rw completion` arrived in v0.4.0.
-    generate_completions_from_executable(bin/"rw", "completion") if version >= "0.4.0"
+    # Make the raw download executable before generating completion.
+    chmod 0755, bin/"rw"
+    generate_completions_from_executable(bin/"rw", "completion")
   end
 
   def caveats
@@ -45,5 +46,8 @@ class Relayweft < Formula
 
   test do
     assert_equal "relayweft #{version}", shell_output("#{bin}/rw version").strip
+    assert_path_exists bash_completion/"rw"
+    assert_path_exists zsh_completion/"_rw"
+    assert_path_exists fish_completion/"rw.fish"
   end
 end
