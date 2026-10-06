@@ -40,6 +40,9 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 - A user edit merged with an agent's change could lose the end of the agent's file when the disk was full; it now counts as a conflict and leaves the file as it was. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
 - `rw bench` blamed "another rw bench" for a workspace folder it could not create. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
 - Commit messages reach git on stdin, so very long task texts work on Windows. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
+- A logged-out or missing agent CLI no longer counts as a usage-limit hit in the Dashboard, `rw stats` and the `rw stats --json` export (format 1.1: `unavailable`), and `rw run --when-reset` no longer waits for its 12 hours. ([#60](https://github.com/Sparkz400/Relayweft/pull/60))
+- With several rw (or an editor's git) on one repo, a merge no longer fails when another git holds the repo's lock for a moment, and a file another rw removes no longer makes the snapshot for undo fail; a task whose start or end cannot be recorded says that undo will not work. ([#60](https://github.com/Sparkz400/Relayweft/pull/60))
+- After `rw resume`, `rw undo --agent-files-only` and `rw pr` also cover the files of the steps from before the interruption. ([#60](https://github.com/Sparkz400/Relayweft/pull/60))
 
 ## [0.3.0] - 2026-10-05
 
