@@ -26,6 +26,7 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Added
 
+- Azure DevOps: `rw pr`, work items as tasks (`--issue`, `--issues label:<tag>`, `--team`), `rw watch` and `rw review --post` work on dev.azure.com, `*.visualstudio.com` and Azure DevOps Server (`AZURE_DEVOPS_HOST`), with `AZURE_DEVOPS_TOKEN`. See `docs/azure-devops.md`. ([#57](https://github.com/Sparkz400/Relayweft/pull/57))
 - `rw completion bash|zsh|fish|powershell`: Tab completion for subcommands, flags, provider names, models and task ids (Windows PowerShell 5.1 and PowerShell 7 too). The .deb/.rpm/.apk packages, Homebrew and the AUR package install it. ([#49](https://github.com/Sparkz400/Relayweft/pull/49))
 - `docs/config.md`: every config key with its type, default, description and whether a repo's `.relayweft.yaml` needs `rw trust` for it; generated from the code, and CI fails when it is out of date. ([#49](https://github.com/Sparkz400/Relayweft/pull/49))
 - `CONTRIBUTING.md`, a pull request template and a Code of Conduct. ([#45](https://github.com/Sparkz400/Relayweft/pull/45))
