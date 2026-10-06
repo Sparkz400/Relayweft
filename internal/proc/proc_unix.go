@@ -91,7 +91,7 @@ func wrap(cmd *exec.Cmd) {
 func guard() error {
 	guardMu.Lock()
 	defer guardMu.Unlock()
-	if watch.Load() != nil {
+	if watchW != nil {
 		return nil
 	}
 	if _, err := os.Stat(shPath); err != nil {
