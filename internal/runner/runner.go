@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,11 @@ import (
 	"github.com/sparkz400/relayweft/internal/proc"
 	"github.com/sparkz400/relayweft/internal/sandbox"
 )
+
+// EnvAgent is set in every agent's environment, to the pid of the rw that
+// started it. `rw mcp` under it refuses to start nested rw tasks (the
+// recursion guard: an agent of a task must not hand work back to rw).
+const EnvAgent = "RW_AGENT"
 
 // Spec describes one agent run.
 type Spec struct {
@@ -223,8 +229,10 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		// line (codexMCPArgs names them).
 		childEnv = append(childEnv, s.MCP.ChildEnv...)
 	}
-	// The provider's env (an API endpoint and key) comes last and wins.
+	// The provider's env (an API endpoint and key) comes next and wins
+	// over the above; the recursion marker comes last, so nothing unsets it.
 	childEnv = append(childEnv, provEnv...)
+	childEnv = append(childEnv, EnvAgent+"="+strconv.Itoa(os.Getpid()))
 	var cmd *exec.Cmd
 	var box *sandbox.Box
 	if boxed {

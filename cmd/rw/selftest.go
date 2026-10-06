@@ -931,9 +931,14 @@ func cmdSelftestAgent() {
 		}
 		b, _ := json.MarshalIndent(plan, "", "  ")
 		result("```json\n" + string(b) + "\n```")
+	case strings.Contains(prompt, stNestedMCP):
+		note("nested")
+		result(selftestNestedMCP())
 	case strings.Contains(prompt, "combine <<"):
-		if os.Getenv(envSelftestHang) == "1" && dir != "" {
-			// Wait to be killed with rw; the pid tells the test who to watch.
+		if os.Getenv(envSelftestHang) == "1" && dir != "" && fileText(filepath.Join(dir, "agent.pid")) == "" {
+			// Wait to be killed with rw; the pid tells the test who to
+			// watch. Only once: a fresh agent that takes the step over
+			// (after a cancel) finishes it.
 			note("hang")
 			_ = os.WriteFile(filepath.Join(dir, "agent.wd"), []byte(wd), 0o644)
 			_ = os.WriteFile(filepath.Join(dir, "agent.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)

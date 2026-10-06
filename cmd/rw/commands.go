@@ -39,6 +39,7 @@ func init() {
 		{name: "run", run: cmdRun, desc: "run one task headless"},
 		{name: "web", run: cmdWeb, desc: "the browser UI"},
 		{name: "app", run: cmdApp, desc: "the browser UI in its own window"},
+		{name: "mcp", run: cmdMCP, desc: "MCP server: Claude Code or Codex hand tasks to rw"},
 		{name: "pr", run: cmdPR, desc: "pull request from a finished task", args: argTask},
 		{name: "watch", run: cmdWatch, desc: "follow up on the PRs rw opened"},
 		{name: "review", run: cmdReview, desc: "agent review of a pull request"},

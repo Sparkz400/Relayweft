@@ -76,6 +76,11 @@ type TaskOptions struct {
 	// Force resumes a task that is no longer marked running (it finished,
 	// failed or was cancelled): its unfinished steps run again.
 	Force bool
+	// Started, if set, gets the task's id (its saved state's, which rw
+	// history, rw resume and rw report take) as the task starts, before
+	// its TaskStart event. A task refused at once (its state is locked by
+	// another rw, or a resume that no longer applies) never calls it.
+	Started func(id string)
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -635,6 +640,13 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 			t.state.Status = "running"
 			t.state.save()
 		}
+	}
+	if opts.Started != nil && refused == "" {
+		id := t.key
+		if t.state != nil {
+			id = t.state.ID
+		}
+		opts.Started(id)
 	}
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
