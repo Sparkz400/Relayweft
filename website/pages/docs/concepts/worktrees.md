@@ -8,3 +8,5 @@ Writing agents that run at the same time each work in their own git worktree, ou
 <!-- include README.md#how-it-works-and-the-decisions-made-for-v1 item="**Parallel worktrees**" -->
 
 The pool also has a disk guard: see [machine load and disk](../guides/machine.md).
+
+When changes overlap, see [conflict resolution](conflicts.md) for the resolution modes and approval of your own edits.
