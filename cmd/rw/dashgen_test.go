@@ -429,6 +429,29 @@ func (w *dashWeb) run(text string, single string, cancel func() bool) (ok bool, 
 	}
 }
 
+// waitAvailable waits until no provider is at a limit (they last seconds
+// here), so each task's outcome does not depend on how fast the last ran.
+func (w *dashWeb) waitAvailable() {
+	w.t.Helper()
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		var st struct {
+			Now       time.Time `json:"now"`
+			Providers map[string]struct {
+				LimitedUntil *time.Time `json:"limited_until"`
+			} `json:"providers"`
+		}
+		w.do("GET", "/api/state", nil, &st)
+		busy := false
+		for _, p := range st.Providers {
+			busy = busy || (p.LimitedUntil != nil && p.LimitedUntil.After(st.Now))
+		}
+		if !busy {
+			return
+		}
+	}
+	w.t.Fatal("a provider stayed at its limit for 15s")
+}
+
 // stop closes stdin: rw stops as on Ctrl+C and logs a clean exit.
 func (w *dashWeb) stop() {
 	w.stdin.Close()
@@ -606,6 +629,7 @@ func TestDashboardMatchesCLI(t *testing.T) {
 				marker := filepath.Join(state, fmt.Sprintf("hang-%d", n))
 				cancel = func() bool { _, err := os.Stat(marker); return err == nil }
 			}
+			w.waitAvailable()
 			ok, summary := w.run(text, tk.single, cancel)
 			got := "failed"
 			switch {
