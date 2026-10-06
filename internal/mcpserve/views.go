@@ -111,7 +111,13 @@ const (
 // reTaskID matches the task ids rw writes (no path separators).
 var reTaskID = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,200}$`)
 
-func validID(id string) bool { return reTaskID.MatchString(id) && !strings.Contains(id, "..") }
+// reDevice matches Windows device names (CON, NUL, COM1, ...): as a file
+// name they open the device, whatever the extension.
+var reDevice = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\.|$)`)
+
+func validID(id string) bool {
+	return reTaskID.MatchString(id) && !strings.Contains(id, "..") && !reDevice.MatchString(id)
+}
 
 // loadHere reads a task state of this folder. Tasks of other folders are
 // not found: the server works only where it was started.
@@ -129,9 +135,10 @@ func (e *Engine) loadHere(id string) (*orchestrator.TaskState, error) {
 	return st, nil
 }
 
-func sameDir(a, b string) bool {
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
-}
+// sameDir is the comparison orchestrator.History uses, so a task that
+// list_tasks shows is one task_status finds (symlinks, 8.3 names; case
+// only where the file system ignores it).
+func sameDir(a, b string) bool { return orchestrator.SamePath(a, b) }
 
 // current returns the id of the newest job, for calls that leave it out.
 func (e *Engine) current(id string) (string, error) {
@@ -184,6 +191,9 @@ func (e *Engine) wait(ctx context.Context, j *job, d time.Duration, progress fun
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	start := e.pendingKey(j)
+	if start != "" {
+		return // it waits for an answer already
+	}
 	lastProgress := time.Now()
 	for {
 		select {
@@ -195,7 +205,7 @@ func (e *Engine) wait(ctx context.Context, j *job, d time.Duration, progress fun
 			return
 		case <-tick.C:
 		}
-		if k := e.pendingKey(j); k != start && k != "" {
+		if e.pendingKey(j) != "" {
 			return
 		}
 		if progress != nil && time.Since(lastProgress) >= 5*time.Second {

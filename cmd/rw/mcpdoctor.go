@@ -109,6 +109,14 @@ func doctorMCPServe(w io.Writer, cfg *config.Config, dir string, ok func(bool) s
 
 // sameFile is samePath after symlinks (Homebrew, winget links).
 func sameFile(a, b string) bool {
+	if samePath(a, b) {
+		return true
+	}
+	// Resolving touches the disk (a network share can be slow): only for
+	// paths that could be the same.
+	if !strings.EqualFold(filepath.Base(a), filepath.Base(b)) {
+		return false
+	}
 	if ea, err := filepath.EvalSymlinks(a); err == nil {
 		a = ea
 	}

@@ -36,12 +36,25 @@ func TestNested(t *testing.T) {
 			}
 			return ""
 		}, "rw", nil, "RW_AGENT=77"},
+		// rw 78 is gone: a program an agent started kept the variable.
+		{"stale RW_AGENT", func(k string) string {
+			if k == runner.EnvAgent {
+				return "78"
+			}
+			return ""
+		}, "rw", chain("claude", "code", "explorer"), ""},
+		{"RW_AGENT that is no pid", func(k string) string {
+			if k == runner.EnvAgent {
+				return "yes"
+			}
+			return ""
+		}, "rw", nil, "RW_AGENT=yes"},
 		{"rw above the agent", noEnv, "rw", chain("node", "cmd", "rw", "bash"), "pid 102"},
 		{"behind a shim, under rw's agent", noEnv, "rw", chain("rw", "codex", "node", "cmd", "rw", "pwsh"), "pid 104"},
 		// rw renamed: its own name counts too.
 		{"renamed rw above the agent", noEnv, "relayweft", chain("claude", "relayweft"), "pid 101"},
 	} {
-		got := Nested(tc.env, tc.self, tc.ancestors)
+		got := Nested(tc.env, tc.self, tc.ancestors, func(pid int) bool { return pid == 77 })
 		if tc.want == "" && got != "" || tc.want != "" && !strings.Contains(got, tc.want) {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
@@ -98,6 +111,10 @@ func TestClipBytes(t *testing.T) {
 
 func TestValidID(t *testing.T) {
 	for id, ok := range map[string]bool{
+		"CON":                         false, // a Windows device
+		"nul.json":                    false,
+		"com1":                        false,
+		"console-task":                true,
 		"20261005-232707-4ef3-task-1": true,
 		"../tasks/x":                  false,
 		`..\x`:                        false,

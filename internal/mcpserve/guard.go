@@ -3,6 +3,7 @@ package mcpserve
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/sparkz400/relayweft/internal/proc"
@@ -19,10 +20,18 @@ import (
 //     agent CLI). The rw processes right above this one are skipped: a
 //     Scoop shim (rw.exe) starts the real rw.exe as its child.
 //
+// RW_AGENT names the rw's pid. A program an agent started can outlive
+// that rw and hand the variable on (an editor the agent opened, and every
+// terminal in it): when that rw is gone (alive says no), the variable is
+// stale and only the process tree counts.
+//
 // self is this program's name (proc.ProgramName of os.Executable).
-func Nested(getenv func(string) string, self string, ancestors []proc.Ancestor) string {
+func Nested(getenv func(string) string, self string, ancestors []proc.Ancestor, alive func(pid int) bool) string {
 	if v := getenv(runner.EnvAgent); v != "" {
-		return fmt.Sprintf("it was started by an agent of a running rw task (%s=%s is set)", runner.EnvAgent, oneLine(v, 20))
+		pid, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || pid <= 0 || alive(pid) {
+			return fmt.Sprintf("it was started by an agent of a running rw task (%s=%s is set)", runner.EnvAgent, oneLine(v, 20))
+		}
 	}
 	isRW := func(name string) bool { return name == "rw" || name == self }
 	between := false
@@ -40,7 +49,7 @@ func Nested(getenv func(string) string, self string, ancestors []proc.Ancestor) 
 // NestedHere is Nested for this process.
 func NestedHere() string {
 	self, _ := os.Executable()
-	return Nested(os.Getenv, proc.ProgramName(self), proc.Ancestors())
+	return Nested(os.Getenv, proc.ProgramName(self), proc.Ancestors(), proc.Alive)
 }
 
 // callerEnv are the variables Claude Code sets for the MCP servers it

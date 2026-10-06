@@ -58,13 +58,11 @@ type Engine struct {
 	store *config.Store
 	base  defaults
 
-	mu      sync.Mutex
-	jobs    []*job // this process's jobs, oldest first (at most maxJobs)
-	cur     *job
-	seq     int
-	closed  bool
-	changed chan struct{} // closed and replaced on every change
-	pumped  chan struct{} // closed when Events is drained
+	mu     sync.Mutex
+	jobs   []*job // this process's jobs, oldest first (at most maxJobs)
+	cur    *job
+	seq    int
+	closed bool
 }
 
 // defaults are the config values a task's options start from.
@@ -134,7 +132,7 @@ func New(o Options) (*Engine, error) {
 		return nil, errors.New("mcpserve: Orc, Approver and Events are required")
 	}
 	cfg := o.Orc.Store().Get()
-	e := &Engine{opt: o, orc: o.Orc, ap: o.Approver, store: o.Orc.Store(), changed: make(chan struct{}), pumped: make(chan struct{}),
+	e := &Engine{opt: o, orc: o.Orc, ap: o.Approver, store: o.Orc.Store(),
 		base: defaults{approvePlan: cfg.Orchestrator.ApprovePlan, reviewChanges: cfg.Orchestrator.ReviewChanges,
 			budgetUSD: cfg.Budget.TaskUSD, budgetTokens: cfg.Budget.TaskTokens}}
 	if e.opt.Session == "" {
@@ -208,7 +206,9 @@ func (e *Engine) Resume(ctx context.Context, id string) (string, error) {
 	if st.Status == "running" && !st.Interrupted() {
 		return "", fmt.Errorf("task %s is running in another rw: resume it there, or wait until it ends", st.ID)
 	}
-	return e.launch(ctx, &job{kind: KindResume, prompt: st.Task, id: st.ID, resume: st})
+	// The id comes from the orchestrator once it has the task's lock: a
+	// resume refused there (another rw took it meanwhile) gets none.
+	return e.launch(ctx, &job{kind: KindResume, prompt: st.Task, resume: st})
 }
 
 // FollowUp sends a message to an agent: a running one gets it when its
@@ -266,7 +266,8 @@ func (e *Engine) launch(ctx context.Context, j *job) (string, error) {
 		return "", fmt.Errorf("options: %w", err)
 	}
 	e.seq++
-	if j.id == "" && j.kind != KindTask {
+	if j.kind == KindReadOnly || j.kind == KindFollowUp {
+		// No task state: an id of this session.
 		j.id = fmt.Sprintf("%s-%s-%d", e.opt.Session, strings.ReplaceAll(j.kind, "_", ""), e.seq)
 	}
 	j.status, j.started, j.agents = "starting", time.Now(), map[string]*agentView{}
@@ -313,10 +314,11 @@ func (e *Engine) launch(ctx context.Context, j *job) (string, error) {
 		once.Do(func() { close(gotID) }) // ended before it started (refused)
 		e.finish(j, res, jctx.Err() != nil)
 	}()
+	// Not on ctx: a caller that gave up must not be told "not started"
+	// about a task that runs.
 	select {
 	case <-gotID:
 	case <-time.After(startWait):
-	case <-ctx.Done():
 	}
 	e.mu.Lock()
 	id, ended, summary := j.id, !j.ended.IsZero(), j.summary
@@ -325,7 +327,7 @@ func (e *Engine) launch(ctx context.Context, j *job) (string, error) {
 	case id == "" && ended:
 		return "", fmt.Errorf("not started: %s", summary)
 	case id == "":
-		return "", errors.New("the task did not start within 30s: call list_tasks to find it")
+		return "", fmt.Errorf("the task is still starting after %s (it runs; call list_tasks to find its id)", startWait)
 	}
 	return id, nil
 }
@@ -369,7 +371,6 @@ func (e *Engine) setStatus(j *job, s string) {
 		j.status = s
 	}
 	e.mu.Unlock()
-	e.notify()
 }
 
 // finish records a job's end.
@@ -397,15 +398,6 @@ func (e *Engine) finish(j *job, res orchestrator.TaskResult, cancelled bool) {
 		}
 	}
 	close(j.done)
-	e.mu.Unlock()
-	e.notify()
-}
-
-// notify wakes everyone waiting for a change.
-func (e *Engine) notify() {
-	e.mu.Lock()
-	close(e.changed)
-	e.changed = make(chan struct{})
 	e.mu.Unlock()
 }
 
@@ -436,9 +428,14 @@ func (e *Engine) Close() {
 	e.closed = true
 	j := e.cur
 	e.mu.Unlock()
-	e.ap.Close()
+	// Cancel first: a closed approver answers a waiting review "reject"
+	// and a waiting plan "no", which a task not yet cancelled would take
+	// for the person's answer.
 	if j != nil {
 		j.cancel()
+	}
+	e.ap.Close()
+	if j != nil {
 		select {
 		case <-j.done:
 		case <-time.After(8 * time.Second):
@@ -460,22 +457,18 @@ func (e *Engine) find(id string) *job {
 
 // pump drains the orchestrator's events into the running job's view.
 func (e *Engine) pump() {
-	defer close(e.pumped)
 	for ev := range e.opt.Events {
-		if e.observe(ev) {
-			e.notify()
-		}
+		e.observe(ev)
 	}
 }
 
-// observe folds one event into the running job; true when task_status
-// would show something new.
-func (e *Engine) observe(ev event.Event) bool {
+// observe folds one event into the running job.
+func (e *Engine) observe(ev event.Event) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	j := e.cur
 	if j == nil {
-		return false
+		return
 	}
 	agent := func() *agentView {
 		if ev.AgentID == "" {
@@ -495,12 +488,10 @@ func (e *Engine) observe(ev event.Event) bool {
 	switch ev.Kind {
 	case event.Phase:
 		j.phase = ev.Text
-		return true
 	case event.AgentQueued:
 		if a := agent(); a != nil {
 			a.State, a.Detail = "queued", oneLine(ev.Text, 120)
 		}
-		return true
 	case event.Route:
 		if a := agent(); a != nil && ev.Decision != nil {
 			a.Step, a.Route = ev.Decision.StepID, ev.Decision.Label()
@@ -509,13 +500,11 @@ func (e *Engine) observe(ev event.Event) bool {
 		if a := agent(); a != nil {
 			a.State = "running"
 		}
-		return true
 	case event.Done:
 		if a := agent(); a != nil {
 			a.State = map[bool]string{true: "ok", false: "failed"}[ev.OK]
 			a.Detail = oneLine(ev.Text, 200)
 		}
-		return true
 	case event.Error, event.LimitHit, event.Log, event.Checkpoint, event.Merge:
 		who := ev.AgentID
 		if who == "" {
@@ -536,11 +525,7 @@ func (e *Engine) observe(ev event.Event) bool {
 		if len(j.recent) > maxRecent {
 			j.recent = j.recent[len(j.recent)-maxRecent:]
 		}
-		return true
-	case event.TaskDone:
-		return true
 	}
-	return false
 }
 
 // readPrompt is what the read-only agent gets: the question, and that it

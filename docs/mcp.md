@@ -102,10 +102,10 @@ In the real runs, Claude Haiku needed one `task_status` call for the plan and on
 
 ## Safety
 
-- **Only this folder.** rw works in the folder it was started in and the repos given with `--repo` at start-up. No tool takes a path. Task ids are checked, and tasks of other folders are not found.
+- **Only this folder.** rw works in the folder it was started in and the repos given with `--repo` at start-up (a resumed multi-repo task keeps the repos it started with, as `rw resume` does). No tool takes a path. Task ids are checked, and tasks of other folders are not found.
 - **The calling agent is untrusted input,** like a task you type. The repository's `.relayweft.yaml` still needs `rw trust` before its commands run. A task's budget can be lowered, never raised. When a budget is reached the task stops; the calling agent cannot let it go on. rw's settings cannot be changed through the tools.
 - **No secrets in results.** Results carry task text, agent answers, file names, diff stats and costs; never environment values. Claude Code gives the servers it starts its own session's variables, among them a messaging token; rw removes them before it starts any agent, so they reach no agent or hook.
-- **No recursion.** rw sets `RW_AGENT` for every agent it starts. An `rw mcp` that finds it, or finds an rw above it in the process tree (for clients such as Codex that pass MCP servers only a few variables), offers no tools and refuses every call: "rw mcp refuses here: ... A task's agent must not start rw tasks of its own". So putting `rw mcp` in your user-wide Claude Code config is safe: rw's own Claude agents get a server that does nothing. `rw doctor` warns if rw's own `mcp:` section gives its agents `rw mcp`.
+- **No recursion.** rw sets `RW_AGENT` (its pid) for every agent it starts. An `rw mcp` that finds it while that rw still runs, or finds an rw above it in the process tree (for clients such as Codex that pass MCP servers only a few variables), offers no tools and refuses every call: "rw mcp refuses here: ... A task's agent must not start rw tasks of its own". So putting `rw mcp` in your user-wide Claude Code config is safe: rw's own Claude agents get a server that does nothing. `rw doctor` warns if rw's own `mcp:` section gives its agents `rw mcp`.
 
 ## Limits
 

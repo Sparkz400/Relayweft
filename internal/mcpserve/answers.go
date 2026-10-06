@@ -55,7 +55,7 @@ func (e *Engine) ApprovePlan(id, reqID string, approve bool) (string, error) {
 		return "", err
 	}
 	if !approve {
-		return "plan rejected: the task is cancelled", nil
+		return "plan rejected: the task ends without running any agent", nil
 	}
 	return fmt.Sprintf("plan approved: %d step(s) run now", len(p.Subtasks)), nil
 }
@@ -108,6 +108,17 @@ func (e *Engine) EditPlan(id, reqID string, in PlanInput) (string, error) {
 	r, err := e.request(id, "plan", reqID)
 	if err != nil {
 		return "", err
+	}
+	// A step the edit keeps (same id) keeps what the tools do not show,
+	// such as its best-of setting.
+	if r.Plan != nil {
+		for i := range p.Subtasks {
+			for _, old := range r.Plan.Subtasks {
+				if old.ID == p.Subtasks[i].ID {
+					p.Subtasks[i].BestOf = old.BestOf
+				}
+			}
+		}
 	}
 	np, err := e.ap.AnswerPlan(r.ID, p, true)
 	if err != nil {
@@ -170,6 +181,17 @@ func (e *Engine) Reject(id, reqID, feedback string) (string, error) {
 // them back). Files no agent reported changing are left alone unless
 // allFiles: they may be the calling agent's own edits made meanwhile.
 func (e *Engine) Undo(id string, redo, allFiles bool) (string, error) {
+	// Never while agents land work in the same tree (the TUI refuses too).
+	e.mu.Lock()
+	cur := e.cur
+	e.mu.Unlock()
+	if cur != nil || e.orc.Running() {
+		running := "a task"
+		if cur != nil && cur.id != "" {
+			running = "task " + cur.id
+		}
+		return "", fmt.Errorf("%s is running in this folder: undo once it has ended, or cancel_task it first", running)
+	}
 	key := ""
 	if j := e.find(id); j != nil {
 		e.mu.Lock()

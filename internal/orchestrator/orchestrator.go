@@ -78,7 +78,8 @@ type TaskOptions struct {
 	Force bool
 	// Started, if set, gets the task's id (its saved state's, which rw
 	// history, rw resume and rw report take) as the task starts, before
-	// its TaskStart event.
+	// its TaskStart event. A task refused at once (its state is locked by
+	// another rw, or a resume that no longer applies) never calls it.
 	Started func(id string)
 }
 
@@ -640,13 +641,10 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 			t.state.save()
 		}
 	}
-	if opts.Started != nil {
+	if opts.Started != nil && refused == "" {
 		id := t.key
-		switch {
-		case t.state != nil:
+		if t.state != nil {
 			id = t.state.ID
-		case opts.Resume != nil:
-			id = opts.Resume.ID // refused: still the task that was asked for
 		}
 		opts.Started(id)
 	}

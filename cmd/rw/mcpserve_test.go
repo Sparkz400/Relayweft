@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -223,6 +224,7 @@ var mcpTestWait = 3 * time.Minute
 // repo, for running a built rw.
 type mcpProfile struct {
 	bin, repo, calls string
+	configDir        string // os.UserConfigDir in the profile
 	env              []string
 }
 
@@ -276,7 +278,7 @@ func newMCPProfile(t *testing.T, extraEnv ...string) mcpProfile {
 	os.WriteFile(filepath.Join(repo, "README.md"), []byte("# mcp test\n"), 0o644)
 	gitIn(t, repo, env, "add", "-A")
 	gitIn(t, repo, env, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
-	return mcpProfile{bin: bin, repo: repo, calls: calls, env: env}
+	return mcpProfile{bin: bin, repo: repo, calls: calls, configDir: profileConfigDir(profile), env: env}
 }
 
 func gitIn(t *testing.T, dir string, env []string, args ...string) {
@@ -353,6 +355,12 @@ func TestMCPServer(t *testing.T) {
 	}
 	if _, e := c.tool("run_task", map[string]any{"prompt": "another task"}); !strings.Contains(e, "one task at a time") {
 		t.Errorf("a second task while one runs: %q", e)
+	}
+	// Review fix: a wait on a task that already waits for an answer
+	// returns at once, not after wait_seconds.
+	began := time.Now()
+	if st := c.mustTool("task_status", map[string]any{"task_id": id, "wait_seconds": 30}); st["status"] != "waiting" || time.Since(began) > 10*time.Second {
+		t.Errorf("task_status waited %s on a waiting task: %v", time.Since(began), st["status"])
 	}
 	if _, e := c.tool("apply", map[string]any{"task_id": id}); !strings.Contains(e, "does not wait for a change review") {
 		t.Errorf("apply without a change review: %q", e)
@@ -449,7 +457,9 @@ func validTaskIDForTest(id string) bool {
 // TestMCPNestedRefuses: an rw mcp started with RW_AGENT set (under one of
 // rw's agents) starts no task and says why, over the protocol.
 func TestMCPNestedRefuses(t *testing.T) {
-	p := newMCPProfile(t, runner.EnvAgent+"=4242")
+	// The pid must be alive (a stale RW_AGENT is ignored): the test's own.
+	marker := runner.EnvAgent + "=" + strconv.Itoa(os.Getpid())
+	p := newMCPProfile(t, marker)
 	c := startMCP(t, p.bin, p.repo, p.env)
 	hello := c.initialize("2025-06-18")
 	if s, _ := hello["instructions"].(string); !strings.Contains(s, "refuses") {
@@ -459,7 +469,7 @@ func TestMCPNestedRefuses(t *testing.T) {
 		t.Errorf("nested rw mcp offers tools: %v", tools)
 	}
 	_, e := c.tool("run_task", map[string]any{"prompt": "do something"})
-	if !strings.Contains(e, "RW_AGENT=4242") || !strings.Contains(e, "recurse") {
+	if !strings.Contains(e, marker) || !strings.Contains(e, "recurse") {
 		t.Errorf("refusal %q", e)
 	}
 	if b, _ := os.ReadFile(filepath.Join(p.calls, "calls.log")); len(b) > 0 {
