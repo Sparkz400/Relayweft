@@ -19,6 +19,8 @@ never rename existing ones, and list every asset in `checksums.txt`
 | `relayweft-linux-amd64.deb`, `relayweft-linux-arm64.deb` | Debian, Ubuntu (from v0.3.0) |
 | `relayweft-linux-amd64.rpm`, `relayweft-linux-arm64.rpm` | Fedora, RHEL, openSUSE (from v0.3.0) |
 | `relayweft-linux-amd64.apk`, `relayweft-linux-arm64.apk` | Alpine (from v0.3.0) |
+| `relayweft-signing-key.asc` | GPG public key that signs the `.deb` and `.rpm` packages (once the [signing keys](#signing-keys) are set up) |
+| `relayweft-apk.rsa.pub` | RSA public key that signs the `.apk` packages (the same) |
 | `rw-<os>-<arch>.cdx.json` (one per binary, without `.exe`) | CycloneDX SBOM of that binary (from v0.4.0) |
 | `checksums.txt` | SHA-256 of every asset above (`sha256sum` format) |
 | `checksums.txt.sigstore.json` | Sigstore bundle: keyless cosign signature of `checksums.txt` (from v0.4.0) |
@@ -63,8 +65,11 @@ Its jobs get only the permissions they need: `build` (tests, binaries,
 packages, SBOMs, checksums) can only read; `attest` and `attest-sbom` get
 the OIDC token (`id-token: write`) and `attestations: write`; `publish`
 gets `contents: write` and runs only after the signature and every
-attestation have been verified. No secret is used besides the workflow's
-own `GITHUB_TOKEN` and OIDC token. Every action is pinned to a commit,
+attestation have been verified, then starts `pages.yml` for the package
+repositories (`actions: write`). Besides the workflow's own `GITHUB_TOKEN`
+and OIDC token, the only secrets are the two package signing keys, which
+only the `build` job's "linux packages" step gets, and never in a pull
+request's run. Every action is pinned to a commit,
 and every downloaded tool (nfpm, cyclonedx-gomod, cosign) to a version
 and checksum.
 
@@ -91,10 +96,12 @@ gh workflow run release.yml --ref my-branch -f version=0.4.0-dryrun.1 -f dry_run
 ```
 
 A pull request that changes `release.yml`, `linux-packages.sh`,
-`nfpm.yaml` or `sbom.sh` runs the build, the SBOMs and the asset checks,
-and signs and verifies `checksums.txt` with a throwaway cosign key and no
-transparency log. Pull requests get no OIDC token here, so they cannot
-attest or sign keyless; a dry run tests that.
+`verify-packages.sh`, `nfpm.yaml` or `sbom.sh` runs the build, the SBOMs
+and the asset checks, and signs and verifies `checksums.txt` with a
+throwaway cosign key and no transparency log. Pull requests get no OIDC
+token here, so they cannot attest or sign keyless; a dry run tests that.
+They get no package signing keys either, so their packages are unsigned;
+a dry run signs and checks them with the real keys.
 
 After the release is published, refresh the manifests:
 
@@ -194,17 +201,12 @@ the modules linked into `rw`, while `gh` and `cosign` already do it.
 against its SHA-256 before it runs. Each package installs `/usr/bin/rw`,
 the README, the license and the bash, zsh and fish completion scripts
 (printed by `rw completion`; zsh's goes to `vendor-completions` on Debian
-and `site-functions` elsewhere), and depends on `git`. The packages carry no
-package-manager signature (GPG or apk key), and there is no apt or dnf
-repository, so users download them from the release (from v0.4.0 they
-can check them with `gh attestation verify` or the signed
-`checksums.txt`, see [Verifying a release](#verifying-a-release)):
-
-```sh
-sudo apt install ./relayweft-linux-amd64.deb
-sudo dnf install ./relayweft-linux-amd64.rpm
-sudo apk add --allow-untrusted ./relayweft-linux-amd64.apk
-```
+and `site-functions` elsewhere), and depends on `git`. With the
+[signing keys](#signing-keys) set, the release signs every package (GPG
+for `.deb` and `.rpm`, the RSA key for `.apk`) and checks each signature
+before anything is published. v0.3.0's packages are unsigned. From v0.4.0
+they can also be checked with `gh attestation verify` or the signed
+`checksums.txt` (see [Verifying a release](#verifying-a-release)).
 
 To build and test them locally (Docker, one container at a time):
 
@@ -221,6 +223,138 @@ docker run --rm -v "$PWD:/src:ro" -w /src archlinux:latest sh packaging/test-ins
 To bump nfpm, change `nfpm_version` and `nfpm_sha256` in
 `linux-packages.sh` (the `Linux_x86_64.tar.gz` line of that nfpm
 release's `checksums.txt`).
+
+### apt, dnf and apk repositories
+
+The project's GitHub Pages site has an apt, an rpm and an apk repository
+with the packages of the last three signed releases (once the
+[signing keys](#signing-keys) are set up and Pages is on; the first
+release after that is the first one in them). Set one up once; after that
+the package manager updates `rw` like everything else.
+
+Debian, Ubuntu:
+
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://sparkz400.github.io/Relayweft/apt/relayweft.gpg | sudo tee /etc/apt/keyrings/relayweft.gpg >/dev/null
+curl -fsSL https://sparkz400.github.io/Relayweft/apt/relayweft.list | sudo tee /etc/apt/sources.list.d/relayweft.list >/dev/null
+sudo apt update && sudo apt install relayweft
+```
+
+Fedora, RHEL and other dnf systems:
+
+```sh
+curl -fsSL https://sparkz400.github.io/Relayweft/rpm/relayweft.repo | sudo tee /etc/yum.repos.d/relayweft.repo >/dev/null
+sudo dnf install relayweft
+```
+
+(openSUSE: `sudo zypper addrepo https://sparkz400.github.io/Relayweft/rpm/relayweft.repo`, not tested.)
+
+Alpine:
+
+```sh
+sudo wget -qO /etc/apk/keys/relayweft-apk.rsa.pub https://sparkz400.github.io/Relayweft/apk/relayweft-apk.rsa.pub
+echo https://sparkz400.github.io/Relayweft/apk | sudo tee -a /etc/apk/repositories
+sudo apk update && sudo apk add relayweft
+```
+
+Then `sudo apt update && sudo apt upgrade`, `sudo dnf upgrade` or
+`sudo apk upgrade` updates `rw`, and `rw update` names that command.
+Signatures are checked: apt checks the repository's (`InRelease`), dnf the
+repository's (`repo_gpgcheck`) and each package's (`gpgcheck`), apk the
+index's and each package's. The key files are the release's
+`relayweft-signing-key.asc` (apt's `relayweft.gpg` is the same key,
+unarmored) and `relayweft-apk.rsa.pub`, and they are committed in
+`packaging/keys/`.
+
+Without a repository, download a package from the release:
+
+```sh
+sudo apt install ./relayweft-linux-amd64.deb
+sudo dnf install ./relayweft-linux-amd64.rpm
+sudo apk add --allow-untrusted ./relayweft-linux-amd64.apk
+```
+
+`repo/build-pages.sh SITE-DIR` builds the repositories into
+`SITE-DIR/apt`, `SITE-DIR/rpm` and `SITE-DIR/apk`. It downloads the
+packages of the last three signed releases (those with
+`relayweft-signing-key.asc`; `RW_REPO_KEEP` changes the number), checks
+them against `checksums.txt` and their signatures against the keys (a
+package that fails is left out with a warning), and builds and signs the
+metadata in pinned Debian and Alpine images (Docker). `pages.yml` builds
+the site into `_site`, runs `packaging/repo/build-pages.sh _site` and
+deploys it. It needs these in the step's environment:
+
+```yaml
+env:
+  PACKAGE_GPG_KEY: ${{ secrets.PACKAGE_GPG_KEY }}
+  PACKAGE_APK_KEY: ${{ secrets.PACKAGE_APK_KEY }}
+  PACKAGE_SIGNING_REQUIRED: ${{ github.repository == 'Sparkz400/Relayweft' }}
+  GH_TOKEN: ${{ github.token }}
+```
+
+Without the keys it builds nothing and says so. With
+`PACKAGE_SIGNING_REQUIRED=true` and the public keys in `packaging/keys/`,
+it fails instead, so the site never loses its repositories silently.
+After each release the release workflow starts `pages.yml` (a release
+made with `GITHUB_TOKEN` triggers no workflow), so it needs a
+`workflow_dispatch` trigger.
+
+`repo/test.sh` tests all of this with throwaway keys made for the test
+(the `package-repo` job of the `packaging` workflow runs it). It signs the
+packages of four versions, builds the repositories, and in Debian, Ubuntu,
+Fedora and Alpine containers checks that apt, dnf and apk refuse the
+repository with another key, install 0.0.2 and upgrade it to 0.0.3, and
+that `rw update --check` names the upgrade command:
+
+```sh
+sh packaging/repo/test.sh   # from the repo root; needs Go and Docker
+```
+
+### Signing keys
+
+Two key pairs sign the packages and the repositories: a GPG key (`.deb`,
+`.rpm`, apt's `InRelease`, dnf's `repomd.xml`) and an RSA key (`.apk` and
+`APKINDEX`). The private keys are repository secrets and have no
+passphrase; the secret store protects them. To set them up, once, on a
+trusted machine with `gpg`, `openssl` and the `gh` CLI:
+
+1. Create the keys (the GPG key does not expire, so users' keyrings keep
+   working; replace it if it leaks):
+
+   ```sh
+   export GNUPGHOME="$(mktemp -d)"
+   mkdir -p packaging/keys
+   gpg --batch --passphrase '' --quick-gen-key \
+     "Relayweft packages <62327601+Sparkz400@users.noreply.github.com>" rsa4096 sign never
+   gpg --armor --export-secret-keys > relayweft-signing.key
+   gpg --armor --export > packaging/keys/relayweft-signing-key.asc
+   openssl genrsa -out relayweft-apk.rsa 4096
+   openssl rsa -in relayweft-apk.rsa -pubout -out packaging/keys/relayweft-apk.rsa.pub
+   ```
+
+2. Add the private keys as secrets of this repository:
+
+   ```sh
+   gh secret set PACKAGE_GPG_KEY --repo Sparkz400/Relayweft < relayweft-signing.key
+   gh secret set PACKAGE_APK_KEY --repo Sparkz400/Relayweft < relayweft-apk.rsa
+   ```
+
+   Keep a copy of both files offline (a password manager), then delete
+   them and `$GNUPGHOME`.
+3. Commit `packaging/keys/relayweft-signing-key.asc` and
+   `packaging/keys/relayweft-apk.rsa.pub`. From then on the release
+   workflow and `build-pages.sh` fail in this repository when the secrets
+   are missing or do not match these files, instead of shipping unsigned
+   packages or a site without repositories.
+4. Turn on Pages: **Settings > Pages > Source: GitHub Actions**.
+   `pages.yml` needs the environment shown above and a `workflow_dispatch`
+   trigger.
+
+Without the secrets (forks, pull requests, before step 3) the packages
+are built unsigned, with a notice, and `build-pages.sh` builds no
+repository. With only one of the two secrets nothing is built: a release
+is signed completely or not at all.
 
 ## Homebrew
 
@@ -348,7 +482,13 @@ them apart by the binary's real path (after symlinks): Homebrew's
 `/usr/` the package database (`dpkg-query -S`, `rpm -qf`, `pacman -Qo`,
 `apk info --who-owns`, run with `LC_ALL=C`). In those cases `rw update --check`
 names the package manager's command, and `rw update` prints it and
-changes nothing. `rw update --force` replaces the binary anyway.
+changes nothing. For a `.deb`, `.rpm` or `.apk` that is the repository's
+upgrade command (`sudo apt update && sudo apt install --only-upgrade
+relayweft`, `sudo dnf upgrade relayweft`, `sudo apk update && sudo apk
+upgrade relayweft`) when the setup above was done
+(`/etc/apt/sources.list.d/relayweft.list`, `/etc/yum.repos.d/relayweft.repo`
+or a `relayweft` line in `/etc/apk/repositories`), and otherwise the
+release's package and a pointer to the setup. `rw update --force` replaces the binary anyway.
 
 ## Private repository
 
