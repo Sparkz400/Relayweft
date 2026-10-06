@@ -332,6 +332,14 @@ func TestLoad(t *testing.T) {
 
 	m := newLoadMonitor(t, dir, out)
 	m.logs = logs
+	if out != "" {
+		// Where rw's own CPU goes (go tool pprof cpu.pprof).
+		if f, err := os.Create(filepath.Join(out, "cpu.pprof")); err == nil {
+			if pprof.StartCPUProfile(f) == nil {
+				defer func() { pprof.StopCPUProfile(); f.Close() }()
+			}
+		}
+	}
 	m.base = sampleResources()
 	m.cpu0 = loadCPU()
 	m.wall0 = time.Now()
