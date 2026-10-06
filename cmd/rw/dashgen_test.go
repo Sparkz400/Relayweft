@@ -438,12 +438,18 @@ func (w *dashWeb) waitAvailable() {
 			Now       time.Time `json:"now"`
 			Providers map[string]struct {
 				LimitedUntil *time.Time `json:"limited_until"`
+				Quota        *struct {
+					Utilization float64   `json:"utilization"`
+					ResetsAt    time.Time `json:"resets_at"`
+				} `json:"quota"`
 			} `json:"providers"`
 		}
 		w.do("GET", "/api/state", nil, &st)
 		busy := false
 		for _, p := range st.Providers {
 			busy = busy || (p.LimitedUntil != nil && p.LimitedUntil.After(st.Now))
+			// A nearly full quota moves work away (switch_at_utilization).
+			busy = busy || (p.Quota != nil && p.Quota.Utilization >= 0.9 && p.Quota.ResetsAt.After(st.Now))
 		}
 		if !busy {
 			return
@@ -1006,6 +1012,11 @@ func dashRepo(t *testing.T, dir string) string {
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "core.autocrlf", "false"}, {"add", "-A"},
 		{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"}} {
 		run(t, dir, args...)
+	}
+	// As a shell's cd gives it: rw stats --here compares the folder rw ran
+	// in, and macOS's temp folder is behind a symlink.
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
 	}
 	return dir
 }
