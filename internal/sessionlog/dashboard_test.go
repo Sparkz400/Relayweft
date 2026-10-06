@@ -262,6 +262,14 @@ func TestDashboardUnavailableCLI(t *testing.T) {
 			t.Errorf("claude:sonnet:medium: %d runs, %d limit hits, %d unavailable; want 0, 1, 1", r.Runs, r.LimitHits, r.Unavailable)
 		}
 	}
+	// A logout's "until" is no reset time (rw run --when-reset).
+	if at, _, ok := LatestReset(recs, event.Codex); ok {
+		t.Errorf("codex resets at %s, from its missing CLI", at)
+	}
+	e := BuildExport(recs, ExportOptions{Machine: "m"})
+	if len(e.Days) != 1 || e.Days[0].LimitHits != 1 || e.Days[0].Unavailable != 2 {
+		t.Errorf("export: %+v; want 1 limit hit and 2 unavailable", e.Days)
+	}
 	st := Aggregate(recs, Filter{})
 	for _, r := range st.Routes {
 		if r.Key == "claude:sonnet" && (r.LimitHits != 1 || r.Unavailable != 1) {

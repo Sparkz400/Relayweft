@@ -82,10 +82,11 @@ type Record struct {
 	Quota      *event.QuotaInfo  `json:"quota,omitempty"` // quota
 	Until      *time.Time        `json:"until,omitempty"` // limit: limited until (the reset time when known)
 
-	// Unavailable marks a limit (and its agent_end) that was no usage
-	// limit: the CLI was logged out or missing, and rw routed around it the
-	// same way. See IsUnavailable for records from before this field.
-	Unavailable bool `json:"unavailable,omitempty"`
+	// Unavailable says whether a limit record (and its agent_end) was no
+	// usage limit: the CLI was logged out or missing, and rw routed around
+	// it the same way. Always set on those records, so nil means a log from
+	// before the field (see IsUnavailable).
+	Unavailable *bool `json:"unavailable,omitempty"`
 }
 
 // Bool returns a pointer for Record.OK.
@@ -104,8 +105,8 @@ func UnavailableError(msg string) bool { return reUnavailable.MatchString(msg) }
 // Logs written before Record.Unavailable (sy, rw 0.3) are told by the
 // error text.
 func IsUnavailable(r Record) bool {
-	if r.Unavailable {
-		return true
+	if r.Unavailable != nil {
+		return *r.Unavailable
 	}
 	switch {
 	case r.Type == TypeLimit:

@@ -825,6 +825,7 @@ func compareStats(t *testing.T, what string, d dashView, export string) {
 				Fresh     int64   `json:"fresh_tokens"`
 				USD       float64 `json:"usd"`
 				LimitHits int     `json:"limit_hits"`
+				Unavail   int     `json:"unavailable"`
 			} `json:"models"`
 		} `json:"days"`
 	}
@@ -836,8 +837,8 @@ func compareStats(t *testing.T, what string, d dashView, export string) {
 		days[dd.Date] = i
 	}
 	type model struct {
-		calls, ok, limit int
-		fresh            int64
+		calls, ok, limit, unavail int
+		fresh                     int64
 	}
 	em, dm := map[string]*model{}, map[string]*model{}
 	for _, ed := range e.Days {
@@ -859,6 +860,7 @@ func compareStats(t *testing.T, what string, d dashView, export string) {
 			em[k].calls += m.Calls
 			em[k].ok += m.OK
 			em[k].limit += m.LimitHits
+			em[k].unavail += m.Unavail
 			em[k].fresh += m.Fresh
 		}
 	}
@@ -871,7 +873,8 @@ func compareStats(t *testing.T, what string, d dashView, export string) {
 		// unavailable CLIs apart.
 		dm[k].calls += r.Runs + r.LimitHits + r.Unavailable
 		dm[k].ok += r.OK
-		dm[k].limit += r.LimitHits + r.Unavailable
+		dm[k].limit += r.LimitHits
+		dm[k].unavail += r.Unavailable
 		dm[k].fresh += r.Tokens
 	}
 	var keys []string

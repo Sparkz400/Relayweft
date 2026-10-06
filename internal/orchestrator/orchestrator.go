@@ -546,9 +546,9 @@ func (o *Orchestrator) snapshotAfter(t *task) {
 	}
 	if err != nil {
 		o.logf("warning: could not record the end state of this task, so rw undo cannot undo it: %v", err)
-		return
+	} else {
+		trimUndo(t.root)
 	}
-	trimUndo(t.root)
 	o.snapshotAfterExtras(t)
 }
 
@@ -1979,18 +1979,27 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 		}
 		o.opts.Tracker.MarkLimited(d.Provider, until)
 		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err), Until: &until,
-			Unavailable: unavailable})
+			Unavailable: sessionlog.Bool(unavailable)})
 		o.emit(event.Event{Kind: event.ProviderState, Provider: d.Provider, Until: until, Text: fmt.Sprintf("%s %s until %s; /limit %s reset to retry", d.Provider, why, until.Format("15:04"), d.Provider)})
 	}
 	tk := res.Tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
-		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit, Unavailable: unavailable,
+		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit, Unavailable: limitFlag(res.LimitHit, unavailable),
 		Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files, Text: clip(res.Final, 500)})
 	// Over budget now? Only noted: this agent's work is done, and a task
 	// whose last agent crossed a limit is finished, not stopped. The next
 	// agent's check (if one starts) asks or stops.
 	o.noteBudget(t, agentID)
 	return d, res
+}
+
+// limitFlag is an agent_end's "unavailable": set (true or false) with a
+// limit hit, left out otherwise.
+func limitFlag(limitHit, unavailable bool) *bool {
+	if !limitHit {
+		return nil
+	}
+	return sessionlog.Bool(unavailable)
 }
 
 // busy reports whether the machine is too loaded to start another agent.

@@ -35,7 +35,7 @@ import (
 // Export format identifiers.
 const (
 	ExportFormat  = "relayweft-stats"
-	ExportVersion = "1.0"
+	ExportVersion = "1.1" // 1.1: unavailable
 	exportMajor   = "1"
 	// What sy (Switchyard, v0.2.0 and older) wrote: the same format, so a
 	// team's budget dir with exports from sy machines still counts them.
@@ -68,6 +68,9 @@ type ExportDay struct {
 	USD         float64          `json:"usd"`
 	Providers   map[string]int64 `json:"providers,omitempty"`
 	LimitHits   int              `json:"limit_hits"`
+	// Unavailable are runs whose CLI was logged out or missing (since 1.1;
+	// before, limit_hits counted them).
+	Unavailable int `json:"unavailable,omitempty"`
 	// Models are the agent runs of the day per provider and model (runs
 	// of tasks still going count here before their task does).
 	Models []ExportModel `json:"models,omitempty"`
@@ -82,6 +85,7 @@ type ExportModel struct {
 	FreshTokens int64   `json:"fresh_tokens"`
 	USD         float64 `json:"usd"`
 	LimitHits   int     `json:"limit_hits"`
+	Unavailable int     `json:"unavailable,omitempty"` // since 1.1
 }
 
 // ExportTask is one finished task (only with --with-tasks).
@@ -140,7 +144,11 @@ func BuildExport(recs []Record, o ExportOptions) Export {
 			if r.OK != nil && *r.OK {
 				m.OK++
 			}
-			if r.LimitHit {
+			switch {
+			case r.LimitHit && IsUnavailable(r):
+				m.Unavailable++
+				d.Unavailable++
+			case r.LimitHit:
 				m.LimitHits++
 				d.LimitHits++
 			}
@@ -618,6 +626,7 @@ func PrintMerged(w io.Writer, exps []Export, dayUSD float64, dayTokens int64) {
 				r.m.Calls += m.Calls
 				r.m.OK += m.OK
 				r.m.LimitHits += m.LimitHits
+				r.m.Unavailable += m.Unavailable
 				r.m.FreshTokens += m.FreshTokens
 				r.m.USD += m.USD
 			}

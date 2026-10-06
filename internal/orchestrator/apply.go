@@ -349,7 +349,9 @@ func (a *applier) apply(write, remove []rawEntry, merged map[string]*mergedFile)
 			}
 		}
 		a.written = append(a.written, chunk...)
-		if err := a.g.restorePaths(a.to, paths); err != nil {
+		// The files are checked again before every run: while restore waits
+		// for another git's lock, the user may save one of them.
+		if err := a.g.restorePathsChecked(a.to, paths, func() error { return a.recheck(paths) }); err != nil {
 			return err
 		}
 		if applyHook != nil {
@@ -448,7 +450,9 @@ func (a *applier) rollback() error {
 			problems = append(problems, e.path)
 		}
 	}
-	if err := a.g.restorePaths(a.from, restore); err != nil {
+	// Only files still as apply left them (or gone) are put back, also
+	// when restore runs again after waiting for another git's lock.
+	if err := a.g.restorePathsChecked(a.from, restore, func() error { return a.stillOurs(restore) }); err != nil {
 		problems = append(problems, restore...)
 	}
 	sort.Slice(a.newDirs, func(i, j int) bool { return strings.Count(a.newDirs[i], "/") > strings.Count(a.newDirs[j], "/") })
@@ -462,14 +466,56 @@ func (a *applier) rollback() error {
 	return nil
 }
 
+// stillOurs checks the files rollback is about to put back: each still
+// holds what apply wrote, or is gone.
+func (a *applier) stillOurs(paths []string) error {
+	ids, _, err := a.g.worktreeIDs(paths)
+	if err != nil {
+		return err
+	}
+	ours := map[string]string{}
+	for _, e := range a.written {
+		ours[e.path] = e.newID
+	}
+	var changed []string
+	for _, p := range paths {
+		if cur := ids[p]; cur != "" && cur != ours[p] {
+			changed = append(changed, p)
+		}
+	}
+	if len(changed) > 0 {
+		return errEditedDuringApply{changed}
+	}
+	return nil
+}
+
 // restorePaths writes paths as they are in source, through git's checkout
 // filters. The paths go in on stdin.
 func (g git) restorePaths(source string, paths []string) error {
+	return g.restorePathsChecked(source, paths, nil)
+}
+
+// restorePathsChecked is restorePaths that calls check before every run of
+// restore: one that found another git's lock taken runs again, but only if
+// check still passes.
+func (g git) restorePathsChecked(source string, paths []string, check func() error) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	_, err := g.run(nil, nulList(paths), "restore", "--source="+source, "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul")
-	return err
+	var lw lockWait
+	for {
+		if check != nil {
+			if err := check(); err != nil {
+				return err
+			}
+		}
+		_, err := g.runOnce(nil, nulList(paths), "restore", "--source="+source, "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul")
+		var ge *gitError
+		if err != nil && errors.As(err, &ge) && lw.again(g, ge.msg) {
+			continue
+		}
+		return err
+	}
 }
 
 // removeEmptyParents removes the directories above the removed file p that

@@ -264,7 +264,7 @@ func TestLoad(t *testing.T) {
 	began := time.Now()
 	dir := filepath.Join(work, "repo")
 	if src := os.Getenv("RW_LOAD_REPO"); src != "" {
-		loadGit(t, work, "clone", "-q", "--local", src, dir)
+		loadGit(t, work, "clone", "-q", src, dir)
 	} else {
 		n, _ := strconv.Atoi(os.Getenv("RW_LOAD_FILES"))
 		loadSynthRepo(t, dir, max(n, 1500))
@@ -324,7 +324,9 @@ func TestLoad(t *testing.T) {
 				mine = append(mine, f)
 			}
 		}
-		writers[i] = &loadWriter{id: i + 1, o: o, files: mine, rng: rand.New(rand.NewSource(int64(i) + time.Now().UnixNano())),
+		seed := int64(i) + time.Now().UnixNano()
+		t.Logf("writer %d: seed %d", i+1, seed)
+		writers[i] = &loadWriter{id: i + 1, o: o, files: mine, rng: rand.New(rand.NewSource(seed)),
 			live: map[loadMark]bool{}, gone: map[loadMark]bool{}}
 	}
 
@@ -337,14 +339,15 @@ func TestLoad(t *testing.T) {
 	defer stopMon()
 
 	var gate sync.RWMutex // writers hold it shared per round; a quiet point takes it
-	deadline := time.Now().Add(total)
+	var stop atomic.Bool
+	time.AfterFunc(total, func() { stop.Store(true) })
 	var wg sync.WaitGroup
 	errc := make(chan error, loadWriters)
 	for _, w := range writers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for round := 1; time.Now().Before(deadline); round++ {
+			for round := 1; !stop.Load(); round++ {
 				gate.RLock()
 				err := w.round(t, dir, state, round)
 				gate.RUnlock()
@@ -363,14 +366,14 @@ func TestLoad(t *testing.T) {
 		case err := <-errc:
 			t.Error(err)
 			// The others stop at the deadline; do not wait for it.
-			deadline = time.Now()
+			stop.Store(true)
 			<-done
 		case <-time.After(quiet):
 			gate.Lock()
 			m.quietPoint(fmt.Sprintf("quiet %d", q), writers)
 			gate.Unlock()
 			if t.Failed() {
-				deadline = time.Now()
+				stop.Store(true)
 				<-done
 				m.report(writers, events.Load())
 				return
@@ -455,10 +458,13 @@ func (w *loadWriter) round(t *testing.T, dir, state string, round int) error {
 				return fmt.Errorf("resumed task %s failed: %s", key, res.Summary)
 			}
 		} else {
-			// Not resumed: what landed stays, the hung step's edits do not.
+			// Not resumed: what landed stays, the hung step's edits do not
+			// (they stay in its worktree or on a branch).
 			for _, mk := range marks {
 				if loadHas(dir, mk) {
 					w.live[mk] = true
+				} else {
+					w.gone[mk] = true
 				}
 			}
 			return nil
@@ -665,9 +671,17 @@ func (m *loadMonitor) quietPoint(name string, writers []*loadWriter) {
 		tasks += w.tasks
 	}
 	c := loadCPU()
-	t.Logf("%s at %s: %d tasks; goroutines %d (base %d), heap %s, handles %d, processes %d; pool %d slots (%d registered), %s; %d refs; rw CPU %s",
+	line := fmt.Sprintf("%s at %s: %d tasks; goroutines %d (base %d), heap %s, handles %d, processes %d; pool %d slots (%d registered), %s; %d refs; rw CPU %s",
 		name, time.Since(m.wall0).Round(time.Second), tasks, r.goroutines, m.base.goroutines, mb(r.heap), r.handles, r.stray,
 		slots, worktrees, mb(uint64(bytes)), m.refs, (c.self - m.cpu0.self).Round(time.Second))
+	t.Log(line)
+	// Kept as it goes: a run stopped by the job's time limit still has it.
+	if out := os.Getenv("RW_LOAD_OUT"); out != "" {
+		if f, err := os.OpenFile(filepath.Join(out, "quiet-points.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			fmt.Fprintln(f, line)
+			f.Close()
+		}
+	}
 	m.row(name, r)
 }
 

@@ -49,6 +49,80 @@ func TestGitWaitsForAnotherGitsLock(t *testing.T) {
 	if took := time.Since(start); took < lockRetryFor {
 		t.Errorf("gave up after %s, before the %s wait", took, lockRetryFor)
 	}
+
+	// A lock older than the wait was left behind: no wait at all.
+	lockRetryFor = 5 * time.Second
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(lock, old, old)
+	start = time.Now()
+	if _, err := g.run(nil, nil, "restore", "--worktree", "--", "README.md"); err == nil {
+		t.Fatal("restore with a lock left behind an hour ago worked")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("waited %s for a lock left behind", took)
+	}
+}
+
+// A merge into the tree that waits for another git's lock checks the files
+// again before it writes: a file the user saved meanwhile is not
+// overwritten (the editor's own git holding index.lock right after a save
+// is the likely case). Found in review of the lock wait.
+func TestApplyWaitingForALockKeepsUserEdits(t *testing.T) {
+	dir := gitRepo(t)
+	g := git{dir}
+	p := filepath.Join(dir, "shared.txt")
+	from, err := g.snapshot("from")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(p, []byte("agent\n"), 0o644)
+	to, err := g.snapshot("to")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(p, []byte("base\n"), 0o644)
+	lock := filepath.Join(dir, ".git", "index.lock")
+	os.WriteFile(lock, nil, 0o644)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		os.WriteFile(p, []byte("the user's edit\n"), 0o644)
+		os.Remove(lock)
+	}()
+	err = g.applyDiff(from, to)
+	if err == nil {
+		t.Fatal("the merge went on although the file changed while it waited")
+	}
+	if got := read(t, p); got != "the user's edit\n" {
+		t.Errorf("shared.txt = %q, want the user's edit kept (%v)", got, err)
+	}
+}
+
+// Found by the load test: the snapshot before an undo, or at a task's end,
+// failed when another rw removed a file while git add -A read the tree
+// ("unable to stat ...: No such file", "unable to index file"). The tree
+// is read again then.
+func TestSnapshotReadsTheTreeAgain(t *testing.T) {
+	dir := gitRepo(t)
+	p := filepath.Join(dir, "busy.txt")
+	os.WriteFile(p, []byte("x\n"), 0o644)
+	release := holdUnreadable(t, p)
+	defer release()
+	tries := 0
+	snapshotRetried = func(try int) {
+		tries = try
+		release()
+	}
+	defer func() { snapshotRetried = nil }()
+	snap, err := (git{dir}).snapshot("test")
+	if err != nil {
+		t.Fatalf("snapshot while a file was unreadable for a moment: %v", err)
+	}
+	if tries != 1 {
+		t.Errorf("read the tree again %d times, want 1", tries)
+	}
+	if out, _ := (git{dir}).out("show", snap+":busy.txt"); out != "x" {
+		t.Errorf("busy.txt in the snapshot = %q", out)
+	}
 }
 
 // A task whose end state cannot be recorded says so: rw undo cannot undo
@@ -60,8 +134,12 @@ func TestSnapshotRecordFailureIsReported(t *testing.T) {
 	dir := gitRepo(t)
 	set := both(func(s runner.Spec) runner.Result {
 		if strings.Contains(s.Prompt, "[RW:STEP]") {
-			os.WriteFile(filepath.Join(s.Dir, "new.txt"), []byte("created\n"), 0o644)
-			return runner.Result{Final: "edited", Files: []string{"new.txt"}}
+			name := "new.txt"
+			if strings.Contains(s.Prompt, "another") {
+				name = "other.txt"
+			}
+			os.WriteFile(filepath.Join(s.Dir, name), []byte("created\n"), 0o644)
+			return runner.Result{Final: "edited", Files: []string{name}}
 		}
 		return approve()
 	})
@@ -87,7 +165,7 @@ func TestSnapshotRecordFailureIsReported(t *testing.T) {
 
 	// Undo refuses to start when it cannot keep the state before it (a
 	// redo needs it), and changes nothing.
-	res = o.Run(context.Background(), "create a new file")
+	res = o.Run(context.Background(), "create another file")
 	if !res.OK {
 		t.Fatalf("%+v", res)
 	}
@@ -97,7 +175,7 @@ func TestSnapshotRecordFailureIsReported(t *testing.T) {
 	if _, err := Undo(dir, res.UndoKey, false, false); err == nil || !strings.Contains(err.Error(), "before the undo") {
 		t.Fatalf("undo without its pre-undo record: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "new.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "other.txt")); err != nil {
 		t.Errorf("the refused undo changed the tree: %v", err)
 	}
 }
