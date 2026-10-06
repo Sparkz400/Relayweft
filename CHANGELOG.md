@@ -38,6 +38,7 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Fixed
 
+- On Linux and macOS, killing rw now also stops its agents and their children in the same process group; resume keeps their half-done work. ([#53](https://github.com/Sparkz400/Relayweft/pull/53))
 - A user edit merged with an agent's change could lose the end of the agent's file when the disk was full; it now counts as a conflict and leaves the file as it was. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
 - `rw bench` blamed "another rw bench" for a workspace folder it could not create. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
 - Commit messages reach git on stdin, so very long task texts work on Windows. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))

@@ -19,6 +19,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/forge"
 	"github.com/sparkz400/relayweft/internal/limits"
 	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/proc"
 	"github.com/sparkz400/relayweft/internal/router"
 	"github.com/sparkz400/relayweft/internal/runner"
 	"github.com/sparkz400/relayweft/internal/sessionlog"
@@ -201,6 +202,7 @@ func runReview(ctx context.Context, c *common, ref string, o reviewOptions) erro
 	if err != nil {
 		return err
 	}
+	_ = proc.Guard()
 	cfg := store.Get()
 	if p := reviewerFor(cfg, writer); p != "" {
 		c.provider = p

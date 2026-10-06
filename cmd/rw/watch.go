@@ -654,6 +654,7 @@ func (w *watcher) round(ctx context.Context, e watchEntry, client forge.Client, 
 		w.note(&e, "skipped: %v", err)
 		return e
 	}
+	_ = proc.Guard()
 	cfg := store.Get()
 	if max := cfg.Watch.MaxRounds; e.Rounds >= max {
 		w.note(&e, "%d new item(s), but its %d follow-up round(s) are used up (watch.max_rounds)", len(items), max)

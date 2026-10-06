@@ -189,7 +189,7 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 - A resumed step is told that it was interrupted.
 - A step that was running when `rw` died continues its agent's own session, in the folder it ran in, with its half-done edits. The session id is saved as soon as the CLI reports it. Without a usable session, a fresh agent takes over.
 - A follow-up to an agent that ran in a pool worktree (Claude or Codex) resumes it in that worktree. A stopped follow-up's work is kept on a branch.
-- On macOS the agent of a killed `rw` is stopped by the next `rw` (it checks the process's start time), and the step continues in its own worktree.
+- On Linux and macOS, killing `rw` now stops its agents and their children in the same process group through a pipe-watching shell wrapper, as the Windows job already does. Resume still continues the agent's session with its half-done edits. Verified with scripted agents on Linux (WSL and CI), macOS (CI) and Windows; real Claude Code and Codex have not been checked. A process that moves out of its process group (`setsid`) can escape cleanup. ([#53](https://github.com/Sparkz400/Relayweft/pull/53))
 - The half-done edits of an interrupted step are saved on a branch (`rw/<task>/<step>-unfinished`) before its worktree is freed after 7 days or removed by `rw clean`. `rw history` and `rw resume` say where they are, with commands that work in Windows PowerShell 5.1 too.
 - The worktree pool keeps its size: a step cancelled before its agent changed anything holds no worktree, and a full pool gives up the oldest held worktree after saving its edits on a branch. A resume racing that waits for it, and edits a step left behind elsewhere are saved before reuse. The 30-minute stress test passes again (it had failed since mid-step resume).
 - A guided first run (`rw setup`): it finds the agent CLIs, checks versions and logins without using quota, says how to install or log in, writes the config with the ready ones and offers a read-only first task. `rw`, `rw run` and `rw web` start it when there is no config (not in CI, or with `RW_NO_SETUP=1`).
@@ -199,7 +199,6 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 **Remaining gaps:**
 - **2.3 Tests:** Codex runs commands in its own sandbox, not from an allowlist, so `verify.commands` can only restrict Claude. Codex offers no allowlist, so this is a limit of the CLI.
 - **2.3 Affected tests:** only the Go selection was run for real (on this repo). The jest/vitest, pytest, cargo, dotnet, Maven and Gradle selections are tested on file trees, not yet on real projects.
-- **2.5 Resume:** on Linux and macOS the agent of a killed `rw` keeps running (and spending) until the next `rw` takes its worktree.
 - **2.8 Distribution:**
   - Code signing of the Windows and macOS binaries needs a certificate (Authenticode, Apple notarization). Release integrity does not: from v0.4.0 every asset has GitHub build provenance, each binary a CycloneDX SBOM (attested), and `checksums.txt` a keyless Sigstore signature (`packaging/README.md`, "Verifying a release"). Not yet seen on a real release until v0.4.0 is cut; a dry run passed.
   - `rw update` checks only the SHA-256; it prints the `gh attestation verify` command instead of verifying the signature itself (that would need sigstore-go and a fresh trust root).
