@@ -89,7 +89,7 @@ func newAzure(api, token string, notes io.Writer) *azure {
 	a.header.Set("X-TFS-FedAuthRedirect", "Suppress")
 	a.forbidden = "A personal access token needs the scopes Code (read and write), Work Items (read and write), Build (read) and Project and Team (read)"
 	// Azure DevOps answers a scope the token lacks with a 401 too.
-	a.keepToken = true
+	a.keep = true
 	return a
 }
 

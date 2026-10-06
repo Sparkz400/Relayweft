@@ -169,25 +169,61 @@ data class FileView(
     }
 }
 
-data class ChangeView(val stepId: String, val title: String, val summary: String, val round: Int, val files: List<FileView>) {
+data class ChangeView(
+    val stepId: String,
+    val title: String,
+    val summary: String,
+    val round: Int,
+    val files: List<FileView>,
+    /** Set when the change set is an agent's resolution of a merge conflict. */
+    val conflict: String = "",
+) {
     companion object {
         fun from(v: Any?): ChangeView {
             val m = v.asObj()
-            return ChangeView(m.str("step_id"), m.str("title"), m.str("summary"), m.int("round"), m["files"].asList().map { FileView.from(it) })
+            return ChangeView(
+                m.str("step_id"), m.str("title"), m.str("summary"), m.int("round"), m["files"].asList().map { FileView.from(it) },
+                m.str("conflict"),
+            )
         }
     }
 }
 
 data class BudgetView(val text: String, val hint: String)
 
+/** A merge conflict between two steps (or a step and your uncommitted edits): let an agent resolve it, or keep it on a branch. */
+data class ConflictView(
+    val task: String,
+    val stepId: String,
+    val title: String,
+    /** "step a (Add the flag)" or "your uncommitted edits". */
+    val with: String,
+    val files: List<String>,
+    /** The conflict is with your own uncommitted edits. */
+    val yours: Boolean,
+    val text: String,
+    val hint: String,
+) {
+    companion object {
+        fun from(v: Any?): ConflictView {
+            val m = v.asObj()
+            return ConflictView(
+                m.str("task"), m.str("step_id"), m.str("title"), m.str("with"), m.strings("files"), m.bool("yours"),
+                m.str("text"), m.str("hint"),
+            )
+        }
+    }
+}
+
 data class ApprovalRequest(
     val id: String,
-    /** plan, changes or budget. */
+    /** plan, changes, budget or conflict. */
     val type: String,
     val task: String,
     val plan: Plan?,
     val changes: ChangeView?,
     val budget: BudgetView?,
+    val conflict: ConflictView?,
     val created: String,
 ) {
     companion object {
@@ -198,6 +234,7 @@ data class ApprovalRequest(
                 m.obj("plan")?.let { Plan.from(it) },
                 m.obj("changes")?.let { ChangeView.from(it) },
                 m.obj("budget")?.let { BudgetView(it.str("text"), it.str("hint")) },
+                m.obj("conflict")?.let { ConflictView.from(it) },
                 m.str("created"),
             )
         }

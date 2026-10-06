@@ -26,6 +26,8 @@ import (
 //     AZURE_DEVOPS_EXT_PAT (the variable of the az devops CLI): a personal
 //     access token, or a Microsoft Entra access token (a JWT, sent as a
 //     bearer token).
+//   - Bitbucket: BITBUCKET_TOKEN, for bitbucket.org only (Bitbucket Cloud
+//     has no other host): an access token, or "<email>:<API token>".
 //
 // When GITLAB_HOST (GITEA_HOST, FORGEJO_HOST, AZURE_DEVOPS_HOST) is set,
 // the GitLab (Gitea, Azure DevOps) variables are for the hosts it names
@@ -61,6 +63,13 @@ func Token(k Kind, host string) (token, source string) {
 		// The az devops CLI's token is for dev.azure.com, never a server.
 		if hostName(host) == azureCloud {
 			if t, v := firstEnv("AZURE_DEVOPS_EXT_PAT"); t != "" {
+				return t, v
+			}
+		}
+		return "", ""
+	case Bitbucket:
+		if isBitbucketCloud(host) {
+			if t, v := firstEnv("BITBUCKET_TOKEN"); t != "" {
 				return t, v
 			}
 		}
@@ -126,9 +135,9 @@ var GLabToken = func(host string) string {
 }
 
 // reCloses matches closing keywords followed by a same-repository issue
-// number: "Closes #12", "fixes #3", "Resolved #7", and GitLab's "Fixing",
-// "Implements" and so on.
-var reCloses = regexp.MustCompile(`(?i)\b(?:clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)\s*:?\s+#(\d+)\b`)
+// number: "Closes #12", "fixes #3", "Resolved #7", GitLab's "Fixing",
+// "Implements" and so on, and Bitbucket's "fixes issue #4".
+var reCloses = regexp.MustCompile(`(?i)\b(?:clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)\s*:?\s+(?:(?:issue|bug|ticket)\s+)?#(\d+)\b`)
 
 // ClosedBy returns the issue numbers the pull requests' bodies close.
 func ClosedBy(pulls []Pull) map[int]bool {

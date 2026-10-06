@@ -76,6 +76,11 @@ type TaskOptions struct {
 	// Force resumes a task that is no longer marked running (it finished,
 	// failed or was cancelled): its unfinished steps run again.
 	Force bool
+	// Started, if set, gets the task's id (its saved state's, which rw
+	// history, rw resume and rw report take) as the task starts, before
+	// its TaskStart event. A task refused at once (its state is locked by
+	// another rw, or a resume that no longer applies) never calls it.
+	Started func(id string)
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -265,6 +270,11 @@ type stepResult struct {
 	files  []string
 	tokens event.TokenUsage // of every attempt
 	bestOf string           // how a best-of step's winner was picked (bestof.go)
+	// dec is the route of the agent whose work this is (a resolve step
+	// runs on it by default, resolve.go).
+	dec event.Decision
+	// resolved says how the step's merge conflicts were resolved.
+	resolved string
 }
 
 // task is the per-run state.
@@ -278,6 +288,9 @@ type task struct {
 	snapshot string // integration commit (snapshot + merges)
 	start    string // snapshot at execute start, for the final diff
 	mergeMu  sync.Mutex
+	// landings are the steps whose work landed in this repo, in order
+	// (guarded by mergeMu): the other side of a later conflict (resolve.go).
+	landings []landing
 	mainProv string
 	tokensMu sync.Mutex
 	tokens   event.TokenUsage
@@ -524,8 +537,15 @@ func (o *Orchestrator) snapshotBefore(t *task) {
 	}
 	t.useGit = true
 	t.snapshot, t.start = snap, snap
+	if t.keepBefore {
+		t.tokensMu.Lock()
+		git{root}.keepAgentFiles(t.key, &t.agentFiles)
+		t.tokensMu.Unlock()
+	}
 	if o.opts.Bench == "" && !t.keepBefore {
-		git{root}.recordSnapshot(t.key, "before", snap)
+		if err := (git{root}).recordSnapshot(t.key, "before", snap); err != nil {
+			o.logf("warning: could not record the start state of this task, so rw undo cannot undo it: %v", err)
+		}
 	}
 }
 
@@ -538,8 +558,13 @@ func (o *Orchestrator) snapshotAfter(t *task) {
 	t.tokensMu.Lock()
 	msg := afterMessage(t.text, t.agentFiles)
 	t.tokensMu.Unlock()
-	if snap, err := g.snapshot(msg); err == nil {
-		g.recordSnapshot(t.key, "after", snap)
+	snap, err := g.snapshot(msg)
+	if err == nil {
+		err = g.recordSnapshot(t.key, "after", snap)
+	}
+	if err != nil {
+		o.logf("warning: could not record the end state of this task, so rw undo cannot undo it: %v", err)
+	} else {
 		trimUndo(t.root)
 	}
 	o.snapshotAfterExtras(t)
@@ -635,6 +660,13 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 			t.state.Status = "running"
 			t.state.save()
 		}
+	}
+	if opts.Started != nil && refused == "" {
+		id := t.key
+		if t.state != nil {
+			id = t.state.ID
+		}
+		opts.Started(id)
 	}
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
@@ -773,7 +805,11 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		o.logf("%s", t.state.resumeSummary())
 		for _, s := range t.state.UnfinishedSaved() {
 			if r, ok := t.state.runningStep(s.Step); ok && r.Kept != "" {
-				o.logf("%s; the step lands its best-of winner's kept work", s.Hint())
+				what := "its best-of winner's kept work"
+				if r.Resolve != nil {
+					what = "its kept work and resolves its merge conflict anew"
+				}
+				o.logf("%s; the step lands %s", s.Hint(), what)
 				continue
 			}
 			o.logf("%s; the step starts over from your tree", s.Hint())
@@ -1252,7 +1288,7 @@ func (o *Orchestrator) execute(ctx context.Context, t *task, p Plan) map[string]
 				case bestOf:
 				case st.Kind.ReadOnly():
 					r = o.runStep(ctx, t, st, deps, stepLoc{dir: dir}, "")
-				case rp.useWT || prev.Slot != "":
+				case rp.useWT || prev.Slot != "" || prev.Resolve != nil:
 					r = o.runInWorktree(ctx, t, st, deps, "")
 				default:
 					writeSem := writeSem
@@ -1317,6 +1353,32 @@ func (o *Orchestrator) runInWorktree(ctx context.Context, t *task, st Subtask, d
 		return o.runStep(ctx, t, st, deps, stepLoc{dir: mainDir}, prompt)
 	}
 	var s *slot
+	if prev, ok := t.interruptedRun(st.ID); ok && prev.Resolve != nil && prev.Kept != "" && rp.useGit {
+		// rw stopped while an agent resolved the step's merge conflict
+		// (resolve.go): its work is kept as a commit. It lands again, and
+		// the conflict is resolved anew; the worktree it held is not
+		// needed for that.
+		t.takeInterrupted(st.ID)
+		if prev.Slot != "" {
+			unholdSlot(prev.Slot, t.state.ID, st.ID)
+		}
+		landed, ok := func() (stepResult, bool) {
+			if !rp.useWT {
+				// Writers take turns in your tree: the landing writes
+				// there. (Released before a fresh start below takes it.)
+				select {
+				case rp.writeSem <- struct{}{}:
+					defer func() { <-rp.writeSem }()
+				case <-ctx.Done():
+					return stepResult{err: "cancelled"}, true
+				}
+			}
+			return o.landKept(ctx, t, rp, st, deps, prev, mainDir, errors.New("rw stopped while an agent resolved its merge conflict with "+prev.Resolve.With))
+		}()
+		if ok {
+			return landed
+		}
+	}
 	if prev, ok := t.interruptedRun(st.ID); ok && prev.Slot != "" {
 		// rw stopped while this step's agent worked in a pool worktree:
 		// its half-done edits are there, as changes against prev.Base.
@@ -1504,53 +1566,7 @@ func (o *Orchestrator) landSlotFrom(ctx context.Context, t, rp *task, st Subtask
 		}
 		break
 	}
-	rp.mergeMu.Lock()
-	defer rp.mergeMu.Unlock()
-	tree, clean, info, err := g.mergeTreeBase(base, rp.snapshot, commit)
-	if err != nil || !clean {
-		reason := info
-		if err != nil {
-			reason = err.Error()
-		}
-		branch := o.keepBranchIn(t, rp, st.ID, commit)
-		o.mergeEvent(t, st.ID, false, fmt.Sprintf("conflict in %s; kept on %s", reason, branch))
-		t.addNote(fmt.Sprintf("%s conflicted (%s) and was NOT applied; its changes are on branch %s", st.ID, reason, branch))
-		r.ok, r.err = false, "merge conflict: "+reason
-		return r
-	}
-	merged, err := g.commitTree(tree, []string{rp.snapshot, commit}, "relayweft: merge "+st.ID)
-	if err != nil {
-		o.mergeEvent(t, st.ID, false, err.Error())
-		r.ok, r.err = false, err.Error()
-		return r
-	}
-	skipped, err := g.applyDiffReport(rp.snapshot, merged)
-	if len(skipped) > 0 {
-		o.logf("%s: submodule changes are not applied to your tree: %s", st.ID, strings.Join(skipped, ", "))
-		t.addNote(fmt.Sprintf("%s changed submodule(s) %s; Relayweft does not apply submodule changes", st.ID, strings.Join(skipped, ", ")))
-	}
-	if err != nil {
-		branch := o.keepBranchIn(t, rp, st.ID, commit)
-		o.mergeEvent(t, st.ID, false, fmt.Sprintf("could not apply to working tree (%v); kept on %s", err, branch))
-		t.addNote(fmt.Sprintf("%s could not be applied to the working tree; its changes are on branch %s", st.ID, branch))
-		r.ok, r.err = false, "apply failed"
-		return r
-	}
-	var landed []string
-	if names, err := g.out("diff", "--name-only", "-z", rp.snapshot, merged); err == nil {
-		var paths []string
-		for _, p := range strings.Split(names, "\x00") {
-			if p != "" {
-				paths = append(paths, filepath.Join(rp.root, filepath.FromSlash(p)))
-			}
-		}
-		t.noteFiles(rp.root, paths)
-		landed = paths
-	}
-	rp.snapshot = merged
-	o.mergeEvent(t, st.ID, true, fmt.Sprintf("merged %d file(s)%s", len(r.files), repoTag(rp)))
-	o.afterMerge(ctx, t, st.ID, landed)
-	return r
+	return o.mergeLand(ctx, t, rp, st, loc, r, base, commit)
 }
 
 // slotWarnings reports what an agent did in its worktree that Relayweft
@@ -1669,9 +1685,6 @@ func (o *Orchestrator) mergeEvent(t *task, stepID string, ok bool, text string) 
 
 var reNumbers = regexp.MustCompile(`\d+`)
 
-// reAuth matches CLI errors that mean "not logged in".
-var reAuth = regexp.MustCompile(`(?i)(not logged in|please (log|sign) ?in|log ?in required|unauthori[sz]ed|\b401\b|authentication (failed|required)|token (has )?expired|codex login)`)
-
 // errorSignature normalizes an error so "the same error twice" ignores
 // timestamps, line numbers and durations.
 func errorSignature(s string) string {
@@ -1737,7 +1750,7 @@ func (o *Orchestrator) runStepAs(ctx context.Context, t *task, st Subtask, deps 
 		}
 		d, res := o.runAgentAt(ctx, t, step, agentID, AgentMain, loc, p, attempt, nil)
 		used = used.Add(res.Tokens)
-		r := stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: used}
+		r := stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: used, dec: d}
 		if res.Err != nil {
 			r.err = res.Err.Error()
 		}
@@ -1816,7 +1829,7 @@ func (o *Orchestrator) resumeStep(ctx context.Context, t *task, step router.Step
 	o.logf("%s: continuing its agent's %s session, interrupted when rw stopped", st.ID, prev.Provider)
 	rp := t.repoOf(st)
 	d, res := o.runAgentAt(ctx, t, step, st.ID, AgentMain, loc, resumePrompt(st, rp.cfg.Verify.Commands), max(1, prev.Attempt), &prev)
-	r := resumedRun{stepResult: stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: res.Tokens}, killed: res.Killed}
+	r := resumedRun{stepResult: stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: res.Tokens, dec: d}, killed: res.Killed}
 	if res.Err != nil {
 		r.err = res.Err.Error()
 	}
@@ -1958,12 +1971,15 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 		}
 	}
 	why := "at usage limit"
-	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && (reAuth.MatchString(res.Err.Error()) || strings.Contains(res.Err.Error(), "not found on PATH")) {
+	unavailable := false
+	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && sessionlog.UnavailableError(res.Err.Error()) {
 		// A CLI that is logged out or missing is as unusable as one at its
-		// limit: route around it for the rest of the session.
+		// limit: route around it for the rest of the session. The log says
+		// which it was, so the dashboard does not call it a limit hit.
 		res.LimitHit = true
 		res.ResetAt = time.Now().Add(12 * time.Hour)
 		why = "unavailable (" + clip(res.Err.Error(), 120) + "; run `rw doctor`)"
+		unavailable = true
 	}
 	if res.LimitHit {
 		until := res.ResetAt
@@ -1971,18 +1987,28 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 			until = time.Now().Add(t.cfg.Providers[d.Provider].LimitCooldown.D())
 		}
 		o.opts.Tracker.MarkLimited(d.Provider, until)
-		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err), Until: &until})
+		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err), Until: &until,
+			Unavailable: sessionlog.Bool(unavailable)})
 		o.emit(event.Event{Kind: event.ProviderState, Provider: d.Provider, Until: until, Text: fmt.Sprintf("%s %s until %s; /limit %s reset to retry", d.Provider, why, until.Format("15:04"), d.Provider)})
 	}
 	tk := res.Tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
-		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit,
+		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit, Unavailable: limitFlag(res.LimitHit, unavailable),
 		Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files, Text: clip(res.Final, 500)})
 	// Over budget now? Only noted: this agent's work is done, and a task
 	// whose last agent crossed a limit is finished, not stopped. The next
 	// agent's check (if one starts) asks or stops.
 	o.noteBudget(t, agentID)
 	return d, res
+}
+
+// limitFlag is an agent_end's "unavailable": set (true or false) with a
+// limit hit, left out otherwise.
+func limitFlag(limitHit, unavailable bool) *bool {
+	if !limitHit {
+		return nil
+	}
+	return sessionlog.Bool(unavailable)
 }
 
 // busy reports whether the machine is too loaded to start another agent.

@@ -19,6 +19,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/forge"
 	"github.com/sparkz400/relayweft/internal/limits"
 	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/proc"
 	"github.com/sparkz400/relayweft/internal/router"
 	"github.com/sparkz400/relayweft/internal/runner"
 	"github.com/sparkz400/relayweft/internal/sessionlog"
@@ -101,7 +102,7 @@ func cmdReview(args []string) error {
 		fmt.Fprint(os.Stderr, `Usage: rw review <PR number|URL> [--provider <name>] [--post] [--yes]
 
 Has one agent review a pull request (GitHub, a GitLab merge request,
-Gitea/Forgejo or Azure DevOps) read-only and prints its findings
+Gitea/Forgejo, Bitbucket Cloud or Azure DevOps) read-only and prints its findings
 (file, line, severity). By default the reviewer is the provider that did not
 write the change, when rw opened the pull request; otherwise the reviewer
 role as configured. --post publishes them as one comment review (never an
@@ -202,6 +203,7 @@ func runReview(ctx context.Context, c *common, ref string, o reviewOptions) erro
 	if err != nil {
 		return err
 	}
+	_ = proc.Guard()
 	cfg := store.Get()
 	if p := reviewerFor(cfg, writer); p != "" {
 		c.provider = p

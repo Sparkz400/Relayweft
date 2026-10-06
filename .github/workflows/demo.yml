@@ -1,0 +1,53 @@
+name: demo
+
+# Records the demo (docs/demo/demo.gif and demo.webm) from docs/demo/demo.tape:
+# the real rw TUI in a throwaway repo, driven by the scripted agents in
+# docs/demo/agent, so it uses no quota. Run it by hand (Actions > demo >
+# Run workflow) after a UI change, download the "demo" artifact and commit
+# its files. Pull requests that change the demo record it too, so a tape
+# that no longer matches the UI fails before merge.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - docs/demo/**
+      - .github/workflows/demo.yml
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VHS_VERSION: 0.12.1
+      VHS_SHA256: eb33787a5b1cebf91fe0b18bd231e2d71d36c1ff4babd99ddac1a6ab411efd10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: install vhs, ttyd and ffmpeg
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ttyd ffmpeg gifsicle
+          curl -fsSL -o /tmp/vhs.tgz "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz"
+          echo "${VHS_SHA256}  /tmp/vhs.tgz" | sha256sum -c -
+          tar -xzf /tmp/vhs.tgz -C /tmp
+          sudo install /tmp/vhs_${VHS_VERSION}_Linux_x86_64/vhs /usr/local/bin/vhs
+          vhs --version
+      - name: record
+        run: docs/demo/record.sh
+        env:
+          # Ubuntu's AppArmor rules stop Chrome's sandbox on the runner;
+          # the browser only renders the terminal.
+          VHS_NO_SANDBOX: "true"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: demo
+          path: |
+            docs/demo/demo.gif
+            docs/demo/demo.webm
+          if-no-files-found: error

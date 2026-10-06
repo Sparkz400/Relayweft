@@ -85,13 +85,14 @@ func undoPrefix(root string) string {
 	return undoRefs + hex.EncodeToString(h[:])[:10] + "/"
 }
 
-// recordSnapshot stores a task snapshot ref (best effort). g.dir must be the
-// working tree's top level.
-func (g git) recordSnapshot(key, which, commit string) {
+// recordSnapshot stores a task snapshot ref. g.dir must be the working
+// tree's top level.
+func (g git) recordSnapshot(key, which, commit string) error {
 	if commit == "" {
-		return
+		return nil
 	}
-	_, _ = g.out("update-ref", undoPrefix(g.dir)+key+"/"+which, commit)
+	_, err := g.out("update-ref", undoPrefix(g.dir)+key+"/"+which, commit)
+	return err
 }
 
 func (g git) deleteSnapshot(key, which string) {
@@ -188,6 +189,19 @@ func findTask(dir, key string, undone bool) (UndoTask, string, error) {
 // agentFiles reads the agent-reported files from an after snapshot; ok is
 // false for snapshots that carry no list.
 func (g git) agentFiles(after string) (map[string]bool, bool) {
+	list, ok := g.agentFileList(after)
+	if !ok {
+		return nil, false
+	}
+	set := map[string]bool{}
+	for _, l := range list {
+		set[agentKey(l)] = true
+	}
+	return set, true
+}
+
+// agentFileList is the agent files of an after snapshot as written.
+func (g git) agentFileList(after string) ([]string, bool) {
 	msg, err := g.run(nil, nil, "log", "-1", "--format=%B", after)
 	if err != nil {
 		return nil, false
@@ -196,13 +210,30 @@ func (g git) agentFiles(after string) (map[string]bool, bool) {
 	if i < 0 {
 		return nil, false
 	}
-	set := map[string]bool{}
+	var list []string
 	for _, l := range strings.Split(msg[i+len(agentFilesMark):], "\n") {
 		if l = strings.TrimSpace(l); l != "" {
-			set[agentKey(l)] = true
+			list = append(list, l)
 		}
 	}
-	return set, true
+	return list, true
+}
+
+// keepAgentFiles adds the agent files of the task's end state so far (an
+// interrupted run's after snapshot) to files: a resumed task's after
+// snapshot must list the files of the steps before the interruption too,
+// or an agent-files-only undo leaves them, and rw pr calls them unreported.
+func (g git) keepAgentFiles(key string, files *map[string]bool) {
+	list, ok := g.agentFileList(undoPrefix(g.dir) + key + "/after")
+	if !ok {
+		return
+	}
+	if *files == nil {
+		*files = map[string]bool{}
+	}
+	for _, l := range list {
+		(*files)[l] = true
+	}
 }
 
 // agentKey is how an agent-reported path is compared with git's: noteFiles
@@ -375,9 +406,14 @@ func undoOne(dir string, t UndoTask, redo bool, only []string) error {
 		g.deleteSnapshot(t.Key, "undone")
 		return nil
 	}
-	// Keep the exact pre-undo state so nothing is ever lost.
-	if snap, err := g.snapshot("relayweft before undo of " + t.Key); err == nil {
-		g.recordSnapshot(t.Key, "undone", snap)
+	// Keep the exact pre-undo state so nothing is ever lost (and a redo
+	// finds the task): without it, nothing is changed.
+	snap, err := g.snapshot("relayweft before undo of " + t.Key)
+	if err == nil {
+		err = g.recordSnapshot(t.Key, "undone", snap)
+	}
+	if err != nil {
+		return fmt.Errorf("could not record the state before the undo: %w", err)
 	}
 	if err := g.applyDiff(t.After, t.Before, only...); err != nil {
 		g.deleteSnapshot(t.Key, "undone")

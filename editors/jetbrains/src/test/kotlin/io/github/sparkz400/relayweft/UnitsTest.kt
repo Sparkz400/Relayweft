@@ -1,5 +1,6 @@
 package io.github.sparkz400.relayweft
 
+import io.github.sparkz400.relayweft.core.ApprovalRequest
 import io.github.sparkz400.relayweft.core.FileView
 import io.github.sparkz400.relayweft.core.FollowUp
 import io.github.sparkz400.relayweft.core.Json
@@ -258,6 +259,38 @@ class UnitsTest {
         assertEquals("edit", st.approvals[0].changes!!.stepId)
         assertEquals(emptyList<String>(), st.runningAgents)
         assertEquals("3s", st.last!!.took)
+    }
+
+    @Test
+    fun approvalDecodesAMergeConflictAndAResolution() {
+        val q = ApprovalRequest.from(
+            Json.parse(
+                """{"id":"r2","type":"conflict","task":"t","created":"x","conflict":{"task":"t","step_id":"b","title":"B",
+                "with":"step a (Add the flag)","files":["shared.txt"],"yours":true,"text":"b conflicts with step a (Add the flag) in shared.txt",
+                "hint":"Yes: an agent merges both changes. No: the change is kept on a branch and the step fails."}}""",
+            ),
+        )
+        assertEquals("conflict", q.type)
+        val c = q.conflict!!
+        assertEquals("b", c.stepId)
+        assertEquals("step a (Add the flag)", c.with)
+        assertEquals(listOf("shared.txt"), c.files)
+        assertTrue(c.yours)
+        assertTrue(c.text.startsWith("b conflicts with"))
+        assertNull(q.budget)
+        assertNull(q.changes)
+
+        val r = ApprovalRequest.from(
+            Json.parse(
+                """{"id":"r3","type":"changes","created":"x","changes":{"step_id":"b","title":"Conflict resolution: B","round":1,
+                "conflict":"b conflicts with step a (Add the flag) in shared.txt","files":[]}}""",
+            ),
+        )
+        assertEquals("b conflicts with step a (Add the flag) in shared.txt", r.changes!!.conflict)
+        assertNull(r.conflict)
+        val plain = ApprovalRequest.from(Json.parse("""{"id":"r4","type":"changes","created":"x","changes":{"step_id":"a","title":"A","round":1,"files":[]}}"""))
+        assertEquals("", plain.changes!!.conflict)
+        assertFalse(ApprovalRequest.from(Json.parse("""{"id":"r5","type":"conflict","created":"x","conflict":{"step_id":"b"}}""")).conflict!!.yours)
     }
 
     @Test

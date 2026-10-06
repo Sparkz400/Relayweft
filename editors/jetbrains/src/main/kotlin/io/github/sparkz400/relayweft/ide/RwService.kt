@@ -501,8 +501,12 @@ class RwService(val project: Project) : Disposable {
             if (!seenApprovals.add(a.id) || !notify) continue
             val (msg, action) = when (a.type) {
                 "plan" -> "Approve the plan (${a.plan?.subtasks?.size ?: 0} subtasks) for \"${oneLine(a.task, 80)}\"" to "Review Plan"
-                "changes" -> "Review the changes of ${a.changes?.stepId ?: ""} (${a.changes?.files?.size ?: 0} file(s))" to "Review Changes"
+                "changes" -> {
+                    val what = if (a.changes?.conflict.isNullOrEmpty()) "changes" else "conflict resolution"
+                    "Review the $what of ${a.changes?.stepId ?: ""} (${a.changes?.files?.size ?: 0} file(s))" to "Review Changes"
+                }
                 "budget" -> (a.budget?.text ?: "The budget is reached") to "Decide"
+                "conflict" -> "Merge conflict: ${a.conflict?.text ?: ""}" to "Decide"
                 else -> continue
             }
             approvalNotes[a.id] = Notify.info(project, msg, action to { answerApproval(a.id) })
@@ -597,10 +601,15 @@ class RwService(val project: Project) : Disposable {
         background("Budget answer", { it.call("POST", "/api/approvals/${enc(id)}/budget", mapOf("ok" to ok)) }) { said(messageOf(it)) }
     }
 
+    /** ok: an agent resolves the merge conflict; otherwise the change stays on a branch and the step fails. */
+    fun answerConflict(id: String, ok: Boolean) {
+        background("Conflict answer", { it.call("POST", "/api/approvals/${enc(id)}/conflict", mapOf("ok" to ok)) }) { said(messageOf(it)) }
+    }
+
     fun approvals(type: String? = null): List<ApprovalRequest> =
         (model.state?.approvals ?: emptyList()).filter { type == null || it.type == type }
 
-    /** Opens what answers a waiting question: the plan dialog, the review, or the budget choice (EDT). */
+    /** Opens what answers a waiting question: the plan dialog, the review, or the budget or conflict choice (EDT). */
     fun answerApproval(id: String) {
         val req = approvals().firstOrNull { it.id == id }
         if (req == null) {
@@ -619,6 +628,20 @@ class RwService(val project: Project) : Disposable {
                 when (choice) {
                     0 -> answerBudget(req.id, true)
                     1 -> answerBudget(req.id, false)
+                }
+            }
+            "conflict" -> {
+                val c = req.conflict
+                var hint = (c?.hint ?: "").ifEmpty { "Let an agent merge both changes in a separate worktree, or keep the change on a branch (the step fails)." }
+                if (c?.yours == true) hint += "\n\nKeep It on a Branch: your files stay as they are."
+                val choice = Messages.showDialog(
+                    project, hint,
+                    "Relayweft: " + (c?.text ?: "Merge conflict"),
+                    arrayOf("Let an Agent Resolve It", "Keep It on a Branch", "Later"), 0, Messages.getQuestionIcon(),
+                )
+                when (choice) {
+                    0 -> answerConflict(req.id, true)
+                    1 -> answerConflict(req.id, false)
                 }
             }
         }

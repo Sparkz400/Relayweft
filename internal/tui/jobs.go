@@ -278,6 +278,17 @@ func (m *Model) phase2Command(cmd string, args []string, rest string, say func(s
 			return true
 		}
 		m.setOrch(func(c *config.Config) { c.Orchestrator.ReviewChanges = on }, fmt.Sprintf("review changes = %v", on))
+	case "conflicts":
+		mode := ""
+		if len(args) == 1 {
+			mode = strings.ToLower(args[0])
+		}
+		switch mode {
+		case config.ConflictsAuto, config.ConflictsResolve, config.ConflictsAsk, config.ConflictsFail:
+			m.setOrch(func(c *config.Config) { c.Orchestrator.Conflicts = mode }, "conflicts = "+mode)
+		default:
+			say("usage: /conflicts auto|resolve|ask|fail  (now %s: what happens when two steps' changes, or a step's and yours, conflict)", m.store.Get().Orchestrator.ConflictMode())
+		}
 	case "verify":
 		m.verifyCommand(args, rest, say)
 	case "agents":

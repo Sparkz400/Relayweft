@@ -114,16 +114,20 @@ export class AgentsTree implements vscode.TreeDataProvider<AgentsItem> {
             icon = 'checklist';
             break;
           case 'changes':
-            label = `Review ${r.changes?.step_id ?? ''}: ${r.changes?.files.length ?? 0} file(s)`;
-            icon = 'diff';
+            label = `Review ${r.changes?.conflict ? 'conflict resolution of ' : ''}${r.changes?.step_id ?? ''}: ${r.changes?.files.length ?? 0} file(s)`;
+            icon = r.changes?.conflict ? 'git-merge' : 'diff';
             break;
           case 'budget':
             label = 'Budget reached';
             icon = 'credit-card';
             break;
+          case 'conflict':
+            label = `Merge conflict: ${r.conflict?.step_id ?? ''}`;
+            icon = 'git-merge';
+            break;
         }
         const it = new vscode.TreeItem(label, None);
-        it.description = oneLine(r.type === 'budget' ? r.budget?.text : r.type === 'changes' ? r.changes?.title : r.plan?.summary || r.task, 80);
+        it.description = oneLine(r.type === 'budget' ? r.budget?.text : r.type === 'conflict' ? r.conflict?.text : r.type === 'changes' ? r.changes?.title : r.plan?.summary || r.task, 80);
         it.iconPath = new vscode.ThemeIcon(icon);
         it.contextValue = 'approval.' + r.type;
         it.command = { command: 'relayweft.answerApproval', title: 'Answer', arguments: [r.id] };

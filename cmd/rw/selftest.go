@@ -50,7 +50,7 @@ import (
 const (
 	selftestAgentCmd = "__selftest-agent" // hidden: rw acting as the scripted agent CLI
 	envSelftestDir   = "RW_SELFTEST_DIR"  // where the agent writes its pid and call log
-	envSelftestHang  = "RW_SELFTEST_HANG" // "1": the combine step hangs until killed
+	envSelftestHang  = "RW_SELFTEST_HANG" // "1": the combine step hangs until killed ("child": its child)
 	envSelftestAs    = "RW_SELFTEST_AS"   // the CLI the agent stands in for (default claude)
 )
 
@@ -554,17 +554,25 @@ wait:
 	t.check(markOK, "kill", "rw run killed hard (pid %d) once it had saved the agent's session (waited %s for that), as closing the window does",
 		cmd.Process.Pid, saved.Round(time.Millisecond))
 
-	gone := waitGone(agent, 10*time.Second)
+	// The agent's child: what the agent started must die with rw too.
+	child, _ := strconv.Atoi(strings.TrimSpace(fileText(filepath.Join(stateDir, "child.pid"))))
+	killed := time.Now()
+	gone := waitGone(agent, 10*time.Second) && (child == 0 || waitGone(child, time.Until(killed.Add(10*time.Second))))
 	switch {
-	case gone:
-		t.check(markOK, "orphans", "the agent died with rw: nothing is left running")
-	case runtime.GOOS == "windows":
-		t.check(markFail, "orphans", "the agent (pid %d) is still running 10s after rw died: the job object did not kill it", agent)
+	case child == 0:
+		t.check(markFail, "orphans", "the agent could not start its child process")
 		killTree(agent)
+	case gone:
+		t.check(markOK, "orphans", "the agent and its child died with rw (%s later): nothing is left running", time.Since(killed).Round(100*time.Millisecond))
 	default:
-		// Unix has no job objects: the next rw that takes the pool slot
-		// kills the agent's process group (proc.ReapOrphans).
-		t.check(markInfo, "orphans", "the agent (pid %d) outlives rw on %s until the next rw reaps it", agent, runtime.GOOS)
+		how := "the wrapper did not kill its process group when rw died"
+		if runtime.GOOS == "windows" {
+			how = "the job object did not kill them"
+		}
+		t.check(markFail, "orphans", "10s after rw died the agent (pid %d, running %v) or its child (pid %d, running %v) still runs: %s",
+			agent, proc.Alive(agent), child, proc.Alive(child), how)
+		killTree(agent)
+		killTree(child)
 	}
 
 	// The finished steps were merged into the tree before rw died.
@@ -623,14 +631,6 @@ wait:
 		return false
 	default:
 		t.check(markOK, "resume", "the interrupted step continued its agent's session in the folder it ran in")
-	}
-	if !gone && runtime.GOOS != "windows" {
-		if waitGone(agent, 5*time.Second) {
-			t.check(markOK, "orphans", "the next rw reaped the agent rw left behind")
-		} else {
-			t.check(markWarn, "orphans", "the agent (pid %d) is still running after the resume; killing it", agent)
-			killTree(agent)
-		}
 	}
 	return true
 }
@@ -844,6 +844,11 @@ func cmdSelftestAgent() {
 	if selftestQuickCheck(os.Getenv(envSelftestAs), os.Args[2:]) {
 		return
 	}
+	if os.Getenv(envSelftestHang) == "child" {
+		// The hanging agent's child: it waits to be killed with rw too.
+		time.Sleep(10 * time.Minute)
+		return
+	}
 	in, _ := io.ReadAll(os.Stdin)
 	prompt := string(in)
 	dir := os.Getenv(envSelftestDir)
@@ -931,11 +936,23 @@ func cmdSelftestAgent() {
 		}
 		b, _ := json.MarshalIndent(plan, "", "  ")
 		result("```json\n" + string(b) + "\n```")
+	case strings.Contains(prompt, stNestedMCP):
+		note("nested")
+		result(selftestNestedMCP())
 	case strings.Contains(prompt, "combine <<"):
-		if os.Getenv(envSelftestHang) == "1" && dir != "" {
-			// Wait to be killed with rw; the pid tells the test who to watch.
+		if os.Getenv(envSelftestHang) == "1" && dir != "" && fileText(filepath.Join(dir, "agent.pid")) == "" {
+			// Wait to be killed with rw, with a child process as real CLIs
+			// have (tools, MCP servers); the pids tell the test who to watch.
+			// Only once: a fresh agent taking over after a cancel finishes.
 			note("hang")
 			_ = os.WriteFile(filepath.Join(dir, "agent.wd"), []byte(wd), 0o644)
+			if exe, err := os.Executable(); err == nil {
+				child := exec.Command(exe, selftestAgentCmd)
+				child.Env = append(os.Environ(), envSelftestHang+"=child")
+				if child.Start() == nil {
+					_ = os.WriteFile(filepath.Join(dir, "child.pid"), []byte(strconv.Itoa(child.Process.Pid)), 0o644)
+				}
+			}
 			_ = os.WriteFile(filepath.Join(dir, "agent.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
 			time.Sleep(10 * time.Minute)
 			fail(errors.New("selftest agent: was not killed within 10 minutes"))

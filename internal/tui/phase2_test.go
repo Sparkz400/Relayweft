@@ -380,9 +380,11 @@ func TestVerifyApproveReviewCommands(t *testing.T) {
 	m.command("/approve off")
 	m.command("/review-changes on")
 	m.command("/review off")
+	m.command("/conflicts maybe") // usage, nothing changes
+	m.command("/conflicts ASK")
 	oc := orc.Store().Get().Orchestrator
-	if oc.ApprovePlan || !oc.ReviewChanges || oc.ReviewBeforeDone {
-		t.Errorf("orchestrator cfg = approve %v review %v reviewer %v", oc.ApprovePlan, oc.ReviewChanges, oc.ReviewBeforeDone)
+	if oc.ApprovePlan || !oc.ReviewChanges || oc.ReviewBeforeDone || oc.Conflicts != config.ConflictsAsk {
+		t.Errorf("orchestrator cfg = approve %v review %v reviewer %v conflicts %q", oc.ApprovePlan, oc.ReviewChanges, oc.ReviewBeforeDone, oc.Conflicts)
 	}
 	if !m.dirty || !strings.Contains(m.logs[len(m.logs)-1].text, "/save") {
 		t.Error("changes must be marked unsaved")

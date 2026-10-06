@@ -34,8 +34,10 @@ import (
 //   - The difference between the old and new integration commit is applied to
 //     the main working tree (apply.go), so the user sees results as soon as
 //     each agent finishes.
-//   - On a conflict the agent's commit is kept on branch rw/<session>/<step>
-//     and the reviewer is told; nothing is half-applied.
+//   - On a conflict an agent may resolve it in a pool worktree first
+//     (resolve.go). Otherwise, or when that fails, the agent's commit is
+//     kept on branch rw/<session>/<step> and the reviewer is told; nothing
+//     is half-applied.
 
 type git struct{ dir string }
 
@@ -71,15 +73,23 @@ func init() {
 }
 
 func (g git) run(env []string, stdin []byte, args ...string) (string, error) {
-	return g.exec(true, env, stdin, args)
+	return g.exec(true, true, env, stdin, args)
 }
 
 // runMagic is run with pathspec magic (":(exclude)...") allowed.
 func (g git) runMagic(env []string, stdin []byte, args ...string) (string, error) {
-	return g.exec(false, env, stdin, args)
+	return g.exec(false, true, env, stdin, args)
 }
 
-func (g git) exec(literal bool, env []string, stdin []byte, args []string) (string, error) {
+// runOnce is run without waiting for another git's lock: for a command
+// whose caller must check the files again before it runs again (lockBusy).
+func (g git) runOnce(env []string, stdin []byte, args ...string) (string, error) {
+	return g.exec(true, false, env, stdin, args)
+}
+
+// exec runs git. With retry, a command that finds a lock another git holds
+// waits for it (lockBusy) and runs again.
+func (g git) exec(literal, retry bool, env []string, stdin []byte, args []string) (string, error) {
 	// Parallel checkout for worktree creation, slot resets and restores into
 	// the main tree; git ignores it elsewhere.
 	pre := []string{"-c", "checkout.workers=" + strconv.Itoa(checkoutWorkers())}
@@ -103,6 +113,97 @@ func (g git) exec(literal bool, env []string, stdin []byte, args []string) (stri
 			return "", fmt.Errorf("git %s: command line too long (%d bytes)", gitArgs(args), n)
 		}
 	}
+	// Another git in the same repo (another rw, an editor's git, the user)
+	// may hold index.lock or a ref lock for a moment. git takes its locks
+	// before it changes anything, so the command is run again.
+	var lw lockWait
+	for {
+		out, msg, took, err := g.execOnce(env, stdin, args)
+		if err != nil {
+			if retry && lw.again(g, msg) {
+				continue
+			}
+			diag.Logf("git %s (in %s) failed after %s: %v: %s", gitArgs(args), g.dir, took.Round(time.Millisecond), err, clip(msg, 500))
+			return out, &gitError{args: strings.Join(args, " "), err: err, msg: msg}
+		}
+		if took > 300*time.Millisecond {
+			diag.Logf("git %s (in %s) took %s", gitArgs(args), g.dir, took.Round(time.Millisecond))
+		}
+		return out, nil
+	}
+}
+
+// reLockPath finds the lock file in git's message about a lock another
+// git holds ("Unable to create '.../index.lock': File exists."). Only the
+// quoted path is matched: the rest of the message is translated.
+var reLockPath = regexp.MustCompile(`'([^']+\.lock)'`)
+
+// lockBusy reports whether msg says a lock is taken that another git may
+// give up soon: the lock file is there and new. A lock older than
+// lockRetryFor was left behind (a git that crashed or was killed): waiting
+// for it would only make every command slow.
+func (g git) lockBusy(msg string) bool {
+	m := reLockPath.FindStringSubmatch(msg)
+	if m == nil {
+		return false
+	}
+	p := filepath.FromSlash(m[1])
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(g.dir, p)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		return true // given up meanwhile
+	}
+	return time.Since(fi.ModTime()) < lockRetryFor
+}
+
+// lockWaited is called (in tests) when a command waits for a lock.
+var lockWaited func()
+
+// lockWait paces the runs of a command that found a lock taken.
+type lockWait struct {
+	began time.Time
+	wait  time.Duration
+}
+
+// again reports whether to run the command again after msg, and waits
+// first: while the lock is busy (lockBusy), for at most lockRetryFor.
+func (w *lockWait) again(g git, msg string) bool {
+	if w.began.IsZero() {
+		w.began, w.wait = time.Now(), lockRetryFirst
+	}
+	if !g.lockBusy(msg) || time.Since(w.began) >= lockRetryFor {
+		return false
+	}
+	diag.Logf("git in %s: a lock is taken, trying again in %s: %s", g.dir, w.wait, clip(msg, 300))
+	if lockWaited != nil {
+		lockWaited()
+	}
+	time.Sleep(w.wait)
+	w.wait = min(2*w.wait, time.Second)
+	return true
+}
+
+// reVanished matches git add failing on a file that was removed (or held
+// by another program) while it ran: "unable to stat 'x': No such file or
+// directory", "open("x"): No such file ...", "unable to index file 'x'".
+var reVanished = regexp.MustCompile(`(?i)unable to stat '|unable to index file|no such file or directory`)
+
+// snapshotTries is how often a snapshot reads the tree when files vanish.
+const snapshotTries = 5
+
+// snapshotRetried is called (in tests) when a snapshot reads the tree again.
+var snapshotRetried func(try int)
+
+// How long a git command waits for another git's lock, and its first pause.
+var (
+	lockRetryFor   = 10 * time.Second
+	lockRetryFirst = 50 * time.Millisecond
+)
+
+// execOnce runs git once; msg is its error output when it failed.
+func (g git) execOnce(env []string, stdin []byte, args []string) (out, msg string, took time.Duration, err error) {
 	gitRuns.Add(1)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = g.dir
@@ -112,28 +213,23 @@ func (g git) exec(literal bool, env []string, stdin []byte, args []string) (stri
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
+	var ob, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &ob, &errb
 	proc.Background(cmd)
 	start := time.Now()
-	err := cmd.Start()
+	err = cmd.Start()
 	if err == nil {
 		proc.Started(cmd)
 		err = cmd.Wait()
 	}
-	took := time.Since(start)
+	took = time.Since(start)
 	if err != nil {
-		msg := strings.TrimSpace(errb.String())
+		msg = strings.TrimSpace(errb.String())
 		if msg == "" {
-			msg = strings.TrimSpace(out.String())
+			msg = strings.TrimSpace(ob.String())
 		}
-		diag.Logf("git %s (in %s) failed after %s: %v: %s", gitArgs(args), g.dir, took.Round(time.Millisecond), err, clip(msg, 500))
-		return out.String(), &gitError{args: strings.Join(args, " "), err: err, msg: msg}
 	}
-	if took > 300*time.Millisecond {
-		diag.Logf("git %s (in %s) took %s", gitArgs(args), g.dir, took.Round(time.Millisecond))
-	}
-	return out.String(), nil
+	return ob.String(), msg, took, err
 }
 
 // gitArgs shortens an argument list for the debug log.
@@ -252,15 +348,32 @@ func (g git) snapshotSkipping(msg string) (commit string, skipped []string, err 
 		skipped = g.bigUntracked(env, limit)
 	}
 	add := []string{"-c", "core.safecrlf=false", "add", "-A"}
+	// Its errors are matched (reVanished): untranslated.
+	addEnv := append(env, "LC_ALL=C", "LANGUAGE=")
 	if len(skipped) > 0 {
-		spec := []string{":(top)"}
-		for _, p := range skipped {
-			spec = append(spec, ":(top,exclude,literal)"+p)
-		}
 		diag.Logf("snapshot of %s leaves out %d untracked file(s) over %d MB: %s", g.dir, len(skipped), snapshotMaxFile.Load()>>20, clip(strings.Join(skipped, ", "), 500))
-		_, err = g.runMagic(env, nulList(spec), append(add, "--pathspec-from-file=-", "--pathspec-file-nul")...)
-	} else {
-		_, err = g.run(env, nil, add...)
+	}
+	// A file can vanish between add -A listing and reading it: another rw
+	// in this tree removes one (an undo, a merge), or the user's tools do.
+	// The tree is read again then; a temporary index makes that harmless.
+	for try := 1; ; try++ {
+		if len(skipped) > 0 {
+			spec := []string{":(top)"}
+			for _, p := range skipped {
+				spec = append(spec, ":(top,exclude,literal)"+p)
+			}
+			_, err = g.runMagic(addEnv, nulList(spec), append(add, "--pathspec-from-file=-", "--pathspec-file-nul")...)
+		} else {
+			_, err = g.run(addEnv, nil, add...)
+		}
+		if err == nil || try == snapshotTries || !reVanished.MatchString(err.Error()) {
+			break
+		}
+		if snapshotRetried != nil {
+			snapshotRetried(try)
+		}
+		diag.Logf("snapshot of %s: a file vanished while it was read, reading the tree again: %v", g.dir, err)
+		time.Sleep(time.Duration(try) * 100 * time.Millisecond)
 	}
 	if err != nil {
 		return "", nil, err
@@ -598,19 +711,25 @@ func (g git) mergeTree(ours, theirs string) (tree string, clean bool, info strin
 // since base on both sides; with base, a change already in ours (merged
 // before rw stopped) is not applied twice.
 func (g git) mergeTreeBase(base, ours, theirs string) (tree string, clean bool, info string, err error) {
-	if base == "" || base == ours || g.isAncestor(base, ours) {
-		return g.mergeTree(ours, theirs)
-	}
-	// ours' tree on top of base: base becomes the merge base of the two.
-	ot, err := g.out("rev-parse", ours+"^{tree}")
-	if err != nil {
-		return "", false, "", err
-	}
-	o2, err := g.commitTree(ot, []string{base}, "relayweft: tree on top of the step's base")
+	o2, err := g.onBase(base, ours)
 	if err != nil {
 		return "", false, "", err
 	}
 	return g.mergeTree(o2, theirs)
+}
+
+// onBase is ours when it is built on base, else a commit with ours' tree on
+// top of base: merged with work that started from base, base is then the
+// merge base of the two (mergeTreeBase, resolve.go).
+func (g git) onBase(base, ours string) (string, error) {
+	if base == "" || base == ours || g.isAncestor(base, ours) {
+		return ours, nil
+	}
+	ot, err := g.out("rev-parse", ours+"^{tree}")
+	if err != nil {
+		return "", err
+	}
+	return g.commitTree(ot, []string{base}, "relayweft: tree on top of the step's base")
 }
 
 // isAncestor reports whether commit a is an ancestor of commit b.

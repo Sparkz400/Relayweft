@@ -1,0 +1,81 @@
+# The docs site, built with Hugo and the Hextra theme (a Hugo module,
+# pinned in go.mod). website/build.sh generates the content into _gen/
+# from website/pages and the repo's own Markdown, then runs Hugo.
+baseURL: https://sparkz400.github.io/Relayweft/
+title: Relayweft
+locale: en
+enableRobotsTXT: true
+disableKinds: [taxonomy, term]
+
+contentDir: _gen/content
+staticDir: [static, _gen/static]
+
+module:
+  hugoVersion:
+    extended: true
+    min: "0.146.0"
+  imports:
+    - path: github.com/imfing/hextra
+
+markup:
+  goldmark:
+    renderer:
+      unsafe: true # the pages' own <video> and <img> tags
+    parser:
+      autoHeadingIDType: github # the same anchors as on GitHub, so README links keep working
+  highlight:
+    noClasses: false
+
+outputs:
+  home: [html]
+  page: [html]
+  section: [html]
+
+menu:
+  main:
+    - name: Docs
+      pageRef: /docs
+      weight: 1
+    - name: Roadmap
+      pageRef: /docs/project/roadmap
+      weight: 2
+    - name: Search
+      weight: 5
+      params:
+        type: search
+    - name: GitHub
+      weight: 6
+      url: https://github.com/Sparkz400/Relayweft
+      params:
+        icon: github
+
+params:
+  description: "Your coding agents, working together. A terminal app that routes coding work between Codex, Claude Code and other agent CLIs."
+  navbar:
+    displayTitle: true
+    displayLogo: true
+    logo:
+      path: favicon.svg
+      dark: favicon.svg
+      width: 28
+      height: 28
+    width: wide
+  page:
+    width: wide
+  theme:
+    default: system
+    displayToggle: true
+  footer:
+    enable: true
+    displayCopyright: false
+    displayPoweredBy: true
+  search:
+    enable: true
+    type: flexsearch
+    flexsearch:
+      index: content
+      tokenize: forward
+  editURL:
+    enable: false
+  externalLinkDecoration: true
+  displayUpdatedDate: false

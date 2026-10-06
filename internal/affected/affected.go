@@ -72,7 +72,7 @@ func Select(ctx context.Context, cmd, template string, in Input) Plan {
 	case pytestShape(f) > 0:
 		return selectPytest(cmd, f, c)
 	case jsShape(f, c.dir).kind != "":
-		return selectJS(cmd, f, c)
+		return selectJS(ctx, cmd, f, c)
 	case cargoShape(f):
 		return selectCargo(ctx, cmd, f, c)
 	case dotnetShape(f):

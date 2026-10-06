@@ -103,6 +103,8 @@ func New(o Options) (*Server, error) {
 			s.alert(notify.EventWaiting, "Relayweft needs you", "approve the plan: "+oneLine(r.Task, 120))
 		case "budget":
 			s.alert(notify.EventWaiting, "Relayweft needs you", "budget reached: "+r.Budget.Text)
+		case "conflict":
+			s.alert(notify.EventWaiting, "Relayweft needs you", "merge conflict: "+r.Conflict.Text)
 		default:
 			s.alert(notify.EventWaiting, "Relayweft needs you", "review the changes of "+r.Changes.StepID)
 		}

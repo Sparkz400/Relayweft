@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// rest is the HTTP side of the GitLab, Gitea and Azure DevOps clients:
+// rest is the HTTP side of the GitLab, Gitea, Bitbucket and Azure clients:
 // JSON in and out, the token in an Authorization header, and reads that go
 // on without a token the forge rejected (a stale token must not block a
 // public repository).
@@ -25,12 +25,12 @@ type rest struct {
 	rejected bool
 
 	// header has more headers for every request; forbidden is the hint
-	// for a 403 ("" = the GitLab and Gitea one). keepToken: a 401 may mean
-	// a scope the token lacks (Azure DevOps), so reads never go on
-	// without it, and the 401 hint names forbidden too.
+	// for a 403 (empty uses the forge default). keep prevents retrying a
+	// 401 without the token: Azure may require another scope, and a
+	// Bitbucket permission probe must report the authenticated result.
 	header    http.Header
 	forbidden string
-	keepToken bool
+	keep      bool
 }
 
 func newRest(kind Kind, base, token, scheme string, notes io.Writer) *rest {
@@ -182,11 +182,11 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s %s: %w", c.name(), method, path, err)
 	}
-	if c.keepToken && resp.StatusCode == http.StatusNonAuthoritativeInfo {
+	if c.kind == Azure && resp.StatusCode == http.StatusNonAuthoritativeInfo {
 		// Azure DevOps' sign-in page, not an answer.
 		resp.StatusCode = http.StatusUnauthorized
 	}
-	if resp.StatusCode == http.StatusUnauthorized && authed && method == http.MethodGet && !c.keepToken {
+	if resp.StatusCode == http.StatusUnauthorized && authed && method == http.MethodGet && !c.keep {
 		resp.Body.Close()
 		c.note("note: " + c.name() + " rejected the token (401); continuing without it")
 		c.rejected = true
@@ -199,7 +199,7 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 		hint := c.kind.TokenHint()
 		switch resp.StatusCode {
 		case http.StatusUnauthorized:
-			if authed && c.keepToken {
+			if authed && c.kind == Azure && c.keep {
 				ae.Hint = "The token (" + hint + ") was rejected: it expired, or lacks a scope this needs. " + c.forbidden
 			} else if authed || c.rejected {
 				ae.Hint = "The token (" + hint + ") was rejected; create a new one"
@@ -214,6 +214,9 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 			}
 		case http.StatusForbidden:
 			ae.Hint = "The token may lack the needed permission (api scope on GitLab; repository and issue write on Gitea)"
+			if c.kind == Bitbucket {
+				ae.Hint = "The token may lack a scope this needs (docs/bitbucket.md lists them)"
+			}
 			if c.forbidden != "" {
 				ae.Hint = c.forbidden
 			}
@@ -225,11 +228,12 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 
 // restMessage reads an error body: GitLab's {"message": "..."},
 // {"message": {"field": ["..."]}} or {"error": "..."}, Gitea's
-// {"message": "...", "errors": [...]}.
+// {"message": "...", "errors": [...]}, Bitbucket's {"error": {"message":
+// "...", "detail": "..."}}.
 func restMessage(data []byte) string {
 	var e struct {
 		Message json.RawMessage `json:"message"`
-		Error   string          `json:"error"`
+		Error   json.RawMessage `json:"error"`
 		Errors  []string        `json:"errors"`
 	}
 	if json.Unmarshal(data, &e) != nil {
@@ -254,8 +258,30 @@ func restMessage(data []byte) string {
 			parts = append(parts, k+" "+strings.Join(fields[k], ", "))
 		}
 	}
-	if e.Error != "" {
-		parts = append(parts, e.Error)
+	var bb struct {
+		Message string                     `json:"message"`
+		Detail  json.RawMessage            `json:"detail"`
+		Fields  map[string]json.RawMessage `json:"fields"`
+	}
+	switch {
+	case json.Unmarshal(e.Error, &s) == nil:
+		parts = append(parts, s)
+	case json.Unmarshal(e.Error, &bb) == nil:
+		parts = append(parts, bb.Message)
+		var d string
+		if json.Unmarshal(bb.Detail, &d) == nil {
+			parts = append(parts, d)
+		} else if len(bb.Detail) > 0 && string(bb.Detail) != "null" {
+			parts = append(parts, string(bb.Detail))
+		}
+		keys := make([]string, 0, len(bb.Fields))
+		for k := range bb.Fields {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			parts = append(parts, k+" "+strings.Trim(string(bb.Fields[k]), `[]"`))
+		}
 	}
 	parts = append(parts, e.Errors...)
 	var out []string

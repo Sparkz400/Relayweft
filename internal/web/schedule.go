@@ -132,6 +132,29 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, res)
 }
 
+// handleConflict answers whether an agent may resolve a merge conflict.
+func (s *Server) handleConflict(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		OK bool `json:"ok"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if err := s.ap.AnswerConflict(r.PathValue("id"), req.OK); err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, errNoRequest) {
+			code = http.StatusGone
+		}
+		fail(w, code, err)
+		return
+	}
+	msg := "the change is kept on a branch"
+	if req.OK {
+		msg = "an agent resolves the conflict"
+	}
+	writeJSON(w, map[string]string{"message": msg})
+}
+
 func (s *Server) handleBudget(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		OK bool `json:"ok"`

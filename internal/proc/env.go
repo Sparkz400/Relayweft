@@ -28,6 +28,8 @@ var childSecrets = []string{
 	// Azure DevOps, and an Azure Pipelines job's token (when a job maps
 	// System.AccessToken into the environment)
 	"AZURE_DEVOPS_TOKEN", "AZURE_DEVOPS_EXT_PAT", "SYSTEM_ACCESSTOKEN",
+	// Bitbucket, and Bitbucket Pipelines' OpenID Connect token
+	"BITBUCKET_TOKEN", "BITBUCKET_STEP_OIDC_TOKEN",
 	// GitHub Actions runner tokens; Forgejo and Gitea runners set the same
 	// ones, plus GITHUB_TOKEN and FORGEJO_TOKEN (GITEA_TOKEN) to the job's
 	// token. A registration token lets anyone register a runner and take

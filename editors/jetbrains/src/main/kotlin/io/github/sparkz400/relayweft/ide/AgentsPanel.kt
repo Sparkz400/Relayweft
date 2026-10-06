@@ -343,9 +343,15 @@ class AgentsPanel(private val project: Project, private val svc: RwService) : Si
                             icon(AllIcons.Actions.Edit)
                         }
                         "changes" -> {
-                            append("Review ${r.changes?.stepId ?: ""}: ${r.changes?.files?.size ?: 0} file(s)")
+                            val resolution = !r.changes?.conflict.isNullOrEmpty()
+                            append("Review ${if (resolution) "conflict resolution of " else ""}${r.changes?.stepId ?: ""}: ${r.changes?.files?.size ?: 0} file(s)")
                             append("  " + oneLine(r.changes?.title, 80), SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                            icon(AllIcons.Actions.Diff)
+                            icon(if (resolution) AllIcons.Vcs.Merge else AllIcons.Actions.Diff)
+                        }
+                        "conflict" -> {
+                            append("Merge conflict: ${r.conflict?.stepId ?: ""}")
+                            append("  " + oneLine(r.conflict?.text, 80), SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                            icon(AllIcons.Vcs.Merge)
                         }
                         else -> {
                             append("Budget reached")

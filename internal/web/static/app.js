@@ -1001,7 +1001,7 @@ function syncApprovals() {
   for (const a of list) {
     if (!S.seenApprovals.has(a.id)) {
       S.seenApprovals.add(a.id);
-      notify('Relayweft needs you', a.type === 'plan' ? 'Approve the plan: ' + oneLine(a.task, 120) : a.type === 'budget' ? 'Budget reached: ' + a.budget.text : 'Review the changes of ' + a.changes.step_id);
+      notify('Relayweft needs you', a.type === 'plan' ? 'Approve the plan: ' + oneLine(a.task, 120) : a.type === 'budget' ? 'Budget reached: ' + a.budget.text : a.type === 'conflict' ? 'Merge conflict: ' + a.conflict.text : (a.changes.conflict ? 'Review the conflict resolution of ' : 'Review the changes of ') + a.changes.step_id);
       if (!S.openApproval && !$('#modal').dataset.busy) openApproval(a);
     }
   }
@@ -1034,6 +1034,7 @@ function openApproval(a) {
   card.className = 'modal-card';
   if (a.type === 'plan') planEditor(a, card);
   else if (a.type === 'budget') budgetPanel(a, card);
+  else if (a.type === 'conflict') conflictPanel(a, card);
   else reviewPanel(a, card);
   $('#modal').hidden = false;
   renderBanner();
@@ -1042,6 +1043,8 @@ function openApproval(a) {
 function approvalTitle(a) {
   if (a.type === 'plan') return 'A plan is waiting for your approval';
   if (a.type === 'budget') return 'Budget reached: ' + a.budget.text + ' - continue?';
+  if (a.type === 'conflict') return 'Merge conflict: ' + a.conflict.text + ' - let an agent resolve it?';
+  if (a.changes.conflict) return `The conflict resolution of ${a.changes.step_id} is waiting for your review`;
   return `Changes of ${a.changes.step_id} are waiting for your review`;
 }
 
@@ -1074,6 +1077,40 @@ function budgetPanel(a, card) {
       h('button', { class: 'btn ghost', onclick: hideApproval, title: 'Hide (the question keeps waiting)' }, 'Later'),
       h('button', { class: 'btn danger', onclick: () => answer(false) }, 'Stop the task'),
       h('button', { class: 'btn primary', onclick: () => answer(true), title: 'Ctrl+Enter' }, icon('play'), 'Continue', h('kbd', null, 'Ctrl ↵'))));
+  card._submit = () => answer(true);
+}
+
+// Merge conflict question: let an agent resolve it in a separate worktree,
+// or keep the change on a branch (the step fails).
+function conflictPanel(a, card) {
+  const c = a.conflict;
+  const err = h('div', { class: 'm-err' });
+  async function answer(ok) {
+    err.textContent = '';
+    try {
+      $('#modal').dataset.busy = '1';
+      const r = await api('POST', `/api/approvals/${a.id}/conflict`, { ok });
+      toast(r.message, ok ? 'ok' : 'warn');
+      closeModal();
+    } catch (e) {
+      err.textContent = e.message;
+    } finally {
+      delete $('#modal').dataset.busy;
+    }
+  }
+  card.append(
+    h('div', { class: 'm-head' },
+      h('div', { class: 'm-kicker' }, h('span', { class: 'pip' }), 'Merge conflict'),
+      h('div', { class: 'm-title' }, h('span', { class: 'mono', style: 'color:var(--muted)' }, c.step_id + '  '), c.title || ''),
+      h('div', { class: 'm-sub' }, oneLine(a.task, 160))),
+    h('div', { class: 'm-body' },
+      h('p', { class: 'budget-q' }, c.text + '.'),
+      (c.files || []).length ? h('p', { class: 'mono small' }, c.files.join(', ')) : '',
+      h('p', { class: 'muted small' }, c.hint + (c.yours ? ' Keeping it on a branch leaves your files as they are.' : ''))),
+    h('div', { class: 'm-foot' }, err, h('span', { class: 'grow' }),
+      h('button', { class: 'btn ghost', onclick: hideApproval, title: 'Hide (the question keeps waiting)' }, 'Later'),
+      h('button', { class: 'btn danger', onclick: () => answer(false) }, 'Keep it on a branch'),
+      h('button', { class: 'btn primary', onclick: () => answer(true), title: 'Ctrl+Enter' }, icon('play'), 'Let an agent resolve it', h('kbd', null, 'Ctrl ↵'))));
   card._submit = () => answer(true);
 }
 
@@ -1363,9 +1400,10 @@ function reviewPanel(a, card) {
   renderAll();
   card.append(
     h('div', { class: 'm-head' },
-      h('div', { class: 'm-kicker' }, h('span', { class: 'pip' }), 'Review changes',
+      h('div', { class: 'm-kicker' }, h('span', { class: 'pip' }), cs.conflict ? 'Review conflict resolution' : 'Review changes',
         cs.round > 1 ? h('span', { style: 'color:var(--warn)' }, ` · round ${cs.round} (after your feedback)`) : ''),
       h('div', { class: 'm-title' }, h('span', { class: 'mono', style: 'color:var(--muted)' }, cs.step_id + '  '), cs.title || ''),
+      cs.conflict ? h('div', { class: 'm-sub', style: 'color:var(--warn)' }, 'Conflict resolution: ' + cs.conflict) : '',
       cs.summary ? h('div', { class: 'm-sub' }, 'agent: ' + cs.summary) : ''),
     h('div', { class: 'm-body', style: 'padding:0' }, h('div', { class: 'review' }, filesEl, diffEl)),
     h('div', { class: 'm-foot' }, h('div', { class: 'grow', style: 'display:flex;gap:8px;align-items:flex-end' }, fb, fbBtn),
@@ -1662,7 +1700,8 @@ async function drawStats(body) {
     const tbl = h('table', { class: 'tbl' }, h('tr', null, ['Route', 'Calls', 'OK', 'Fail', 'Limit', 'Fresh in', 'Out', 'Avg'].map((x, i) => h('th', { class: i ? 'num' : '' }, x))));
     for (const r of st.Routes) {
       tbl.append(h('tr', null, h('td', null, h('span', { class: 'now', style: `--c:var(--${r.Provider})` }, r.Key)),
-        h('td', { class: 'num' }, r.Calls), h('td', { class: 'num' }, r.OK), h('td', { class: 'num' }, r.Failed), h('td', { class: 'num' }, r.LimitHits),
+        h('td', { class: 'num' }, r.Calls), h('td', { class: 'num' }, r.OK), h('td', { class: 'num' }, r.Failed),
+        h('td', { class: 'num', title: r.Unavailable ? `${r.Unavailable} run${r.Unavailable === 1 ? '' : 's'} with the CLI logged out or missing (not a limit)` : '' }, r.LimitHits + (r.Unavailable ? ` +${r.Unavailable} n/a` : '')),
         h('td', { class: 'num' }, human((r.Tokens.input || 0) - (r.Tokens.cached || 0))), h('td', { class: 'num' }, human(r.Tokens.output)),
         h('td', { class: 'num' }, r.Calls ? dur(r.Duration / 1e6 / r.Calls) : '-')));
     }
@@ -2038,7 +2077,8 @@ function renderDashboard(body, v) {
         h('td', { class: 'num' }, r.escalated || '-'),
         h('td', { class: 'num', title: r.reviews ? `${r.rejected} of ${r.reviews} final reviews of tasks this route wrote in asked for changes` : '' }, r.reviews ? `${r.rejected}/${r.reviews} rejected` : '-'),
         h('td', null, h('div', { class: 'chips', style: 'margin:0' }, dec)),
-        h('td', { class: 'num' }, r.limit_hits || '-'),
+        h('td', { class: 'num', title: r.unavailable ? `${r.unavailable} run${r.unavailable === 1 ? '' : 's'} with the CLI logged out or missing: rw routed around it, but it was no limit` : '' },
+          (r.limit_hits || (r.unavailable ? 0 : '-')) + (r.unavailable ? ` +${r.unavailable} n/a` : '')),
         h('td', null, (r.suggested || []).map((i) => sugs[i] ? h('span', { class: 'sev ' + sugs[i].Severity, title: sugs[i].Title }, `#${i + 1} ${SEV_LABEL[sugs[i].Severity] || ''}`) : ''))));
     }
     rc.append(h('div', { class: 'tbl-wrap' }, tbl));
@@ -2099,14 +2139,17 @@ function renderDashboard(body, v) {
   }
   const lp = provOrder(per);
   if (lp.length) {
-    lm.append(h('table', { class: 'tbl', style: 'margin-top:10px' }, h('tr', null, ['Provider', 'Limit hits', 'Switched before', 'Fell back after'].map((x, i) => h('th', { class: i ? 'num' : '' }, x))),
-      lp.map((p) => h('tr', null, h('td', null, h('span', { class: 'prov-head', style: `--c:${provColor(p)}` }, h('i'), p)), h('td', { class: 'num' }, per[p].hits), h('td', { class: 'num' }, per[p].preempts), h('td', { class: 'num' }, per[p].fallbacks)))));
+    const na = lp.some((p) => per[p].unavailable);
+    lm.append(h('table', { class: 'tbl', style: 'margin-top:10px' }, h('tr', null, ['Provider', 'Limit hits', 'Switched before', 'Fell back after', ...(na ? ['Unavailable'] : [])].map((x, i) => h('th', { class: i ? 'num' : '', title: x === 'Unavailable' ? 'its CLI was logged out or missing: rw routed around it, but it was no limit' : null }, x))),
+      lp.map((p) => h('tr', null, h('td', null, h('span', { class: 'prov-head', style: `--c:${provColor(p)}` }, h('i'), p)), h('td', { class: 'num' }, per[p].hits), h('td', { class: 'num' }, per[p].preempts), h('td', { class: 'num' }, per[p].fallbacks),
+        na ? h('td', { class: 'num' }, per[p].unavailable || 0) : ''))));
   } else lm.append(h('div', { class: 'muted small', style: 'margin-top:8px' }, `No limit hits or switches in the last ${ndays} days.`));
-  const recent = [...(lim.hits || []).map((x) => ({ ...x, k: 'hit' })), ...(lim.switches || []).map((x) => ({ ...x, k: 'switch' }))].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 8);
+  const recent = [...(lim.hits || []).map((x) => ({ ...x, k: 'hit' })), ...(lim.unavailable || []).map((x) => ({ ...x, k: 'na' })), ...(lim.switches || []).map((x) => ({ ...x, k: 'switch' }))]
+    .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 8);
   if (recent.length) {
     lm.append(h('div', { class: 'dash-sub muted small' }, 'Recent'), h('ul', { class: 'events' }, recent.map((x) => h('li', null, h('span', { class: 'mono small muted' }, when(x.ts)), ' ',
-      x.k === 'hit' ? [h('b', null, x.provider), ' hit its limit', x.until ? ` (until ${when(x.until)})` : '', x.text ? h('div', { class: 'muted small ell', title: x.text }, x.text) : '']
-        : [x.role ? String(x.role).replace('_', ' ') + ': ' : '', h('b', null, x.provider), ' → ', h('b', null, x.to), x.rule === 'quota-preempt' ? ' before the limit' : ' after a limit hit']))));
+      x.k !== 'switch' ? [h('b', null, x.provider), x.k === 'hit' ? ' hit its limit' : ' was unavailable (logged out or not installed; rw doctor)', x.until ? ` (until ${when(x.until)})` : '', x.text ? h('div', { class: 'muted small ell', title: x.text }, x.text) : '']
+        : [x.role ? String(x.role).replace('_', ' ') + ': ' : '', h('b', null, x.provider), ' → ', h('b', null, x.to), x.rule === 'quota-preempt' ? ' before the limit' : x.unavailable ? ' while it was unavailable' : ' after a limit hit']))));
   }
   const hc = card('Health streak', 'toward the Phase 1 exit criterion');
   const H = v.health;

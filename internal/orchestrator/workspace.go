@@ -417,8 +417,15 @@ func (o *Orchestrator) snapshotExtra(t, r *task) error {
 	}
 	r.useGit = true
 	r.snapshot, r.start = snap, snap
+	if t.keepBefore && t.key != "" {
+		t.tokensMu.Lock()
+		git{root}.keepAgentFiles(t.key, &r.agentFiles)
+		t.tokensMu.Unlock()
+	}
 	if o.opts.Bench == "" && !t.keepBefore && t.key != "" {
-		git{root}.recordSnapshot(t.key, "before", snap)
+		if err := (git{root}).recordSnapshot(t.key, "before", snap); err != nil {
+			o.logf("warning: repo %s: could not record the start state, so rw undo cannot undo this task there: %v", r.repoName, err)
+		}
 	}
 	return nil
 }
@@ -711,10 +718,15 @@ func (o *Orchestrator) snapshotAfterExtras(t *task) {
 		t.tokensMu.Lock()
 		msg := afterMessage(t.text, r.agentFiles)
 		t.tokensMu.Unlock()
-		if snap, err := g.snapshot(msg); err == nil {
-			g.recordSnapshot(t.key, "after", snap)
-			trimUndo(r.root)
+		snap, err := g.snapshot(msg)
+		if err == nil {
+			err = g.recordSnapshot(t.key, "after", snap)
 		}
+		if err != nil {
+			o.logf("warning: repo %s: could not record the end state of this task, so rw undo cannot undo it there: %v", r.repoName, err)
+			continue
+		}
+		trimUndo(r.root)
 	}
 }
 
@@ -775,15 +787,5 @@ func (o *Orchestrator) saveBranchIn(rp *task, stepID, commit string) string {
 	if rp.repoName != "" {
 		return rp.repoName + ":" + b
 	}
-	return b
-}
-
-// keepBranchIn keeps a conflicting commit of repo rp on a branch and
-// records it as kept (parallel steps of every repo).
-func (o *Orchestrator) keepBranchIn(t, rp *task, stepID, commit string) string {
-	b := o.saveBranchIn(rp, stepID, commit)
-	t.notesMu.Lock()
-	t.kept = append(t.kept, b)
-	t.notesMu.Unlock()
 	return b
 }

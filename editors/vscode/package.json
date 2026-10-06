@@ -135,7 +135,7 @@
         "relayweft.notifyApprovals": {
           "type": "boolean",
           "default": true,
-          "description": "Show a notification when a plan, a change set or a budget question waits for you."
+          "description": "Show a notification when a plan, a change set, a budget or a merge conflict question waits for you."
         }
       }
     }
