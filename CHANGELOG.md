@@ -27,6 +27,7 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 ### Added
 
 - Resolve steps: when two agents' changes conflict, or an agent's change overlaps with your own uncommitted edits, an agent merges both in a pool worktree (never in your folder); rw checks for leftover markers and runs `verify.commands` before it lands, and asks first for your own edits. `orchestrator.conflicts: auto|resolve|ask|fail`, `max_resolve_rounds`, `resolve_role`, `/conflicts` in the TUI; see docs/conflicts.md. ([#56](https://github.com/Sparkz400/Relayweft/pull/56))
+- `rw mcp`: an MCP server, so Claude Code or Codex can hand a multi-step task to rw from inside their own session and follow it (status, plan approval, change review, result, undo). It works only in the folder it was started in, and refuses tasks under rw's own agents. Set-up: `docs/mcp.md`; `rw doctor` checks it. ([#58](https://github.com/Sparkz400/Relayweft/pull/58))
 - `rw completion bash|zsh|fish|powershell`: Tab completion for subcommands, flags, provider names, models and task ids (Windows PowerShell 5.1 and PowerShell 7 too). The .deb/.rpm/.apk packages, Homebrew and the AUR package install it. ([#49](https://github.com/Sparkz400/Relayweft/pull/49))
 - `docs/config.md`: every config key with its type, default, description and whether a repo's `.relayweft.yaml` needs `rw trust` for it; generated from the code, and CI fails when it is out of date. ([#49](https://github.com/Sparkz400/Relayweft/pull/49))
 - `CONTRIBUTING.md`, a pull request template and a Code of Conduct. ([#45](https://github.com/Sparkz400/Relayweft/pull/45))
@@ -38,9 +39,13 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Fixed
 
+- On Linux and macOS, killing rw now also stops its agents and their children in the same process group; resume keeps their half-done work. ([#53](https://github.com/Sparkz400/Relayweft/pull/53))
 - A user edit merged with an agent's change could lose the end of the agent's file when the disk was full; it now counts as a conflict and leaves the file as it was. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
 - `rw bench` blamed "another rw bench" for a workspace folder it could not create. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
 - Commit messages reach git on stdin, so very long task texts work on Windows. ([#48](https://github.com/Sparkz400/Relayweft/pull/48))
+- A logged-out or missing agent CLI no longer counts as a usage-limit hit in the Dashboard, `rw stats` and the `rw stats --json` export (format 1.1: `unavailable`), and `rw run --when-reset` no longer waits for its 12 hours. ([#60](https://github.com/Sparkz400/Relayweft/pull/60))
+- With several rw (or an editor's git) on one repo, a merge no longer fails when another git holds the repo's lock for a moment, and a file another rw removes no longer makes the snapshot for undo fail; a task whose start or end cannot be recorded says that undo will not work. ([#60](https://github.com/Sparkz400/Relayweft/pull/60))
+- After `rw resume`, `rw undo --agent-files-only` and `rw pr` also cover the files of the steps from before the interruption. ([#60](https://github.com/Sparkz400/Relayweft/pull/60))
 
 ## [0.3.0] - 2026-10-05
 

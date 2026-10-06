@@ -78,7 +78,8 @@ func LatestReset(recs []Record, provider string) (at time.Time, seen time.Time, 
 		switch {
 		case r.Type == TypeQuota && r.Quota != nil:
 			t = r.Quota.ResetsAt
-		case r.Type == TypeLimit && r.Until != nil:
+		case r.Type == TypeLimit && r.Until != nil && !IsUnavailable(r):
+			// A logged-out or missing CLI's "until" is no reset.
 			t = *r.Until
 		}
 		if t.IsZero() {

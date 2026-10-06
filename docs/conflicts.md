@@ -65,6 +65,8 @@ No other step starts or lands in that repo until this is done.
 
 Because the agent edits lines you are working on, `auto` asks you first. A task that runs unattended (queued, scheduled, `--file`) cannot ask, so the change is kept on a branch, as before.
 
+`rw mcp` also keeps the work on a branch when approval is needed: the calling agent has no tool to answer a conflict question. Automatically allowed resolutions still run, and MCP change reviews identify them with `changes.conflict`.
+
 ## Settings
 
 ```yaml

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/sparkz400/relayweft/internal/diag"
 )
 
 // Resolve finds a command on PATH. On Windows exec.LookPath honours PATHEXT,
@@ -125,7 +127,9 @@ func init() { lowPriority.Store(true) }
 // SetLowPriority turns low-priority children on or off.
 func SetLowPriority(on bool) { lowPriority.Store(on) }
 
-// Prepare configures cmd so cancelling its context kills the whole tree.
+// Prepare configures cmd so cancelling its context kills the whole tree,
+// and so the tree dies with rw (see Guard). Call it after cmd's path and
+// arguments are set, and do not set ExtraFiles after it.
 func Prepare(cmd *exec.Cmd) {
 	prepare(cmd)
 	cmd.WaitDelay = 5 * time.Second
@@ -139,15 +143,23 @@ func Background(cmd *exec.Cmd) { background(cmd) }
 // are ignored: priority is best effort.
 func Started(cmd *exec.Cmd) {
 	if lowPriority.Load() && cmd.Process != nil {
-		lower(cmd.Process.Pid)
+		lower(cmd)
 	}
 	noteStart(cmd)
 }
 
-// Guard makes sure child processes die with this process (a Windows job
-// object with kill-on-close). It is a no-op elsewhere, where agents get
-// their own process group and are killed explicitly.
-func Guard() error { return guard() }
+// Guard makes sure child processes die with this process, even when it is
+// killed hard or crashes. On Windows rw joins a job object with
+// kill-on-close. Elsewhere the commands Prepare sets up from then on run
+// in a wrapper that kills their process group when rw's end of a pipe
+// closes (proc_unix.go).
+func Guard() error {
+	err := guard()
+	if err != nil {
+		diag.Logf("guard: agents may outlive rw: %v", err)
+	}
+	return err
+}
 
 // Breakaway configures cmd to start outside Guard's job, so it outlives rw:
 // for the user's own programs rw merely launches (a browser), never for

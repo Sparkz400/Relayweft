@@ -76,6 +76,11 @@ type TaskOptions struct {
 	// Force resumes a task that is no longer marked running (it finished,
 	// failed or was cancelled): its unfinished steps run again.
 	Force bool
+	// Started, if set, gets the task's id (its saved state's, which rw
+	// history, rw resume and rw report take) as the task starts, before
+	// its TaskStart event. A task refused at once (its state is locked by
+	// another rw, or a resume that no longer applies) never calls it.
+	Started func(id string)
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -532,8 +537,15 @@ func (o *Orchestrator) snapshotBefore(t *task) {
 	}
 	t.useGit = true
 	t.snapshot, t.start = snap, snap
+	if t.keepBefore {
+		t.tokensMu.Lock()
+		git{root}.keepAgentFiles(t.key, &t.agentFiles)
+		t.tokensMu.Unlock()
+	}
 	if o.opts.Bench == "" && !t.keepBefore {
-		git{root}.recordSnapshot(t.key, "before", snap)
+		if err := (git{root}).recordSnapshot(t.key, "before", snap); err != nil {
+			o.logf("warning: could not record the start state of this task, so rw undo cannot undo it: %v", err)
+		}
 	}
 }
 
@@ -546,8 +558,13 @@ func (o *Orchestrator) snapshotAfter(t *task) {
 	t.tokensMu.Lock()
 	msg := afterMessage(t.text, t.agentFiles)
 	t.tokensMu.Unlock()
-	if snap, err := g.snapshot(msg); err == nil {
-		g.recordSnapshot(t.key, "after", snap)
+	snap, err := g.snapshot(msg)
+	if err == nil {
+		err = g.recordSnapshot(t.key, "after", snap)
+	}
+	if err != nil {
+		o.logf("warning: could not record the end state of this task, so rw undo cannot undo it: %v", err)
+	} else {
 		trimUndo(t.root)
 	}
 	o.snapshotAfterExtras(t)
@@ -643,6 +660,13 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 			t.state.Status = "running"
 			t.state.save()
 		}
+	}
+	if opts.Started != nil && refused == "" {
+		id := t.key
+		if t.state != nil {
+			id = t.state.ID
+		}
+		opts.Started(id)
 	}
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTask, TaskID: t.id, Task: text, Mode: o.opts.Mode})
 	o.emit(event.Event{Kind: event.TaskStart, Text: text})
@@ -1661,9 +1685,6 @@ func (o *Orchestrator) mergeEvent(t *task, stepID string, ok bool, text string) 
 
 var reNumbers = regexp.MustCompile(`\d+`)
 
-// reAuth matches CLI errors that mean "not logged in".
-var reAuth = regexp.MustCompile(`(?i)(not logged in|please (log|sign) ?in|log ?in required|unauthori[sz]ed|\b401\b|authentication (failed|required)|token (has )?expired|codex login)`)
-
 // errorSignature normalizes an error so "the same error twice" ignores
 // timestamps, line numbers and durations.
 func errorSignature(s string) string {
@@ -1950,12 +1971,15 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 		}
 	}
 	why := "at usage limit"
-	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && (reAuth.MatchString(res.Err.Error()) || strings.Contains(res.Err.Error(), "not found on PATH")) {
+	unavailable := false
+	if !res.OK() && !res.LimitHit && !res.Killed && res.Err != nil && sessionlog.UnavailableError(res.Err.Error()) {
 		// A CLI that is logged out or missing is as unusable as one at its
-		// limit: route around it for the rest of the session.
+		// limit: route around it for the rest of the session. The log says
+		// which it was, so the dashboard does not call it a limit hit.
 		res.LimitHit = true
 		res.ResetAt = time.Now().Add(12 * time.Hour)
 		why = "unavailable (" + clip(res.Err.Error(), 120) + "; run `rw doctor`)"
+		unavailable = true
 	}
 	if res.LimitHit {
 		until := res.ResetAt
@@ -1963,18 +1987,28 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 			until = time.Now().Add(t.cfg.Providers[d.Provider].LimitCooldown.D())
 		}
 		o.opts.Tracker.MarkLimited(d.Provider, until)
-		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err), Until: &until})
+		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeLimit, TaskID: t.id, Agent: agentID, Provider: d.Provider, Model: d.Model, Text: errText(res.Err), Until: &until,
+			Unavailable: sessionlog.Bool(unavailable)})
 		o.emit(event.Event{Kind: event.ProviderState, Provider: d.Provider, Until: until, Text: fmt.Sprintf("%s %s until %s; /limit %s reset to retry", d.Provider, why, until.Format("15:04"), d.Provider)})
 	}
 	tk := res.Tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: agentID, Step: step.ID, Kind: string(step.Kind), Attempt: attempt,
-		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit,
+		Role: d.Role, Provider: d.Provider, Model: d.Model, Effort: d.Effort, OK: sessionlog.Bool(res.OK()), LimitHit: res.LimitHit, Unavailable: limitFlag(res.LimitHit, unavailable),
 		Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files, Text: clip(res.Final, 500)})
 	// Over budget now? Only noted: this agent's work is done, and a task
 	// whose last agent crossed a limit is finished, not stopped. The next
 	// agent's check (if one starts) asks or stops.
 	o.noteBudget(t, agentID)
 	return d, res
+}
+
+// limitFlag is an agent_end's "unavailable": set (true or false) with a
+// limit hit, left out otherwise.
+func limitFlag(limitHit, unavailable bool) *bool {
+	if !limitHit {
+		return nil
+	}
+	return sessionlog.Bool(unavailable)
 }
 
 // busy reports whether the machine is too loaded to start another agent.

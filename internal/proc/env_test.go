@@ -53,6 +53,19 @@ func TestWithoutSecretsForgejoActions(t *testing.T) {
 	}
 }
 
+// A Bitbucket Pipelines step: rw's token (a secured variable) and the
+// step's OpenID Connect token go; the build's own variables stay.
+func TestWithoutSecretsBitbucketPipelines(t *testing.T) {
+	in := []string{
+		"BITBUCKET_TOKEN=me@example.com:ATATT", "BITBUCKET_STEP_OIDC_TOKEN=eyJ",
+		"BITBUCKET_WORKSPACE=w", "BITBUCKET_REPO_SLUG=r", "BITBUCKET_COMMIT=abc", "CI=true", "ANTHROPIC_API_KEY=keep",
+	}
+	got := WithoutSecrets(in)
+	if want := in[2:]; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("got  %v\nwant %v", got, want)
+	}
+}
+
 // Verify commands, hooks and bench checks run code the agents wrote: the
 // shell they run in must not see rw's tokens either.
 func TestShellWithoutSecrets(t *testing.T) {

@@ -82,7 +82,7 @@ func breakaway(cmd *exec.Cmd) {
 }
 
 // lower is a no-op: the priority class is set at creation.
-func lower(int) {}
+func lower(*exec.Cmd) {}
 
 var job windows.Handle
 
