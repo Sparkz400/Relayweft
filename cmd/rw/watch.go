@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,7 +31,7 @@ import (
 )
 
 // rw watch follows up on the pull requests rw opened, on GitHub, GitLab
-// (merge requests), Gitea/Forgejo and Bitbucket Cloud (forge.Client):
+// (merge requests), Gitea/Forgejo, Bitbucket Cloud and Azure DevOps (forge.Client):
 //
 //   - rw pr (and rw run --issue(s) --pr) records every pull request it
 //     opens in <user config dir>/relayweft/watch.json: the repository,
@@ -38,7 +39,8 @@ import (
 //   - A pass reads each recorded pull request. A merged or closed one is
 //     dropped. New items are failed checks on the current head commit
 //     (GitHub check runs, GitLab pipeline jobs, Gitea commit statuses,
-//     Bitbucket pipeline steps and commit statuses),
+//     Bitbucket pipeline steps and commit statuses, Azure Pipelines
+//     builds and their failed tasks),
 //     inline review comments, and reviews that request changes, by people
 //     who may direct work on the repository (forge.Feedback.Trusted: the
 //     owner, members, collaborators or developers; not bots, not other
@@ -262,7 +264,7 @@ func cmdWatch(args []string) error {
 		fmt.Fprint(os.Stderr, `Usage: rw watch [--every 15m] [--dir repo] | --list | --forget <n>
 
 Follows up on the pull requests rw pr opened (GitHub, GitLab merge requests,
-Gitea/Forgejo, Bitbucket Cloud). Each pass reads every watched pull
+Gitea/Forgejo, Bitbucket Cloud, Azure DevOps). Each pass reads every watched pull
 request: merged or closed ones are dropped; failed checks (or pipeline jobs)
 on its head commit,
 review comments and reviews requesting changes (by the repository's owner,
@@ -386,7 +388,7 @@ func watchMatches(e watchEntry, ref string) bool {
 		n, err := strconv.Atoi(ref[i+1:])
 		return err == nil && n == e.Number && strings.EqualFold(ref[:i], e.repo().String())
 	}
-	r, err := forge.ParsePullRef(ref, forge.Hosts{}.With(e.Host, e.repo().Kind))
+	r, err := forge.ParsePullRef(ref, forge.Hosts{}.With(cmp.Or(e.Web, e.Host), e.repo().Kind))
 	if err != nil || r.Number != e.Number {
 		return false
 	}
@@ -799,15 +801,25 @@ func (w *watcher) land(e watchEntry, co *orchestrator.Checkout, res orchestrator
 
 // CI and forge settings that rw watch never pushes, on any forge: GitHub
 // Actions and settings, GitLab CI, Gitea and Forgejo Actions, Woodpecker
-// (Codeberg's CI), Drone and Bitbucket Pipelines.
+// (Codeberg's CI), Drone, Bitbucket Pipelines, and Azure Pipelines (azure-pipelines*.yml in any
+// folder, and the usual pipeline and Azure DevOps folders; a pipeline may
+// name a YAML file anywhere, so branch policies still matter there).
 var (
-	ciDirs   = []string{".github/", ".gitlab/", ".gitea/", ".forgejo/", ".woodpecker/"}
+	ciDirs   = []string{".github/", ".gitlab/", ".gitea/", ".forgejo/", ".woodpecker/", ".azuredevops/", ".azure-pipelines/", ".pipelines/", ".vsts/"}
 	ciNames  = []string{".gitlab-ci.yml", ".gitlab-ci.yaml", ".woodpecker.yml", ".woodpecker.yaml", ".drone.yml", ".drone.yaml", "bitbucket-pipelines.yml"}
-	ciPlaces = ".github/, .gitlab-ci.yml, .gitlab/, .gitea/, .forgejo/, .woodpecker, .drone.yml, bitbucket-pipelines.yml"
+	ciPlaces = ".github/, .gitlab-ci.yml, .gitlab/, .gitea/, .forgejo/, .woodpecker, .drone.yml, bitbucket-pipelines.yml, azure-pipelines*.yml, .azuredevops/, .azure-pipelines/, .pipelines/"
 )
 
+// isAzurePipeline reports whether p's file name is an Azure Pipelines one
+// (azure-pipelines.yml, azure-pipelines-ci.yaml, ...).
+func isAzurePipeline(p string) bool {
+	name := strings.ToLower(p[strings.LastIndexAny(p, `/\`)+1:])
+	return strings.HasPrefix(name, "azure-pipelines") && (strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml"))
+}
+
 // ciFiles are the CI and forge settings files among buildPRCommit's files
-// ("<status> <path>"): anything under ciDirs, and ciNames at the top.
+// ("<status> <path>"): anything under ciDirs, ciNames at the top, and
+// Azure Pipelines files anywhere.
 func ciFiles(files []string) []string {
 	var out []string
 	for _, f := range files {
@@ -822,6 +834,9 @@ func ciFiles(files []string) []string {
 			if strings.EqualFold(p, n) {
 				hit = true
 			}
+		}
+		if isAzurePipeline(p) {
+			hit = true
 		}
 		if hit {
 			out = append(out, p)
@@ -895,7 +910,8 @@ func checkOrigin(root string, repo forge.Repo) error {
 	if err != nil {
 		return fmt.Errorf("%s has no origin remote", root)
 	}
-	r, err := forge.ParseRemote(strings.TrimSpace(u), forge.Hosts{}.With(repo.Host, repo.Kind))
+	// The root URL keeps a path prefix (https://tfs.example.com/tfs).
+	r, err := forge.ParseRemote(strings.TrimSpace(u), forge.Hosts{}.With(cmp.Or(repo.Web, repo.Host), repo.Kind))
 	if err != nil || !r.Same(repo) {
 		return fmt.Errorf("origin of %s is not %s any more", root, repo)
 	}

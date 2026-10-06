@@ -25,6 +25,9 @@ var childSecrets = []string{
 	"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN",
 	// Gitea / Forgejo
 	"GITEA_TOKEN", "FORGEJO_TOKEN",
+	// Azure DevOps, and an Azure Pipelines job's token (when a job maps
+	// System.AccessToken into the environment)
+	"AZURE_DEVOPS_TOKEN", "AZURE_DEVOPS_EXT_PAT", "SYSTEM_ACCESSTOKEN",
 	// Bitbucket, and Bitbucket Pipelines' OpenID Connect token
 	"BITBUCKET_TOKEN", "BITBUCKET_STEP_OIDC_TOKEN",
 	// GitHub Actions runner tokens; Forgejo and Gitea runners set the same

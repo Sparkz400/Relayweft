@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-// rest is the HTTP side of the GitLab and Gitea clients: JSON in and out,
-// the token in an Authorization header, and reads that go on without a
-// token the forge rejected (a stale token must not block a public
-// repository).
+// rest is the HTTP side of the GitLab, Gitea, Bitbucket and Azure clients:
+// JSON in and out, the token in an Authorization header, and reads that go
+// on without a token the forge rejected (a stale token must not block a
+// public repository).
 type rest struct {
 	kind     Kind
 	base     string
@@ -23,7 +23,14 @@ type rest struct {
 	http     *http.Client
 	notes    io.Writer
 	rejected bool
-	keep     bool // a 401 answers the request; it does not drop the token
+
+	// header has more headers for every request; forbidden is the hint
+	// for a 403 (empty uses the forge default). keep prevents retrying a
+	// 401 without the token: Azure may require another scope, and a
+	// Bitbucket permission probe must report the authenticated result.
+	header    http.Header
+	forbidden string
+	keep      bool
 }
 
 func newRest(kind Kind, base, token, scheme string, notes io.Writer) *rest {
@@ -161,6 +168,9 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", "relayweft")
+	for k, v := range c.header {
+		req.Header[k] = v
+	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -171,6 +181,10 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s %s: %w", c.name(), method, path, err)
+	}
+	if c.kind == Azure && resp.StatusCode == http.StatusNonAuthoritativeInfo {
+		// Azure DevOps' sign-in page, not an answer.
+		resp.StatusCode = http.StatusUnauthorized
 	}
 	if resp.StatusCode == http.StatusUnauthorized && authed && method == http.MethodGet && !c.keep {
 		resp.Body.Close()
@@ -185,7 +199,9 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 		hint := c.kind.TokenHint()
 		switch resp.StatusCode {
 		case http.StatusUnauthorized:
-			if authed || c.rejected {
+			if authed && c.kind == Azure && c.keep {
+				ae.Hint = "The token (" + hint + ") was rejected: it expired, or lacks a scope this needs. " + c.forbidden
+			} else if authed || c.rejected {
 				ae.Hint = "The token (" + hint + ") was rejected; create a new one"
 			} else {
 				ae.Hint = "This needs a token: " + hint
@@ -200,6 +216,9 @@ func (c *rest) send(method, path, accept string, in any) (*http.Response, error)
 			ae.Hint = "The token may lack the needed permission (api scope on GitLab; repository and issue write on Gitea)"
 			if c.kind == Bitbucket {
 				ae.Hint = "The token may lack a scope this needs (docs/bitbucket.md lists them)"
+			}
+			if c.forbidden != "" {
+				ae.Hint = c.forbidden
 			}
 		}
 		return nil, ae

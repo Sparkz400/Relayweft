@@ -26,6 +26,7 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Added
 
+- Azure DevOps: `rw pr`, work items as tasks (`--issue`, `--issues label:<tag>`, `--team`), `rw watch` and `rw review --post` work on dev.azure.com, `*.visualstudio.com` and Azure DevOps Server (`AZURE_DEVOPS_HOST`), with `AZURE_DEVOPS_TOKEN`. See `docs/azure-devops.md`. ([#57](https://github.com/Sparkz400/Relayweft/pull/57))
 - Resolve steps: when two agents' changes conflict, or an agent's change overlaps with your own uncommitted edits, an agent merges both in a pool worktree (never in your folder); rw checks for leftover markers and runs `verify.commands` before it lands, and asks first for your own edits. `orchestrator.conflicts: auto|resolve|ask|fail`, `max_resolve_rounds`, `resolve_role`, `/conflicts` in the TUI; see docs/conflicts.md. ([#56](https://github.com/Sparkz400/Relayweft/pull/56))
 - `rw mcp`: an MCP server, so Claude Code or Codex can hand a multi-step task to rw from inside their own session and follow it (status, plan approval, change review, result, undo). It works only in the folder it was started in, and refuses tasks under rw's own agents. Set-up: `docs/mcp.md`; `rw doctor` checks it. ([#58](https://github.com/Sparkz400/Relayweft/pull/58))
 - `rw completion bash|zsh|fish|powershell`: Tab completion for subcommands, flags, provider names, models and task ids (Windows PowerShell 5.1 and PowerShell 7 too). The .deb/.rpm/.apk packages, Homebrew and the AUR package install it. ([#49](https://github.com/Sparkz400/Relayweft/pull/49))

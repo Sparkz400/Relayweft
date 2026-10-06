@@ -22,7 +22,7 @@ import (
 )
 
 // rw pr turns a finished task into a branch, a commit and a pull request
-// on GitHub, GitLab (a merge request), Gitea/Forgejo or Bitbucket Cloud,
+// on GitHub, GitLab (a merge request), Gitea/Forgejo, Bitbucket Cloud or Azure DevOps,
 // whichever hosts the origin remote (forge.go):
 //
 //   - The change is the task's own: its undo "after" snapshot against its
@@ -111,7 +111,7 @@ func cmdPR(args []string) error {
 
 Turns a finished task (default: the newest finished task in this directory,
 see rw history) into a branch, a commit and a pull request on GitHub,
-GitLab (a merge request), Gitea/Forgejo or Bitbucket Cloud: whichever
+GitLab (a merge request), Gitea/Forgejo, Bitbucket Cloud or Azure DevOps: whichever
 hosts origin.
 
 The commit holds exactly the task's changes (its undo snapshots), applied
@@ -120,9 +120,9 @@ if they do not apply cleanly to HEAD, nothing is created. The branch
 (rw/<task>) must not exist yet and is pushed with git push -u origin (never
 forced). The PR is opened with the forge's token (GitHub: GITHUB_TOKEN,
 GH_TOKEN or `+"`gh auth token`"+`; GitLab: GITLAB_TOKEN or glab; Gitea: GITEA_TOKEN;
-Bitbucket: BITBUCKET_TOKEN);
+Bitbucket: BITBUCKET_TOKEN; Azure DevOps: AZURE_DEVOPS_TOKEN);
 without one the body is written to a file and the compare URL is printed.
-Self-hosted forges: set GH_HOST, GITLAB_HOST or GITEA_HOST to the host. A task that did not finish ok is opened as a draft.
+Self-hosted forges: set GH_HOST, GITLAB_HOST, GITEA_HOST or AZURE_DEVOPS_HOST to the host. A task that did not finish ok is opened as a draft.
 A multi-repo task gets one PR per repo: --repo <name> picks an extra repo.
 An opened pull request is followed up by rw watch (failed checks, reviews).
 `)
@@ -525,7 +525,7 @@ func unattendedPRCheck(st *orchestrator.TaskState, base string, unreported []str
 }
 
 // apiFlagHelp is the --api flag's text.
-const apiFlagHelp = "forge API base URL (GitHub Enterprise: https://<host>/api/v3, GitLab: https://<host>/api/v4, Gitea: https://<host>/api/v1, Bitbucket Cloud: https://api.bitbucket.org/2.0; GH_HOST, GITLAB_HOST and GITEA_HOST also work)"
+const apiFlagHelp = "forge API base URL (GitHub Enterprise: https://<host>/api/v3, GitLab: https://<host>/api/v4, Gitea: https://<host>/api/v1, Bitbucket Cloud: https://api.bitbucket.org/2.0; GH_HOST, GITLAB_HOST, GITEA_HOST and AZURE_DEVOPS_HOST also work)"
 
 // forgeName is the kind stored in rw watch's list ("" for GitHub, as in
 // lists from before GitLab and Gitea).
@@ -866,8 +866,8 @@ func renderPRParts(st *orchestrator.TaskState, o prBodyOptions) prParts {
 // reCloseRef finds closing keywords (GitHub's and Gitea's, plus GitLab's
 // -ing forms and "implements", and Bitbucket's other issue commands:
 // reopen, hold, wontfix, invalidate) followed by an issue reference (#7,
-// issue #7, bug #7, owner/repo#7, group/sub/project#7 or an issues URL);
-// reMention finds @user, @org/team and Bitbucket's @{account}; reQuickAction
+// issue #7, bug #7, owner/repo#7, group/sub/project#7, Azure Boards AB#7 or an issues URL);
+// reMention finds @user, @org/team and Bitbucket's @{account} and Azure DevOps' @<id>; reQuickAction
 // finds GitLab quick actions ("/merge", "/approve" at the start of a line),
 // which GitLab runs with the poster's rights. reJiraKey finds a Jira issue
 // key: with one in the text, "#word" may be a Jira smart commit command
@@ -877,9 +877,9 @@ func renderPRParts(st *orchestrator.TaskState, o prBodyOptions) prParts {
 // Spaces include the Unicode ones (no-break space and others) and \v,
 // which \s alone leaves out.
 var (
-	reCloseRef = regexp.MustCompile(strings.ReplaceAll(`(?i)\b(clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?|reopen(?:s|ed|ing)?|hold(?:s|ing)?|wontfix|invalidat(?:e[sd]?|ing))(SP*:?SP*(?:(?:issue|bug|ticket)SP*)?(?:[\w.-]+(?:/[\w.-]+)+)?#\d|SP*:?SP*https?://[^\s]*/issues/\d)`,
+	reCloseRef = regexp.MustCompile(strings.ReplaceAll(`(?i)\b(clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?|reopen(?:s|ed|ing)?|hold(?:s|ing)?|wontfix|invalidat(?:e[sd]?|ing))(SP*:?SP*(?:(?:issue|bug|ticket)SP*)?(?:[\w.-]+(?:/[\w.-]+)+|AB)?#\d|SP*:?SP*https?://[^\s]*/issues/\d)`,
 		"SP", `[\s\v\p{Z}]`))
-	reMention      = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9{])`)
+	reMention      = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9{<])`)
 	reQuickAction  = regexp.MustCompile(`(?m)^([ \t]*)/([A-Za-z])`)
 	reJiraKey      = regexp.MustCompile(`\b[A-Z][A-Z0-9_]+-\d+\b`)
 	reSmartCommand = regexp.MustCompile(`#([A-Za-z])`)
