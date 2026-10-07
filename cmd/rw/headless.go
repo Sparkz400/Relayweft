@@ -177,10 +177,19 @@ func cmdRun(args []string) error {
 	testsFirst := fs.Bool("tests-first", false, "write acceptance tests for the task before any code, on another provider than the implementer; asks you for tests when none can be written (orchestrator.tests_first)")
 	var accepts multiFlag
 	fs.Var(&accepts, "accept", "an acceptance criterion the task must meet (repeatable): the result shows each one with its test or evidence")
+	fill := fs.Bool("fill", false, "day plan: spend both subscriptions' usage windows - each task leans on the provider whose window resets first, and when none has room rw waits for the next reset (see rw dayplan)")
 	iss := registerIssueFlags(fs)
 	var sf scheduleFlags
 	sf.register(fs)
+	var df dayFlags
+	df.register(fs)
 	parseFlags(fs, args)
+	if df.set() && !*fill {
+		return errors.New("--until and --fresh-at go with --fill")
+	}
+	if *fill && (iss.active() || *single != "") {
+		return errors.New("--fill runs a task file or a task, not issues or --single")
+	}
 	var tasks []string
 	if iss.active() {
 		if *file != "" {
@@ -240,7 +249,7 @@ func cmdRun(args []string) error {
 		return errors.New("--tests-first writes tests for a routed task; it does not combine with --single or --estimate")
 	}
 	if *estimate {
-		if *file != "" || *single != "" || sf.set() || iss.active() || len(tasks) != 1 {
+		if *file != "" || *single != "" || sf.set() || *fill || iss.active() || len(tasks) != 1 {
 			return errors.New(`--estimate takes one task: rw run --estimate "task"`)
 		}
 		return runEstimate(&c, *quiet, tasks[0])
@@ -260,7 +269,7 @@ func cmdRun(args []string) error {
 	// answer, so they never ask (a budget limit stops them).
 	// A workflow's approvals are the exception: they hold, and the task
 	// waits at them on this terminal (see gatedApprover).
-	unattended := *file != "" || sf.set() || iss.batch()
+	unattended := *file != "" || sf.set() || iss.batch() || *fill
 	gated := c.workflow != nil && c.workflow.Gated()
 	var ap orchestrator.Approver
 	var gate *gatedApprover
@@ -311,6 +320,12 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer release()
+	if *fill {
+		if !sf.set() && !c.allowSleep {
+			defer proc.KeepAwake()() // waits for resets: the PC must not sleep through them
+		}
+		return runFillCmd(h, tasks, df)
+	}
 	runOne := func(task string) orchestrator.TaskResult {
 		// Issues arrive after the scheduled wait, or after a team claim.
 		// Render each with the workflow loaded before the wait, just as

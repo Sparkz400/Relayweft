@@ -33,6 +33,8 @@ var helpText = []string{
 	"/schedule <02:30|in 2h|reset claude> <task> · /schedule · /schedule rm <n>   run a task later, unattended",
 	"/workflow · /workflow <name> <task>  list saved workflows · run a task under one (its approvals hold when queued)",
 	"/schedule <when> /workflow <name> <task>   schedule a workflow task: it waits for its approvals when it runs",
+	"/fill on [until 07:00] [fresh 09:00] · /fill off · /fill   day plan: queued tasks spend both subscriptions'",
+	"                                     5-hour windows, each on the window that resets first; waits for resets",
 	"/resume [<id>] · /history            continue an interrupted task · list the last 10 tasks",
 	"/explain [<id>]                      why the last finished task (or <id>) ran as one agent or several: routes, reasons, estimates, escalations",
 	"/threads <n> · /parallel on|off · /review on|off (reviewer checkpoints) · /judge on|off",
@@ -63,6 +65,10 @@ func (m *Model) command(line string) tea.Cmd {
 	}
 	if cmd == "workflow" {
 		m.workflowCommand(args, rest, say)
+		return nil
+	}
+	if cmd == "fill" {
+		m.fillCommand(args, say)
 		return nil
 	}
 	switch cmd {

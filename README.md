@@ -491,6 +491,8 @@ rw run --file tasks.txt --when-reset claude   # claude | codex | any
 
 In the TUI, `/schedule 02:30 <task>`, `/schedule in 2h <task>` or `/schedule reset claude <task>` puts the task in the queue with a start time; it runs when due, after any running task. `/schedule` lists them, `/schedule rm <n>` removes one. In `rw web`, the Queue panel has the same form, and scheduled items show their time and a remove button.
 
+**Day planner**: `rw run --file tasks.txt --fill` spends both subscriptions' 5-hour usage windows on the queue instead of failing the rest at the first limit. Before each task it plans again from the live quota readings: the task goes to the provider whose window resets first and still has room, and when every window is full it waits for the next reset (keeping the PC awake) and goes on. A task stopped by a limit resumes after the reset. `--until 07:00` starts no task after then; `--fresh-at 09:00` opens no window that would still run at 09:00, so both subscriptions start your day full. `rw dayplan --file tasks.txt` prints the plan without running anything. In the TUI, `/fill on [until 07:00] [fresh 09:00]` does the same for the queue. In `rw web`, the Queue panel has a **Fill windows** box. See [docs/dayplan.md](docs/dayplan.md).
+
 `rw schedule --file tasks.txt --at 02:30 [--daily]` prints a ready Windows Task Scheduler (`schtasks /create …`) or cron command, so the OS starts `rw` even when no terminal is open. It installs nothing.
 
 ### Protecting your machine

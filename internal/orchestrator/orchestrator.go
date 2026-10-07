@@ -102,6 +102,9 @@ type TaskOptions struct {
 	// the task puts a saved change in place as its one step, then
 	// verifies and fixes it as any task does (fixreplay.go).
 	Replay *ReplayWork
+	// Lean sends the task's work to one provider while it runs (the day
+	// planner, rw run --fill): see router.Lean.
+	Lean router.Lean
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -684,6 +687,10 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	o.taskSeq++
 	seq := o.taskSeq
 	o.mu.Unlock()
+	if opts.Lean.Provider != "" {
+		o.router.SetLean(opts.Lean)
+		defer o.router.SetLean(router.Lean{})
+	}
 	finished := false
 	defer func() { // panics only; the normal path clears it before TaskDone
 		r := recover()

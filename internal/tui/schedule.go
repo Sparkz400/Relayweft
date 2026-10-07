@@ -134,7 +134,7 @@ func (m *Model) tickSchedule() {
 	if !m.running {
 		m.startNext()
 	}
-	want := m.running && !m.current.at.IsZero()
+	want := m.running && !m.current.at.IsZero() || m.fillWaiting()
 	for _, j := range m.queue {
 		want = want || !j.at.IsZero()
 	}

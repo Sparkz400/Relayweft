@@ -26,6 +26,8 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Added
 
+- Day planner: `rw run --file tasks.txt --fill` spends both subscriptions' 5-hour usage windows overnight. Each task leans on the provider whose window resets first, rw waits for the next reset when every window is full, and a task a limit stopped resumes after it. `--until` and `--fresh-at` keep the morning free and both windows full; `rw dayplan` prints the plan. The TUI's queue (`/fill`) and `rw web`'s Queue panel (**Fill windows**) can use the same planner. See `docs/dayplan.md`.
+
 - **Inspect result** in the browser/app brings requirements, changed-file diffs, checks, remaining failures, routing decisions, cost, and recovery actions into one task screen, accessible from History and the latest result.
 - `rw run --workflow NAME` now works with `--issue` and `--issues`, including scheduled runs and team queues: each issue uses the workflow's prompt, checks, budgets and approvals before `--pr` opens its pull request.
 - Acceptance criteria: a finished task now reports "agent finished", "configured checks passed" and "requirements verified" as three separate results, and lists each requirement with its supporting test or evidence. You can give criteria with `rw run --accept` or an `Acceptance criteria:` list in the task. The results appear after `rw run`, in `rw report`, in `rw pr` descriptions and in the dashboard's History list.

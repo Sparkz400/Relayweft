@@ -317,6 +317,7 @@ var completeFreeFlags = []string{
 	"n", "name", "only", "port", "repo", "scan", "sessions", "setup", "since", "speed",
 	"threads", "title", "writers", "replay-subjects",
 	"id", "revision", "task",
+	"fresh-at", "until",
 }
 
 func hintFor(cmd command, name string) valueHint {

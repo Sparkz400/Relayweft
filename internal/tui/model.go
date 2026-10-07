@@ -203,6 +203,7 @@ type Model struct {
 	queue       []job          // tasks typed while one ran, and scheduled ones (schedule.go)
 	current     job            // the job running now (when running)
 	awake       func()         // releases the keep-awake while scheduled work is pending
+	fill        fillState      // the day planner (/fill, fill.go)
 	interrupted *orchestrator.TaskState
 	complete    struct { // tab completion of @agent ids
 		active       bool

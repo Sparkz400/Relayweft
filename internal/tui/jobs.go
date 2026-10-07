@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/dayplan"
 	"github.com/sparkz400/relayweft/internal/event"
 	"github.com/sparkz400/relayweft/internal/notify"
 	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/router"
 	"github.com/sparkz400/relayweft/internal/schedule"
 	"github.com/sparkz400/relayweft/internal/workflow"
 )
@@ -31,6 +33,12 @@ type job struct {
 	// wf is the saved workflow the task runs under (text is its {{task}});
 	// its approvals hold even when the job is queued or scheduled.
 	wf *workflow.Definition
+	// The day plan (fill.go): the provider it leans on, whether the plan
+	// started it, and a limit-stopped task's resume (force, retries).
+	lean    router.Lean
+	planned bool
+	force   bool
+	retries int
 }
 
 func (j job) label() string {
@@ -126,8 +134,19 @@ func orLast(agent string) string {
 	return agent
 }
 
-// startTask runs a new task, or queues it while another one runs.
-func (m *Model) startTask(text string) { m.startJob(job{text: text}) }
+// startTask runs a new task, or queues it while another one runs. With
+// fill on, the day plan decides when it runs.
+func (m *Model) startTask(text string) {
+	if m.fill.on {
+		m.queue = append(m.queue, job{text: text, unattended: true})
+		m.fill.check = time.Time{}
+		m.flashNotice(fmt.Sprintf("queued (%d) for the day plan: %s - runs unattended when a window has room; /fill shows the plan", len(m.queue), oneLine(text, 60)))
+		m.startNext()
+		m.tickSchedule()
+		return
+	}
+	m.startJob(job{text: text})
+}
 
 // startJob runs j now, or queues it (unattended) when a task is running.
 func (m *Model) startJob(j job) {
@@ -162,6 +181,11 @@ func (m *Model) startJob(j job) {
 		m.interrupted = nil
 	}
 	orc := m.orc
+	var fr *fillRun
+	if j.planned {
+		fr = &fillRun{job: j, done: done, hits: dayplan.LimitHits(orc.Tracker(), m.store.Get())}
+		m.fill.run = fr
+	}
 	go func() {
 		defer close(done)
 		if j.followUp {
@@ -172,7 +196,14 @@ func (m *Model) startJob(j job) {
 		if j.wf != nil {
 			text, _ = j.wf.Render(text) // checked when the job was made
 		}
-		orc.RunWith(ctx, text, orchestrator.TaskOptions{Unattended: j.unattended, Resume: j.resume, Workflow: j.wf})
+		opts := orchestrator.TaskOptions{Unattended: j.unattended, Resume: j.resume, Force: j.force, Lean: j.lean, Workflow: j.wf}
+		if fr != nil {
+			opts.Started = func(id string) { fr.id = id }
+		}
+		res := orc.RunWith(ctx, text, opts)
+		if fr != nil {
+			fr.res, fr.cancelled = res, ctx.Err() != nil
+		}
 	}()
 	if m.overlay == nil {
 		m.focus = focusTree
@@ -183,13 +214,21 @@ func (m *Model) startJob(j job) {
 // startNext runs the next queued job that may start now, if any: one
 // without a start time, or a scheduled one whose time has come.
 func (m *Model) startNext() {
-	if m.running || len(m.queue) == 0 || m.orc.Running() {
+	if m.running || m.orc.Running() || !m.fillSettled() || len(m.queue) == 0 {
 		return
 	}
 	now := time.Now()
+	defer func() {
+		if m.fill.on && !m.running {
+			m.startPlanned(now)
+		}
+	}()
 	for i, j := range m.queue {
 		if !j.at.IsZero() && now.Before(j.at) {
 			continue
+		}
+		if m.fill.on && j.plannable() {
+			continue // the day plan picks these
 		}
 		m.queue = append(m.queue[:i:i], m.queue[i+1:]...)
 		what := "queued"

@@ -182,6 +182,9 @@ func (m *Model) viewHeader(W int) string {
 			left += th.fg(th.Warn).Render(" · next " + schedule.Clock(next, time.Now()))
 		}
 	}
+	if f := m.fillHeader(time.Now()); f != "" {
+		left += th.fg(th.Warn).Render(f)
+	}
 	if b := m.budgetLine(); b != "" {
 		left += th.fg(th.Muted).Render(" · ") + b
 	}
