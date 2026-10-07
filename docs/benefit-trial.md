@@ -50,6 +50,10 @@ the trial by adding features to explain away an unfavorable result.
 
 ## Evidence boundaries
 
+On 7 October, all six eligible historical cases were revalidated on Windows:
+the known solution passed and the base failed with protected tests. This was a
+no-model check of the corpus, not a fresh comparison of agent output.
+
 Automated tests and historical replays cannot supply human acceptance or
 intervention time. The table is deliberately pending. The reliability suite and
 hosted CI establish software checks only, not completion of this trial.

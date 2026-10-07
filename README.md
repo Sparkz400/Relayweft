@@ -129,7 +129,7 @@ Acceptance criteria:
 - gives up with a clear error
 ```
 
-rw also recognizes `Done when:`, `Definition of done:` and `Requirements:` as headings, and `-`, `*`, `1.` and `- [ ]` as list items. With `review_when: large` or `always`, a task that lists criteria always gets the final review, because only the review checks them. With the default `untested` (and with `failing`), the checks and tests decide: when they pass, explicit criteria stay `unchecked` without a review; passing independent tests do not verify them either. Tests written first (`rw run --tests-first`) can supply evidence for derived requirements, but do not certify them. Without a list, the reviewer lists the requirements it reads in the task.
+rw also recognizes `Done when:`, `Definition of done:` and `Requirements:` as headings, and `-`, `*`, `1.` and `- [ ]` as list items. When final review is enabled, `review_when: large` or `always` reviews tasks with listed criteria. With review off (the default), or a policy that skips it, project checks decide: when they pass, explicit criteria stay `unchecked` without a review; passing independent tests do not verify them either. Tests written first (`rw run --tests-first`) can supply evidence for derived requirements, but do not certify them. Without a list, the reviewer lists the requirements it reads in the task.
 
 Each requirement gets one of four statuses:
 - `verified`: retained for saved reports; current command-level checks cannot assign this status to an individual requirement.
