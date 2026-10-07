@@ -47,6 +47,21 @@ func TestBenchTiersAndOrder(t *testing.T) {
 	}
 }
 
+func TestBenchReviewModeEnablesOptionalGate(t *testing.T) {
+	base := config.NewStore(config.Default(), "")
+	m, err := parseBenchMode("routed-review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := m.store(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Get().Orchestrator.ReviewBeforeDone || s.Get().Orchestrator.FinalReview() != config.ReviewFailing || base.Get().Orchestrator.ReviewBeforeDone {
+		t.Fatal("review experiment must enable its own gate without changing the default")
+	}
+}
+
 func TestFairBenchMatrix(t *testing.T) {
 	isolate(t)
 	chdir(t, gitInit(t))

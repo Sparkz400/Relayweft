@@ -123,6 +123,7 @@ func (m benchMode) store(base *config.Store) (*config.Store, error) {
 		cfg.Orchestrator.Handoff = false
 	}
 	if m.review {
+		cfg.Orchestrator.ReviewBeforeDone = true
 		cfg.Orchestrator.ReviewWhen, cfg.Orchestrator.IndependentTests = config.ReviewFailing, false
 	}
 	if m.reqTests {
