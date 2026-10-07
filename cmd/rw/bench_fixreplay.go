@@ -236,7 +236,9 @@ func replayBenchFix(c common, ws *orchestrator.BenchWorkspace, store *config.Sto
 		}
 		hiddenOK, hiddenOut := benchCheck(ctx, ws, t, nil)
 		row.Hidden = passFail(hiddenOK)
-		os.WriteFile(filepath.Join(art, "check-before.txt"), []byte(hiddenOut), 0o600)
+		if err := os.WriteFile(filepath.Join(art, "check-before.txt"), []byte(hiddenOut), 0o600); err != nil {
+			return fmt.Errorf("save starting check: %w", err)
+		}
 
 		// The task, from the base with the change as its step.
 		if note := prepareBenchRun(ctx, ws, head, bf.Setup, t); note != "" {
@@ -266,18 +268,26 @@ func replayBenchFix(c common, ws *orchestrator.BenchWorkspace, store *config.Sto
 			return err
 		}
 		printed := make(chan struct{})
+		var eventErr error // read only after printed closes
 		fixes := 0
 		go func() {
 			defer close(printed)
 			enc := json.NewEncoder(eventFile)
 			for e := range events {
-				enc.Encode(e)
+				if err := enc.Encode(e); err != nil && eventErr == nil {
+					eventErr = err
+				}
 				if e.Kind == event.Phase && e.Text == "fix" {
 					fixes++
 				}
 				printEvent(e, true)
 			}
-			eventFile.Close()
+			if err := eventFile.Sync(); err != nil && eventErr == nil {
+				eventErr = err
+			}
+			if err := eventFile.Close(); err != nil && eventErr == nil {
+				eventErr = err
+			}
 		}()
 		orc := orchestrator.New(orchestrator.Options{Dir: ws.Path, Store: runStore, Runners: benchRunners, Tracker: tracker, Log: log,
 			Events: events, ForceProvider: c.provider, Mode: "routed", Bench: t.Name, TaskIDPrefix: fmt.Sprintf("fixreplay%d-", n+1)})
@@ -306,6 +316,9 @@ func replayBenchFix(c common, ws *orchestrator.BenchWorkspace, store *config.Sto
 		if err := rctx.Err(); err != nil {
 			cancel()
 			done()
+			if eventErr != nil {
+				return fmt.Errorf("save replay events: %w", eventErr)
+			}
 			if err := fail(map[bool]string{true: "timed out", false: "cancelled"}[err == context.DeadlineExceeded]); err != nil {
 				return err
 			}
@@ -313,12 +326,21 @@ func replayBenchFix(c common, ws *orchestrator.BenchWorkspace, store *config.Sto
 		}
 		reqOK, reqRep := orc.RunRequirementTests(rctx, rt)
 		row.ReqAfter = passFail(reqOK)
-		os.WriteFile(filepath.Join(art, "req-after.txt"), []byte(reqRep), 0o600)
+		if err := os.WriteFile(filepath.Join(art, "req-after.txt"), []byte(reqRep), 0o600); err != nil {
+			cancel()
+			done()
+			return fmt.Errorf("save requirement check: %w", err)
+		}
 		hiddenOK, hiddenOut = benchCheck(rctx, ws, t, runStore.Get())
 		cancel()
 		done()
+		if eventErr != nil {
+			return fmt.Errorf("save replay events: %w", eventErr)
+		}
 		row.HiddenAfter = passFail(hiddenOK)
-		os.WriteFile(filepath.Join(art, "check.txt"), []byte(hiddenOut), 0o600)
+		if err := os.WriteFile(filepath.Join(art, "check.txt"), []byte(hiddenOut), 0o600); err != nil {
+			return fmt.Errorf("save hidden check: %w", err)
+		}
 		row.Req = "fail" // as in the replay; the task's first round says it again (events.jsonl)
 		rows = append(rows, row)
 		fmt.Printf("  => hidden %s -> %s, independent tests fail -> %s, %d fix round(s), %s\n", row.Hidden, row.HiddenAfter, row.ReqAfter, row.FixRounds, oneLine(row.Summary, 160))

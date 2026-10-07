@@ -137,19 +137,20 @@ func orLast(agent string) string {
 // startTask runs a new task, or queues it while another one runs. With
 // fill on, the day plan decides when it runs.
 func (m *Model) startTask(text string) {
-	if m.fill.on {
-		m.queue = append(m.queue, job{text: text, unattended: true})
+	m.startJob(job{text: text})
+}
+
+// startJob runs j now, or queues it while a task runs or the day plan waits.
+func (m *Model) startJob(j job) {
+	if m.fill.on && j.plannable() && !j.planned {
+		j.unattended = true
+		m.queue = append(m.queue, j)
 		m.fill.check = time.Time{}
-		m.flashNotice(fmt.Sprintf("queued (%d) for the day plan: %s - runs unattended when a window has room; /fill shows the plan", len(m.queue), oneLine(text, 60)))
+		m.flashNotice(fmt.Sprintf("queued (%d) for the day plan: %s - %s; /fill shows the plan", len(m.queue), oneLine(j.label(), 60), j.approvalsNote()))
 		m.startNext()
 		m.tickSchedule()
 		return
 	}
-	m.startJob(job{text: text})
-}
-
-// startJob runs j now, or queues it (unattended) when a task is running.
-func (m *Model) startJob(j job) {
 	if m.running {
 		if j.resume != nil {
 			m.flashNotice("a task is running - /resume once it has finished")

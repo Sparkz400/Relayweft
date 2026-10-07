@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sparkz400/relayweft/internal/config"
@@ -82,6 +83,32 @@ func TestSingleWorkerHonorsPlanAndResume(t *testing.T) {
 			tc.task.text, tc.task.cfg = "Update the service and its callers", o.opts.Store.Get()
 			if shape := o.shapeTask(tc.task); shape.single {
 				t.Fatalf("lost plan boundary: %+v", shape)
+			}
+		})
+	}
+}
+
+func TestPlanReviewFailureStopsBeforeWorkers(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		t.Run(map[bool]string{false: "rejected", true: "unavailable"}[unavailable], func(t *testing.T) {
+			var workers atomic.Int32
+			set := both(func(s runner.Spec) runner.Result {
+				if strings.Contains(s.Prompt, runner.MarkerPlanReview) {
+					if unavailable {
+						return runner.Result{Err: errors.New("service unavailable")}
+					}
+					return runner.Result{Final: `{"approve":false,"advice":"unsafe plan"}`}
+				}
+				if r, ok := twoEdits(s); ok {
+					return r
+				}
+				workers.Add(1)
+				return runner.Result{Final: "done"}
+			})
+			o, _ := newOrc(t, "", set, func(c *config.Config) { c.Orchestrator.MaxPlanRevisions = 0 })
+			res := o.RunWith(context.Background(), longTask, TaskOptions{Plan: true})
+			if res.OK || workers.Load() != 0 {
+				t.Fatalf("unapproved plan ran %d workers: %+v", workers.Load(), res)
 			}
 		})
 	}

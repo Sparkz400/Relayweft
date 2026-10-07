@@ -3,7 +3,9 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/sparkz400/relayweft/internal/event"
 	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
@@ -40,4 +42,19 @@ func TestWorkflowCommandQueuesAndSchedules(t *testing.T) {
 		t.Error("the schedule message does not say the workflow's approvals hold")
 	}
 	m.Shutdown()
+}
+
+func TestWorkflowWaitsForDayPlanWhenIdle(t *testing.T) {
+	stubAwake(t)
+	m, _, _ := newModel(t, true)
+	defer m.Shutdown()
+	m.fill.on = true
+	for _, p := range []string{event.Codex, event.Claude} {
+		m.orc.Tracker().MarkLimited(p, time.Now().Add(time.Hour))
+	}
+	wf := &workflow.Definition{Name: "gated", Description: "test", Prompt: "{{task}}", ApprovePlan: true}
+	m.startJob(job{text: "Fix the parser", wf: wf})
+	if m.running || len(m.queue) != 1 || m.queue[0].wf != wf || !m.queue[0].unattended {
+		t.Fatalf("workflow bypassed idle day plan: running=%v queue=%+v", m.running, m.queue)
+	}
 }

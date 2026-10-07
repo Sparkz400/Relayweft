@@ -278,13 +278,13 @@ func (e *Explanation) escalations(recs []sessionlog.Record, choices []Choice) {
 			if m := reRoleMove.FindStringSubmatch(r.Reason); m != nil {
 				what = m[1] + " → " + m[2]
 			}
-			add(what+" ("+r.Route.Label()+")", "the same error twice"+quoteErr(prev))
+			add(what+" ("+r.Label()+")", "the same error twice"+quoteErr(prev))
 		case router.RuleLargeDiff:
-			add("worker_high ("+r.Route.Label()+")", firstClause(r.Reason))
+			add("worker_high ("+r.Label()+")", firstClause(r.Reason))
 		case router.RuleQuota:
 			add("moved to "+r.Provider, firstClause(r.Reason))
 		case router.RuleStandby:
-			add("standby route "+r.Route.Label(), firstClause(r.Reason))
+			add("standby route "+r.Label(), firstClause(r.Reason))
 		}
 		if r.Fallback && r.Rule != router.RuleQuota {
 			from := r.From
@@ -301,7 +301,7 @@ func (e *Explanation) escalations(recs []sessionlog.Record, choices []Choice) {
 			add("judge set the role: "+r.Role, "the rules were not confident about this step")
 		}
 		if tc := tierClause(r.Reason); tc != "" && strings.Contains(tc, "route instead of") && r.Tier == "strong" {
-			add("tier strong ("+r.Route.Label()+")", tc)
+			add("tier strong ("+r.Label()+")", tc)
 		}
 		if r.Attempt > 1 && r.Rule != router.RuleRepeatError && !r.Fallback && prev != "" {
 			add(fmt.Sprintf("retry (attempt %d)", r.Attempt), "the previous attempt failed"+quoteErr(prev))
@@ -452,7 +452,7 @@ func (e *Explanation) Text(w io.Writer) error {
 			width = max(width, len(title(r)))
 		}
 		for i, r := range e.Runs {
-			p("%2d. %-*s  %-11s → %s   %s\n", i+1, min(width, 28), title(r), r.Role, r.Route.Label(), runOutcome(r))
+			p("%2d. %-*s  %-11s → %s   %s\n", i+1, min(width, 28), title(r), r.Role, r.Label(), runOutcome(r))
 			why := r.Rule
 			if r.Reason != "" {
 				why += " — " + r.Reason

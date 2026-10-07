@@ -1033,13 +1033,19 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 				if ctx.Err() != nil {
 					return TaskResult{Summary: "cancelled during plan review"}
 				}
-				if !ok || v.Approve || rev >= oc.MaxPlanRevisions {
+				if !ok {
+					return TaskResult{Summary: "plan review unavailable: run `rw doctor`, then retry the task; no workers ran"}
+				}
+				if v.Approve {
 					break
+				}
+				if rev >= oc.MaxPlanRevisions {
+					return TaskResult{Summary: "plan not approved: " + clip(v.Advice, 200) + "; revise the task and retry; no workers ran"}
 				}
 				o.emit(event.Event{Kind: event.Phase, Text: "plan"})
 				np, ok := o.plan(ctx, t, v.Advice+"\n"+strings.Join(v.Issues, "\n"), &plan)
 				if !ok {
-					break
+					return TaskResult{Summary: "plan revision failed; retry the task; no workers ran"}
 				}
 				plan = np
 			}

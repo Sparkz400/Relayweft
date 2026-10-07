@@ -69,6 +69,8 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Fixed
 
+- Plan review failures and exhausted rejections stop before workers run. Project-memory source references cannot traverse or follow symlinks outside the project. Benchmark replay reports evidence-write failures instead of silently losing logs.
+
 - Four historical benchmark cases with suspect scoring contracts are quarantined before model calls. Skips are explicit; `--validate` remains available for diagnosis.
 
 - An unavailable final reviewer fails the requested review gate, reports an actionable retry instruction and never claims approval or triggers speculative repairs. Benchmark solution diffs use the host Git safeguards.

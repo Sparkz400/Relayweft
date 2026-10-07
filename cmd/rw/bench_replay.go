@@ -212,10 +212,22 @@ func replayBenchTests(c common, ws *orchestrator.BenchWorkspace, store *config.S
 				wc.Files, wc.Command = rt.Paths(), rt.Command
 				for _, p := range rt.Paths() {
 					dst := filepath.Join(wdir, "files", filepath.FromSlash(p))
-					os.MkdirAll(filepath.Dir(dst), 0o755)
-					os.WriteFile(dst, rt.Files[p], 0o644)
+					if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+						close(events)
+						<-done
+						return err
+					}
+					if err := os.WriteFile(dst, rt.Files[p], 0o644); err != nil {
+						close(events)
+						<-done
+						return err
+					}
 				}
-				os.WriteFile(filepath.Join(wdir, "requirements.txt"), []byte(rt.Requirements+"\n\nCOMMAND: "+rt.Command+"\n\nNOTES:\n"+strings.Join(rt.Notes, "\n")+"\n"), 0o644)
+				if err := os.WriteFile(filepath.Join(wdir, "requirements.txt"), []byte(rt.Requirements+"\n\nCOMMAND: "+rt.Command+"\n\nNOTES:\n"+strings.Join(rt.Notes, "\n")+"\n"), 0o644); err != nil {
+					close(events)
+					<-done
+					return err
+				}
 			}
 			costs = append(costs, wc)
 			if rt == nil {

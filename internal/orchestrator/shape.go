@@ -351,7 +351,6 @@ func (o *Orchestrator) fitPlan(t *task, p Plan, reviewPlan bool) (Plan, bool) {
 		return p, reviewPlan
 	}
 	if reviewPlan {
-		reviewPlan = false
 		if nt, nu := need(p, false); room.fits(nt, nu) {
 			o.logf("budget: skipping the plan review so the plan fits (%s left, plan ~%s)", left(), tok(nt))
 			return p, false
