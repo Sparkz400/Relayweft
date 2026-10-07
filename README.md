@@ -1,4 +1,6 @@
-# Relayweft (`rw`) runs coding agents with project checks, recovery snapshots and resumable tasks. It works with Codex, Claude Code and [optional providers](docs/providers.md). Its purpose is to make agent work easier to control and recover, with one capable worker as the normal path.
+# Relayweft
+
+Relayweft (`rw`) runs coding agents with project checks, recovery snapshots and resumable tasks. It works with Codex, Claude Code and [optional providers](docs/providers.md). Its purpose is to make agent work easier to control and recover, with one capable worker as the normal path.
 
 Extra agents have not established a reliable correctness advantage in the recorded experiments. Planning, generated tests, model selection experiments and overnight queues are available when useful; they are not required to run an ordinary task.
 

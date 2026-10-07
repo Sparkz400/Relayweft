@@ -69,6 +69,8 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Fixed
 
+- Morning summaries match project directories through platform-aware canonical paths, including symlinks, without combining distinct Linux paths by letter case.
+
 - Plan review failures and exhausted rejections stop before workers run. Project-memory source references cannot traverse or follow symlinks outside the project. Benchmark replay reports evidence-write failures instead of silently losing logs.
 
 - Four historical benchmark cases with suspect scoring contracts are quarantined before model calls. Skips are explicit; `--validate` remains available for diagnosis.

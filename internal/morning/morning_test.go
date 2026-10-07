@@ -2,6 +2,9 @@ package morning
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -81,12 +84,30 @@ func TestBuild(t *testing.T) {
 	if s := Build(states, recs, Options{Since: since, Until: until, All: true, Interrupted: interrupted}); len(s.Tasks) != 5 {
 		t.Fatalf("all: %d tasks", len(s.Tasks))
 	}
-	if s := Build(states, recs, Options{Since: since, Until: until, Dir: `d:\other\`, Interrupted: interrupted}); len(s.Tasks) != 1 || s.Tasks[0].ID != "c" {
+	dirFilter := "D:/other/"
+	if runtime.GOOS == "windows" {
+		dirFilter = `d:\other\`
+	}
+	if s := Build(states, recs, Options{Since: since, Until: until, Dir: dirFilter, Interrupted: interrupted}); len(s.Tasks) != 1 || s.Tasks[0].ID != "c" {
 		t.Fatalf("dir: %+v", s.Tasks)
 	}
 	empty := Build(nil, nil, Options{Since: since, Until: until})
 	if !empty.Empty() || !strings.Contains(empty.Text(), "nothing ran unattended since Tue 18:00") || empty.Tasks == nil {
 		t.Fatalf("empty = %q %+v", empty.Text(), empty)
+	}
+}
+
+func TestProjectFilterRecognizesPathAliases(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !samePath(root, alias) {
+		t.Fatal("same project through a symlink was excluded")
+	}
+	if runtime.GOOS == "linux" && samePath(filepath.Join(root, "Repo"), filepath.Join(root, "repo")) {
+		t.Fatal("distinct case-sensitive projects were combined")
 	}
 }
 

@@ -330,8 +330,5 @@ func clip(s string, n int) string {
 }
 
 func samePath(a, b string) bool {
-	norm := func(s string) string {
-		return strings.TrimRight(strings.ToLower(filepath.ToSlash(filepath.Clean(s))), "/")
-	}
-	return norm(a) == norm(b)
+	return orchestrator.SamePath(a, b)
 }
