@@ -290,7 +290,13 @@ type OrchestratorCfg struct {
 	// AgentTimeout stops an agent that runs longer than this.
 	AgentTimeout   Duration `yaml:"agent_timeout"`
 	SmallTaskWords int      `yaml:"small_task_words"`
-	// AutoSingle runs a task as one worker step, without the planner, when
+	// SingleWorker runs new single-repository tasks with one worker and no
+	// planner, regardless of task wording. Snapshots, configured checks and
+	// bounded repairs still run. --plan explicitly requests a plan; resumed
+	// tasks retain their saved plan and multi-repo tasks still need planning.
+	SingleWorker bool `yaml:"single_worker"`
+	// AutoSingle is the legacy heuristic when SingleWorker is off. It runs
+	// a task as one worker step, without the planner, when
 	// its text does not look multi-file, multi-part, broad or hard (on the
 	// bench a single agent was 2-3x faster on such tasks). Checks and the
 	// final review still run.
@@ -299,16 +305,10 @@ type OrchestratorCfg struct {
 	// their provider for a task that does not look hard or sensitive (the
 	// planner and reviewer were most of a routed task's cost).
 	LightPlanning bool `yaml:"light_planning"`
-	// ReviewWhen says when the final review runs. untested: only on a
-	// task without checks; with checks, the checks and the independent
-	// tests decide, and their failing output advises the fix round.
-	// failing: with checks, only after they fail and a fix round follows
-	// (the reviewer advises it); without checks, after every round. large:
-	// unless the checks pass on a change of at most review_skip_max_lines
-	// lines. always: after every round. On the bench the final review
-	// approved 7 of 10 failing results and never changed a verdict, while
-	// independent tests caught 4 of the 7 it approved, so by default tests
-	// take its place.
+	// ReviewWhen controls an enabled final review (review_before_done).
+	// untested: only without checks; failing: after failed checks when a fix
+	// follows, or always without checks; large: unless checks pass on a small
+	// nonsensitive change; always: every round. It does not enable review.
 	ReviewWhen string `yaml:"review_when"`
 	// ReviewSkipMaxLines is review_when: large's limit: the final review
 	// is skipped when the checks pass and the change is at most this many
@@ -325,8 +325,8 @@ type OrchestratorCfg struct {
 	// the task's requirements while the worker works, in a worktree at the
 	// task's start, so it never sees the change. rw runs them after the
 	// work like the checks; a failure starts a fix round. Needs a git repo
-	// and verify.commands. With review_when: untested (the default) they
-	// stand in for the final review.
+	// and verify.commands. Off by default: generated expectations can be
+	// wrong and a repair can reduce correctness.
 	IndependentTests bool `yaml:"independent_tests"`
 	// IndependentTestsGate says what failing independent tests do. soft:
 	// they fail a round only once, and only when a fix round can follow;
@@ -379,6 +379,8 @@ const (
 // planned and reviewed on the full planner and reviewer routes, as before
 // they existed (rw bench mode routed-classic).
 func (o *OrchestratorCfg) Classic() {
+	o.SingleWorker = false
+	o.ReviewBeforeDone = true
 	o.AutoSingle, o.LightPlanning, o.FitBudget, o.ReviewSkipMaxLines = false, false, false, 0
 	o.ReviewWhen, o.IndependentTests = ReviewAlways, false
 }

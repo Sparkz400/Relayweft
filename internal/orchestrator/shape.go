@@ -118,6 +118,9 @@ func (o *Orchestrator) shapeTask(t *task) taskShape {
 	switch {
 	case t.forcePlan || (t.resumed && t.state != nil && t.state.Plan != nil):
 		s.why = "planned on request"
+	case oc.SingleWorker && len(t.repos) == 0:
+		s.single = true
+		s.why = "one worker: orchestrator.single_worker (use --plan for a planned task)"
 	case len(not) == 0 && oc.AutoSingle:
 		s.single = true
 		s.why = fmt.Sprintf("one step: no sign of a multi-file task (difficulty %.2f)", diff)

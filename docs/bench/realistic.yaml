@@ -10,6 +10,7 @@ timeout: 20m
 learn: false
 tasks:
 - name: affected-module-index
+  disabled: Exact fallback-reason wording can fail correct selection; repair the scoring assertion first.
   # Public checks only; the hidden scoring command below is never given to agents.
   agent_checks:
   - go test -p 2 -count=1 -timeout 60s ./internal/affected
@@ -45,6 +46,7 @@ tasks:
     - internal/orchestrator/lockretry_test.go
     visible: false
 - name: azure-api-edge-cases
+  disabled: Hidden tests require internal API names absent from the prompt; repair the contract first.
   prompt: 'Make Azure DevOps issue, PR and review handling robust. Preserve the complete description within service
     limits, identify the authenticated user correctly, interpret policy/build failures consistently, and keep credentials
     scoped to the intended Azure API. Support repository names and legacy URLs without weakening URL validation
@@ -61,6 +63,7 @@ tasks:
     - internal/forge/azure_test.go
     visible: false
 - name: dashboard-auth-failures
+  disabled: The historical known solution has failed its fixture in a later environment; revalidate and repair it first.
   prompt: 'The dashboard currently reports a missing or logged-out agent CLI as a provider usage-limit hit. Distinguish
     unavailable CLIs from actual quota limits in dashboard aggregation and generated display data. Read older log
     records correctly, preserve genuine rate limits, and keep CLI and dashboard totals consistent.
@@ -92,6 +95,7 @@ tasks:
     - internal/forge/bitbucket_test.go
     visible: false
 - name: process-ancestry
+  disabled: Hidden tests require Ancestors, ProgramName and caseFold absent from the prompt; repair the contract first.
   prompt: 'Ensure every launched agent can identify that it runs under Relayweft, and make process ancestry inspection
     robust enough to recognize nested agent invocations through wrappers. Normalize executable names consistently
     and handle vanished or inaccessible ancestors without assuming an unrelated process belongs to this task. Keep

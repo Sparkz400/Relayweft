@@ -280,11 +280,10 @@ func TestReqFailingTests(t *testing.T) {
 	}
 }
 
-// On by default, in place of the final review; turned off, no test writer
-// runs.
+// Generated tests are opt-in; the normal path runs no test writer.
 func TestIndependentTestsOff(t *testing.T) {
-	if !config.Default().Orchestrator.IndependentTests {
-		t.Fatal("independent_tests is off by default")
+	if config.Default().Orchestrator.IndependentTests {
+		t.Fatal("independent_tests must be off by default")
 	}
 	dir := gitRepo(t)
 	r := &reqRun{command: reqCheck()}

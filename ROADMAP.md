@@ -10,6 +10,21 @@ The phases are ordered. A phase starts only when the previous phase's **exit cri
 
 ---
 
+## Current priority: reliability and practical usefulness
+
+Feature expansion is frozen after consolidating the existing workflow, recovery,
+day-planning and unattended/mobile branches. New single-repository tasks use
+one worker with snapshots, checks and bounded repairs. Extra final review and
+generated tests are opt-in. A requested reviewer that cannot answer fails its
+gate and reports how to retry. Previously recorded experiments do not establish
+that additional agents produce better code.
+
+The [ten-task adoption trial](docs/benefit-trial.md) separates software validation
+from accepted real work and human intervention time. Keep the project if its
+controls repeatedly save effort without reducing correctness; narrow it to the
+controls that help, or archive it if they go unused. Daily use and human acceptance
+remain pending until recorded; historical benchmark scores do not close them.
+
 ## Where we are (October 2026)
 
 Each numbered item has three independent statuses in its phase's evidence table:

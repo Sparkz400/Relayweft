@@ -1,8 +1,6 @@
-# Relayweft
+# Relayweft (`rw`) runs coding agents with project checks, recovery snapshots and resumable tasks. It works with Codex, Claude Code and [optional providers](docs/providers.md). Its purpose is to make agent work easier to control and recover, with one capable worker as the normal path.
 
-*Your coding agents, working together.*
-
-A Windows-first, animated terminal app that routes coding work between your **ChatGPT (Codex CLI)** and **Claude (Claude Code)** subscriptions, and optionally **Gemini CLI**, **Qwen Code**, **DeepSeek** and **local models** ([more providers](docs/providers.md)). It picks a model for each step, runs agents in parallel and only calls the expensive models when it matters.
+Extra agents have not established a reliable correctness advantage in the recorded experiments. Planning, generated tests, model selection experiments and overnight queues are available when useful; they are not required to run an ordinary task.
 
 ```
 rw            # start the TUI in your project
@@ -72,22 +70,40 @@ Hooks that read `SY_*` variables need the `RW_*` names, and old `sy/…` branche
 ## What happens when you submit a task
 
 ```
-plan (planner, read-only)
-  -> review the plan (reviewer, other provider)   <- checkpoint 1
-  -> fan out: explorer / researcher / worker agents in parallel
-       writing agents each get their own git worktree, merged back as they finish
-       same error twice -> escalate one tier + reviewer diagnoses   <- checkpoint 2
-       provider hits its usage limit -> same role on the other provider
-  -> review before done (reviewer)                 <- checkpoint 3
-       changes requested -> one fix round -> review again
+snapshot -> one worker -> project checks
+                         -> one repair if checks fail -> final full checks
+         -> saved result, honest check status, resume / undo
 ```
 
-Tasks shorter than 12 words skip the planner and run as one worker step (or one explorer step for questions).
+New single-repository tasks use one worker regardless of their wording
+(`orchestrator.single_worker: true`). Questions remain read-only. Checks are
+configured with `verify.commands`, or detected from build files by `verify.auto`.
+Passing checks establishes only what those checks cover; with no checks the
+result explicitly says **unchecked**. Recovery preserves attributable changes
+and reports conflicts rather than overwriting concurrent edits.
 
-With the defaults, three more steps involve you, your repo's checks or tests:
-- **You approve the plan** before any agent runs (`approve_plan`).
-- **Your checks decide** (`verify.commands`, such as `go test ./...`). They run after the agents finish. A repo without `verify.commands` gets them detected from its build files at each task (`verify.auto`). 
-- **Tests replace the final review.** While the worker works, an agent on the other provider writes tests for the task's requirements from the task text alone, without seeing the change (`orchestrator.independent_tests`). rw runs them after the checks and removes them again. When the checks and these tests pass, the task is done. When they fail, the failing output goes into the fix round; no reviewer reads the change. On the bench the final review approved 7 of 10 failing results, while these tests caught 4 of the 7 it approved. Failing independent tests get one fix round and then only advise (`independent_tests_gate: soft`), since they sometimes ask for more than the task. Only a task without any checks still gets the final review (`orchestrator.review_when`: `untested` by default; `failing` reviews before each fix round, `large` all but small passing changes, `always` every round).
+Use `rw run --plan` when you deliberately want a planner and multiple steps.
+Multi-repository tasks still need planning; resumed tasks keep their saved plan.
+`approve_plan` shows the work before execution in the TUI or `rw run --approve`.
+
+Extra final review (`review_before_done`), independent generated tests
+(`independent_tests`) and tests written first (`tests_first`) are off by default.
+If you enable final review, `review_when` controls when it runs; a reviewer that
+cannot answer never counts as approval. Generated tests are experimental:
+they can detect missed requirements, but can also push correct code toward an
+incorrect expectation. Best-of selection, automatic model tiers and the routing
+judge also remain off; learned routes suggest changes only.
+
+Existing user configuration overrides these defaults. Set
+`single_worker: true`, `review_before_done: false`, and `independent_tests: false`
+under `orchestrator` in your user config to adopt them. Do not replace your
+provider routes or project check commands. To restore the older task-shape
+heuristics, set `single_worker: false` and keep `auto_single: true`.
+
+Dollar totals are API-equivalent estimates, not subscription savings. Budget
+fitting only constrains work when you set nonzero limits; zero means unlimited.
+See the [bounded adoption trial](docs/benefit-trial.md) for the keep-or-archive
+criteria and the evidence still needed.
 
 ### Acceptance criteria
 

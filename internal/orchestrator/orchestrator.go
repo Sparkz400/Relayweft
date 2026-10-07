@@ -897,7 +897,6 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 		}
 		s.Summary, s.CostLine = res.Summary, res.Cost.Summary()
 		s.Acceptance = res.Acceptance
-		s.Kept = res.Kept
 		s.save()
 		pruneStates()
 	}
@@ -1114,6 +1113,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	reqAdvisory := false // they fail but no longer fail the round (reqGate)
 	gate := &reqGate{strict: oc.ReqTestsGate() == config.ReqGateStrict}
 	reviewSkipped := false
+	reviewUnavailable := false
 	reviewAsked := false // a final review asked for changes
 	var lastAdvice string
 	verifying := t.verifying()
@@ -1124,12 +1124,14 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	reviewWhy := "a read-only task: no final review"
 	if !oc.ReviewBeforeDone {
 		reviewWhy = "the final review is off (orchestrator.review_before_done)"
+		o.noteChoice(t, sessionlog.ChoiceReview, "skipped", reviewWhy, 0)
 	}
 	if hasEdits(plan) && (oc.ReviewBeforeDone || verifying) {
 		for round := 0; ; round++ {
 			report, testsAdvice := "", ""
 			var failing map[string]bool
 			reviewed, lastVerdict = false, Verdict{}
+			reviewUnavailable = false
 			if verifying {
 				o.emit(event.Event{Kind: event.Phase, Text: "verify"})
 				// The work must pass the acceptance tests as written.
@@ -1200,6 +1202,12 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 					return TaskResult{Summary: "cancelled during final review"}
 				}
 				reviewWhy = "the reviewer did not answer"
+				if !ok {
+					reviewUnavailable = true
+					roundOK = false
+					o.logf("final review unavailable: run `rw doctor`, then `rw resume` to retry; work is retained")
+					o.emit(event.Event{Kind: event.Checkpoint, AgentID: AgentReviewer, OK: false, Text: "final review unavailable: run `rw doctor`, then `rw resume` to retry"})
+				}
 				if ok {
 					applyRequirements(&v)
 					reviewed, lastVerdict = true, v
@@ -1209,7 +1217,7 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 				}
 			}
 			approved = roundOK
-			if roundOK || round >= oc.MaxFixRounds {
+			if roundOK || reviewUnavailable || round >= oc.MaxFixRounds {
 				break
 			}
 			o.noteChoice(t, sessionlog.ChoiceFix, "", reqFixWhy(fixWhy(verified, oc.ReviewBeforeDone && !skip, v.Approve, t.verifyCommands(), v.Advice), reqOK), round+1)
@@ -1257,19 +1265,22 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		}
 	}
 	fmt.Fprintf(&b, "%d/%d subtasks ok", done, len(plan.Subtasks))
+	if reviewUnavailable {
+		b.WriteString("; final review unavailable (rw doctor, then rw resume)")
+	}
 	switch {
 	case !verified:
 		b.WriteString("; checks still fail (" + strings.Join(t.verifyCommands(), ", ") + ")")
 	case !reqPass && !reqAdvisory:
 		b.WriteString("; independent requirement tests still fail")
-	case !approved:
+	case !approved && !reviewUnavailable:
 		b.WriteString("; reviewer still has concerns: " + clip(lastAdvice, 200))
 	case reviewSkipped && oc.FinalReview() == config.ReviewUntested:
 		// Tests take the review's place; the checks' part below says how
 		// they went.
 	case reviewSkipped:
 		b.WriteString("; final review skipped (" + strings.TrimSuffix(strings.TrimPrefix(reviewWhy, "the final review was skipped: "), " (review_when: failing)") + ")")
-	case oc.ReviewBeforeDone && hasEdits(plan):
+	case reviewed && lastVerdict.Approve:
 		b.WriteString("; reviewer approved")
 	}
 	if verified && verifying && hasEdits(plan) {

@@ -173,7 +173,7 @@ func cmdRun(args []string) error {
 	file := fs.String("file", "", "run the tasks in this file one after another, unattended (one per line, or blocks separated by a line with ---)")
 	approve := fs.Bool("approve", false, "ask on the terminal before a plan runs (and per change when orchestrator.review_changes is on)")
 	estimate := fs.Bool("estimate", false, "plan only: print the plan with its estimated tokens, time and $, then stop (nothing runs, the tree is untouched)")
-	forcePlan := fs.Bool("plan", false, "always run the planner, even for a task that looks like one step (orchestrator.auto_single, small_task_words)")
+	forcePlan := fs.Bool("plan", false, "opt into planning instead of the default single worker (overrides single_worker, auto_single and small_task_words)")
 	testsFirst := fs.Bool("tests-first", false, "write acceptance tests for the task before any code, on another provider than the implementer; asks you for tests when none can be written (orchestrator.tests_first)")
 	var accepts multiFlag
 	fs.Var(&accepts, "accept", "an acceptance criterion the task must meet (repeatable): the result shows each one with its test or evidence")

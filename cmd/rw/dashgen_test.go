@@ -596,7 +596,7 @@ func TestDashboardMatchesCLI(t *testing.T) {
 			"providers": map[string]any{"claude": prov("claude"), "codex": prov("codex")},
 			// Every task is planned: the scenarios script the planner.
 			"orchestrator": map[string]any{"approve_plan": false, "min_free_disk_gb": 0, "max_cpu_percent": 0, "min_free_memory_mb": 0,
-				"auto_single": false, "light_planning": false, "fit_budget": false, "review_skip_max_lines": 0},
+				"single_worker": false, "review_before_done": true, "auto_single": false, "light_planning": false, "fit_budget": false, "review_skip_max_lines": 0},
 			"notify":  map[string]any{"enabled": false},
 			"routing": map[string]any{"learn": "suggest"},
 		}

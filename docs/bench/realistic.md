@@ -24,6 +24,17 @@ project's history, so it does not measure general performance across languages
 or unfamiliar repositories. Public historical solutions may also occur in a
 model's training data; no claim of an uncontaminated benchmark is made.
 
+## Current scoring quarantine
+
+Four historical cases are disabled for new model runs: affected-module-index,
+azure-api-edge-cases, dashboard-auth-failures and process-ancestry. Their manifest
+entries state the scoring problem. The runner prints skipped tasks, refuses an
+explicit `--only` request for a disabled task, and spends no quota on it. The
+historical ten-task table and matrix below describe the original design; only
+six cases are currently eligible. `--validate` still allows diagnosis, but a
+known-solution pass alone does not repair an unspecified internal contract.
+See [the adoption gate](../benefit-trial.md) before drawing quality conclusions.
+
 ## Validate the corpus without models
 
 Use a full checkout containing the referenced commits, with the Go version in

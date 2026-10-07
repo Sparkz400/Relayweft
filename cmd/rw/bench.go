@@ -42,7 +42,7 @@ modes:
   - routed                          # Relayweft with your relayweft.yaml routes
   # - routed-classic                # always plan, full-strength planner/reviewer, no review skip or budget fit, to measure those
   # - routed-review                 # the final review in place of independent tests (review_when: failing, independent_tests off), to measure the swap
-  # - routed-tests                  # with independent requirement tests (orchestrator.independent_tests, on by default), to measure them
+  # - routed-tests                  # with independent requirement tests (orchestrator.independent_tests, opt-in), to measure them
   # - routed-tiers                  # difficulty-based model tiers
   # - routed-nohandoff              # the same without the context hand-off (repo map, notes), to measure it
   # - routed-bestof                 # every writing step as best of N (routing.best_of), to measure it
@@ -88,6 +88,9 @@ type benchTask struct {
 	Name   string `yaml:"name"`
 	Prompt string `yaml:"prompt"`
 	Check  string `yaml:"check"`
+	// Disabled quarantines an invalid scoring contract before any model runs.
+	// --validate may still diagnose its historical solution and base.
+	Disabled string `yaml:"disabled,omitempty"`
 	// AgentChecks are public, non-mutating checks/formatter probes. Claude
 	// must execute them successfully before implementation; hidden scoring
 	// checks are never copied into this list.
@@ -232,6 +235,13 @@ func cmdBench(args []string) error {
 			return fmt.Errorf("task %q: the check uses %s or %s, but the task has no tests.files", t.Name, phTests, phTestDirs)
 		}
 		if len(want) == 0 || want[t.Name] {
+			if t.Disabled != "" && !*validate {
+				if want[t.Name] {
+					return fmt.Errorf("task %q is disabled: %s; repair its scoring contract before running it", t.Name, t.Disabled)
+				}
+				fmt.Printf("skipping %s: %s\n", t.Name, t.Disabled)
+				continue
+			}
 			tasks = append(tasks, t)
 		}
 	}

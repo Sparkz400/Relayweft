@@ -18,6 +18,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/event"
 	"github.com/sparkz400/relayweft/internal/limits"
 	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/proc"
 	"github.com/sparkz400/relayweft/internal/sessionlog"
 )
 
@@ -92,7 +93,7 @@ func loadSavedReqTests(wdir string) (*orchestrator.ReqTests, error) {
 // tests among them, as the replay of the tests ran the solution: without
 // them its older tests fail the public checks.
 func solutionPatch(dir string, t benchTask, path string) error {
-	out, err := exec.Command("git", "-C", dir, "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", t.Base, t.Tests.From, "--").Output()
+	out, err := exec.Command("git", proc.GitArgs("-C", dir, "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", t.Base, t.Tests.From, "--")...).Output()
 	if err != nil {
 		return fmt.Errorf("git diff for the solution: %w", err)
 	}

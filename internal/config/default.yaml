@@ -283,18 +283,19 @@ orchestrator:
   review_before_plan: true
   review_single_step_plan: false   # also review one-step plans (rw bench: 10/10 approved, +1 strong-model call each)
   review_on_repeat_error: true
-  review_before_done: true
+  review_before_done: false        # opt in to an extra model review; project checks still run
   max_plan_revisions: 1
   max_fix_rounds: 1
   max_attempts: 3                  # per subtask, not counting limit fallbacks
   agent_timeout: 30m
   small_task_words: 12             # tasks shorter than this skip planning and run as one worker step
+  single_worker: true             # one worker with snapshots, checks and bounded repairs; --plan opts into planning
   auto_single: true                # one worker step, no planner, unless the task looks multi-file, multi-part, broad or hard
   light_planning: true             # planner and reviewer use the worker route on their provider unless the task looks hard or sensitive
   review_when: untested            # final review: untested (only without checks: the checks and independent tests decide), failing (only when checks fail and a fix round follows; always without checks), large (unless checks pass on a small diff) or always
   review_skip_max_lines: 80        # review_when: large: skip the final review when checks pass and the diff is at most this many lines
   fit_budget: true                 # with budget limits: tell the planner what is left and shrink a plan that would not fit
-  independent_tests: true          # another provider writes tests from the task text alone (never sees the change); rw runs them after the work like the checks, in place of the final review
+  independent_tests: false         # experimental generated tests can overconstrain correct work; opt in deliberately
   independent_tests_gate: soft     # soft: failing independent tests start one fix round, then are reported, not held against the task; strict: they fail the task like a check
   tests_first: false               # write acceptance tests for the task before any code, on the other provider (rw run --tests-first)
   approve_plan: true               # TUI / rw run --approve: show the plan and let you edit it before anything runs

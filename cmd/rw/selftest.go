@@ -309,7 +309,8 @@ func (t *selftest) setup(proj string, files int) bool {
 		},
 		"notify": map[string]any{"enabled": false},
 		// The TUI's task in the window-close check runs without a question.
-		"orchestrator": map[string]any{"approve_plan": false},
+		// This fixture specifically exercises planned parallel steps and review.
+		"orchestrator": map[string]any{"approve_plan": false, "single_worker": false, "review_before_done": true},
 	}
 	data, _ := yaml.Marshal(cfg)
 	t.cfg = filepath.Join(roaming, "relayweft", "relayweft.yaml")

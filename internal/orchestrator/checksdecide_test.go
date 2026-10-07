@@ -160,7 +160,7 @@ func TestAcceptanceFromTestsFirst(t *testing.T) {
 
 func TestReviewWhenDefaults(t *testing.T) {
 	c := config.Default()
-	if c.Orchestrator.FinalReview() != config.ReviewUntested || !c.Orchestrator.IndependentTests || !c.Verify.Auto {
+	if c.Orchestrator.FinalReview() != config.ReviewUntested || c.Orchestrator.IndependentTests || c.Orchestrator.ReviewBeforeDone || !c.Orchestrator.SingleWorker || !c.Verify.Auto {
 		t.Errorf("review_when %q, independent_tests %v, verify.auto %v", c.Orchestrator.ReviewWhen, c.Orchestrator.IndependentTests, c.Verify.Auto)
 	}
 	if (config.OrchestratorCfg{}).FinalReview() != config.ReviewUntested {
