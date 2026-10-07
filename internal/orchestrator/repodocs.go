@@ -24,9 +24,19 @@ func repoDocs(cfg *config.Config, root string) string {
 
 // docsContext is the fenced conventions block for the planner and the
 // final reviewer: every repo's, named, in a multi-repo task.
-func (t *task) docsContext() string {
+func (t *task) docsContext() string { return t.docsContextMax(0) }
+
+// docsContextMax is docsContext with the conventions clipped to max bytes
+// before they are fenced (0 = no limit), so the fence always closes.
+func (t *task) docsContextMax(max int) string {
+	fence := func(s string) string {
+		if max > 0 && len(s) > max {
+			s = s[:max] + "\n... (conventions shortened)"
+		}
+		return repodocs.Fence(s)
+	}
 	if len(t.repos) == 0 {
-		return repodocs.Fence(t.repoDocs)
+		return fence(t.repoDocs)
 	}
 	var b strings.Builder
 	for _, r := range t.allRepos() {
@@ -39,5 +49,5 @@ func (t *task) docsContext() string {
 		}
 		b.WriteString("## repo " + name + "\n" + r.repoDocs + "\n")
 	}
-	return repodocs.Fence(strings.TrimRight(b.String(), "\n"))
+	return fence(strings.TrimRight(b.String(), "\n"))
 }

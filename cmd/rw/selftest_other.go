@@ -24,3 +24,9 @@ func writeAgentShim(dir, bin, name string) (string, error) {
 }
 
 func (t *selftest) defender() {}
+
+// Closing a console window mid-task is a Windows check
+// (selftest_close_windows.go).
+func cmdSelftestConsole([]string) { os.Exit(2) }
+
+func (t *selftest) closeScenarios() {}

@@ -23,6 +23,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/runner"
 	"github.com/sparkz400/relayweft/internal/sessionlog"
 	"github.com/sparkz400/relayweft/internal/sysload"
+	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
 // Fixed agent ids shown in the tree.
@@ -76,11 +77,31 @@ type TaskOptions struct {
 	// Force resumes a task that is no longer marked running (it finished,
 	// failed or was cancelled): its unfinished steps run again.
 	Force bool
+	// Plan always runs the planner (rw run --plan): no small-task or
+	// auto_single shortcut.
+	Plan bool
+	// TestsFirst writes acceptance tests before any code (rw run
+	// --tests-first; orchestrator.tests_first sets it for every task).
+	TestsFirst bool
+	// TestsAsker, if set, is asked for tests when none could be written
+	// (and shows written ones when plans are approved); else the Approver
+	// is, if it can ask (testsfirst.go).
+	TestsAsker TestsApprover
+	// Workflow is the saved workflow this task runs under: its checks,
+	// budget caps and approvals apply to this task only. Its approvals
+	// hold even when the task is unattended (queued or scheduled): the task
+	// waits for a person there, and is unattended in everything else. A
+	// resumed task keeps the workflow it started with.
+	Workflow *workflow.Definition
 	// Started, if set, gets the task's id (its saved state's, which rw
 	// history, rw resume and rw report take) as the task starts, before
 	// its TaskStart event. A task refused at once (its state is locked by
 	// another rw, or a resume that no longer applies) never calls it.
 	Started func(id string)
+	// Replay stands in for the plan and the work (rw bench --replay-fix):
+	// the task puts a saved change in place as its one step, then
+	// verifies and fixes it as any task does (fixreplay.go).
+	Replay *ReplayWork
 }
 
 // busyPoll is how often a held agent re-checks the machine load.
@@ -259,6 +280,10 @@ type TaskResult struct {
 	Kept     []string // branches kept because of merge conflicts
 	Cost     event.TaskCost
 	UndoKey  string // for `rw undo` ("" when not in a git repo)
+	// Acceptance separates "the agents finished", "the checks passed"
+	// and "the requirements are verified" (acceptance.go); nil when the
+	// task stopped before its work was judged.
+	Acceptance *Acceptance
 }
 
 // stepResult is the outcome of one subtask.
@@ -308,7 +333,22 @@ type task struct {
 	quotaBefore map[string]float64
 	agentFiles  map[string]bool // repo-relative paths agents changed (guarded by tokensMu)
 
-	unattended bool       // no approvals (queued task)
+	unattended bool // no approvals (queued task)
+	forcePlan  bool // always plan (TaskOptions.Plan)
+	// testsFirst writes acceptance tests before any code; tests are those
+	// tests once written (testsfirst.go).
+	testsFirst bool
+	testsAsker TestsApprover
+	replay     *ReplayWork // rw bench --replay-fix (fixreplay.go)
+	tests      *acceptTests
+	// wf is the saved workflow the task runs under (TaskOptions.Workflow).
+	wf *workflow.Definition
+	// lastWriter is the session of the last writing agent that succeeded in
+	// a repo's own tree, and cont the sessions fix steps continue (runFix);
+	// both guarded by resumeMu.
+	lastWriter *StepRun
+	cont       map[string]StepRun
+	shape      taskShape  // how big the task looks (shape.go)
 	state      *TaskState // persisted progress (nil in bench runs)
 	resumed    bool       // continuing an interrupted task
 	keepBefore bool       // resumed: undo keeps the original "before" snapshot
@@ -371,18 +411,60 @@ func (t *task) takeInterrupted(id string) (StepRun, bool) {
 	return r, ok
 }
 
+// noteWriter records the last writing agent that succeeded in a repo's own
+// tree, whose session a fix round continues.
+func (t *task) noteWriter(r StepRun) {
+	t.resumeMu.Lock()
+	defer t.resumeMu.Unlock()
+	t.lastWriter = &r
+}
+
+// writer returns the last writing agent's session (nil = none).
+func (t *task) writer() *StepRun {
+	t.resumeMu.Lock()
+	defer t.resumeMu.Unlock()
+	if t.lastWriter == nil {
+		return nil
+	}
+	r := *t.lastWriter
+	return &r
+}
+
+// continueAs has step id's first agent continue the session r.
+func (t *task) continueAs(id string, r StepRun) {
+	t.resumeMu.Lock()
+	defer t.resumeMu.Unlock()
+	if t.cont == nil {
+		t.cont = map[string]StepRun{}
+	}
+	t.cont[id] = r
+}
+
+// takeContinue returns and forgets the session step id continues.
+func (t *task) takeContinue(id string) *StepRun {
+	t.resumeMu.Lock()
+	defer t.resumeMu.Unlock()
+	r, ok := t.cont[id]
+	if !ok {
+		return nil
+	}
+	delete(t.cont, id)
+	return &r
+}
+
 // maxRepoRetries caps the planner reruns of one task for a plan that names
 // an unknown repo.
 const maxRepoRetries = 2
 
 // approving reports whether this task asks a person to approve its plan.
+// A workflow's own approval holds even on an unattended task.
 func (o *Orchestrator) approving(t *task) bool {
-	return o.opts.Approver != nil && !t.unattended && t.cfg.Orchestrator.ApprovePlan
+	return o.opts.Approver != nil && (!t.unattended && t.cfg.Orchestrator.ApprovePlan || t.wf != nil && t.wf.ApprovePlan)
 }
 
 // reviewing reports whether each agent's changes are shown before they land.
 func (o *Orchestrator) reviewing(t *task) bool {
-	return o.opts.Approver != nil && !t.unattended && t.cfg.Orchestrator.ReviewChanges
+	return o.opts.Approver != nil && (!t.unattended && t.cfg.Orchestrator.ReviewChanges || t.wf != nil && t.wf.ReviewChanges)
 }
 
 // noteFiles records files an agent working in dir reported changing, as
@@ -393,7 +475,7 @@ func (t *task) noteFiles(dir string, files []string) {
 		return
 	}
 	t.tokensMu.Lock()
-	defer t.tokensMu.Unlock()
+	var reported []string
 	for _, f := range files {
 		f = filepath.FromSlash(f)
 		if !filepath.IsAbs(f) {
@@ -413,8 +495,20 @@ func (t *task) noteFiles(dir string, files []string) {
 				r.agentFiles = map[string]bool{}
 			}
 			r.agentFiles[filepath.ToSlash(rel)] = true
+			reported = append(reported, filepath.Join(r.root, rel))
 			break
 		}
+	}
+	t.tokensMu.Unlock()
+	t.state.noteFiles(reported)
+}
+
+func (t *task) trackEdits(dir string, readOnly bool, emit func(event.Event)) func(event.Event) {
+	return func(e event.Event) {
+		if !readOnly && e.Kind == event.FileEdit {
+			t.noteFiles(dir, []string{e.Text})
+		}
+		emit(e)
 	}
 }
 
@@ -618,13 +712,33 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	t := &task{id: fmt.Sprintf("%stask-%d", o.opts.TaskIDPrefix, seq), text: text, cfg: cfg, runners: o.opts.Runners(cfg)}
 	t.key = o.opts.Log.Session() + "-" + t.id
 	t.unattended = opts.Unattended
+	t.forcePlan = opts.Plan
+	t.testsFirst, t.testsAsker = opts.TestsFirst || cfg.Orchestrator.TestsFirst, opts.TestsAsker
+	t.replay = opts.Replay
 	t.dir = o.opts.Dir
 	refused := ""
 	stayInterrupted := false // a resume that could not start keeps its state "running"
+	// The workflow applies to this task's copy of the config only.
+	useWorkflow := func(d *workflow.Definition) {
+		if d == nil {
+			return
+		}
+		wf := *d
+		wf.Checks = append([]string(nil), d.Checks...)
+		if err := wf.Apply(cfg); err != nil {
+			refused = "not started: workflow " + wf.Name + ": " + err.Error()
+			return
+		}
+		t.wf = &wf
+		if wf.Gated() && o.opts.Approver == nil {
+			refused = "not started: workflow " + wf.Name + " requires an approver"
+		}
+	}
+	useWorkflow(opts.Workflow)
 	if o.opts.Bench == "" && o.opts.Mode != "demo" {
 		t.state = opts.Resume
 		if t.state == nil {
-			t.state = &TaskState{ID: t.key, Task: text, Dir: o.opts.Dir, Mode: o.opts.Mode, Created: time.Now(), UndoKey: t.key, Repos: o.Repos()}
+			t.state = &TaskState{ID: t.key, Task: text, Dir: o.opts.Dir, Mode: o.opts.Mode, Created: time.Now(), UndoKey: t.key, Repos: o.Repos(), Workflow: t.wf}
 		} else {
 			t.resumed = true
 		}
@@ -644,6 +758,22 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 					refused = err.Error()
 				case fresh.Status != "running" && !opts.Force:
 					refused = fmt.Sprintf("task %s is %s now, not interrupted (rw resume --force runs its unfinished steps)", fresh.ID, fresh.Status)
+				}
+				if refused == "" && fresh.UndoKey != "" && fresh.Dir != "" {
+					undos, err := UndoList(fresh.Dir)
+					if err != nil {
+						refused = fmt.Sprintf("cannot check the task's undo state: %v; restore access to its project before resuming", err)
+					}
+					for _, u := range undos {
+						if u.Key == fresh.UndoKey && u.Undone {
+							refused = fmt.Sprintf("task %s was undone; run rw undo --redo %s before resuming, or start a new task", fresh.ID, fresh.UndoKey)
+							break
+						}
+					}
+				}
+				if refused == "" && opts.Workflow == nil {
+					// A resume keeps the workflow's checks and approvals.
+					useWorkflow(fresh.Workflow)
 				}
 				if refused != "" {
 					t.state = nil
@@ -734,14 +864,19 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 	// runHooks shows and logs a failure itself.
 	_ = o.runHooks(context.WithoutCancel(ctx), t, "after_task", cfg.Hooks.AfterTask, map[string]string{"RW_STATUS": status, "RW_SUMMARY": res.Summary})
 	if res.OK && t.useGit && o.opts.Bench == "" && t.cfg.Orchestrator.Handoff {
-		addRepoNote(t.root, text, res.Summary, t.changedFiles())
+		if err := addRepoNote(t.root, text, res.Summary, t.changedFiles()); err != nil {
+			o.logf("project memory was not saved: %v; check rw memory", err)
+		}
 		for _, r := range t.repos {
 			if files := r.changedFiles(); r.useGit && len(files) > 0 {
-				addRepoNote(r.root, text, res.Summary, files)
+				if err := addRepoNote(r.root, text, res.Summary, files); err != nil {
+					o.logf("project memory for %s was not saved: %v; check rw memory --dir %s", r.root, err, r.root)
+				}
 			}
 		}
 	}
 	if s := t.state; s != nil {
+		s.Kept = append([]string(nil), res.Kept...)
 		s.Status = map[bool]string{true: "done", false: "failed"}[res.OK]
 		if ctx.Err() != nil {
 			s.Status = "cancelled"
@@ -753,6 +888,7 @@ func (o *Orchestrator) RunWith(ctx context.Context, text string, opts TaskOption
 			s.UndoKey = res.UndoKey // a resume that never ran keeps the task's key
 		}
 		s.Summary, s.CostLine = res.Summary, res.Cost.Summary()
+		s.Acceptance = res.Acceptance
 		s.save()
 		pruneStates()
 	}
@@ -778,6 +914,11 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 
 	// Git setup.
 	o.snapshotBefore(t)
+	t.shape = o.shapeTask(t)
+	if err := o.preflight(ctx, t, o.preflightOnly(t)); err != nil {
+		return TaskResult{Summary: err.Error()}
+	}
+	t.noteFiles(o.opts.Dir, t.state.reportedFiles())
 	t.bestOfAny = cfg.Routing.BestOf.On() || (t.resumed && t.state.Plan != nil && planBestOf(*t.state.Plan))
 	t.wtOK = o.worktreesAllowed(t)
 	if o.reviewing(t) && !t.wtOK {
@@ -789,17 +930,32 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	}
 	if t.useGit && cfg.Orchestrator.Handoff {
 		t.repoMap = repoMap(t.root)
-		t.repoNotes = repoNotes(t.root)
+		t.repoNotes = repoNotes(t.root, t.text)
 	}
 	t.repoDocs = repoDocs(cfg, t.root)
 	if err := o.prepareExtras(t); err != nil {
 		return TaskResult{Summary: "not started: " + err.Error()}
+	}
+	o.detectChecks(t)
+
+	// 0. Tests first: acceptance tests before any code (testsfirst.go). A
+	// resumed task keeps guarding the tests it wrote.
+	if t.resumed && t.state.Tests != nil {
+		o.loadTests(t, *t.state.Tests)
+	} else if (t.testsFirst || t.resumed && t.state.TestsFirst) && !(t.resumed && t.state.Plan != nil) {
+		if res, ok := o.writeTests(ctx, t); !ok {
+			return res
+		}
 	}
 
 	// 1. Plan.
 	o.emit(event.Event{Kind: event.Phase, Text: "plan"})
 	var plan Plan
 	small := false
+	oneWhy := "" // why the task runs as one agent (rw explain)
+	if !t.resumed {
+		o.logf("task shape: %s", t.shape.why)
+	}
 	if t.resumed && t.state.Plan != nil {
 		plan = *t.state.Plan
 		o.logf("%s", t.state.resumeSummary())
@@ -815,14 +971,16 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 			o.logf("%s; the step starts over from your tree", s.Hint())
 		}
 		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
-	} else if words := len(strings.Fields(t.text)); oc.SmallTaskWords > 0 && words < oc.SmallTaskWords && len(t.repos) == 0 {
-		small = true
-		plan = Plan{Summary: "small task: one worker step", Subtasks: []Subtask{{ID: "work", Title: firstWords(t.text, 6), Kind: router.KindEdit, Prompt: t.text}}}
-		if looksRead(t.text) {
-			plan.Subtasks[0].Kind = router.KindExplore
-			plan.Subtasks[0].ID = "explore"
-		}
-		o.logf("small task (%d words): skipping the planner", words)
+	} else if t.replay != nil {
+		plan, small, oneWhy = replayPlan(), true, "a replayed change: no plan"
+		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
+	} else if p, why, ok, tiny := o.shortcutPlan(t); ok {
+		// A small task runs at once; a task auto_single made one step is
+		// still shown for approval (the person may add steps).
+		small = tiny
+		plan = p
+		oneWhy = why
+		o.logf("%s", why)
 		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
 	} else {
 		if t.wtOK {
@@ -853,8 +1011,14 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		plan = p
 		// 2. Review the plan. A one-step plan is skipped unless asked for:
 		// on the bench every one was approved, and the final review still
-		// checks the work.
-		if oc.ReviewBeforePlan && (len(plan.Subtasks) > 1 || oc.ReviewSingleStepPlan) {
+		// checks the work. A plan over the budget is shrunk first (and
+		// then skips the review).
+		reviewPlan := oc.ReviewBeforePlan && (len(plan.Subtasks) > 1 || oc.ReviewSingleStepPlan)
+		plan, reviewPlan = o.fitPlan(t, plan, reviewPlan)
+		if reviewPlan && len(plan.Subtasks) <= 1 && !oc.ReviewSingleStepPlan {
+			reviewPlan = false
+		}
+		if reviewPlan {
 			for rev := 0; ; rev++ {
 				o.emit(event.Event{Kind: event.Phase, Text: "review-plan"})
 				v, ok := o.review(ctx, t, "plan", planReviewPrompt(t.text, plan))
@@ -874,8 +1038,11 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		}
 	}
 
-	// 2b. The person approves (and may edit) the plan.
-	if !(t.resumed && t.state.Plan != nil) && !small && o.approving(t) {
+	o.noteShape(t, plan, oneWhy)
+
+	// 2b. The person approves (and may edit) the plan. A workflow that
+	// asks for approval shows even a small task's plan.
+	if !(t.resumed && t.state.Plan != nil) && (!small || t.wf != nil && t.wf.ApprovePlan) && o.approving(t) {
 		o.emit(event.Event{Kind: event.Phase, Text: "approve-plan"})
 		o.logf("waiting for you to approve the plan (%d subtasks)", len(plan.Subtasks))
 		plan.Repos = t.workspaceNames()
@@ -908,9 +1075,18 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 		t.state.save()
 	}
 
-	// 3. Execute.
+	// 3. Execute, with the independent test writer working next to it
+	// (reqtests.go).
 	o.emit(event.Event{Kind: event.Phase, Text: "execute"})
-	results := o.execute(ctx, t, plan)
+	var results map[string]stepResult
+	var reqTests *ReqTests
+	if t.replay != nil {
+		results, reqTests = o.replayStep(t, plan)
+	} else {
+		writer := o.startReqTests(ctx, t, plan)
+		results = o.execute(ctx, t, plan)
+		reqTests = writer.wait()
+	}
 	if ctx.Err() != nil {
 		return TaskResult{Summary: "cancelled during execution"}
 	}
@@ -925,14 +1101,32 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	// rounds that get the reviewer's advice and the failing output.
 	approved := true
 	verified := true
+	reqPass := true      // the independent tests pass (or there are none)
+	reqAdvisory := false // they fail but no longer fail the round (reqGate)
+	gate := &reqGate{strict: oc.ReqTestsGate() == config.ReqGateStrict}
+	reviewSkipped := false
+	reviewAsked := false // a final review asked for changes
 	var lastAdvice string
 	verifying := t.verifying()
+	// What the last round knows, for the task's Acceptance.
+	criteria := ParseCriteria(t.text)
+	checksRan, reviewed := false, false
+	var lastVerdict Verdict
+	reviewWhy := "a read-only task: no final review"
+	if !oc.ReviewBeforeDone {
+		reviewWhy = "the final review is off (orchestrator.review_before_done)"
+	}
 	if hasEdits(plan) && (oc.ReviewBeforeDone || verifying) {
 		for round := 0; ; round++ {
-			report := ""
+			report, testsAdvice := "", ""
 			var failing map[string]bool
+			reviewed, lastVerdict = false, Verdict{}
 			if verifying {
 				o.emit(event.Event{Kind: event.Phase, Text: "verify"})
+				// The work must pass the acceptance tests as written.
+				if restored := o.guardTests(t); len(restored) > 0 {
+					testsAdvice = testsChangedAdvice(restored)
+				}
 				// After a fix round, first only the tests the changes
 				// affect; the full checks follow when those pass. The
 				// last round's result decides the task, so it is full.
@@ -944,32 +1138,101 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 				if ctx.Err() != nil {
 					return TaskResult{Summary: "cancelled during verify"}
 				}
+				checksRan = true
 			}
-			roundOK := verified
+			reqReport := ""
+			reqAdvisory = false
+			if reqTests != nil {
+				reqPass, reqReport = o.runReqTests(ctx, t, reqTests)
+				if ctx.Err() != nil {
+					return TaskResult{Summary: "cancelled during verify"}
+				}
+				if !reqPass && !gate.decides(round, oc.MaxFixRounds) {
+					reqAdvisory = true
+					why := gate.advisoryWhy(reqReport)
+					o.logf("independent tests: advisory: %s", why)
+					o.noteChoice(t, sessionlog.ChoiceReqTests, sessionlog.ChoiceAdvisory, why, round+1)
+					reqReport += "\nThese independent tests no longer fail the round: " + why + "\n"
+				}
+				if !reqPass && !reqAdvisory {
+					failing = map[string]bool{"": true} // a single-repo task's
+				}
+			}
+			reqOK := reqPass || reqAdvisory
+			roundOK := verified && reqOK
 			var v Verdict
+			skip, why := false, ""
 			if oc.ReviewBeforeDone {
+				tests := reqTestsNone
+				switch {
+				case reqTests == nil:
+				case reqPass:
+					tests = reqTestsPass
+				case reqAdvisory:
+					tests = reqTestsAdvise
+				default:
+					tests = reqTestsFail
+				}
+				skip, why = o.skipFinalReview(t, verifying, verified, tests, allOK, reviewAsked, round >= oc.MaxFixRounds)
+				outcome := map[bool]string{true: "skipped", false: "runs"}[skip]
+				o.logf("final review %s: %s", outcome, why)
+				o.noteChoice(t, sessionlog.ChoiceReview, outcome, why, round+1)
+			}
+			reviewSkipped = skip
+			if skip {
+				reviewWhy = "the final review was skipped: " + why
+			}
+			if oc.ReviewBeforeDone && !skip {
 				o.emit(event.Event{Kind: event.Phase, Text: "review"})
 				stat, diff := t.workspaceDiff(40_000)
 				var ok bool
-				v, ok = o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes, report, t.docsContext()))
+				v, ok = o.review(ctx, t, "final", finalReviewPrompt(t.text, plan, results, stat, diff, t.notes, report+reqReport, t.docsContextMax(reviewDocsMax), criteria))
 				if ctx.Err() != nil {
 					return TaskResult{Summary: "cancelled during final review"}
 				}
+				reviewWhy = "the reviewer did not answer"
 				if ok {
+					applyRequirements(&v)
+					reviewed, lastVerdict = true, v
 					roundOK = roundOK && v.Approve
 					lastAdvice = v.Advice
+					reviewAsked = reviewAsked || !v.Approve
 				}
 			}
 			approved = roundOK
 			if roundOK || round >= oc.MaxFixRounds {
 				break
 			}
+			o.noteChoice(t, sessionlog.ChoiceFix, "", reqFixWhy(fixWhy(verified, oc.ReviewBeforeDone && !skip, v.Approve, t.verifyCommands(), v.Advice), reqOK), round+1)
 			if !verified {
 				v.Approve = false
 				v.Advice = strings.TrimSpace(v.Advice + "\n\nThese checks fail; make them pass:\n" + report)
 			}
+			if testsAdvice != "" {
+				v.Advice = strings.TrimSpace(v.Advice + "\n\n" + testsAdvice)
+			}
+			// A fix agent in your tree gets the failing independent tests
+			// in place, so it can run them; rw takes them out again after.
+			inTree := !(o.reviewing(t) && t.wtOK)
+			unplace := func() {}
+			if !reqOK {
+				gate.fixed = true
+				v.Approve = false
+				v.Advice = strings.TrimSpace(v.Advice+"\n"+reqReport) + reqFixAdvice(reqTests, inTree)
+				if inTree {
+					var err error
+					if unplace, _, err = placeReqTests(t.root, reqTests); err != nil {
+						o.logf("independent tests: could not put them in place for the fix agent: %v", err)
+					}
+				}
+			}
 			o.emit(event.Event{Kind: event.Phase, Text: "fix"})
-			if !o.runFix(ctx, t, round, v, failing, results) {
+			fixed := o.runFix(ctx, t, round, v, reviewed && !v.Approve, failing, results)
+			unplace()
+			if !reqOK {
+				o.noteDisputes(t, gate, results[fmt.Sprintf("fix-%d", round+1)].final, round+1)
+			}
+			if !fixed {
 				allOK = false
 				break
 			}
@@ -988,18 +1251,40 @@ func (o *Orchestrator) run(ctx context.Context, t *task) TaskResult {
 	switch {
 	case !verified:
 		b.WriteString("; checks still fail (" + strings.Join(t.verifyCommands(), ", ") + ")")
+	case !reqPass && !reqAdvisory:
+		b.WriteString("; independent requirement tests still fail")
 	case !approved:
 		b.WriteString("; reviewer still has concerns: " + clip(lastAdvice, 200))
+	case reviewSkipped && oc.FinalReview() == config.ReviewUntested:
+		// Tests take the review's place; the checks' part below says how
+		// they went.
+	case reviewSkipped:
+		b.WriteString("; final review skipped (" + strings.TrimSuffix(strings.TrimPrefix(reviewWhy, "the final review was skipped: "), " (review_when: failing)") + ")")
 	case oc.ReviewBeforeDone && hasEdits(plan):
 		b.WriteString("; reviewer approved")
 	}
 	if verified && verifying && hasEdits(plan) {
 		b.WriteString("; checks pass")
+		if reqTests != nil && reqPass {
+			b.WriteString("; independent tests pass")
+		}
+	}
+	if reqAdvisory {
+		b.WriteString("; independent tests still fail, advisory (independent_tests_gate: soft; rw explain says which and why)")
+	}
+	if t.tests != nil {
+		fmt.Fprintf(&b, "; acceptance tests written first (%d file(s))", len(t.tests.Files))
+	}
+	acc := buildAcceptance(acceptanceInput{done: done, steps: len(plan.Subtasks), allOK: allOK, edits: hasEdits(plan),
+		verifying: verifying, checksRan: checksRan, verified: verified, checkCmds: t.verifyCommands(),
+		reviewed: reviewed, verdict: lastVerdict, why: reviewWhy, criteria: criteria, testFound: t.testFoundIn(), firstTests: t.firstTests()})
+	if s := acc.SummaryPart(); s != "" {
+		b.WriteString("; " + s)
 	}
 	if len(t.kept) > 0 {
 		b.WriteString("; conflicts kept on " + strings.Join(t.kept, ", "))
 	}
-	return TaskResult{OK: ok, Summary: b.String()}
+	return TaskResult{OK: ok, Summary: b.String(), Acceptance: acc}
 }
 
 func hasEdits(p Plan) bool {
@@ -1018,8 +1303,8 @@ func looksRead(s string) bool { return reReadTask.MatchString(s) }
 // plan runs the planner. On a parse failure the whole task becomes one edit
 // step, so a chatty planner never blocks progress.
 func (o *Orchestrator) plan(ctx context.Context, t *task, advice string, prev *Plan) (Plan, bool) {
-	step := router.Step{ID: "plan", Title: "Plan the task", Kind: router.KindPlan, Prompt: t.text}
-	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev)+t.planContext()+t.docsContext())
+	step := router.Step{ID: "plan", Title: "Plan the task", Kind: router.KindPlan, Prompt: t.text, Light: t.shape.light}
+	d, res := o.runOnce(ctx, t, step, AgentMain, "", planPrompt(t.text, advice, prev)+o.planBudgetHint(t)+t.planContext()+t.docsContext())
 	t.mainProv = d.Provider
 	if !res.OK() {
 		msg := "planner failed"
@@ -1073,7 +1358,7 @@ func (o *Orchestrator) runOnce(ctx context.Context, t *task, step router.Step, a
 
 // review runs the reviewer and reports its verdict.
 func (o *Orchestrator) review(ctx context.Context, t *task, checkpoint, prompt string) (Verdict, bool) {
-	step := router.Step{ID: "review-" + checkpoint, Title: checkpoint + " review", Kind: router.KindReview, MainProvider: t.mainProv}
+	step := router.Step{ID: "review-" + checkpoint, Title: checkpoint + " review", Kind: router.KindReview, MainProvider: t.mainProv, Light: t.shape.light}
 	d, res := o.runOnce(ctx, t, step, AgentReviewer, AgentMain, prompt)
 	if !res.OK() {
 		o.logf("reviewer unavailable for %s checkpoint: %v", checkpoint, res.Err)
@@ -1576,7 +1861,7 @@ func (o *Orchestrator) slotWarnings(t, rp *task, stepID string, sc slotCommit, a
 		*agentHead = sc.Head
 		branch := o.saveBranchIn(rp, stepID+"-agent-head", sc.Head)
 		o.logf("%s: the agent moved git HEAD in its worktree (committed or switched branches); its files are merged as usual, and its own commits are kept on %s", stepID, branch)
-		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeMerge, TaskID: t.id, Step: stepID, Text: "agent moved HEAD; kept on " + branch})
+		o.savedEvent(t, stepID, "agent moved HEAD; kept on "+branch)
 	}
 	if len(sc.Nested) > 0 {
 		o.logf("%s: left out nested git repositories the agent created (their files are not merged): %s", stepID, strings.Join(sc.Nested, ", "))
@@ -1601,6 +1886,9 @@ func (o *Orchestrator) saveBranch(t *task, stepID, commit string) string {
 		o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeMerge, TaskID: t.id, Step: stepID, OK: sessionlog.Bool(false), Text: msg})
 		diag.Logf("%s", msg)
 		return commit + " (not on a branch)"
+	}
+	if err := t.state.noteBranch(name); err != nil {
+		o.logf("saved branch %s, but could not record it for recovery: %v; inspect it with git show %s", name, err, name)
 	}
 	return name
 }
@@ -1683,6 +1971,11 @@ func (o *Orchestrator) mergeEvent(t *task, stepID string, ok bool, text string) 
 	o.emit(event.Event{Kind: event.Merge, AgentID: stepID, ParentID: AgentMain, OK: ok, Text: text})
 }
 
+func (o *Orchestrator) savedEvent(t *task, stepID, text string) {
+	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeMerge, Kind: "saved", TaskID: t.id, Step: stepID, Text: text})
+	o.emit(event.Event{Kind: event.Log, AgentID: stepID, ParentID: AgentMain, Text: text})
+}
+
 var reNumbers = regexp.MustCompile(`\d+`)
 
 // errorSignature normalizes an error so "the same error twice" ignores
@@ -1734,6 +2027,10 @@ func (o *Orchestrator) runStepAs(ctx context.Context, t *task, st Subtask, deps 
 			first++
 		}
 	}
+	var cont *StepRun // a fix round continues the writer's session (runFix)
+	if c == nil {
+		cont = t.takeContinue(st.ID)
+	}
 	for attempt := first; ; attempt++ {
 		p := prompt
 		if p == "" {
@@ -1745,10 +2042,15 @@ func (o *Orchestrator) runStepAs(ctx context.Context, t *task, st Subtask, deps 
 			if len(rp.cfg.Verify.Commands) > 0 && !st.Kind.ReadOnly() {
 				p += verifyHint(rp.cfg.Verify, dir)
 			}
+			if !st.Kind.ReadOnly() {
+				p += t.testsHint()
+			}
 		} else if advice != "" || prevErr != "" {
 			p += "\n\nPREVIOUS ATTEMPT FAILED WITH:\n" + clip(prevErr, 2000) + "\n\nREVIEWER ADVICE:\n" + advice
 		}
-		d, res := o.runAgentAt(ctx, t, step, agentID, AgentMain, loc, p, attempt, nil)
+		resume := cont
+		cont = nil
+		d, res := o.runAgentAt(ctx, t, step, agentID, AgentMain, loc, p, attempt, resume)
 		used = used.Add(res.Tokens)
 		r := stepResult{ok: res.OK(), final: res.Final, route: d.Label(), files: res.Files, tokens: used, dec: d}
 		if res.Err != nil {
@@ -1756,6 +2058,12 @@ func (o *Orchestrator) runStepAs(ctx context.Context, t *task, st Subtask, deps 
 		}
 		if r.ok || res.Killed || ctx.Err() != nil {
 			return r
+		}
+		if resume != nil {
+			// The session could not be continued: a fresh agent, routed as
+			// usual, does the step; this attempt is not a failure of it.
+			o.logf("%s: could not continue the %s session (%s); starting a fresh agent", st.ID, resume.Provider, clip(r.err, 160))
+			continue
 		}
 		if res.LimitHit && c != nil {
 			c.limit = true
@@ -1852,9 +2160,6 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	if ctx.Err() != nil {
 		return event.Decision{}, runner.Result{Err: ctx.Err(), Killed: true}
 	}
-	if !o.checkBudget(ctx, t, fmt.Sprintf("start %s (%s)", agentID, step.Title)) {
-		return event.Decision{}, runner.Result{Err: errBudget, Killed: true}
-	}
 	if step.Kind != router.KindJudge {
 		// The judge runs inside its parent's slot; holding it would only
 		// make the parent wait for itself.
@@ -1869,8 +2174,12 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	}
 	var d event.Decision
 	if resume != nil {
+		why := resume.why
+		if why == "" {
+			why = "continues the session interrupted when rw stopped"
+		}
 		d = event.Decision{StepID: step.ID, StepTitle: step.Title, Role: resume.Role, Provider: resume.Provider, Model: resume.Model, Effort: resume.Effort,
-			Rule: router.RuleForced, Reason: "continues the session interrupted when rw stopped", Confidence: 1}
+			Rule: router.RuleForced, Reason: why, Confidence: 1}
 	} else {
 		d = o.router.Route(step)
 	}
@@ -1892,6 +2201,11 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	if !ok {
 		return d, runner.Result{Err: errors.New("no runner for " + d.Provider)}
 	}
+	account, admitted := o.admitAgent(ctx, t, step, d, agentID)
+	if !admitted {
+		return d, runner.Result{Err: errBudget, Killed: true}
+	}
+	defer account(event.TokenUsage{Incomplete: true}) // panic/early-exit retains an unknown reservation
 
 	dc := d
 	o.emit(event.Event{Kind: event.Route, AgentID: agentID, ParentID: parent, Provider: d.Provider, Model: d.Model, Role: d.Role, Decision: &dc})
@@ -1930,6 +2244,10 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	}
 	if !spec.ReadOnly {
 		spec.AllowedCommands = verifyAllowed(t.repoAt(dir).cfg.Verify, dir) // that repo's checks
+		if agentID == TestsStepID {
+			// The tests-first writer runs its own tests (testsfirst.go).
+			spec.AllowedCommands = append(spec.AllowedCommands, checkRunners(t.repoAt(dir).cfg.Verify.Commands)...)
+		}
 	}
 	// Project settings an agent of this task changed since its start are
 	// not used by a sandboxed CLI (sandbox.Spec.Base).
@@ -1952,7 +2270,7 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 		t.state.setRunning(step.ID, run)
 		spec.OnSession = func(id string) { t.state.noteSession(step.ID, id) }
 	}
-	res := rn.Run(actx, spec, o.emit)
+	res := rn.Run(actx, spec, t.trackEdits(dir, spec.ReadOnly, o.emit))
 	if spec.OnSession != nil && res.SessionID != "" {
 		// Also when the CLI reported it only at the end.
 		t.state.noteSession(step.ID, res.SessionID)
@@ -1961,9 +2279,13 @@ func (o *Orchestrator) runAgentAt(ctx context.Context, t *task, step router.Step
 	if res.SessionID != "" {
 		o.rememberSession(agentID, AgentSession{Provider: d.Provider, Model: d.Model, Effort: d.Effort, Role: d.Role,
 			SessionID: res.SessionID, Dir: dir, Slot: loc.slot, Final: res.Final, Title: step.Title, Task: t.text})
+		if !step.Kind.ReadOnly() && loc.slot == "" && step.Pin == nil && res.OK() {
+			t.noteWriter(StepRun{Provider: d.Provider, Kind: t.cfg.Kind(d.Provider), Model: d.Model, Effort: d.Effort, Role: d.Role,
+				Session: res.SessionID, Dir: dir})
+		}
 	}
 	o.opts.Tracker.AddUsage(d.Provider, res.Tokens)
-	t.addTokens(d.Provider, res.Tokens)
+	account(res.Tokens)
 	if !step.Kind.ReadOnly() {
 		t.noteFiles(dir, res.Files)
 		if res.OK() && step.Pin == nil { // a best-of step counts its winner only (bestof.go)
@@ -2103,26 +2425,44 @@ func (o *Orchestrator) RunSingle(ctx context.Context, text, provider string, rou
 	rn := t.runners[provider]
 	spec := runner.Spec{AgentID: AgentMain, StepID: "single", Attempt: 1, Role: event.RoleWorker, Provider: provider,
 		Model: route.Model, Effort: route.Effort, Prompt: text, Dir: o.opts.Dir, Timeout: cfg.Orchestrator.AgentTimeout.D()}
+	spec.AllowedCommands = verifyAllowed(cfg.Verify, o.opts.Dir)
+	if len(cfg.Verify.Commands) > 0 {
+		spec.Prompt += verifyHint(cfg.Verify, o.opts.Dir)
+	}
 	// The same budget as a task: a day already at its limit starts nothing.
 	bctx := o.startBudget(ctx, t)
 	var res runner.Result
-	if o.checkBudget(bctx, t, "start the single agent") {
+	if rn == nil {
+		res = runner.Result{Err: fmt.Errorf("provider %s is unavailable; run rw doctor and check the provider configuration", provider)}
+	} else if err := o.preflight(bctx, t, provider); err != nil {
+		res = runner.Result{Err: err}
+	} else if account, admitted := o.admitAgent(bctx, t, router.Step{ID: "single", Kind: router.KindEdit, Title: "single agent"}, d, AgentMain); admitted {
 		res = rn.Run(bctx, spec, o.emit)
 		o.opts.Tracker.AddUsage(provider, res.Tokens)
-		t.addTokens(provider, res.Tokens)
+		account(res.Tokens)
 		o.noteBudget(t, AgentMain)
 	} else {
 		res = runner.Result{Err: errBudget, Killed: true}
 	}
+	if ctx.Err() != nil {
+		res.Killed = true
+		res.Err = ctx.Err()
+	}
+	t.noteFiles(o.opts.Dir, res.Files)
 	o.snapshotAfter(t)
 	tk := res.Tokens
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeAgentEnd, TaskID: t.id, Agent: AgentMain, Step: "single", Attempt: 1,
 		Role: event.RoleWorker, Provider: provider, Model: route.Model, Effort: route.Effort, OK: sessionlog.Bool(res.OK()),
 		LimitHit: res.LimitHit, Error: errText(res.Err), Tokens: &tk, DurationMS: res.Duration.Milliseconds(), Files: res.Files})
-	out := TaskResult{OK: res.OK(), Duration: time.Since(began), Tokens: tk, Summary: clip(res.Final, 300), Cost: o.cost(t)}
+	out := TaskResult{OK: res.OK(), Duration: time.Since(began), Tokens: t.usage(), Summary: clip(res.Final, 300), Cost: o.cost(t)}
 	if t.useGit {
 		out.UndoKey = t.key
 	}
+	// A single agent is not checked by rw: only "the agent finished" is known.
+	finished := map[bool]int{true: 1}[res.OK()]
+	out.Acceptance = buildAcceptance(acceptanceInput{done: finished, steps: 1, allOK: res.OK(), edits: true,
+		verifying: len(cfg.Verify.Commands) > 0, checksWhy: "single-agent mode: rw does not run the checks", checkCmds: cfg.Verify.Commands,
+		why: "single-agent mode: no final review", criteria: ParseCriteria(text)})
 	if res.Err != nil {
 		out.Summary = res.Err.Error()
 	}
@@ -2131,6 +2471,7 @@ func (o *Orchestrator) RunSingle(ctx context.Context, text, provider string, rou
 		out.Summary = "stopped by budget: " + why
 	}
 	cost := out.Cost
+	tk = out.Tokens // task total includes the permission preflight
 	o.opts.Log.Write(sessionlog.Record{Type: sessionlog.TypeTaskEnd, TaskID: t.id, Task: text, Mode: "single",
 		OK: sessionlog.Bool(out.OK), Text: out.Summary, Tokens: &tk, DurationMS: out.Duration.Milliseconds(), Cost: &cost, Bench: o.opts.Bench})
 	o.endBudget(t, cost)

@@ -48,6 +48,7 @@ func newEnv(t *testing.T, mutate func(c *config.Config)) *testEnv {
 		t.Setenv(k, home)
 	}
 	cfg := config.Default()
+	cfg.Orchestrator.Classic() // these tests drive the planner and its approval
 	cfg.Orchestrator.ApprovePlan = false
 	if mutate != nil {
 		mutate(cfg)

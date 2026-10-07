@@ -24,10 +24,65 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Inspect result** in the browser/app brings requirements, changed-file diffs, checks, remaining failures, routing decisions, cost, and recovery actions into one task screen, accessible from History and the latest result.
+- `rw run --workflow NAME` now works with `--issue` and `--issues`, including scheduled runs and team queues: each issue uses the workflow's prompt, checks, budgets and approvals before `--pr` opens its pull request.
+- Acceptance criteria: a finished task now reports "agent finished", "configured checks passed" and "requirements verified" as three separate results, and lists each requirement with its supporting test or evidence. You can give criteria with `rw run --accept` or an `Acceptance criteria:` list in the task. The results appear after `rw run`, in `rw report`, in `rw pr` descriptions and in the dashboard's History list.
+- `orchestrator.auto_single` (on by default) runs a task that does not look multi-file, multi-part, broad, hard or sensitive as one worker step without the planner; checks and the final review still run, and `rw run --plan` always plans.
+- `orchestrator.light_planning` (on by default) has the planner and reviewer of a task that does not look hard or sensitive use the worker route on their provider.
+- Tests replace the final review: `orchestrator.independent_tests` is on by default, and the new default `review_when: untested` runs the final review only on a task without checks. With checks, the checks and the independent tests decide, and the fix agent gets what fails instead of a reviewer's advice. Estimates count the test writer in place of the review. `rw bench` mode `routed-review` keeps the review (`review_when: failing`, no independent tests) to measure the swap, and `routed-classic` turns the independent tests off too.
+- `orchestrator.review_when` decides when the final review runs. With `failing`, the checks decide: the review runs only after they fail and a fix round follows, never when they pass and never after the last round; without checks it runs every round. `large` skips it only for small passing changes (`review_skip_max_lines`, 80), and `always` restores the old behavior.
+- `verify.auto` (on by default): a repo without `verify.commands` gets its checks detected from its build files at the start of each task, as `rw init` does.
+- Without a final review, acceptance tests written first (`rw run --tests-first`) list their requirements and supporting test references; check outcomes remain separate.
+- `orchestrator.fit_budget` (on by default) tells the planner what the task, day or team budget has left; a plan estimated over it drops the plan review and best-of candidates, then merges into one step that keeps all of its work for single-repo tasks. Multi-repo tasks retain their repository assignments and dependencies. A task whose budget cannot fund planning runs as one step.
+- `rw explain [task id]` shows why a task ran as one agent or several, why each run got its provider and model, each run's estimated against actual tokens and $, and what caused each escalation (a repeating error, a usage limit, a risky change, the strong tier, a fix round). The session log now records the task shape, final review and fix round choices for it.
+- The routing explanation also shows in the browser (**Why it ran this way** on the last result, **Why** in History), in the TUI (`/explain [id]`) and in `rw report` (HTML and Markdown), where the routing table also gains an estimate column.
+- `rw bench` mode `routed-classic` plans every task with the full planner and reviewer routes, to measure these shortcuts.
+- `orchestrator.independent_tests`: while the worker works, an agent on the other provider writes tests for the task's requirements in a worktree at the task's start, without seeing the change. rw runs them after the checks; a failure starts a fix round with their output. The tests are removed again and never land in your tree.
+- `orchestrator.independent_tests_gate` (default `soft`): failing independent tests start one fix round and then are reported, not held against the task, because in a replay the known solution failed a writer test in 3 of 5 tasks. The fix agent can dispute a test (`DISPUTE: <test>: <why>`); disputes and advisory tests show in the summary and in `rw explain`. `strict` keeps the earlier behavior.
+- `rw bench --replay-tests <results.json,...>` writes the independent tests once per task and runs them against every saved run's change, the known solution and the base, with no workers; it reports which hidden-check failures they catch, which of those the final review approved, and how often they fail correct work. Mode `routed-tests` runs them live.
+- `rw bench --replay-fix <bench-replay folder>` measures the fix round failing independent tests start, with no workers or writers: each saved change whose tests failed in that replay becomes a task's one step, with the same tests, and the checks, review and fix rounds run as in a task (`--gate soft|strict`, `--replay-subjects` to pick some). The hidden check scores the result. On 7 October it found that the fix round turned 0 of 7 caught failures into a pass and broke 2 of 3 correct results (docs/bench/2026-10-07-soft-gate-fix-round.md).
+- `rw run --tests-first` (or `orchestrator.tests_first`) is the product form of independent tests: before any code is written, an agent on another provider than the implementer writes acceptance tests for the task's requirements, and the work is written against them. Only test files may change, the tests must fail first, they run with the checks, and a change to them is put back before each check. With no tests written, rw asks you at the terminal, or stops before any code. The test writer may run the test runner of each configured check with any arguments (`go test -run 'TestA|TestB' ./pkg`), so it sees its tests fail; exact check commands alone were refused in 3 of 4 bench runs. The `rw bench` mode `routed-tests-first` measures it.
+- Benchmark checkpoints and per-run full check logs, solution/candidate patches and event streams survive interruption and workspace resets.
+- Optional `verify.preflight` requires successful Claude tool results before implementation; `budget.reserve` accounts for concurrent agents and reserves finishing capacity.
+- A ten-task multi-file benchmark corpus with protected checks, clean starts, repeated and rotated single/routed/tiers/best-of comparisons, JSON results and `rw bench --validate`.
+- `rw workflow` saves bug-fix, dependency-upgrade, review and release-preparation recipes with checks, approvals and budget caps.
+- Saved workflows run everywhere tasks run: `rw run --workflow` with `--file`, `--at`, `--in` or `--when-reset`; a workflow picker in `rw web` for running, queueing and scheduling; `/workflow` in the TUI; and `workflow` in MCP `run_task`. A queued or scheduled workflow task keeps the workflow's plan approval and change review and waits for you there, with a notification. Apart from that it stays unattended. A workflow's settings apply to its own task only, and a resumed task keeps them.
+- Recovery and project memory views in the browser, plus `rw recovery` and `rw memory` for inspecting and managing them from the terminal.
+- Project memory picks notes by task: each task gets your pinned conventions, the two newest notes and up to four that match its words or file names. Notes record their source files and leave the prompts once those files all change, until you re-confirm them (`rw memory --task`, `--pin`, `--ref`, `--refresh`).
+- Azure Pipelines and Bitbucket Pipelines templates with pinned installer checks, task budgets and retained reports.
+- On Windows, `rw selftest` closes the window of a running task (`rw run` and the TUI, in the old console and in Windows Terminal) and checks that nothing is left running and that `rw history`, `rw resume`, `rw undo` and redo work afterwards; `--close off` skips it, `--close only` runs just that.
+
+### Changed
+
+- A task that runs as one step without the planner runs `verify.preflight` only on the provider that step uses, so a Codex worker no longer pays for a Claude permission probe.
+- Writing agents check their work against every requirement the task names before they finish, and the final reviewer rejects a change that has no evidence for one; the reviewer judges from the diff and the checks, with the repo conventions shortened.
+- A fix round continues the last writer's CLI session in the same folder (its context is cached) instead of starting a fresh agent; if the session cannot be continued, a fresh agent takes over.
+- Affected vitest runs narrow in more layouts instead of running in full: a config `root` (rw names the changed files relative to it), the react, react-swc, vue and tsconfig-paths plugins, and `require()` or `vi.importActual` chains (rw adds the files that load a changed file that way, and vitest runs their tests). Other plugins and computed imports still run in full.
+
 ### Fixed
+
+- Affected tests now narrow plain Yarn Plug'n'Play installs without scanning generated loaders, and retain full runs for PnP workspaces with peer dependencies that Jest/Vitest can miss. Gradle follows whitespace and named project references; unread dependencies, duplicate project folders, external init scripts and malformed JavaScript package metadata fall back to the full suite. Real Yarn and Gradle checks are opt-in and repeatable.
+
+- Resuming a workflow retains its approval gates without needing `--approve`; gated workflows refuse to run when no approver is available.
+- Budget fitting preserves multi-repo subtasks instead of collapsing their work into the first repository.
+- Requirement reports no longer treat a passing build or unrelated check as proof that a cited test passed, including tests written first. Test references remain evidence until individual execution can be confirmed.
+- Interrupted Claude runs retain streamed token usage and label missing final accounting as incomplete; single-agent runs receive configured test permissions and include preflight cost.
+- Recovery refuses to resume undone work until it is redone, and its undo preview separates agent changes from files it will keep.
+- File edits reported before a hard interruption survive in saved task state, so agent-only undo also covers the first half of a resumed step.
+- Concurrent project notes no longer overwrite each other; stale manual edits are rejected.
+- Browser recovery refuses tasks from a different project; saved alternatives no longer appear as failed merges in statistics or reports.
+- Single-agent runs retain agent-file undo metadata, report cancellation as failure and return an actionable error when their provider is unavailable.
+- Affected tests fall back safely for Jest aliases, Vitest workspaces/custom configs and Gradle layouts with externally applied dependency scripts.
+- Closing the TUI's window while a task runs (also a logoff, a shutdown or `kill`) no longer cancels the task: it stays interrupted, so `rw resume` continues it and its agent's session instead of refusing it.
 
 - Homebrew makes the downloaded `rw` binary executable before running it to generate completion scripts during installation. ([#62](https://github.com/Sparkz400/Relayweft/pull/62))
 - The package repository publisher requests release asset bytes with a single `Accept` header; conflicting JSON and binary headers made the first signed feed deployment download metadata and fail its checksum check. ([#62](https://github.com/Sparkz400/Relayweft/pull/62))
+
+### Security
+
+- `rw update` verifies signed provenance for the binary and checksums before installation, bound to the release workflow and tag commit; failures leave the installed binary unchanged.
 
 ## [0.4.0] - 2026-10-06
 

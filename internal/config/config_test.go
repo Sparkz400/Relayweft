@@ -100,6 +100,27 @@ func TestBestOfConfig(t *testing.T) {
 	}
 }
 
+// independent_tests_gate is soft by default, strict keeps failing tests
+// failing the task, and anything else is refused.
+func TestIndependentTestsGateConfig(t *testing.T) {
+	c := Default()
+	if c.Orchestrator.ReqTestsGate() != ReqGateSoft {
+		t.Fatalf("default gate = %q", c.Orchestrator.ReqTestsGate())
+	}
+	c.Orchestrator.IndependentTestsGate = ""
+	if c.Orchestrator.ReqTestsGate() != ReqGateSoft {
+		t.Error("an empty gate is not soft")
+	}
+	c.Orchestrator.IndependentTestsGate = ReqGateStrict
+	if err := c.Validate(); err != nil || c.Orchestrator.ReqTestsGate() != ReqGateStrict {
+		t.Errorf("strict refused: %v", err)
+	}
+	c.Orchestrator.IndependentTestsGate = "lenient"
+	if c.Validate() == nil {
+		t.Error("independent_tests_gate: lenient is valid")
+	}
+}
+
 // best_of in a repo file layers over your config like other routing
 // settings (it sets only what it names), but an untrusted file may only
 // lower it: more candidates cost more.

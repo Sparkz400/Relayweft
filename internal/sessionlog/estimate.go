@@ -87,7 +87,7 @@ func NewHistory(recs []Record, root string) *History {
 	var claudeUSD, claudeTok float64
 	inRepo := repoFilter(root)
 	for _, r := range recs {
-		if !routedStep(r) || r.Tokens == nil {
+		if !routedStep(r) || r.Tokens == nil || r.Tokens.Incomplete {
 			continue
 		}
 		k := histKey{r.Role, r.Kind, RouteKey{r.Provider, r.Model, r.Effort}}

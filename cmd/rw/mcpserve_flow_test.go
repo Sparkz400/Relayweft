@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -213,4 +214,32 @@ func TestMCPDisconnectDuringReview(t *testing.T) {
 	if s := fmt.Sprint(st["plan"]); strings.Contains(s, "rejected by you") {
 		t.Errorf("a step counts as rejected by the person: %s", s)
 	}
+}
+
+// TestMCPWorkflowKeepsApprovals: run_task under a saved workflow waits for
+// the workflow's plan approval even when the caller says approve_plan false.
+func TestMCPWorkflowKeepsApprovals(t *testing.T) {
+	p := newMCPProfile(t)
+	wf := filepath.Join(p.configDir, "relayweft", "workflows", "gated.yaml")
+	os.MkdirAll(filepath.Dir(wf), 0o700)
+	if err := os.WriteFile(wf, []byte("name: gated\ndescription: test workflow\nprompt: '{{task}}'\napprove_plan: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := startMCP(t, p.bin, p.repo, p.env)
+	c.initialize("2025-06-18")
+	for _, bad := range []map[string]any{
+		{"prompt": selftestTask, "workflow": "nope"},
+		{"prompt": selftestTask, "workflow": "gated", "read_only": true},
+	} {
+		if _, e := c.tool("run_task", bad); e == "" {
+			t.Errorf("run_task %v accepted", bad)
+		}
+	}
+	id := c.mustTool("run_task", map[string]any{"prompt": selftestTask, "workflow": "gated", "approve_plan": false})["task_id"].(string)
+	st := c.waitStatus(id, "waiting")
+	waiting, _ := st["waiting"].([]any)
+	if len(waiting) != 1 || waiting[0].(map[string]any)["type"] != "plan" {
+		t.Fatalf("waiting %v", st["waiting"])
+	}
+	c.mustTool("cancel_task", map[string]any{"task_id": id})
 }

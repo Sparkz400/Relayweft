@@ -27,6 +27,76 @@ type BenchWorkspace struct {
 	Path string
 }
 
+// Evidence captures the working tree and kept candidate branches before a bench
+// reset destroys them. A temporary index preserves the workspace's staging.
+// base must be the workspace HEAD recorded before the agents start.
+func (b *BenchWorkspace) Evidence(base, dir string) error {
+	g := git{b.Path}
+	now, skipped, err := g.snapshotSkipping("rw bench evidence")
+	if err != nil {
+		return err
+	}
+	if len(skipped) > 0 {
+		return fmt.Errorf("evidence would omit oversized files: %s", strings.Join(skipped, ", "))
+	}
+	patch, err := g.run(nil, nil, "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", base, now, "--")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "solution.patch"), []byte(patch), 0600); err != nil {
+		return err
+	}
+	refs, err := g.out("for-each-ref", "--format=%(refname)", "refs/heads/rw/")
+	if err != nil {
+		return err
+	}
+	var index strings.Builder
+	for i, ref := range strings.Fields(refs) {
+		patch, err := g.run(nil, nil, "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", base, ref, "--")
+		if err != nil {
+			return err
+		}
+		name := fmt.Sprintf("candidate-%03d.patch", i+1)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(patch), 0600); err != nil {
+			return err
+		}
+		fmt.Fprintf(&index, "%s\t%s\n", name, ref)
+	}
+	return os.WriteFile(filepath.Join(dir, "candidates.txt"), []byte(index.String()), 0600)
+}
+
+// ApplyPatch puts an earlier run's saved change (its solution.patch) on the
+// workspace's current commit. It goes through the index, so the patch's
+// normalized line endings apply whatever the checkout's are.
+func (b *BenchWorkspace) ApplyPatch(patch string) error {
+	g := git{b.Path}
+	if fi, err := os.Stat(patch); err != nil {
+		return err
+	} else if fi.Size() == 0 {
+		return nil // the run changed nothing
+	}
+	if _, err := g.run(nil, nil, "apply", "--cached", "--binary", "--whitespace=nowarn", patch); err != nil {
+		return err
+	}
+	tree, err := g.out("write-tree")
+	if err != nil {
+		return err
+	}
+	head, err := g.out("rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	c, err := g.commitTree(tree, []string{head}, "rw bench: replayed change")
+	if err != nil {
+		return err
+	}
+	_, err = g.run(lfsSkip, nil, append(noHooks(), "reset", "-q", "--hard", c)...)
+	return err
+}
+
+// StartCommit identifies the disposable repository's starting commit.
+func (b *BenchWorkspace) StartCommit() (string, error) { return git{b.Path}.out("rev-parse", "HEAD") }
+
 // NewBenchWorkspace prepares the bench workspace of the repo containing dir.
 func NewBenchWorkspace(dir string) (*BenchWorkspace, error) {
 	root, err := repoRoot(dir)
@@ -55,6 +125,21 @@ func (b *BenchWorkspace) Head() (string, error) { return git{b.root}.out("rev-pa
 func (b *BenchWorkspace) Dirty() bool {
 	s, _ := git{b.root}.out("status", "--porcelain", "--ignore-submodules=all")
 	return s != ""
+}
+
+// Clear removes the previous run completely, including ignored files in which
+// an agent could leave answers. Dependency setup must run anew in fair benches.
+func (b *BenchWorkspace) Clear() error {
+	if b.root == "" || !samePath(b.Path, filepath.Join(repoCache(b.root), "bench", "work")) {
+		return fmt.Errorf("refusing to clear a path outside this repository's benchmark workspace")
+	}
+	if _, err := os.Stat(b.Path); os.IsNotExist(err) {
+		return nil
+	}
+	if _, err := CleanPool(b.Path); err != nil {
+		return err
+	}
+	return os.RemoveAll(b.Path)
 }
 
 // BenchCommitMessage is the message of the workspace's only commit.

@@ -1,0 +1,23 @@
+# Explicit experiment settings. Check model availability with rw doctor first.
+# Unspecified fields use Relayweft's defaults; retain this file and doctor output
+# beside each result when comparing runs across versions.
+providers:
+  claude:
+    # Formatting is a writing agent's normal work; no blanket shell bypass.
+    write_allowed_tools: ["Bash(gofmt *)", "PowerShell(gofmt *)"]
+routing:
+  provider_order: [codex, claude]
+  learn: off
+  tiers: off
+  best_of:
+    when: off
+    n: 2
+    routes: [codex:gpt-6.1-sol:high, claude:sonnet:high]
+orchestrator:
+  approve_plan: false
+  review_changes: false
+  handoff: false
+budget:
+  reserve: true
+  task_tokens: 200000
+  task_usd: 10

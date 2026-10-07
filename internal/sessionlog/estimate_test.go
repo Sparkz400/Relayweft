@@ -21,6 +21,24 @@ func timedRuns(cwd, role, kind string, k RouteKey, toks ...int64) []Record {
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
+func TestEstimateAndLearningIgnorePreflightAndIncompleteUsage(t *testing.T) {
+	recs := timedRuns(t.TempDir(), event.RoleWorker, "edit", sonnet, 1, 2, 3, 4, 5, 6)
+	for i := range recs {
+		if i < 3 {
+			recs[i].Kind = "preflight"
+		} else {
+			recs[i].Tokens.Incomplete = true
+		}
+		if routedStep(recs[i]) {
+			t.Fatal("probe/partial usage became learning evidence")
+		}
+	}
+	e := NewHistory(recs, "").Estimate(event.RoleWorker, "edit", sonnet, false)
+	if e.Samples != 0 || e.Source != SourceNone || e.Tokens.Mid != defaultWriteTokens {
+		t.Fatalf("probe/partial usage cheapened estimates: %+v", e)
+	}
+}
+
 func TestEstimatePercentiles(t *testing.T) {
 	repo := t.TempDir()
 	h := NewHistory(timedRuns(repo, event.RoleWorker, "edit", sonnet, 50_000, 10_000, 40_000, 20_000, 30_000), repo)

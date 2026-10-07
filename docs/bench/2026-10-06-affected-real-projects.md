@@ -235,12 +235,115 @@ for jest and Gradle to miss tests; those are fixed too (marked "review").
    either flag (npm 11.17). rw's narrowed vitest command only worked because
    `related` comes first. Both now use `npx --no -- <runner>`.
 
+## Monorepos, aliases, Plug'n'Play and `projectDir` (follow-up, 6 Oct)
+
+The first version of this record left four layouts open. Each one now
+either narrows, with the case checked against the real runner, or runs in
+full with a reason in the activity log. Fixture tests:
+`internal/affected/layouts_test.go`.
+
+How it was checked: small workspaces built locally (Windows 11, npm 11.17,
+node 24) with vitest 3.2.7 and 1.2.2, jest 29.4.3 and pnpm 10.34.6. First
+each runner's own related-test search was probed for what it finds and
+what it misses. Then a bug was put into one file and rw's selection ran
+with the full and the narrowed command, as in the method above.
+
+**What the runners do.** `vitest related` (1.2.2 and 3.2.7) found every
+related test through `test.projects`, a `vitest.workspace` file, workspace
+packages imported by name (npm links them) and `resolve.alias`. It found
+nothing through a config `root` or `test.root` (the changed paths resolve
+against it), a plugin's virtual module, `resolve.preserveSymlinks`, a
+`require()` chain (Node loads those files, not vite), `vi.importActual`, or
+a computed `import()`. jest's `--findRelatedTests` with `projects` found
+no test of one project that reached another project's changed file: by a
+relative path, by the package's name, or by a `moduleNameMapper` alias.
+Each project searches only its own index.
+
+| Layout | Now | Real run |
+|---|---|---|
+| vitest `test.projects`, `vitest.workspace`, npm/pnpm workspaces, `resolve.alias`, tsconfig `paths` | Narrows with `vitest related`. rw reads every config vitest may load (the check folder and the folders above it, since vitest looks upwards; with projects, the configs below too) and the files they import. It runs in full on `preserveSymlinks`, plugins other than react, react-swc, vue and tsconfig-paths, `external`, `extends: '<file>'`, a config import it does not read (a shared preset package), a project list that points above its folder, and `--config`, `--project` or `--root` on the command line. | 3.2.7, projects + alias + import by package name: bug in `core/src/inner.ts`, full 3 failing, narrowed the same 3 (1 of 4 test files left out). Same on 1.2.2 with `vitest.workspace.ts`. In a package folder (`packages/app`, root config above): 1 failing, same. |
+| vitest and `require()` / `vi.importActual` / computed imports | rw reads the imports of every JS/TS file in the check folder. It runs in full when any file imports a computed path. (Until 7 Oct it also ran in full when a changed file was reachable from a `require()` or `vi.importActual` target; see the follow-up below.) It also runs in full when a workspace package is installed as a copy under `node_modules` (npm `install-links`, pnpm injected packages), where vitest stops; it follows symlinks and Windows junctions to tell. | Plan on the real workspace: full for a `.cjs` file reached through `require()`, full with `preserveSymlinks`; narrowed again without them. |
+| Yarn Plug'n'Play | With `.pnp.cjs` (or `.pnp.js`) and no `node_modules/vitest`, rw reads every vitest version in the `yarn.lock` next to it (Berry or classic). It narrows only if all are 1.2.2 or later, and runs in full without a lockfile or a vitest entry. | Not run: Yarn is not installed here and was not downloaded. The lockfile format follows Yarn 4; the fixture tests use it. |
+| Several jest projects, `moduleNameMapper` | A changed file needs one project that sees it, not all. For each project, every file it sees may import only files it sees: relative imports, workspace packages by name (all their files), and `moduleNameMapper` targets. rw applies the first matching pattern with `$1` like jest, and allows targets under `node_modules`. It runs in full on a pattern Go cannot read, a target outside the check folder, a computed import, `resolver`, `modulePaths` or custom `moduleDirectories`. | jest 29.4.3, two projects. With cross-project imports (by name, alias and relative path): full, and the real run had missed all three tests. Independent projects: bug in core, full 1 failing, narrowed the same 1. An app alias `^@app/(.*)$`: 1 failing, same. |
+| Workspaces where each package has its own runner config: `npm test --workspaces` (`-ws`, `--if-present`), `pnpm -r test`, or a root test script that is one of them | Package granularity. rw runs the changed packages and those that depend on them: `npm test --workspace=a --workspace=b`, or `pnpm --filter a run test` per package. Dependencies come from `package.json`, relative imports between packages, and imports of a package's name. It runs in full on a file of the workspace root, `package.json`, lockfiles, `.npmrc`, tsconfig, `*.config.*` or preset files, and on a bare import that is neither a declared dependency (of the package or the root) nor a workspace package. Such an import may be an alias into another package. It also runs in full on `include-workspace-root` with pnpm. Yarn's `workspaces foreach` and turbo/nx still run in full. | npm, 3 packages: bug in app, `--workspace=@vw/app`, 1 failing in both runs. Bug in core: app + core, 2 failing in both. pnpm 10.34.6 (`Scope: 3 of 4 workspace projects`): the same 2 failing with `pnpm --filter`. |
+| Gradle `project(':x').projectDir = file('dir')` | rw reads the plain forms: `file('dir')`, `File(rootDir, "dir")`, `new File(settingsDir, 'dir')`, Groovy or Kotlin, at the top level of the settings script. They map that folder to the project. It runs in full on one inside a block, a folder outside the build, a computed folder, a project that is not included, a second assignment, any other `project(...)` call in the settings (`buildFileName`, names) and `rootProject.children.each`. | Not run on a real Gradle build (Docker was busy with another benchmark); fixture tests only. |
+
+Two more fixes came out of the probes. A vitest config `root` had made
+narrowed runs find no test, and `--passWithNoTests` made that a pass. Earlier
+code did not check for it, and an interim fallback caught it only by
+accident. jest's `moduleNameMapper` used to make every jest run full.
+
+## Config `root`, plugins and `require()` chains (follow-up, 7 Oct)
+
+The three vitest layouts that ran in full above now narrow. Each was
+probed against the real runner first, then checked with a bug in one file,
+full and narrowed. Windows 11, node 24, vitest 3.2.7 (vite 7) and 1.2.2.
+
+**What vitest does.**
+- `vitest related` resolves the files it gets against the config's root.
+  With `root: 'src'`, `./src/core.ts` and the absolute path found no test.
+  `./core.ts` found it. A string root is resolved against the folder vitest
+  runs in, not against the config's folder.
+- It also runs a test file named on the command line, and the tests that
+  import a named file. `related b.cjs` found no test for `a.test.ts`, which
+  imports `a.cjs`, which `require()`s `b.cjs`. `related b.cjs a.cjs` found it.
+- With `@vitejs/plugin-react`, `@vitejs/plugin-react-swc`,
+  `@vitejs/plugin-vue` (`<script setup>` and plain `<script>`) and
+  `vite-tsconfig-paths`, it found the test that reaches a changed file
+  through a `.tsx`, a `.vue` script or a tsconfig alias. An inline plugin
+  that serves a virtual module re-exporting the changed file hid its test.
+
+**What rw does now.**
+- **Root.** rw reads the root of the config vitest loads (the nearest
+  `vitest.config.*`, then `vite.config.*`). Accepted forms: a string,
+  `path.resolve`/`join(__dirname | import.meta.dirname, '...')`,
+  `__dirname`, `fileURLToPath(new URL('...', import.meta.url))` and
+  `process.cwd()`. rw names the files relative to that root.
+- **Plugins.** Every `plugins: [...]` list must call one of those four
+  plugins, imported by name; their options are not read.
+- **`require()` chains.** rw adds every file that loads a changed file
+  (directly or through other files) with `require()` or `vi.importActual`,
+  so vitest finds its tests. At most 100 such files are added.
+
+These cases still run in full:
+- a root in another file, a computed or absolute root, two roots, or a
+  root together with projects;
+- any other plugin, a spread or variable plugin list;
+- a file reached through `require()` that imports an alias, a virtual
+  module or a file outside the check folder.
+
+| Case | vitest 3.2.7: full / narrowed | vitest 1.2.2: full / narrowed |
+|---|---|---|
+| Bug in `b.cjs`, required by `a.cjs` (imported by a test) and by a test through `createRequire` | 2 failed of 4 / 2 failed of 2 (`related ./src/a.cjs ./src/b.cjs ./src/direct.test.ts`) | 2 failed / 2 failed |
+| Bug in `actual.ts`, loaded by a test with `vi.importActual` | 1 failed of 4 / 1 failed of 1 | 1 failed of 4 / 1 failed of 1 |
+| Plain import (control) | 1 failed of 4 / 1 failed of 1 | not rerun |
+| `root: 'src'`, bug in `src/core.ts` | 1 failed of 3 / 1 failed of 1 (`related ./core.ts`) | 1 failed of 3 / 1 failed of 1 |
+| `root: 'src'`, bug in `leaf.cjs` behind `require()` | 1 failed of 3 / 1 failed of 1 (`related ./leaf.cjs ./mid.cjs`) | 1 failed of 3 / 1 failed of 1 |
+| react + tsconfig-paths plugins, bug in `src/lib/deep.ts` reached through `@/lib/deep` in a `.tsx` | 1 failed of 2 / 1 failed of 1 | 1 failed of 2 / 1 failed of 1 |
+
+These were small local workspaces, not published projects. Fixture tests:
+`TestVitestLayouts`, `TestVitestRoot` and `TestVitestGraph` in
+`internal/affected/layouts_test.go`.
+
 ## Not run here
 
-Everything above ran. Limits:
-- jest and pytest ran on Windows only; vitest on Windows (0.34.6) and Linux
-  (3.2.7); Gradle on Linux only.
-- One project per ecosystem, except jest. Monorepos with several jest or
-  vitest projects, Yarn Plug'n'Play (rw cannot find the vitest version and
-  runs in full) and Gradle builds with `projectDir` are not covered.
+Everything above ran, except where a row says otherwise. Limits:
+
+The later [7 October PnP and Gradle checks](2026-10-07-affected-layouts.md)
+close the real-install gaps in the historical table above. They also found
+and fixed false passes with virtual PnP workspaces and unread Gradle
+dependencies. The limits below describe this earlier run only.
+
+- jest and pytest ran on Windows only; vitest on Windows (0.34.6, and
+  1.2.2/3.2.7 in the follow-up) and Linux (3.2.7); Gradle on Linux only.
+- One project per ecosystem, except jest. The monorepo follow-up used small
+  local workspaces, not published monorepos.
+- Not covered: Yarn Plug'n'Play against a real Yarn install, Gradle
+  `projectDir` against a real Gradle build, Yarn `workspaces foreach`,
+  turbo and nx (full runs), and jest `moduleDirectories`/`modulePaths`/
+  custom resolvers (full runs). vitest configs with plugins other than
+  react, react-swc, vue and tsconfig-paths still run in full: their
+  virtual modules cannot be followed from outside vite.
+- The superjson vitest 3.2.7 runs above predate the config checks. A
+  superjson config with plugins or an unread import would now run in full.
 - No agent wrote these changes: the changed files are the commits' own.

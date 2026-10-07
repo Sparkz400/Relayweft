@@ -85,9 +85,10 @@ Downloads the latest release from GitHub, verifies its SHA-256 against
 checksums.txt and replaces this rw binary. Set GITHUB_TOKEN or GH_TOKEN
 if the repository is private.
 
-Releases from v0.4.0 on are also signed (Sigstore) and have build
-provenance. rw update does not check those itself; after an update it
-prints the command that does (packaging/README.md, "Verifying a release").
+Before installation, GitHub CLI (gh) verifies signed build provenance for
+the binary and checksums, bound to the release workflow and tag's commit.
+Missing gh, signatures or network access stop the update; there is no
+checksum-only fallback (packaging/README.md, "Verifying a release").
 
 If Homebrew, Scoop, winget or a Linux package (.deb, .rpm, .apk, AUR)
 installed rw, it says how to update with that instead and changes nothing.
@@ -180,14 +181,16 @@ installed rw, it says how to update with that instead and changes nothing.
 	if !strings.EqualFold(hex.EncodeToString(got[:]), want) {
 		return fmt.Errorf("checksum mismatch for %s (got %x, want %s); refusing to install", name, got, want)
 	}
+	if err := updateVerify(rel, name, data, sumData); err != nil {
+		return err
+	}
 
 	windows := runtime.GOOS == "windows"
 	old, err := replaceBinary(target, data, windows)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Updated %s from %s to %s (sha256 verified).\n", target, cur, latest)
-	fmt.Fprint(out, provenanceHint(rel, target))
+	fmt.Fprintf(out, "Updated %s from %s to %s (sha256 verified; signed build provenance verified).\n", target, cur, latest)
 	if windows {
 		fmt.Fprintf(out, "The previous version is kept as %s and removed on the next start.\n", old)
 		fmt.Fprintf(out, "To roll back now: close rw, then move %s back to %s.\n", old, target)
@@ -201,23 +204,6 @@ installed rw, it says how to update with that instead and changes nothing.
 // v0.4.0 on have it, and build provenance for every asset; older ones have
 // neither.
 const signatureAsset = "checksums.txt.sigstore.json"
-
-// provenanceHint says how to check the installed binary's provenance, for
-// a release that has it ("" for older releases).
-//
-// rw update itself trusts checksums.txt as GitHub serves it over TLS and
-// does not verify the signature. Doing that properly needs Sigstore's
-// trust root, kept fresh over TUF, and sigstore-go, which would roughly
-// triple the modules linked into rw. gh and cosign already do it.
-func provenanceHint(rel *ghRelease, target string) string {
-	if _, ok := findAsset(rel, signatureAsset); !ok {
-		return ""
-	}
-	// Plain double quotes, not %q: a Windows path must keep single
-	// backslashes to be pasted into a shell.
-	return "This release is signed and has build provenance. To check this binary (needs the gh CLI):\n" +
-		"  gh attestation verify \"" + target + "\" --repo Sparkz400/Relayweft\n"
-}
 
 // pkgManager is a package manager that installed rw and how to update with it.
 type pkgManager struct {

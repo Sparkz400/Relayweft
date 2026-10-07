@@ -289,6 +289,14 @@ orchestrator:
   max_attempts: 3                  # per subtask, not counting limit fallbacks
   agent_timeout: 30m
   small_task_words: 12             # tasks shorter than this skip planning and run as one worker step
+  auto_single: true                # one worker step, no planner, unless the task looks multi-file, multi-part, broad or hard
+  light_planning: true             # planner and reviewer use the worker route on their provider unless the task looks hard or sensitive
+  review_when: untested            # final review: untested (only without checks: the checks and independent tests decide), failing (only when checks fail and a fix round follows; always without checks), large (unless checks pass on a small diff) or always
+  review_skip_max_lines: 80        # review_when: large: skip the final review when checks pass and the diff is at most this many lines
+  fit_budget: true                 # with budget limits: tell the planner what is left and shrink a plan that would not fit
+  independent_tests: true          # another provider writes tests from the task text alone (never sees the change); rw runs them after the work like the checks, in place of the final review
+  independent_tests_gate: soft     # soft: failing independent tests start one fix round, then are reported, not held against the task; strict: they fail the task like a check
+  tests_first: false               # write acceptance tests for the task before any code, on the other provider (rw run --tests-first)
   approve_plan: true               # TUI / rw run --approve: show the plan and let you edit it before anything runs
   review_changes: false            # show each agent's changes (per file) before they land in your tree
   handoff: true                    # give agents a repo map, earlier tasks' notes and read-only findings
@@ -315,7 +323,9 @@ orchestrator:
 # them after the agents finish and before the final review, and failures go
 # into the fix round. `rw init` detects them (go test, npm test, pytest, ...).
 verify:
+  preflight: []                    # optional short Claude permission probes before implementation; uses task quota
   commands: []                     # e.g. ["go test ./...", "go vet ./..."]
+  auto: true                       # with no commands: detect them from the repo's build files at each task (go, cargo, npm, pytest, dotnet, maven, gradle)
   timeout: 10m
   affected: auto                   # after a fix round (not the last), first only the tests the changes affect; the full checks always run before the final review (off = always full)
 
@@ -384,6 +394,7 @@ notify:
 # scheduled and `rw run` tasks without --approve stop instead.
 # Flags: --budget-task-tokens, --budget-task-usd, --budget-day-usd.
 budget:
+  reserve: false                   # estimate in-flight agents; keep 20% for review/fixes (soft admission, not a hard quota cap)
   task_tokens: 0
   task_usd: 0
   day_tokens: 0

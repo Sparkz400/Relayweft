@@ -447,7 +447,7 @@ func (o *Orchestrator) prepareExtras(t *task) error {
 		r.wtOK = o.worktreesAllowedIn(t, r)
 		if t.cfg.Orchestrator.Handoff {
 			r.repoMap = repoMap(r.root)
-			r.repoNotes = repoNotes(r.root)
+			r.repoNotes = repoNotes(r.root, t.text)
 		}
 		r.repoDocs = repoDocs(t.cfg, r.root)
 	}
@@ -677,10 +677,10 @@ func (r *task) changedSinceStart() bool {
 
 // runFix runs one fix round in every target repo and reports whether all
 // fixes succeeded.
-func (o *Orchestrator) runFix(ctx context.Context, t *task, round int, v Verdict, failing map[string]bool, results map[string]stepResult) bool {
+func (o *Orchestrator) runFix(ctx context.Context, t *task, round int, v Verdict, reviewAsked bool, failing map[string]bool, results map[string]stepResult) bool {
 	ok := true
 	for _, r := range t.fixTargets(failing) {
-		prompt := fixPrompt(t.text, v)
+		prompt := fixPrompt(t.text, v, reviewAsked) + t.testsHint()
 		id := fmt.Sprintf("fix-%d", round+1)
 		if len(t.repos) > 0 {
 			name := r.repoName
@@ -693,6 +693,9 @@ func (o *Orchestrator) runFix(ctx context.Context, t *task, round int, v Verdict
 				fmt.Sprintf("You work in repo %q (your working directory). Fix only what belongs to this repo; the other repos get their own fix agent.\n", name)
 		}
 		fix := Subtask{ID: id, Title: "Apply review fixes", Kind: router.KindFix, Prompt: prompt, Repo: r.repoName}
+		if w := o.fixSession(t, r); w != nil {
+			t.continueAs(fix.ID, *w)
+		}
 		var res stepResult
 		if o.reviewing(t) && r.wtOK {
 			res = o.runInWorktree(ctx, t, fix, nil, prompt)
@@ -706,6 +709,27 @@ func (o *Orchestrator) runFix(ctx context.Context, t *task, round int, v Verdict
 		}
 	}
 	return ok
+}
+
+// fixSession is the session a fix agent in repo r continues: the last
+// writing agent's, when it worked in r's own tree and its provider can take
+// it now. Its context (the repo it read, what it changed and why) is cached,
+// so the fix costs a fraction of a fresh agent's fresh tokens. A fix in a
+// pool worktree (change review) or a multi-repo task starts fresh.
+func (o *Orchestrator) fixSession(t *task, r *task) *StepRun {
+	if len(t.repos) > 0 || (o.reviewing(t) && r.wtOK) {
+		return nil
+	}
+	w := t.writer()
+	if w == nil || w.Dir != r.dir || w.Session == "" || o.opts.Tracker.Limited(w.Provider) {
+		return nil
+	}
+	if pc, ok := t.cfg.Providers[w.Provider]; !ok || pc.Disabled || t.cfg.Kind(w.Provider) != w.Kind || t.runners[w.Provider] == nil {
+		return nil
+	}
+	w.Attempt = 1
+	w.why = "continues the writer's session (its context is cached)"
+	return w
 }
 
 // recordAfterExtras records the extra repos' "after" snapshots.

@@ -1,9 +1,10 @@
 // Package affected picks the tests that a task's changed files can affect,
 // so a fix round reruns those instead of the whole suite. It knows Go,
 // jest/vitest (npm, pnpm, yarn), pytest, cargo, dotnet, Maven and Gradle,
-// plus templates from verify.affected_commands. When it cannot tell
-// reliably, it says so and the caller runs the full command: a narrowed
-// run never replaces the full one.
+// npm and pnpm workspace runs (a package at a time), plus templates from
+// verify.affected_commands. When it cannot tell reliably, it says so and
+// the caller runs the full command: a narrowed run never replaces the
+// full one.
 package affected
 
 import (
@@ -73,6 +74,9 @@ func Select(ctx context.Context, cmd, template string, in Input) Plan {
 		return selectPytest(cmd, f, c)
 	case jsShape(f, c.dir).kind != "":
 		return selectJS(ctx, cmd, f, c)
+	case wsOK(f, c.dir):
+		w, _ := wsShape(f, c.dir)
+		return selectWorkspace(cmd, w, c)
 	case cargoShape(f):
 		return selectCargo(ctx, cmd, f, c)
 	case dotnetShape(f):
@@ -135,6 +139,8 @@ func Allowed(dir, cmd, template string) (prefixes []string, hint string) {
 		return nil, cmd + " <test files>"
 	case jsShape(f, dir).kind != "":
 		return jsAllowed(f, dir)
+	case wsOK(f, dir):
+		return wsAllowed(f, dir)
 	case cargoShape(f):
 		if i := cargoArgsEnd(f); i < len(f) {
 			pre := strings.Join(f[:i], " ")
@@ -268,6 +274,10 @@ func isTestFile(p string) bool {
 
 // hasShellSyntax reports a command line that is more than one plain
 // command with arguments: rw then cannot tell where to add the tests.
+// HasShellSyntax reports whether cmd has characters a shell would read as
+// more than words: rw does not run such a command when an agent named it.
+func HasShellSyntax(cmd string) bool { return hasShellSyntax(cmd) }
+
 func hasShellSyntax(cmd string) bool {
 	return strings.ContainsAny(cmd, "&|;<>()$`\"'%!^*?[]{}~\n\r")
 }

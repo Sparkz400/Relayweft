@@ -19,6 +19,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/event"
 	"github.com/sparkz400/relayweft/internal/notify"
 	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
 // Options configure a server.
@@ -390,6 +391,10 @@ type jobView struct {
 	Label string     `json:"label"`
 	Kind  string     `json:"kind"`
 	At    *time.Time `json:"at,omitempty"` // scheduled start
+	// Workflow names the saved workflow the job runs under; Gated: it
+	// waits for approval when it runs, though it was queued.
+	Workflow string `json:"workflow,omitempty"`
+	Gated    bool   `json:"gated,omitempty"`
 }
 
 type stateView struct {
@@ -405,6 +410,7 @@ type stateView struct {
 	Paused      bool                      `json:"paused"`
 	Phase       string                    `json:"phase"`
 	Task        string                    `json:"task,omitempty"`
+	Workflow    string                    `json:"workflow,omitempty"` // the running task's
 	TaskStart   *time.Time                `json:"task_start,omitempty"`
 	Queue       []jobView                 `json:"queue"`
 	Approvals   []*Request                `json:"approvals"`
@@ -450,12 +456,18 @@ func (s *Server) snapshot() stateView {
 	v.Running, v.Cancelling, v.Phase, v.Dirty, v.Interrupted, v.Last = s.running, s.cancelling, s.phase, s.dirty, s.interrupted, s.last
 	if s.current != nil {
 		v.Task = s.current.label()
+		if s.current.wf != nil {
+			v.Workflow = s.current.wf.Name
+		}
 		t := s.taskStart
 		v.TaskStart = &t
 	}
 	v.Queue = []jobView{}
 	for _, j := range s.queue {
 		jv := jobView{ID: j.ID, Label: j.label(), Kind: j.kind()}
+		if j.wf != nil {
+			jv.Workflow, jv.Gated = j.wf.Name, j.wf.Gated()
+		}
 		if !j.at.IsZero() {
 			at := j.at
 			jv.At = &at
@@ -482,6 +494,9 @@ type job struct {
 	single     *singleRoute
 	unattended bool
 	at         time.Time // scheduled start (zero = as soon as possible)
+	// wf is the saved workflow the task runs under (text is its {{task}});
+	// its approvals hold even when the job is queued or scheduled.
+	wf *workflow.Definition
 }
 
 type singleRoute struct {
@@ -499,6 +514,8 @@ func (j *job) label() string {
 		return "resume: " + j.resume.Task
 	case j.single != nil:
 		return "single " + j.single.provider + ":" + j.single.route.Model + ": " + j.text
+	case j.wf != nil:
+		return j.wf.Name + ": " + j.text
 	}
 	return j.text
 }
@@ -607,7 +624,7 @@ func (s *Server) startJob(j *job) (submitResult, error) {
 		s.mu.Unlock()
 		s.kick()
 		return submitResult{Status: "queued", JobID: j.ID,
-			Message: fmt.Sprintf("queued (%d): runs unattended (no approvals) after the current task", n)}, nil
+			Message: fmt.Sprintf("queued (%d): runs after the current task, %s", n, j.approvalsNote())}, nil
 	}
 	if s.orc.Running() {
 		s.mu.Unlock()
@@ -647,7 +664,11 @@ func (s *Server) launchLocked(j *job) {
 		case j.single != nil:
 			orc.RunSingle(ctx, j.text, j.single.provider, j.single.route)
 		default:
-			orc.RunWith(ctx, j.text, orchestrator.TaskOptions{Unattended: j.unattended, Resume: j.resume, Force: j.force})
+			text := j.text
+			if j.wf != nil {
+				text, _ = j.wf.Render(text) // checked when the job was made
+			}
+			orc.RunWith(ctx, text, orchestrator.TaskOptions{Unattended: j.unattended, Resume: j.resume, Force: j.force, Workflow: j.wf})
 		}
 	}()
 }

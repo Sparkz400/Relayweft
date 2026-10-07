@@ -89,7 +89,18 @@ func (m *Model) scheduleCommand(args []string, say func(string, ...any)) {
 		say("what should run? %s", usage)
 		return
 	}
-	if strings.HasPrefix(task, "@") {
+	j := job{text: task}
+	if f := strings.Fields(task); len(f) > 0 && f[0] == "/workflow" {
+		if len(f) < 3 {
+			say("usage: /schedule <when> /workflow <name> <task>")
+			return
+		}
+		var err error
+		if j, err = m.workflowJob(f[1], strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(task, f[0])), f[1]))); err != nil {
+			say("%v", err)
+			return
+		}
+	} else if strings.HasPrefix(task, "@") {
 		say("follow-ups cannot be scheduled; schedule a task")
 		return
 	}
@@ -99,7 +110,8 @@ func (m *Model) scheduleCommand(args []string, say func(string, ...any)) {
 	if at.IsZero() {
 		at = now // unknown or past reset: as soon as nothing else runs
 	}
-	m.queue = append(m.queue, job{text: task, unattended: true, at: at})
+	j.unattended, j.at = true, at
+	m.queue = append(m.queue, j)
 	when := "now"
 	if d := at.Sub(now); d > 0 {
 		when = fmt.Sprintf("at %s (in %s)", schedule.Clock(at, now), schedule.Left(d))
@@ -108,7 +120,11 @@ func (m *Model) scheduleCommand(args []string, say func(string, ...any)) {
 	if m.opt.AllowSleep {
 		awake = "the PC may sleep (--allow-sleep)"
 	}
-	say("scheduled %s, unattended (no approvals; a budget limit stops it): %s - %s; /schedule lists", when, oneLine(task, 70), awake)
+	how := "unattended (no approvals; a budget limit stops it)"
+	if j.wf != nil {
+		how = j.approvalsNote() + "; a budget limit stops it"
+	}
+	say("scheduled %s, %s: %s - %s; /schedule lists", when, how, oneLine(j.label(), 70), awake)
 	m.tickSchedule()
 }
 

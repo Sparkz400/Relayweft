@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,50 @@ const (
 	// was kept, Reason how the winner was picked (BestOfBy*), Passed
 	// whether its checks passed (nil: none ran).
 	TypeBestOf = "best_of"
+	// TypeChoice is a task-level routing choice behind the per-agent
+	// decisions (rw explain): Step says what was chosen (Choice*), Kind
+	// the outcome, Reason why.
+	TypeChoice = "choice"
+	// TypeReqTests is one run of a task's independent requirement tests
+	// (orchestrator.independent_tests): OK whether they passed, Files the
+	// test files, Provider and Model their writer's, Text the command
+	// ("" = the checks ran them).
+	TypeReqTests = "req_tests"
+)
+
+// What a choice record decides (Record.Step of TypeChoice).
+const (
+	// ChoiceShape: one agent or a planned task. Kind is ChoiceOne,
+	// ChoicePlanned or ChoiceResumed.
+	ChoiceShape = "shape"
+	// ChoiceReview: whether the final review runs; Kind is "runs" or
+	// "skipped".
+	ChoiceReview = "review-final"
+	// ChoiceFix: a fix round starts; Attempt is the round (1-based).
+	ChoiceFix = "fix"
+	// ChoiceChecks: the checks were detected (verify.auto); Kind is
+	// "detected" or "none".
+	ChoiceChecks = "checks"
+	// ChoiceReqTests: what failing independent tests did
+	// (orchestrator.independent_tests_gate); Kind is ChoiceAdvisory or
+	// ChoiceDisputed, Reason the tests and why.
+	ChoiceReqTests = "independent-tests"
+)
+
+// Outcomes of ChoiceReqTests.
+const (
+	// ChoiceAdvisory: they still fail but no longer fail the round.
+	ChoiceAdvisory = "advisory"
+	// ChoiceDisputed: the fix agent said a test asks for more than the
+	// task does.
+	ChoiceDisputed = "disputed"
+)
+
+// Outcomes of ChoiceShape.
+const (
+	ChoiceOne     = "one"     // one agent, no planner
+	ChoicePlanned = "planned" // the planner split the task
+	ChoiceResumed = "resumed" // a resume ran its saved plan
 )
 
 // How a best-of step's winner was picked (Record.Reason of TypeBestOf).
@@ -91,6 +136,12 @@ type Record struct {
 
 // Bool returns a pointer for Record.OK.
 func Bool(b bool) *bool { return &b }
+
+// SavedMerge distinguishes preserved alternatives from attempted merges,
+// including logs written before the explicit "saved" kind existed.
+func SavedMerge(r Record) bool {
+	return r.Type == TypeMerge && (r.Kind == "saved" || strings.HasPrefix(r.Text, "not used (") || strings.HasPrefix(r.Text, "agent moved HEAD; kept on "))
+}
 
 // reUnavailable matches CLI errors that mean "not logged in" or "not
 // installed".

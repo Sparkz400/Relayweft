@@ -14,6 +14,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/config"
 	"github.com/sparkz400/relayweft/internal/event"
 	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
 // Shell completion. The scripts (completions/) are thin: on every Tab
@@ -266,6 +267,8 @@ const (
 	valRoleRoute           // role=provider:model[:effort]
 	valRolePref            // role=codex|claude|other|auto|<provider>
 	valChoice              // one of choices
+	valWorkflow            // a saved workflow
+	valTaskHere            // task id from this project only
 )
 
 type valueHint struct {
@@ -278,9 +281,18 @@ type valueHint struct {
 // that command. Flags not listed take free text (a test checks that each
 // value flag was looked at: completeFreeFlags).
 var flagValues = map[string]valueHint{
+	"run workflow":     {kind: valWorkflow},
+	"workflow show":    {kind: valWorkflow},
+	"workflow save":    {kind: valFile},
+	"recovery resume":  {kind: valTaskHere},
+	"recovery retry":   {kind: valTaskHere},
+	"recovery undo":    {kind: valTaskHere},
+	"memory ref":       {kind: valFile},
 	"config":           {kind: valFile},
 	"file":             {kind: valFile},
 	"out":              {kind: valFile},
+	"replay-tests":     {kind: valFile},
+	"replay-fix":       {kind: valDir},
 	"dir":              {kind: valDir},
 	"logs":             {kind: valDir},
 	"starter":          {kind: valDir},
@@ -291,17 +303,20 @@ var flagValues = map[string]valueHint{
 	"route":            {kind: valRoleRoute},
 	"prefer":           {kind: valRolePref},
 	"selftest sandbox": {kind: valChoice, choices: []string{"auto", "off", "only"}},
+	"selftest close":   {kind: valChoice, choices: []string{"auto", "off", "only"}},
 	"schedule os":      {kind: valChoice, choices: []string{"windows", "darwin", "linux"}},
+	"bench gate":       {kind: valChoice, choices: []string{"soft", "strict"}},
 }
 
 // completeFreeFlags are the value flags that take free text (numbers,
 // durations, names, URLs, commands): nothing to complete.
 var completeFreeFlags = []string{
-	"api", "at", "base", "branch", "budget-day-usd", "budget-task-tokens", "budget-task-usd",
+	"accept", "api", "at", "base", "branch", "budget-day-usd", "budget-task-tokens", "budget-task-usd",
 	"check", "check-timeout", "count", "days", "every", "files", "forget", "idle", "in",
 	"issue", "issues", "lease", "limit", "max-files", "max-lines", "min-files", "min-use",
 	"n", "name", "only", "port", "repo", "scan", "sessions", "setup", "since", "speed",
-	"threads", "title",
+	"threads", "title", "writers", "replay-subjects",
+	"id", "revision", "task",
 }
 
 func hintFor(cmd command, name string) valueHint {
@@ -314,6 +329,29 @@ func hintFor(cmd command, name string) valueHint {
 func valueCompletion(cmd command, f *flag.Flag, cur string, st completeState) completion {
 	h := hintFor(cmd, f.Name)
 	switch h.kind {
+	case valWorkflow:
+		defs, err := workflow.List()
+		if err != nil {
+			return completion{}
+		}
+		var cands []candidate
+		for _, d := range defs {
+			cands = append(cands, candidate{d.Name, d.Description})
+		}
+		return prefixed(cur, cands)
+	case valTaskHere:
+		dir := st.values["dir"]
+		if dir == "" {
+			dir, _ = os.Getwd()
+		}
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
+		var cands []candidate
+		for _, s := range orchestrator.Recent(dir, completeTasks) {
+			cands = append(cands, candidate{s.ID, s.Status + ": " + oneLine(s.Task, 60)})
+		}
+		return prefixed(cur, cands)
 	case valFile:
 		return completion{directive: "files"}
 	case valDir:

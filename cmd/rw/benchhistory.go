@@ -74,6 +74,7 @@ type historyOpts struct {
 	count, scan        int
 	lim                historyLimits
 	hidden, noValidate bool
+	clean              bool
 	ownTests           bool
 	timeout            time.Duration
 	runCmd             string // how to run the written file
@@ -308,6 +309,11 @@ func validateHistory(ctx context.Context, ws *orchestrator.BenchWorkspace, h his
 		check = o.check
 	}
 	run := func(base string, tests *benchTests) (ok, checked bool, why string) {
+		if o.clean {
+			if err := ws.Clear(); err != nil {
+				return false, false, err.Error()
+			}
+		}
 		rctx, cancel := context.WithTimeout(ctx, o.timeout)
 		defer cancel()
 		t := benchTask{Check: check, Base: base, Tests: tests}

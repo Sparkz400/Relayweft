@@ -48,6 +48,9 @@ type Verdict struct {
 	Approve bool     `json:"approve"`
 	Advice  string   `json:"advice"`
 	Issues  []string `json:"issues"`
+	// Requirements is the final review's judgment of each requirement
+	// (acceptance.go); other checkpoints leave it empty.
+	Requirements []ReqVerdict `json:"requirements,omitempty"`
 }
 
 const maxSubtasks = 8
@@ -107,7 +110,7 @@ func NormalizePlan(p Plan) (Plan, error) {
 		p.Subtasks = p.Subtasks[:maxSubtasks]
 	}
 	// The fixed agent ids are reserved so a subtask never collides with them.
-	seen := map[string]bool{"main": true, "reviewer": true, "judge": true}
+	seen := map[string]bool{"main": true, "reviewer": true, "judge": true, TestsStepID: true}
 	ids := map[string]bool{} // the subtasks' own ids: the only valid dependencies
 	for i := range p.Subtasks {
 		st := &p.Subtasks[i]
@@ -288,8 +291,9 @@ Reply with ONLY this JSON in a json code block:
 }
 
 // finalReviewPrompt is the final checkpoint's prompt; docs is the repo's
-// conventions, already fenced as untrusted data (docsContext).
-func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat, diff string, mergeNotes []string, verifyReport, docs string) string {
+// conventions, already fenced as untrusted data (docsContext); criteria
+// are the task's explicit acceptance criteria (ParseCriteria).
+func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat, diff string, mergeNotes []string, verifyReport, docs string, criteria []string) string {
 	var b strings.Builder
 	b.WriteString(runner.MarkerFinalReview + " You are the reviewer at the final checkpoint. Do NOT modify files; you may read the repository and run read-only checks.\n")
 	b.WriteString("Decide whether the task is done correctly.\n\nTASK:\n" + task + "\n\nPLAN SUMMARY:\n" + p.Summary + "\n\nSUBTASK RESULTS:\n")
@@ -313,13 +317,27 @@ func finalReviewPrompt(task string, p Plan, results map[string]stepResult, stat,
 		b.WriteString("\n(No git diff available; inspect the files directly.)\n")
 	}
 	b.WriteString(docs)
-	b.WriteString(`
+	b.WriteString(criteriaBlock(criteria))
+	step1 := "1. List every requirement the TASK states: each behaviour, edge case, fallback, platform and constraint it names, with ids R1, R2, ...\n"
+	if len(criteria) > 0 {
+		step1 = "1. Judge each ACCEPTANCE CRITERION above, under its id.\n"
+	}
+	b.WriteString("\nHow to decide:\n" + step1 + `2. For each one, find the evidence in the DIFF: the code that implements it, and a test where the repo tests such code.
+3. Judge from the diff and the checks above. Open other files only to settle a specific doubt.
+Reject when a requirement has no evidence (mark it "met": false and put it in issues as "missing: <requirement>"), and for real defects: bugs, broken builds or tests.
+Do not reject for style or for improvements the task did not ask for.
+Name a test only when it exists in the repo and exercises the requirement; leave test_file and test_name empty otherwise.
+
 Reply with ONLY this JSON in a json code block:
-{"approve": true|false, "advice": "what must change (empty if approved)", "issues": ["..."]}
-Only reject for real defects: bugs, missing requirements, broken builds or tests.
+{"approve": true|false, "advice": "what must change (empty if approved)", "issues": ["..."], ` + reqsJSONHint + `}
 `)
 	return b.String()
 }
+
+// reviewDocsMax caps the repo conventions in the final review prompt (in
+// bytes, before fencing): the reviewer judges the diff against the task, and
+// a long contributing guide adds fresh tokens to every review.
+const reviewDocsMax = 3000
 
 func stepPrompt(task string, st Subtask, depResults []string, prevErr, advice string, readOnly bool) string {
 	var b strings.Builder
@@ -340,17 +358,41 @@ func stepPrompt(task string, st Subtask, depResults []string, prevErr, advice st
 	}
 	if readOnly {
 		b.WriteString("\nThis is a read-only subtask: DO NOT modify any files.\n")
-	} else {
-		b.WriteString("\nStay within your subtask; other agents may be editing other files in parallel.\n")
+		b.WriteString("When finished, reply with a short summary of what you found.\n")
+		return b.String()
 	}
-	b.WriteString("When finished, reply with a short summary of what you found or changed.\n")
+	b.WriteString("\nStay within your subtask; other agents may be editing other files in parallel.\n")
+	b.WriteString(requirementsCheck)
+	b.WriteString("When finished, reply with a short summary of what you changed, then a REQUIREMENTS list: one line per requirement, met or not met, and where (file, test).\n")
 	return b.String()
 }
+
+// requirementsCheck has a writing agent check its work against every
+// requirement of its subtask before it finishes: on the realistic bench,
+// agents passed the public checks but quietly left out one named part of
+// the task (a fallback, an edge case, a platform), and the reviewer
+// approved the plausible diff.
+const requirementsCheck = "Before you finish, list every requirement your subtask states: each behaviour, edge case, fallback, platform and constraint it names. " +
+	"Check that each one is implemented, and covered by a test where the repo tests such code. Implement what is missing before you reply.\n"
 
 // lfsNote is appended to step prompts that run in a worktree of a Git LFS repo.
 const lfsNote = "\nNOTE: Git LFS files (binary assets such as textures, models, audio) appear here as small text pointer files (\"version https://git-lfs.github.com/spec/v1 ...\"). This is expected: do not edit, \"fix\" or delete them, and do not run builds that need those assets.\n"
 
-func fixPrompt(task string, v Verdict) string {
+// fixPrompt asks a fix agent for the changes in v. reviewAsked is a final
+// review having asked for them; otherwise v.Advice is what fails.
+func fixPrompt(task string, v Verdict, reviewAsked bool) string {
+	if !reviewAsked {
+		return runner.MarkerFix + ` You are a worker in Relayweft. rw ran the checks and tests on the finished work, and some fail.
+
+TASK:
+` + task + `
+
+WHAT FAILS:
+` + v.Advice + `
+
+Fix the cause now, run the failing checks and tests again if you can, and check again that every requirement of the TASK is met. Then reply with a short summary.
+`
+	}
 	return runner.MarkerFix + ` You are a worker in Relayweft. The reviewer checked the finished work and asked for changes.
 
 TASK:
@@ -362,7 +404,7 @@ REVIEWER ADVICE:
 ISSUES:
 - ` + strings.Join(v.Issues, "\n- ") + `
 
-Make the requested changes now, run the relevant tests if you can, then reply with a short summary.
+Make the requested changes now, run the relevant tests if you can, and check again that every requirement of the TASK is met. Then reply with a short summary.
 `
 }
 

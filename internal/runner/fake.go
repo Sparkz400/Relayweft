@@ -58,6 +58,12 @@ const (
 	// MarkerResolve starts the prompt of an agent that resolves a merge
 	// conflict between two changes.
 	MarkerResolve = "[RW:RESOLVE]"
+	// MarkerReqTests starts the prompt of the agent that writes
+	// independent requirement tests (orchestrator.independent_tests).
+	MarkerReqTests = "[RW:REQ-TESTS]"
+	// MarkerTests starts the prompt of the agent that writes a task's
+	// acceptance tests before any code (rw run --tests-first).
+	MarkerTests = "[RW:TESTS]"
 )
 
 func (f *Fake) sleep(ctx context.Context, min, max time.Duration) bool {
@@ -180,6 +186,11 @@ func (f *Fake) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 	case strings.Contains(p, MarkerPlan):
 		f.script(ctx, send, []string{"Glob **/*.go", "Read README.md", "Grep func main"}, nil)
 		res.Final = "```json\n" + fakePlan(p) + "\n```"
+	case strings.Contains(p, MarkerTests):
+		f.script(ctx, send, []string{"Glob **/*_test.go", "Read internal/parse_test.go"}, []string{"internal/parse_test.go"})
+		res.Files = []string{"internal/parse_test.go"}
+		res.Final = "```json\n{\"tests\": [{\"requirement\": \"the trailing field is kept\", \"file\": \"internal/parse_test.go\", \"name\": \"TestSplitFieldsKeepsTrailing\"}], " +
+			"\"files\": [\"internal/parse_test.go\"], \"command\": \"go test ./internal -run TestSplitFieldsKeepsTrailing\"}\n```"
 	default: // step or fix
 		ro := s.ReadOnly
 		tools := []string{"Grep " + pick("parse", "config", "Run(", "TODO"), "Read " + pick("internal/parse.go", "cmd/main.go", "README.md", "go.mod")}

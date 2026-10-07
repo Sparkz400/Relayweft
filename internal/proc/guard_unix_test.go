@@ -6,8 +6,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,7 +25,7 @@ func testWatch(t *testing.T) *os.File {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := watch.Swap(r)
+	old := watch.Swap(&watchPipe{r: r, w: w})
 	t.Cleanup(func() {
 		watch.Store(old)
 		r.Close()
@@ -139,4 +141,52 @@ func TestNoWrapperWithoutGuard(t *testing.T) {
 	if cmd.Path != "/bin/sh" || len(cmd.Args) != 3 || cmd.ExtraFiles != nil {
 		t.Errorf("wrapped without Guard: %s %q", cmd.Path, cmd.Args)
 	}
+}
+
+// rw mcp finds the rw above it by walking up the process tree. The wrapper
+// is one more process between rw and its agent: the walk goes through it
+// and still reaches rw.
+func TestAncestorsThroughWrapper(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Ancestors is not implemented here")
+	}
+	testWatch(t)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(context.Background(), exe, "-test.run=^TestHelperAncestors$")
+	Prepare(cmd)
+	cmd.Env = append(os.Environ(), "RW_PROC_HELPER=ancestors")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	var pids []int
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		var pid int
+		var name string
+		if _, err := fmt.Sscan(line, &pid, &name); err == nil {
+			pids, names = append(pids, pid), append(names, name)
+		}
+	}
+	if len(pids) < 2 || pids[0] != cmd.Process.Pid || pids[1] != os.Getpid() {
+		t.Fatalf("ancestors %v %v; want the wrapper %d, then this process %d", pids, names, cmd.Process.Pid, os.Getpid())
+	}
+	if self := ProgramName(exe); names[0] == self || names[1] != self {
+		t.Errorf("names %v: want a shell, then %s", names, self)
+	}
+}
+
+// TestHelperAncestors prints this process's ancestors, one "pid name" per
+// line.
+func TestHelperAncestors(t *testing.T) {
+	if os.Getenv("RW_PROC_HELPER") != "ancestors" {
+		t.Skip("helper process")
+	}
+	for _, a := range Ancestors() {
+		fmt.Println(a.PID, a.Name)
+	}
+	os.Exit(0)
 }

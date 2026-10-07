@@ -14,6 +14,7 @@ import (
 
 	"github.com/sparkz400/relayweft/internal/diag"
 	"github.com/sparkz400/relayweft/internal/proc"
+	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
 // Task state for resume:
@@ -74,6 +75,9 @@ type StepRun struct {
 	// (resolve.go): Kept is then the step's work against Base, and a
 	// resume lands it again, resolving the conflict anew.
 	Resolve *ResolveRun `json:"resolve,omitempty"`
+	// why is the decision reason of a run that continues this session for
+	// another reason than an interruption (a fix round); not saved.
+	why string
 }
 
 // ResolveRun is a resolve step in progress.
@@ -102,6 +106,9 @@ type TaskState struct {
 	Results  map[string]StepState `json:"results,omitempty"`
 	UndoKey  string               `json:"undo_key,omitempty"`
 	CostLine string               `json:"cost,omitempty"`
+	// AgentFiles preserves streamed edit reports even if rw dies before an
+	// agent returns. Paths are absolute and belong to this task's repositories.
+	AgentFiles []string `json:"agent_files,omitempty"`
 	// Repos are the extra repos of a multi-repo task (workspace.go); the
 	// plan's subtasks name them. A resume works in the same repos.
 	Repos []Repo `json:"repos,omitempty"`
@@ -114,6 +121,39 @@ type TaskState struct {
 	// Saved are half-done edits of interrupted steps, saved on a branch
 	// when the pool worktree that held them was given up (holds.go).
 	Saved []SavedEdits `json:"saved,omitempty"`
+	// Kept lists branches retained because the task could not land its work.
+	Kept []string `json:"kept,omitempty"`
+	// Branches also includes saved alternatives and full pre-review changes.
+	Branches []string `json:"branches,omitempty"`
+	// Workflow is the saved workflow the task runs under, as it was when
+	// the task started; a resume applies it again.
+	Workflow *workflow.Definition `json:"workflow,omitempty"`
+	// Acceptance is the finished task's three-level result (acceptance.go).
+	Acceptance *Acceptance `json:"acceptance,omitempty"`
+	// TestsFirst is set for a task that writes acceptance tests before any
+	// code (testsfirst.go); Tests are those tests once written, which a
+	// resume keeps guarding instead of writing new ones.
+	TestsFirst bool        `json:"tests_first,omitempty"`
+	Tests      *TestsState `json:"tests,omitempty"`
+}
+
+func (s *TaskState) noteBranch(branch string) error {
+	if s == nil {
+		return nil
+	}
+	stateMu.Lock()
+	found := false
+	for _, b := range s.Branches {
+		if b == branch {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.Branches = append(s.Branches, branch)
+	}
+	stateMu.Unlock()
+	return s.saveErr()
 }
 
 // setRunning records that a subtask's agent starts.
@@ -152,6 +192,37 @@ func (s *TaskState) noteSession(id, session string) {
 	if ok {
 		s.save()
 	}
+}
+
+func (s *TaskState) noteFiles(files []string) {
+	if s == nil || len(files) == 0 {
+		return
+	}
+	stateMu.Lock()
+	seen := make(map[string]bool, len(s.AgentFiles))
+	for _, f := range s.AgentFiles {
+		seen[f] = true
+	}
+	changed := false
+	for _, f := range files {
+		if !seen[f] {
+			s.AgentFiles = append(s.AgentFiles, f)
+			seen[f], changed = true, true
+		}
+	}
+	stateMu.Unlock()
+	if changed {
+		s.save()
+	}
+}
+
+func (s *TaskState) reportedFiles() []string {
+	if s == nil {
+		return nil
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return append([]string(nil), s.AgentFiles...)
 }
 
 // runningStep returns the recorded run of a subtask.

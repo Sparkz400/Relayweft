@@ -188,7 +188,7 @@ func (o *Orchestrator) mergeLand(ctx context.Context, t, rp *task, st Subtask, l
 		}
 		rp.snapshot = merged
 		rp.landings = append(rp.landings, landing{step: st.ID, title: st.Title, prompt: st.Prompt, final: r.final, merged: merged, files: changed})
-		text := fmt.Sprintf("merged %d file(s)%s", len(r.files), repoTag(rp))
+		text := fmt.Sprintf("merged %d file(s)%s", len(changed), repoTag(rp))
 		if len(ls.resolved) > 0 {
 			r.resolved = strings.Join(ls.resolved, "; ")
 			text += "; " + r.resolved

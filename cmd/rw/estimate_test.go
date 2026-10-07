@@ -68,13 +68,15 @@ func TestRunEstimateLeavesTheTreeAlone(t *testing.T) {
 	status, head := gitOut(t, dir, "status", "--porcelain"), gitOut(t, dir, "rev-parse", "HEAD")
 
 	out, err := captureStdout(t, func() error {
-		return cmdRun([]string{"--estimate", "--quiet", "fix the parser so that it keeps trailing empty fields and document the new behaviour"})
+		return cmdRun([]string{"--estimate", "--quiet", "fix the parser so that it keeps trailing empty fields, then document the new behaviour"})
 	})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
+	// light_planning: the task does not look hard, so the reviewer is on
+	// the worker route.
 	for _, want := range []string{"Plan: two edits", "1. [edit, auto] fix the parser", "~ worker on codex:gpt-6.1-sol:medium:",
-		"+  final review ~ reviewer on claude:opus:high", "Estimate: ~", "3 of 3 steps without history", "estimate only: nothing was run"} {
+		"+  final review ~ reviewer on claude:sonnet:medium", "Estimate: ~", "3 of 3 steps without history", "estimate only: nothing was run"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

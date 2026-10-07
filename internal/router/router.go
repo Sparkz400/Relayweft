@@ -48,6 +48,10 @@ type Step struct {
 	// Pin is a route picked before the step runs (a best-of candidate's):
 	// Route returns it as it is.
 	Pin *event.Decision
+	// Light moves a planner or reviewer step to the worker route on its
+	// provider (orchestrator.light_planning, for a task that does not
+	// look hard); other steps ignore it.
+	Light bool
 }
 
 // State is what the router needs to know about providers.
@@ -74,6 +78,11 @@ const (
 	RuleForced      = "forced"
 	RuleBestOf      = "best-of"
 	RuleResolve     = "conflict-resolve"
+	// RuleIndependentTests routes the independent test writer.
+	RuleIndependentTests = "independent-tests"
+	// RuleTestsFirst routes the acceptance test writer of rw run
+	// --tests-first.
+	RuleTestsFirst = "tests-first"
 )
 
 // Router applies the rules to the live config.
@@ -125,10 +134,29 @@ func (r *Router) Route(s Step) event.Decision {
 			// to save, and it is the route set up to stand by.
 			return d
 		}
-		return r.applyTier(cfg, s, d, rule)
+		return r.applyLight(cfg, s, r.applyTier(cfg, s, d, rule))
 	}
 	d.Rule, d.Reason = rule, reason
-	return Finalize(r.applyTier(cfg, s, learned(cfg, d), rule))
+	return Finalize(r.applyLight(cfg, s, r.applyTier(cfg, s, learned(cfg, d), rule)))
+}
+
+// applyLight moves a light planner or reviewer step (Step.Light) to the
+// worker route on the same provider. A role set explicitly, or one without
+// a worker route there, keeps its own.
+func (r *Router) applyLight(cfg *config.Config, s Step, d event.Decision) event.Decision {
+	if !s.Light || (d.Role != event.RolePlanner && d.Role != event.RoleReviewer) {
+		return d
+	}
+	if r.Pinned != nil && r.Pinned(d.Role) {
+		return d
+	}
+	route := cfg.Roles[event.RoleWorker].For(d.Provider)
+	if route.Model == "" || (route.Model == d.Model && route.Effort == d.Effort) {
+		return d
+	}
+	d.Model, d.Effort = route.Model, route.Effort
+	d.Reason += "; light: worker route, the task does not look hard"
+	return d
 }
 
 // Hard reports whether a writing step looks hard enough to run as best of
@@ -428,8 +456,18 @@ func ParseJudge(reply string) (string, bool) {
 	return "", false
 }
 
+// MentionsWrite reports whether a text asks for a change (add, fix, write,
+// create, ...).
+func MentionsWrite(text string) bool { return writeWords.MatchString(text) }
+
 func looksReadOnly(prompt string) bool {
 	return readOnlyWords.MatchString(prompt) && !writeWords.MatchString(prompt)
+}
+
+// Sensitive returns the routing.sensitive_paths entry that the files or
+// text hit ("" = none).
+func (r *Router) Sensitive(files []string, text string) string {
+	return sensitive(r.Cfg().Routing.SensitivePaths, files, text)
 }
 
 func sensitive(words, files []string, text string) string {

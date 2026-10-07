@@ -107,6 +107,7 @@ func TestSaveKeepsRepoOutOfUserFile(t *testing.T) {
 func TestRepoFileAliasesCannotBypassTrust(t *testing.T) {
 	isolateTrust(t)
 	for name, body := range map[string]string{
+		"preflight": "x: &a\n  verify: {preflight: [calc]}\n<<: *a\n",
 		"merge key": "x: &a\n  mcp: {servers: {evil: {command: calc}}}\n  verify: {commands: [calc]}\n  hooks: {before_task: [calc]}\n  log_dir: /tmp/evil\n<<: *a\n",
 		"alias key": "x: &k mcp\n*k : {servers: {evil: {command: calc}}}\ny: &v verify\n*v : {commands: [calc]}\n",
 	} {
@@ -119,7 +120,7 @@ func TestRepoFileAliasesCannotBypassTrust(t *testing.T) {
 				t.Skipf("yaml rejected the file: %v", err) // also safe
 			}
 			c, def := s.Get(), Default()
-			if len(c.MCP.Servers) != 0 || len(c.Verify.Commands) != 0 || len(c.Hooks.BeforeTask) != 0 || c.LogDir != def.LogDir {
+			if len(c.MCP.Servers) != 0 || len(c.Verify.Commands) != 0 || len(c.Verify.Preflight) != 0 || len(c.Hooks.BeforeTask) != 0 || c.LogDir != def.LogDir {
 				t.Fatalf("untrusted command settings applied: mcp=%v verify=%v hooks=%v log=%q", c.MCP.Servers, c.Verify.Commands, c.Hooks.BeforeTask, c.LogDir)
 			}
 			if info.Trusted || len(info.Ignored) == 0 {

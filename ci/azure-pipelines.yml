@@ -1,0 +1,32 @@
+# Copy to azure-pipelines.yml and copy ci/forge-job.sh to .relayweft-ci/forge-job.sh.
+# Run manually on a trusted branch. See docs/ci-azure-bitbucket.md.
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+jobs:
+  - job: Relayweft
+    timeoutInMinutes: 90
+    steps:
+      - checkout: self
+        persistCredentials: false
+        fetchDepth: 50
+      - task: UseNode@1
+        inputs:
+          version: '22.x'
+      - bash: bash .relayweft-ci/forge-job.sh
+        displayName: Run Relayweft issues
+        env:
+          RW_FORGE: azure
+          AZURE_DEVOPS_TOKEN: $(RW_AZURE_PAT)
+          ANTHROPIC_API_KEY: $(RW_ANTHROPIC_API_KEY)
+          RW_PROVIDER: claude
+          RW_BUDGET_TASK_USD: '5'
+          RW_LIMIT: '1'
+          RW_DRAFT: 'true'
+          RW_TRUST_REPO_CONFIG: 'false'
+      - task: PublishPipelineArtifact@1
+        condition: always()
+        inputs:
+          targetPath: $(Build.SourcesDirectory)/relayweft-report
+          artifact: relayweft-report

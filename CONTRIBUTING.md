@@ -39,9 +39,12 @@ go test -p 4 ./...
   and `GOOS=windows go vet ./...` (in PowerShell: `$env:GOOS="linux"; go vet ./...`).
 - `rw selftest` runs the Windows real-use checks with a scripted agent (no
   quota). `--sandbox only` runs the container sandbox checks and needs
-  docker or podman. `go test` runs it as `TestSelftest`.
+  docker or podman. `go test` runs it as `TestSelftest`. On Windows,
+  `--close only` closes a task's window in the old console and in Windows
+  Terminal; it opens windows, so `go test` runs it (`TestSelftestClose`)
+  only with `RW_TEST_CLOSE=1`.
 - Long runs, by hand or in their CI workflows:
-  - stress test: `RW_STRESS_DURATION=3m go test -run '^TestStress$' -v ./internal/orchestrator` (`stress.yml` runs 30 minutes);
+  - stress test: `RW_STRESS_DURATION=3m go test -run '^TestStress$' -v -count=1 ./internal/orchestrator` (`stress.yml` runs 30 minutes). Keep `-count=1`: long stress runs can otherwise produce a large Go test-cache input log and spend minutes hashing it after the tests pass;
   - fuzzing: `go test -run='^$' -fuzz='^FuzzClaudeParser$' -fuzztime=30s ./internal/runner` (`fuzz.yml` has every target).
 
 **VS Code extension** (`editors/vscode`, Node 22):

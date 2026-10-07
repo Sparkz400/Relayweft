@@ -593,10 +593,12 @@ func TestDashboardMatchesCLI(t *testing.T) {
 			return map[string]any{"command": self, "extra_args": []string{dashgenCLIArg + kind, dashgenStateArg + state}, "limit_cooldown": "3s"}
 		}
 		cfg := map[string]any{
-			"providers":    map[string]any{"claude": prov("claude"), "codex": prov("codex")},
-			"orchestrator": map[string]any{"approve_plan": false, "min_free_disk_gb": 0, "max_cpu_percent": 0, "min_free_memory_mb": 0},
-			"notify":       map[string]any{"enabled": false},
-			"routing":      map[string]any{"learn": "suggest"},
+			"providers": map[string]any{"claude": prov("claude"), "codex": prov("codex")},
+			// Every task is planned: the scenarios script the planner.
+			"orchestrator": map[string]any{"approve_plan": false, "min_free_disk_gb": 0, "max_cpu_percent": 0, "min_free_memory_mb": 0,
+				"auto_single": false, "light_planning": false, "fit_budget": false, "review_skip_max_lines": 0},
+			"notify":  map[string]any{"enabled": false},
+			"routing": map[string]any{"learn": "suggest"},
 		}
 		if edit != nil {
 			edit(cfg)

@@ -29,7 +29,7 @@ import (
 // checks that goroutines, heap, open files/handles, leftover processes and
 // pool worktrees stay flat. It only runs when RW_STRESS_DURATION is set:
 //
-//	RW_STRESS_DURATION=3m go test -run '^TestStress$' -v -timeout 0 ./internal/orchestrator
+//	RW_STRESS_DURATION=3m go test -run '^TestStress$' -v -count=1 -timeout 0 ./internal/orchestrator
 //
 // The time is split between two modes:
 //   - demo: the demo scenario (runner.NewFakeSet) in a no-git folder, as
@@ -252,6 +252,7 @@ func mb(n uint64) string { return fmt.Sprintf("%.1fMB", float64(n)/(1<<20)) }
 // run, as the TUI does.
 func stressOrc(t *testing.T, dir, mode string, runners func(*config.Config) runner.Set, edit func(*config.Config)) (*Orchestrator, *atomic.Int64) {
 	cfg := config.Default()
+	classic(cfg)
 	cfg.Orchestrator.MinFreeDiskGB = 0 // CI disks are small; worktrees must still be used
 	if edit != nil {
 		edit(cfg)
@@ -337,6 +338,7 @@ func stressGit(t *testing.T, d time.Duration) {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
+	classic(cfg)
 	pc := cfg.Providers[event.Claude]
 	pc.Command = self
 	pc.ExtraArgs = []string{fakeCLIFlag, stressDirArg + stressDir}

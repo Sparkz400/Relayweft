@@ -106,11 +106,13 @@ func (k Kind) MarshalText() ([]byte, error) { return []byte(k.String()), nil }
 
 // TokenUsage is a token count as reported by a CLI.
 type TokenUsage struct {
-	Input     int64   `json:"input,omitempty"`
-	Cached    int64   `json:"cached,omitempty"`
-	Output    int64   `json:"output,omitempty"`
-	Reasoning int64   `json:"reasoning,omitempty"`
-	CostUSD   float64 `json:"cost_usd,omitempty"` // only Claude reports this
+	// Incomplete marks a lower bound: the CLI ended without final accounting.
+	Incomplete bool    `json:"incomplete,omitempty"`
+	Input      int64   `json:"input,omitempty"`
+	Cached     int64   `json:"cached,omitempty"`
+	Output     int64   `json:"output,omitempty"`
+	Reasoning  int64   `json:"reasoning,omitempty"`
+	CostUSD    float64 `json:"cost_usd,omitempty"` // only Claude reports this
 }
 
 // Total returns fresh tokens: uncached input + output. Input includes cache
@@ -121,7 +123,8 @@ func (t TokenUsage) Total() int64 { return t.Input - t.Cached + t.Output }
 // Add returns the sum of two usages.
 func (t TokenUsage) Add(o TokenUsage) TokenUsage {
 	return TokenUsage{
-		Input: t.Input + o.Input, Cached: t.Cached + o.Cached, Output: t.Output + o.Output,
+		Incomplete: t.Incomplete || o.Incomplete,
+		Input:      t.Input + o.Input, Cached: t.Cached + o.Cached, Output: t.Output + o.Output,
 		Reasoning: t.Reasoning + o.Reasoning, CostUSD: t.CostUSD + o.CostUSD,
 	}
 }
@@ -147,15 +150,23 @@ type TaskCost struct {
 // "codex 12k · claude 40k fresh tokens · ≈$0.31 API-equivalent · claude limit 61%→64%".
 func (c TaskCost) Summary() string {
 	var parts []string
+	incomplete := false
 	for _, p := range ProvidersOf(c.PerProvider) {
+		incomplete = incomplete || c.PerProvider[p].Incomplete
 		if u := c.PerProvider[p]; u.Total() > 0 {
 			parts = append(parts, p+" "+HumanTokens(u.Total()))
 		}
 	}
 	if len(parts) == 0 {
+		if incomplete {
+			return "usage incomplete (no final accounting)"
+		}
 		return "no tokens used"
 	}
 	s := strings.Join(parts, " · ") + " fresh tokens"
+	if incomplete {
+		s = "at least " + s + " (usage incomplete)"
+	}
 	if c.CostUSD > 0 {
 		s += fmt.Sprintf(" · ≈$%.2f API-equivalent", c.CostUSD)
 	}

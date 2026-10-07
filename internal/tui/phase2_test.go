@@ -2,6 +2,9 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -460,6 +463,49 @@ func TestHistoryListsFinishedTask(t *testing.T) {
 	m.command("/history")
 	if !strings.Contains(strings.Join(logTexts(m), "\n"), "trailing empty fields") {
 		t.Error("/history does not list the task")
+	}
+}
+
+func TestExplainCommand(t *testing.T) {
+	m, orc, ch := newModel(t, false)
+	if cmd := m.command("/explain"); cmd != nil {
+		m.Update(cmd())
+	}
+	if got := logTexts(m); !strings.Contains(got[len(got)-1], "no finished task") {
+		t.Errorf("/explain without tasks: %q", got[len(got)-1])
+	}
+	orc.Run(context.Background(), "Make the parser keep trailing empty fields and add a strict flag with tests and docs please")
+	drain(m, ch)
+	if !strings.Contains(strings.Join(logTexts(m), "\n"), "/explain says why it ran this way") {
+		t.Error("the result does not point at /explain")
+	}
+	// Demo tasks keep no state: record a finished one here.
+	cd, _ := os.UserConfigDir()
+	os.MkdirAll(filepath.Join(cd, "relayweft", "tasks"), 0o700)
+	data, _ := json.Marshal(orchestrator.TaskState{ID: "explain-here", Dir: m.opt.Dir, Task: "Make the parser keep trailing empty fields", Status: "done",
+		Created: time.Now(), Plan: &orchestrator.Plan{Subtasks: []orchestrator.Subtask{{ID: "one"}}}})
+	if err := os.WriteFile(filepath.Join(cd, "relayweft", "tasks", "explain-here.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := m.command("/explain")
+	if cmd == nil {
+		t.Fatal("/explain runs nothing")
+	}
+	m.Update(cmd())
+	all := strings.Join(logTexts(m), "\n")
+	for _, want := range []string{"trailing empty fields", "Why ", "Escalations", "--open shows the same reasons"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("/explain lacks %q:\n%s", want, all)
+		}
+	}
+	if cmd := m.command("/explain nope"); cmd != nil {
+		m.Update(cmd())
+	}
+	if got := logTexts(m); !strings.HasPrefix(got[len(got)-1], "explain: ") {
+		t.Errorf("unknown id: %q", got[len(got)-1])
+	}
+	if m.command("/explain a b") != nil || !strings.Contains(strings.Join(logTexts(m), "\n"), "usage: /explain") {
+		t.Error("two ids accepted")
 	}
 }
 

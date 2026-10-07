@@ -851,6 +851,18 @@ func renderPRParts(st *orchestrator.TaskState, o prBodyOptions) prParts {
 		p.checks = fmt.Sprintf("- Checks: %s\n", c)
 		b.WriteString(p.checks)
 	}
+	if a := st.Acceptance; a != nil {
+		// The three levels apart: finished, checks passed, requirements verified.
+		fmt.Fprintf(&b, "- Agent finished: %s (%s)\n", a.Agents.Status, mdLine(a.Agents.Detail))
+		fmt.Fprintf(&b, "- Requirements verified: %s (%s)\n", a.Requirements.Status, mdLine(a.Requirements.Detail))
+		for _, c := range a.Criteria {
+			line := c.Mark() + " " + c.ID + " " + c.Text
+			if s := c.Support(); s != "" {
+				line += " — " + s
+			}
+			fmt.Fprintf(&b, "  - %s\n", mdLine(line))
+		}
+	}
 	if st.CostLine != "" {
 		fmt.Fprintf(&b, "- Cost: %s\n", mdLine(st.CostLine))
 	}

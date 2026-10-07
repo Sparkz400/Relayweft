@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sparkz400/relayweft/internal/config"
@@ -105,23 +106,31 @@ func (r BudgetRequest) RaiseHint() string {
 
 // taskBudget is one task's budget state.
 type taskBudget struct {
-	mu      sync.Mutex
-	allowed map[string]bool
-	warned  map[string]bool
-	noted   map[string]bool // limits crossed by a finishing agent, logged once
-	stopped string          // why the budget stopped the task ("" = it did not)
-	cancel  context.CancelFunc
+	mu                sync.Mutex
+	allowed           map[string]bool
+	warned            map[string]bool
+	noted             map[string]bool // limits crossed by a finishing agent, logged once
+	stopped           string          // why the budget stopped the task ("" = it did not)
+	cancel            context.CancelFunc
+	active            int
+	reserved, unknown event.TokenUsage // estimates, never reported as actual spend
+	changed           chan struct{}
+	history           *sessionlog.History
+	view              atomic.Pointer[event.TokenUsage] // UI reads must not wait for approval under mu
 }
 
 // BudgetStatus is what the UIs show: today's use (finished tasks plus the
 // running one), the running task's use and the limits.
 type BudgetStatus struct {
-	DayTokens  int64            `json:"day_tokens"`
-	DayUSD     float64          `json:"day_usd"`
-	TaskTokens int64            `json:"task_tokens"`
-	TaskUSD    float64          `json:"task_usd"`
-	Running    bool             `json:"running"`
-	Limits     config.BudgetCfg `json:"limits"`
+	ReservedTokens  int64            `json:"reserved_tokens"` // running and unreported estimates, not actual spend
+	ReservedUSD     float64          `json:"reserved_usd"`
+	UsageIncomplete bool             `json:"usage_incomplete"`
+	DayTokens       int64            `json:"day_tokens"`
+	DayUSD          float64          `json:"day_usd"`
+	TaskTokens      int64            `json:"task_tokens"`
+	TaskUSD         float64          `json:"task_usd"`
+	Running         bool             `json:"running"`
+	Limits          config.BudgetCfg `json:"limits"`
 }
 
 // dayCache holds today's finished-task totals from the session logs.
@@ -214,12 +223,18 @@ func (o *Orchestrator) addDay(u event.TokenUsage, usd float64) {
 }
 
 // budgetLimits are the live limits: an edit in the settings applies to
-// the running task at its next check.
+// the running task at its next check. A workflow's caps still bound them.
 func (o *Orchestrator) budgetLimits(t *task) config.BudgetCfg {
+	var b config.BudgetCfg
 	if o.opts.Store != nil {
-		return o.opts.Store.Budget()
+		b = o.opts.Store.Budget()
+	} else {
+		b = t.cfg.Budget
 	}
-	return t.cfg.Budget
+	if t.wf != nil {
+		t.wf.Tighten(&b)
+	}
+	return b
 }
 
 // BudgetStatus reports today's and the running task's use against the
@@ -235,9 +250,16 @@ func (o *Orchestrator) BudgetStatus() BudgetStatus {
 	if t != nil {
 		u := t.usage()
 		st.Running = true
+		st.Limits = o.budgetLimits(t) // with the task's workflow caps
 		st.TaskTokens, st.TaskUSD = u.Total(), u.CostUSD
 		st.DayTokens += st.TaskTokens
 		st.DayUSD += st.TaskUSD
+		st.UsageIncomplete = u.Incomplete
+		if t.budget != nil {
+			if held := t.budget.view.Load(); held != nil {
+				st.ReservedTokens, st.ReservedUSD = held.Total(), held.CostUSD
+			}
+		}
 	}
 	return st
 }
@@ -255,7 +277,17 @@ func (t *task) usage() event.TokenUsage {
 func (o *Orchestrator) startBudget(ctx context.Context, t *task) context.Context {
 	ctx, cancel := context.WithCancel(ctx)
 	o.refreshDay(time.Now(), true)
-	t.budget = &taskBudget{allowed: map[string]bool{}, warned: map[string]bool{}, noted: map[string]bool{}, cancel: cancel}
+	t.budget = &taskBudget{allowed: map[string]bool{}, warned: map[string]bool{}, noted: map[string]bool{}, cancel: cancel, changed: make(chan struct{})}
+	// Bench modes share fixed defaults, not estimates changed by earlier runs.
+	if t.cfg.Budget.Reserve && o.opts.Bench == "" {
+		if dir := o.logDir(); dir != "" {
+			recs, err := sessionlog.ReadDir(dir)
+			if err != nil {
+				o.logf("budget reservation history incomplete: %v; using available samples/defaults", err)
+			}
+			t.budget.history = sessionlog.NewHistory(recs, t.root)
+		}
+	}
 	o.mu.Lock()
 	o.cur = t
 	o.mu.Unlock()
@@ -329,8 +361,17 @@ func (o *Orchestrator) budgetShare(t *task) float64 {
 		return 0
 	}
 	share := 0.0
+	t.budget.mu.Lock()
+	defer t.budget.mu.Unlock()
 	for _, l := range o.budgetUse(t, cfg, false) {
 		if l.max > 0 {
+			if cfg.Reserve {
+				if (BudgetRequest{Limit: l.name}).USD() {
+					l.used += t.budget.reserved.CostUSD + t.budget.unknown.CostUSD
+				} else {
+					l.used += float64(t.budget.reserved.Total() + t.budget.unknown.Total())
+				}
+			}
 			share = max(share, l.used/l.max)
 		}
 	}

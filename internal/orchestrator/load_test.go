@@ -286,6 +286,7 @@ func TestLoad(t *testing.T) {
 	state := filepath.Join(work, "agent-state")
 	os.MkdirAll(state, 0o755)
 	cfg := config.Default()
+	classic(cfg)
 	cfg.Orchestrator.MinFreeDiskGB = 1
 	cfg.Notify.Enabled = false
 	pc := cfg.Providers[event.Claude]
@@ -333,6 +334,9 @@ func TestLoad(t *testing.T) {
 	m := newLoadMonitor(t, dir, out)
 	m.logs = logs
 	if out != "" {
+		// Heap profiles fine enough to show a few kB per task.
+		defer func(r int) { runtime.MemProfileRate = r }(runtime.MemProfileRate)
+		runtime.MemProfileRate = 1024
 		// Where rw's own CPU goes (go tool pprof cpu.pprof).
 		if f, err := os.Create(filepath.Join(out, "cpu.pprof")); err == nil {
 			if pprof.StartCPUProfile(f) == nil {
@@ -688,6 +692,17 @@ func (m *loadMonitor) quietPoint(name string, writers []*loadWriter) {
 	t.Log(line)
 	// Kept as it goes: a run stopped by the job's time limit still has it.
 	if out := os.Getenv("RW_LOAD_OUT"); out != "" {
+		// The live heap here, for go tool pprof -base heap-first.pprof heap-end.pprof.
+		if len(m.quiet) == 1 || name == "end" {
+			p := "heap-first.pprof"
+			if name == "end" {
+				p = "heap-end.pprof"
+			}
+			if f, err := os.Create(filepath.Join(out, p)); err == nil {
+				pprof.Lookup("heap").WriteTo(f, 0)
+				f.Close()
+			}
+		}
 		if f, err := os.OpenFile(filepath.Join(out, "quiet-points.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 			fmt.Fprintln(f, line)
 			f.Close()

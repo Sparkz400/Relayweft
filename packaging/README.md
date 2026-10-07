@@ -187,12 +187,24 @@ manager checks it on install. To check provenance as well, run
 `gh attestation verify` on the installed binary (for example
 `$(brew --prefix)/bin/rw`, or `(Get-Command rw).Source` in PowerShell).
 
-`rw update` checks only the SHA-256 against `checksums.txt`; after
-installing a release that is signed, it prints the
-`gh attestation verify` command for the installed binary. It does not
-verify the signature itself: that needs Sigstore's trust root kept
-current over TUF and the sigstore-go library, which would roughly triple
-the modules linked into `rw`, while `gh` and `cosign` already do it.
+`rw update` checks SHA-256 and invokes `gh attestation verify` **before**
+replacing the executable. It verifies signed SLSA provenance for both the
+binary and `checksums.txt`, binds it to this repository's `release.yml`
+workflow and the exact commit referenced by the release tag, requires GitHub's
+OIDC issuer and rejects self-hosted signers. The workflow may run on the
+release tag or `main`; the source commit must match in either case.
+
+Install a current GitHub CLI with attestation support first. Missing signing
+metadata, verifier, provenance, authentication or network access stops the
+update and leaves the installed file unchanged. `--force` overrides package
+ownership only, never verification. Old unsigned releases cannot be installed
+through this updater. GitHub CLI maintains the Sigstore trust roots and checks
+signatures, artifact digests and transparency evidence. The separate checksum
+bundle can still be inspected with the cosign command above.
+
+The opt-in `RW_VERIFY_LIVE=1 go test ./cmd/rw -run TestUpdateLive` check verifies
+v0.4.0 with the real verifier, then rejects altered binary/checksum bytes. It
+downloads public artifacts but never installs one or invokes a model.
 
 ## Linux packages
 

@@ -15,6 +15,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/notify"
 	"github.com/sparkz400/relayweft/internal/orchestrator"
 	"github.com/sparkz400/relayweft/internal/schedule"
+	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
 // job is something the TUI runs as a task: a new task, a resumed one or a
@@ -25,8 +26,11 @@ type job struct {
 	agent      string                    // follow-up target; "" = the newest agent
 	session    orchestrator.AgentSession // the target, resolved when typed
 	resume     *orchestrator.TaskState
-	unattended bool      // queued: never waits for approvals
+	unattended bool      // queued: never waits for approvals (but a workflow's)
 	at         time.Time // scheduled start (zero = as soon as possible)
+	// wf is the saved workflow the task runs under (text is its {{task}});
+	// its approvals hold even when the job is queued or scheduled.
+	wf *workflow.Definition
 }
 
 func (j job) label() string {
@@ -37,6 +41,8 @@ func (j job) label() string {
 		return "@" + j.agent + " " + j.text
 	case j.resume != nil:
 		return "resume: " + j.resume.Task
+	case j.wf != nil:
+		return j.wf.Name + ": " + j.text
 	}
 	return j.text
 }
@@ -132,7 +138,7 @@ func (m *Model) startJob(j job) {
 		}
 		j.unattended = true
 		m.queue = append(m.queue, j)
-		m.flashNotice(fmt.Sprintf("queued (%d): %s - runs unattended (no approvals) after the current task; /queue lists", len(m.queue), oneLine(j.label(), 60)))
+		m.flashNotice(fmt.Sprintf("queued (%d): %s - runs after the current task, %s; /queue lists", len(m.queue), oneLine(j.label(), 60), j.approvalsNote()))
 		return
 	}
 	if m.orc.Running() {
@@ -162,7 +168,11 @@ func (m *Model) startJob(j job) {
 			orc.FollowUpSession(ctx, j.session, j.text)
 			return
 		}
-		orc.RunWith(ctx, j.text, orchestrator.TaskOptions{Unattended: j.unattended, Resume: j.resume})
+		text := j.text
+		if j.wf != nil {
+			text, _ = j.wf.Render(text) // checked when the job was made
+		}
+		orc.RunWith(ctx, text, orchestrator.TaskOptions{Unattended: j.unattended, Resume: j.resume, Workflow: j.wf})
 	}()
 	if m.overlay == nil {
 		m.focus = focusTree

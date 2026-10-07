@@ -339,6 +339,31 @@ func TestPRNeedsGitHubOriginUnlessNoPush(t *testing.T) {
 	}
 }
 
+// The description keeps "agent finished", "checks passed" and
+// "requirements verified" apart and lists each requirement's support.
+func TestRenderPRBodyAcceptance(t *testing.T) {
+	st := &orchestrator.TaskState{ID: "s1-task-1", Task: "Add retries", Status: "done", UndoKey: "s1-task-1",
+		Summary: "1/1 subtasks ok; reviewer approved; checks pass; requirements 1/2 verified",
+		Acceptance: &orchestrator.Acceptance{Explicit: true,
+			Agents:       orchestrator.Level{Status: orchestrator.LevelPass, Detail: "1/1 subtasks finished"},
+			Checks:       orchestrator.Level{Status: orchestrator.LevelPass, Detail: "passed: go test ./..."},
+			Requirements: orchestrator.Level{Status: orchestrator.LevelPartial, Detail: "1/2 verified"},
+			Criteria: []orchestrator.Criterion{
+				{ID: "R1", Text: "retries 3 times", Status: orchestrator.CritVerified, Test: "retry_test.go: TestRetry", Evidence: "retry.go:10"},
+				{ID: "R2", Text: "fixes #12 too", Status: orchestrator.CritEvidence, Evidence: "retry.go:20", Note: "no test named"}}}}
+	body := renderPRBody(st, prBodyOptions{})
+	for _, want := range []string{"- Agent finished: pass (1/1 subtasks finished)", "- Checks: pass\n", "- Requirements verified: partial (1/2 verified)",
+		"  - ✓ R1 retries 3 times — test: retry_test.go: TestRetry; evidence: retry.go:10", "  - ~ R2", "(no test named)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
+	}
+	// Requirement text is untrusted: it never closes an issue.
+	if strings.Contains(body, "fixes #12") {
+		t.Errorf("issue reference not defused:\n%s", body)
+	}
+}
+
 func TestRenderPRBodyForFailedTask(t *testing.T) {
 	st := &orchestrator.TaskState{
 		ID: "s1-task-1", Task: "Add a | strict flag\nwith tests", Status: "failed", UndoKey: "s1-task-1",

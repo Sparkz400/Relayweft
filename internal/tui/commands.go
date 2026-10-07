@@ -31,7 +31,10 @@ var helpText = []string{
 	"/verify [<command>|clear]            list, add or clear the checks run before the final review",
 	"/queue · /queue clear · /queue rm <n>   tasks waiting to run",
 	"/schedule <02:30|in 2h|reset claude> <task> · /schedule · /schedule rm <n>   run a task later, unattended",
+	"/workflow · /workflow <name> <task>  list saved workflows · run a task under one (its approvals hold when queued)",
+	"/schedule <when> /workflow <name> <task>   schedule a workflow task: it waits for its approvals when it runs",
 	"/resume [<id>] · /history            continue an interrupted task · list the last 10 tasks",
+	"/explain [<id>]                      why the last finished task (or <id>) ran as one agent or several: routes, reasons, estimates, escalations",
 	"/threads <n> · /parallel on|off · /review on|off (reviewer checkpoints) · /judge on|off",
 	"/tiers on|off                        pick each work step's model from its difficulty and the quota left",
 	"/pause · /unpause · /kill <agent> · /cancel · /clear · /usage",
@@ -56,6 +59,10 @@ func (m *Model) command(line string) tea.Cmd {
 	}
 	if cmd == "schedule" {
 		m.scheduleCommand(args, say)
+		return nil
+	}
+	if cmd == "workflow" {
+		m.workflowCommand(args, rest, say)
 		return nil
 	}
 	switch cmd {
@@ -209,6 +216,16 @@ func (m *Model) command(line string) tea.Cmd {
 		}
 		say("%s: checking the working tree...", cmd)
 		return undoCmd(m.opt.Dir, cmd == "redo", len(args) == 1 && args[0] == "yes")
+	case "explain", "why":
+		if len(args) > 1 {
+			say("usage: /explain [<task id>]  (default: the last finished task here; /history lists ids)")
+			return nil
+		}
+		id := ""
+		if len(args) == 1 {
+			id = args[0]
+		}
+		return explainCmd(m.opt.Dir, id, m.store.Get().SessionDir())
 	case "quit", "exit", "q":
 		_, c := m.tryQuit()
 		return c
@@ -241,7 +258,7 @@ func onOff(args []string) (bool, bool) {
 	return false, false
 }
 
-// undoMsg carries the lines an undo or redo produced.
+// undoMsg carries the lines an undo, redo or explain produced.
 type undoMsg []string
 
 // undoCmd previews or applies an undo/redo off the UI thread: snapshots and

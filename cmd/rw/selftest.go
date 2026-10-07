@@ -52,6 +52,8 @@ const (
 	envSelftestDir   = "RW_SELFTEST_DIR"  // where the agent writes its pid and call log
 	envSelftestHang  = "RW_SELFTEST_HANG" // "1": the combine step hangs until killed ("child": its child)
 	envSelftestAs    = "RW_SELFTEST_AS"   // the CLI the agent stands in for (default claude)
+
+	selftestConsoleCmd = "__selftest-console" // hidden: runs a command in the console window the test closes (Windows)
 )
 
 // The scripted task. The agent recognises its steps by these texts, so the
@@ -88,6 +90,9 @@ type selftest struct {
 	lfs     bool
 	blobSum string // sha256 of the LFS file
 	counts  [5]int
+	// closeLeft are the terminals whose window-close check did not pass
+	// or did not run: closing the window there is still to do by hand.
+	closeLeft []string
 }
 
 func cmdSelftest(args []string) error {
@@ -98,15 +103,18 @@ func cmdSelftest(args []string) error {
 	in := fs.String("in", "", "create the work folder in this folder (default: the temp folder)")
 	sandboxMode := fs.String("sandbox", "auto", "auto: also run tasks in a container sandbox when docker or podman is there; off; only: just that")
 	firstOnly := fs.Bool("first-run", false, "only the guided first run (rw setup) from fresh profiles, timed")
+	closeMode := fs.String("close", "auto", "Windows: auto: also close a console window mid-task, in the old console and in Windows Terminal (windows open and close by themselves); off; only: just that")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: rw selftest [--files 2000] [--onedrive] [--sandbox auto|off|only] [--keep] [--in <folder>]
+		fmt.Fprint(os.Stderr, `Usage: rw selftest [--files 2000] [--onedrive] [--sandbox auto|off|only] [--close auto|off|only] [--keep] [--in <folder>]
 
 Runs the automated part of the Windows test pass in a throwaway folder,
 with a scripted agent instead of Codex or Claude (no quota is used):
 a user profile and project path with spaces and non-ASCII letters, a
-.cmd-shim CLI, many files and Git LFS, a task killed mid-run (as closing
-the window does), then rw resume, rw undo and rw undo --redo. It also
-reports OneDrive and Microsoft Defender. With docker or podman it also
+.cmd-shim CLI, many files and Git LFS, a task killed mid-run, then rw
+resume, rw undo and rw undo --redo. On Windows it also closes the window
+of a running task (rw run and the TUI, in the old console and in Windows
+Terminal; --close off skips that), and reports OneDrive and Microsoft
+Defender. With docker or podman it also
 runs tasks with the agent in a container sandbox (a scripted agent in a
 small test image). Your own repos and config are not touched. What is
 left to check by hand is printed at the end.
@@ -118,6 +126,12 @@ left to check by hand is printed at the end.
 	}
 	if *sandboxMode != "auto" && *sandboxMode != "off" && *sandboxMode != "only" {
 		return fmt.Errorf("--sandbox must be auto, off or only")
+	}
+	if *closeMode != "auto" && *closeMode != "off" && *closeMode != "only" {
+		return fmt.Errorf("--close must be auto, off or only")
+	}
+	if *sandboxMode == "only" && *closeMode == "only" {
+		return fmt.Errorf("--sandbox only and --close only exclude each other")
 	}
 	if *files < 1 {
 		*files = 1
@@ -153,12 +167,12 @@ left to check by hand is printed at the end.
 	case ready && *firstOnly:
 		t.section("First run: guided setup from a fresh profile")
 		t.firstRun()
-	case ready && *sandboxMode == "only":
+	case ready && (*sandboxMode == "only" || *closeMode == "only"):
 	case ready:
 		t.section("Environment")
 		t.environment()
 		t.section("Task killed mid-run, then resume and undo")
-		t.scenario(proj, filepath.Join(t.work, "agent main"), true)
+		t.scenario(proj, filepath.Join(t.work, "agent main"), t.killMidRun)
 		if *oneDrive {
 			t.section("A task inside OneDrive")
 			t.oneDriveRun()
@@ -166,14 +180,24 @@ left to check by hand is printed at the end.
 		t.section("First run: guided setup from a fresh profile")
 		t.firstRun()
 	}
-	if ready && !*firstOnly && *sandboxMode != "off" {
+	switch {
+	case !ready || *firstOnly || *sandboxMode == "only":
+	case *closeMode == "off":
+		t.closeLeft = []string{"Windows Terminal", "the old console (conhost)"}
+	case runtime.GOOS == "windows":
+		t.closeScenarios()
+	case *closeMode == "only":
+		t.section("Window closed mid-task")
+		t.check(markSkip, "close", "closing a console window is a Windows check")
+	}
+	if ready && !*firstOnly && *sandboxMode != "off" && *closeMode != "only" {
 		t.section("Agents in a container sandbox")
 		t.sandboxScenario()
 	}
 
 	if !*firstOnly {
 		t.section("Still to do by hand")
-		fmt.Fprint(t.out, manualSteps)
+		fmt.Fprint(t.out, manualSteps(runtime.GOOS == "windows", t.closeLeft))
 	}
 	fmt.Fprintf(t.out, "\n%d ok, %d warning(s), %d failed, %d skipped in %s\n",
 		t.counts[markOK], t.counts[markWarn], t.counts[markFail], t.counts[markSkip], time.Since(start).Round(time.Second))
@@ -193,16 +217,25 @@ left to check by hand is printed at the end.
 	return nil
 }
 
-const manualSteps = `These need you at the keyboard; run each in a git repo of your own with a real task:
-  1. Sleep and resume: start a task, put the PC to sleep (Start > Power > Sleep) while an agent works,
-     wake it after a minute or more. rw must either carry on or stop with a clear message, never hang;
-     if it stopped, ` + "`rw resume`" + ` continues the task.
-  2. Closing the window: start a task in Windows Terminal and close the tab while an agent works;
-     then do the same in the old console (run rw from conhost.exe, or set Terminal's default terminal
-     to "Windows Console Host"). Each time, open a new window: Task Manager shows no codex/claude/node
-     left over, ` + "`rw history`" + ` lists the task as interrupted, ` + "`rw resume`" + ` finishes it and ` + "`rw undo`" + ` reverts it.
-  After any problem, run ` + "`rw bugreport`" + ` and send the zip.
-`
+// manualSteps is what is left to check by hand. closeLeft are the
+// terminals where closing the window was not checked (or failed).
+func manualSteps(windowsOS bool, closeLeft []string) string {
+	steps := []string{"Sleep and resume: start a task, put the PC to sleep (Start > Power > Sleep) while an agent works,\n" +
+		"     wake it after a minute or more. rw must either carry on or stop with a clear message, never hang;\n" +
+		"     if it stopped, `rw resume` continues the task."}
+	if windowsOS && len(closeLeft) > 0 {
+		steps = append(steps, "Closing the window in "+strings.Join(closeLeft, " and in ")+": start a task and close the window while\n"+
+			"     an agent works. Then, in a new window: Task Manager shows no codex/claude/node left over, `rw history`\n"+
+			"     lists the task as interrupted, `rw resume` finishes it and `rw undo` reverts it.")
+	}
+	var b strings.Builder
+	b.WriteString("These need you at the keyboard; run each in a git repo of your own with a real task:\n")
+	for i, s := range steps {
+		fmt.Fprintf(&b, "  %d. %s\n", i+1, s)
+	}
+	b.WriteString("  After any problem, run `rw bugreport` and send the zip.\n")
+	return b.String()
+}
 
 func (t *selftest) section(title string) {
 	fmt.Fprintf(t.out, "\n%s\n", lipgloss.NewStyle().Bold(true).Render(title))
@@ -275,6 +308,8 @@ func (t *selftest) setup(proj string, files int) bool {
 			"codex":  map[string]any{"disabled": true},
 		},
 		"notify": map[string]any{"enabled": false},
+		// The TUI's task in the window-close check runs without a question.
+		"orchestrator": map[string]any{"approve_plan": false},
 	}
 	data, _ := yaml.Marshal(cfg)
 	t.cfg = filepath.Join(roaming, "relayweft", "relayweft.yaml")
@@ -431,22 +466,28 @@ func runTimeout(cmd *exec.Cmd, d time.Duration) error {
 	}
 }
 
-// scenario runs the scripted task in proj. With kill, rw is killed while
-// the last step's agent works and the task is resumed; then it is undone
-// and redone.
-func (t *selftest) scenario(proj, stateDir string, kill bool) {
+// interruptFunc starts rw run (args runArgs, env env added) in proj and
+// stops it while the last step's agent works, the way a user's rw ends
+// without being asked to (killed, its window closed). It checks that
+// nothing it started is left running, and returns the agent's pid.
+type interruptFunc func(proj, stateDir string, env, runArgs []string) (agent int, ok bool)
+
+// scenario runs the scripted task in proj. With interrupt, rw is stopped
+// that way while the last step's agent works and the task is resumed;
+// then it is undone and redone.
+func (t *selftest) scenario(proj, stateDir string, interrupt interruptFunc) {
 	_ = os.MkdirAll(stateDir, 0o755) // rw run fails on it and the check says so
 	env := []string{envSelftestDir + "=" + stateDir}
 	tag := filepath.Base(stateDir)
 	runArgs := []string{"run", "--config", t.cfg, "--provider", "claude", selftestTask}
-	if !kill {
+	if interrupt == nil {
 		out, err := t.rw(proj, tag+" run", env, runArgs...)
 		if err != nil {
 			t.check(markFail, "run", "rw run failed: %v\n%s", err, tailLines(out, 15))
 			return
 		}
 		t.check(markOK, "run", "rw run finished the task")
-	} else if !t.killMidRun(proj, stateDir, env, runArgs) {
+	} else if agent, ok := interrupt(proj, stateDir, env, runArgs); !ok || !t.resumeInterrupted(proj, stateDir, env, agent) {
 		return
 	}
 
@@ -472,7 +513,7 @@ func (t *selftest) scenario(proj, stateDir string, kill bool) {
 		return
 	}
 	t.check(markOK, "undo", "rw undo --yes put the tree back (git status is clean)")
-	if !kill {
+	if interrupt == nil {
 		return
 	}
 	out, err = t.rw(proj, tag+" redo", nil, "undo", "--redo", "--yes")
@@ -484,12 +525,12 @@ func (t *selftest) scenario(proj, stateDir string, kill bool) {
 }
 
 // killMidRun starts rw run, kills it hard while the combine agent runs,
-// checks what is left, and resumes the task.
-func (t *selftest) killMidRun(proj, stateDir string, env, runArgs []string) bool {
+// and checks that the agent and its child died with it.
+func (t *selftest) killMidRun(proj, stateDir string, env, runArgs []string) (int, bool) {
 	logf, err := os.Create(filepath.Join(t.logs, filepath.Base(stateDir)+" run (killed).log"))
 	if err != nil {
 		t.check(markFail, "run", "%v", err)
-		return false
+		return 0, false
 	}
 	defer logf.Close()
 	cmd := exec.Command(t.bin, runArgs...)
@@ -499,59 +540,41 @@ func (t *selftest) killMidRun(proj, stateDir string, env, runArgs []string) bool
 	began := time.Now()
 	if err := cmd.Start(); err != nil {
 		t.check(markFail, "run", "start rw run: %v", err)
-		return false
+		return 0, false
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
-
-	// The combine step's agent writes its pid when it starts hanging.
-	pidFile := filepath.Join(stateDir, "agent.pid")
-	agent := 0
-	deadline := time.After(4 * time.Minute)
-wait:
-	for {
-		select {
-		case err := <-exited:
-			t.check(markFail, "run", "rw run ended before the last step (%v):\n%s", err, tailLines(fileText(logf.Name()), 15))
-			return false
-		case <-deadline:
-			cmd.Process.Kill()
-			<-exited
-			t.check(markFail, "run", "the last step's agent did not start within 4 minutes:\n%s", tailLines(fileText(logf.Name()), 15))
-			return false
-		case <-time.After(50 * time.Millisecond):
-			if b, err := os.ReadFile(pidFile); err == nil {
-				if agent, err = strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
-					break wait
-				}
+	var exitErr error
+	done := false
+	ended := func() (string, bool) {
+		if !done {
+			select {
+			case exitErr = <-exited:
+				done = true
+			default:
 			}
 		}
+		return fmt.Sprint(exitErr), done
 	}
-	t.check(markOK, "run", "rw run planned the task and finished 3 steps; the last step's agent (pid %d) is working after %s",
-		agent, time.Since(began).Round(100*time.Millisecond))
-
-	// The agent prints its session id before it writes its pid, and rw
-	// saves the id in the task state as soon as it reads that line. Under
-	// load, saving can take longer than the 50ms poll above. A kill before
-	// the save is a real case, and rw handles it with a fresh agent. But
-	// this check is about continuing the session, so the kill waits for
-	// the save: the kill point no longer depends on timing.
-	sid := fmt.Sprintf("selftest-%d", agent)
-	saved, ok := waitSessionSaved(profileConfigDir(t.profile), sid, 30*time.Second)
-	if !ok {
+	stop := func() {
 		cmd.Process.Kill()
-		<-exited
-		t.check(markFail, "run", "the agent reported session %s, but rw had not saved it in the task state after %s:\n%s", sid, saved.Round(time.Millisecond), tailLines(fileText(logf.Name()), 15))
-		return false
+		if !done {
+			exitErr, done = <-exited, true
+		}
+	}
+	agent, saved, ok := t.waitAgentWorking(stateDir, began, ended, stop, func() string { return fileText(logf.Name()) })
+	if !ok {
+		return 0, false
 	}
 
-	// TerminateProcess, as when the console is closed and Windows ends rw.
+	// TerminateProcess: rw gets no chance to clean up, as when Task
+	// Manager ends it or the PC loses power.
 	if err := cmd.Process.Kill(); err != nil {
 		t.check(markFail, "kill", "could not kill rw run: %v", err)
-		return false
+		return 0, false
 	}
-	<-exited
-	t.check(markOK, "kill", "rw run killed hard (pid %d) once it had saved the agent's session (waited %s for that), as closing the window does",
+	stop()
+	t.check(markOK, "kill", "rw run killed hard (pid %d) once it had saved the agent's session (waited %s for that)",
 		cmd.Process.Pid, saved.Round(time.Millisecond))
 
 	// The agent's child: what the agent started must die with rw too.
@@ -574,7 +597,57 @@ wait:
 		killTree(agent)
 		killTree(child)
 	}
+	return agent, true
+}
 
+// waitAgentWorking waits until the last step's agent hangs and rw has
+// saved its session. ended reports whether rw ended early (and how), stop
+// ends it, output is what it printed so far.
+func (t *selftest) waitAgentWorking(stateDir string, began time.Time, ended func() (string, bool), stop func(), output func() string) (agent int, saved time.Duration, ok bool) {
+	// The combine step's agent writes its pid when it starts hanging.
+	pidFile := filepath.Join(stateDir, "agent.pid")
+	deadline := time.Now().Add(4 * time.Minute)
+	for {
+		if b, err := os.ReadFile(pidFile); err == nil {
+			if agent, err = strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+				break
+			}
+		}
+		if how, done := ended(); done {
+			t.check(markFail, "run", "rw ended before the last step (%s):\n%s", how, tailLines(output(), 15))
+			return 0, 0, false
+		}
+		if time.Now().After(deadline) {
+			stop()
+			t.check(markFail, "run", "the last step's agent did not start within 4 minutes:\n%s", tailLines(output(), 15))
+			return 0, 0, false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.check(markOK, "run", "rw planned the task and finished 3 steps; the last step's agent (pid %d) is working after %s",
+		agent, time.Since(began).Round(100*time.Millisecond))
+
+	// The agent prints its session id before it writes its pid, and rw
+	// saves the id in the task state as soon as it reads that line. Under
+	// load, saving can take longer than the 50ms poll above. A stop before
+	// the save is a real case, and rw handles it with a fresh agent. But
+	// this check is about continuing the session, so the stop waits for
+	// the save: the stop point no longer depends on timing.
+	sid := fmt.Sprintf("selftest-%d", agent)
+	saved, ok = waitSessionSaved(profileConfigDir(t.profile), sid, 30*time.Second)
+	if !ok {
+		stop()
+		t.check(markFail, "run", "the agent reported session %s, but rw had not saved it in the task state after %s:\n%s", sid, saved.Round(time.Millisecond), tailLines(output(), 15))
+		return 0, 0, false
+	}
+	return agent, saved, true
+}
+
+// resumeInterrupted checks what an interrupted task left (the finished
+// steps' files, rw history) and resumes it: the interrupted step must
+// continue its agent's session.
+func (t *selftest) resumeInterrupted(proj, stateDir string, env []string, agent int) bool {
+	tag := filepath.Base(stateDir)
 	// The finished steps were merged into the tree before rw died.
 	partial := t.wantFiles()
 	delete(partial, stFileC)
@@ -582,11 +655,11 @@ wait:
 		return false
 	}
 	if _, err := os.Stat(filepath.Join(proj, stFileC)); err == nil {
-		t.check(markFail, "saved work", "c.txt exists although its step was killed")
+		t.check(markFail, "saved work", "c.txt exists although its step was interrupted")
 		return false
 	}
 
-	out, err := t.rw(proj, "history", nil, "history")
+	out, err := t.rw(proj, tag+" history", nil, "history")
 	if err != nil || !strings.Contains(out, "interrupted") {
 		t.check(markFail, "history", "rw history does not list the task as interrupted (%v):\n%s", err, tailLines(out, 10))
 		return false
@@ -594,8 +667,8 @@ wait:
 	t.check(markOK, "history", "rw history lists the task as interrupted")
 
 	before := len(readCalls(stateDir))
-	began = time.Now()
-	out, err = t.rw(proj, "resume", env, "resume", "--config", t.cfg, "--provider", "claude")
+	began := time.Now()
+	out, err = t.rw(proj, tag+" resume", env, "resume", "--config", t.cfg, "--provider", "claude")
 	if err != nil {
 		t.check(markFail, "resume", "rw resume failed: %v\n%s", err, tailLines(out, 15))
 		return false
@@ -620,14 +693,14 @@ wait:
 		continued = continued || c == want
 		fresh = fresh || c == "combine"
 	}
-	wdKilled, wdResumed := fileText(filepath.Join(stateDir, "agent.wd")), fileText(filepath.Join(stateDir, "resume.wd"))
+	wdStopped, wdResumed := fileText(filepath.Join(stateDir, "agent.wd")), fileText(filepath.Join(stateDir, "resume.wd"))
 	switch {
 	case !continued || fresh:
 		t.check(markFail, "resume", "the interrupted step did not continue its agent's session %s (calls: %s); rw resume said:\n%s", strings.TrimPrefix(want, "resume:"),
 			strings.Join(readCalls(stateDir)[before:], ", "), resumeReasons(out))
 		return false
-	case wdKilled == "" || !orchestrator.SamePath(wdKilled, wdResumed):
-		t.check(markFail, "resume", "the interrupted step's session was continued in %s, not where it ran (%s)", wdResumed, wdKilled)
+	case wdStopped == "" || !orchestrator.SamePath(wdStopped, wdResumed):
+		t.check(markFail, "resume", "the interrupted step's session was continued in %s, not where it ran (%s)", wdResumed, wdStopped)
 		return false
 	default:
 		t.check(markOK, "resume", "the interrupted step continued its agent's session in the folder it ran in")
@@ -811,7 +884,7 @@ func (t *selftest) oneDriveRun() {
 		return
 	}
 	t.check(markOK, "onedrive", "a repo inside OneDrive: %s", proj)
-	t.scenario(proj, filepath.Join(t.work, "agent onedrive"), false)
+	t.scenario(proj, filepath.Join(t.work, "agent onedrive"), nil)
 }
 
 // --- the scripted agent ---------------------------------------------------

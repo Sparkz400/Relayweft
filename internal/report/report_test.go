@@ -44,6 +44,37 @@ func hostileData() *Data {
 		Diff: &Diff{Before: "aaa", After: "bbb", Add: 1, Del: 1, Files: []FileDiff{{Path: "x<y>.go", Status: "M", Add: 1, Del: 1, Lang: "c",
 			Lines: []Line{diffLine("@@ -1 +1 @@", "c"), diffLine(`-	s := "</div><script>alert(3)</script>"`, "c"), diffLine("+	return `<!--` // ```", "c")}}}},
 		UndoCmd: `rw undo --dir "C:\Users\Nico Schu\repo" k`,
+		Acceptance: &orchestrator.Acceptance{Explicit: true,
+			Agents:       orchestrator.Level{Status: orchestrator.LevelPass, Detail: "1/1 subtasks finished"},
+			Checks:       orchestrator.Level{Status: orchestrator.LevelPass, Detail: "passed: go test ./..."},
+			Requirements: orchestrator.Level{Status: orchestrator.LevelPartial, Detail: "1/2 verified"},
+			Criteria: []orchestrator.Criterion{
+				{ID: "R1", Text: "retries " + hostile, Status: orchestrator.CritVerified, Test: "retry_test.go: TestRetry", Evidence: hostile},
+				{ID: "R2", Text: "logs", Status: orchestrator.CritEvidence, Evidence: "retry.go:20", Note: "no test named"}}},
+	}
+}
+
+// The report shows the three levels apart and each requirement with its
+// test or evidence.
+func TestReportShowsAcceptance(t *testing.T) {
+	var page, mdown bytes.Buffer
+	d := hostileData()
+	if err := d.HTML(&page); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Markdown(&mdown); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"<h2>Acceptance</h2>", "Agent finished", "Configured checks passed", "Requirements verified",
+		`<span class="pill warn">partial</span>`, `<span class="pill ok">verified</span>`, "retry_test.go: TestRetry", "no test named", "Criteria as given with the task."} {
+		if !strings.Contains(page.String(), want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	for _, want := range []string{"## Acceptance", "| Requirements verified | partial | 1/2 verified |", `| R2 logs | evidence \(no test named\) |  | retry.go:20 |`} {
+		if !strings.Contains(mdown.String(), want) {
+			t.Errorf("markdown lacks %q:\n%s", want, mdown.String())
+		}
 	}
 }
 
@@ -218,6 +249,7 @@ func TestBuildFromRealTask(t *testing.T) {
 	}
 	set := runner.Set{event.Codex: scripted{event.Codex, fn}, event.Claude: scripted{event.Claude, fn}}
 	cfg := config.Default()
+	cfg.Orchestrator.Classic() // a planned two-step task with a final review
 	check := "git --version"
 	cfg.Verify.Commands = []string{check}
 	logDir := t.TempDir()
@@ -387,6 +419,7 @@ func TestBuildBestOfTask(t *testing.T) {
 	}
 	set := runner.Set{event.Codex: scripted{event.Codex, fn}, event.Claude: scripted{event.Claude, fn}}
 	cfg := config.Default()
+	cfg.Orchestrator.Classic()
 	cfg.Routing.BestOf.When = config.BestOfAlways
 	logDir := t.TempDir()
 	log, err := sessionlog.Open(logDir, dir)

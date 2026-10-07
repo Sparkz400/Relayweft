@@ -866,7 +866,7 @@ function rowEl(e, animate) {
     if (e.took) line += (line ? ' · ' : '') + dur(e.took);
     return h('div', { class: 'result' + (e.ok ? '' : ' bad') },
       h('h4', null, icon(e.ok ? 'check' : 'x'), e.ok ? 'Task finished' : 'Task did not finish'),
-      h('p', null, e.text || ''), line ? h('div', { class: 'cost-line' }, line) : '');
+      h('p', null, e.text || ''), line ? h('div', { class: 'cost-line' }, line) : '', whyButton(e));
   }
   const cls = ['row', 'k-' + e.kind];
   if (e.ok === true) cls.push('ok');
@@ -879,6 +879,17 @@ function rowEl(e, animate) {
   if ((e.kind === 'done' || e.kind === 'merge' || e.kind === 'checkpoint') && e.ok === false) ic = 'x';
   else if (e.kind === 'checkpoint' && e.ok) ic = 'check';
   return h('div', { class: cls.join(' ') }, h('span', { class: 'ts' }, clock(e.ts)), who, h('span', { class: 'k' }, icon(ic)), h('span', { class: 'tx' }, e.text));
+}
+// whyButton inspects the newest finished task; older result cards lose
+// theirs, since "last" no longer means them.
+function whyButton(e) {
+  if (S.snap?.demo) return ''; // demo runs do not save inspectable task evidence
+  let latest = null;
+  for (let i = S.log.length - 1; i >= 0; i--) if (S.log[i].kind === 'task_done') { latest = S.log[i]; break; }
+  if (latest !== e) return '';
+  document.querySelectorAll('#log .why-last').forEach((b) => b.remove());
+  return h('button', { class: 'btn sm why-last', style: 'margin-top:8px', title: 'Inspect requirements, file changes, checks, routing, cost and recovery',
+    onclick: () => openInspection('last') }, 'Inspect result');
 }
 function nearBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 60; }
 function renderLog() {
@@ -936,24 +947,76 @@ function autosize() {
 function renderComposer() {
   const s = S.snap;
   if (!s) return;
+  const wf = workflowByName(S.workflow);
   $('#send-label').textContent = s.running ? 'Queue' : 'Run';
+  prompt().placeholder = wf ? 'Describe the ' + wf.name + ' task…  Enter to run · Shift+Enter for a new line' : 'Describe a task…  @agent to follow up · Enter to run · Shift+Enter for a new line';
+  $('#workflow').classList.toggle('on', !!wf);
   const hints = $('#hints');
   hints.textContent = '';
   const add = (k, t) => hints.append(h('span', null, h('kbd', null, k), t));
   add('Enter', 'run');
   add('Shift+Enter', 'new line');
-  add('@', 'follow up / tell an agent');
+  if (!wf) add('@', 'follow up / tell an agent');
   if (s.running) add('Ctrl+X', 'cancel task');
   add('Esc', 'close panel');
-  if (s.running) hints.append(h('span', null, 'A task typed now is queued and runs unattended afterwards.'));
+  if (wf) hints.append(h('span', { class: wf.problem ? 'warn' : null }, wf.name + ': ' + workflowSummary(wf)));
+  if (s.running) hints.append(h('span', null, wf && workflowGates(wf).length ? 'A task typed now is queued; it waits for your approval when it runs.' : 'A task typed now is queued and runs unattended afterwards.'));
 }
+
+// ---------- saved workflows ----------
+// The pickers list the user's saved workflows (rw workflow). A workflow's
+// approvals hold even when its task is queued or scheduled.
+const WF = { list: [], error: '' };
+async function loadWorkflows() {
+  try {
+    const v = await api('GET', '/api/workflows');
+    WF.list = v.workflows || [];
+    WF.error = v.error || '';
+  } catch (e) { WF.error = e.message; }
+  if (S.workflow && !workflowByName(S.workflow)) S.workflow = '';
+  fillWorkflowSelect($('#workflow'), S.workflow);
+  $('#workflow').hidden = false;
+  renderComposer();
+  if (S.drawer === 'queue') openDrawer('queue', true);
+}
+function workflowByName(n) { return n ? WF.list.find((w) => w.name === n) : null; }
+function workflowGates(w) { return [w.approve_plan && 'plan approval', w.review_changes && 'change review'].filter(Boolean); }
+function workflowSummary(w) {
+  const g = workflowGates(w);
+  return [w.description,
+    g.length ? 'waits for ' + g.join(' and ') + ', also when queued or scheduled' : 'no approvals',
+    w.checks && w.checks.length ? 'checks: ' + w.checks.join(', ') : '',
+    w.task_usd ? 'at most $' + w.task_usd + ' per task' : '',
+    w.task_tokens ? 'at most ' + w.task_tokens.toLocaleString() + ' tokens' : '',
+    w.problem ? 'cannot run here: ' + w.problem : ''].filter(Boolean).join(' · ');
+}
+function fillWorkflowSelect(sel, value) {
+  sel.textContent = '';
+  sel.append(h('option', { value: '' }, 'No workflow'));
+  for (const w of WF.list) sel.append(h('option', { value: w.name, title: workflowSummary(w) }, w.name + (w.problem ? ' (needs checks)' : '')));
+  if (WF.error) sel.append(h('option', { value: '', disabled: true, title: WF.error }, 'A saved workflow is invalid'));
+  else if (!WF.list.length) sel.append(h('option', { value: '__init' }, 'Install starter workflows…'));
+  sel.value = workflowByName(value) ? value : '';
+  sel.title = WF.error || 'Run the task as a saved workflow: its checks, budget caps and approvals';
+}
+// pickWorkflow handles a picker change and returns the workflow to use
+// (at once: a click right after the change must see it).
+function pickWorkflow(sel) {
+  if (sel.value !== '__init') return sel.value;
+  sel.value = '';
+  act('POST', '/api/workflows/init', {}, 'ok').then(loadWorkflows);
+  return '';
+}
+
 async function submit() {
   const p = prompt();
   const text = p.value.trim();
   if (!text) return;
   askNotifyPermission();
   hideAC();
-  const r = await act('POST', '/api/task', { text }, 'ok');
+  const body = { text };
+  if (S.workflow) body.workflow = S.workflow;
+  const r = await act('POST', '/api/task', body, 'ok');
   if (r) {
     p.value = '';
     autosize();
@@ -1478,6 +1541,10 @@ function highlight(code, lang) {
 
 // ---------- drawers ----------
 const DRAWERS = {
+  inspection: { title: 'Task result', render: (body) => drawInspection(body), wide: true },
+  recovery: { title: 'Recovery', render: drawRecovery },
+  memory: { title: 'Project memory', render: (body) => drawMemory(body) },
+  explain: { title: 'Why it ran this way', render: (body) => drawExplain(body) },
   dashboard: { title: 'Dashboard', render: drawDashboard, wide: true },
   models: { title: 'Models & routes', render: drawModels, wide: true },
   queue: { title: 'Queue', render: drawQueue, narrow: true },
@@ -1584,25 +1651,31 @@ function drawQueue(body) {
   const ae = document.activeElement;
   const refocus = ae && body.contains(ae) && ae.dataset && ae.dataset.sched ? ae.dataset.sched : '';
   body.textContent = '';
-  body.append(h('div', { class: 'toolbar' }, h('div', { class: 'grow muted small' }, 'Tasks typed while one runs wait here and run one after another, unattended (no approvals). Scheduled tasks start at their time, after any running task.'),
+  body.append(h('div', { class: 'toolbar' }, h('div', { class: 'grow muted small' }, 'Tasks typed while one runs wait here and run one after another, unattended (no approvals). A workflow task keeps its workflow\'s approvals and waits for you at them. Scheduled tasks start at their time, after any running task.'),
     q.length ? h('button', { class: 'btn sm danger', onclick: () => act('POST', '/api/queue/clear', {}, 'warn') }, 'Clear all') : ''));
   // The drawer re-renders on every state update: keep what is typed.
-  const sf = S.sched || (S.sched = { when: '', what: '' });
+  const sf = S.sched || (S.sched = { when: '', what: '', workflow: '' });
   const when = h('input', { class: 'in when', placeholder: '02:30 · in 2h · reset claude', value: sf.when, dataset: { sched: 'when' }, title: 'When: HH:MM (today or tomorrow), "2026-10-04 02:30", in 2h, or reset <provider>|any (when that usage limit resets)' });
   const what = h('input', { class: 'in what', placeholder: 'Task to run then…', value: sf.what, dataset: { sched: 'what' } });
   for (const [el, k] of [[when, 'when'], [what, 'what']]) el.addEventListener('input', () => { sf[k] = el.value; });
+  const wf = h('select', { class: 'sel-in wf', title: 'Saved workflow to run the task under', dataset: { sched: 'workflow' }, onchange: (e) => { sf.workflow = pickWorkflow(e.target); } });
+  fillWorkflowSelect(wf, sf.workflow);
+  sf.workflow = wf.value;
   const go = async () => {
     if (!sf.when.trim() || !sf.what.trim()) { toast('Give a time and a task', 'warn'); return; }
     try {
-      const r = await api('POST', '/api/schedule', { when: sf.when, text: sf.what });
+      const req = { when: sf.when, text: sf.what };
+      if (sf.workflow) req.workflow = sf.workflow;
+      const r = await api('POST', '/api/schedule', req);
       toast(r.message, 'ok');
       sf.what = '';
       what.value = '';
     } catch (e) { toast(e.message, 'err'); }
   };
   what.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-  body.append(h('div', { class: 'sched-form' }, when, what, h('button', { class: 'btn sm primary', onclick: go }, 'Schedule')));
-  if (refocus) {
+  body.append(h('div', { class: 'sched-form' }, when, wf, what, h('button', { class: 'btn sm primary', onclick: go }, 'Schedule')));
+  if (refocus === 'workflow') wf.focus();
+  else if (refocus) {
     const el = refocus === 'when' ? when : what;
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
@@ -1612,9 +1685,354 @@ function drawQueue(body) {
   q.forEach((j, i) => list.append(h('div', { class: 'item', style: `animation-delay:${i * 30}ms` },
     h('div', { class: 't' }, j.label),
     h('div', { class: 'meta' }, h('span', { class: 'pill' }, j.at ? 'scheduled' : j.kind),
+      j.workflow ? h('span', { class: 'pill', title: 'Runs under the saved workflow ' + j.workflow }, j.workflow) : '',
+      j.gated ? h('span', { class: 'pill interrupted', title: 'The workflow asks for approval: the task waits for you at its plan or changes' }, 'waits for approval') : '',
       j.at ? 'at ' + new Date(Date.parse(j.at) + S.timeOffset).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '#' + (i + 1) + ' in line'),
     h('div', { class: 'side' }, h('button', { class: 'btn sm', onclick: () => act('POST', '/api/queue/remove', { id: j.id }) }, icon('trash'), 'Remove')))));
   body.append(list);
+}
+
+async function drawMemory(body, task = '') {
+  let v;
+  try { v = await api('GET', '/api/memory' + (task ? '?task=' + encodeURIComponent(task) : '')); } catch (e) { body.textContent = e.message; return; }
+  body.textContent = '';
+  body.append(h('p', { class: 'muted small' }, 'Notes from earlier tasks and your own. With context hand-off on, a task gets the pinned conventions, the two newest notes and up to four more that match its text. A note retires once all its source files change; re-confirm it to use it again. Changes apply to the next task. Repository instructions and learned routes are separate.'));
+  const sourceList = (s) => s.split(',').map(x => x.trim()).filter(Boolean);
+  // change: {id, text, delete, pin, refs, refresh}; omitted fields stay as they are.
+  const save = async (change, done) => {
+    try {
+      await api('POST', '/api/memory', { revision: v.revision, ...change });
+      toast(done, 'ok'); await drawMemory(body, task);
+    } catch (e) { toast(e.message, 'warn'); }
+  };
+  const taskIn = h('input', { class: 'ta', 'aria-label': 'Preview for a task', placeholder: 'Preview the notes a task would get…', style: 'flex:1' });
+  taskIn.value = task;
+  body.append(h('div', { class: 'toolbar' }, taskIn, h('button', { class: 'btn sm', onclick: () => drawMemory(body, taskIn.value.trim()) }, 'Preview')));
+  for (const note of v.entries) {
+    const sources = note.sources || [];
+    const paths = sources.map(s => s.path).join(', ');
+    const text = h('textarea', { class: 'ta', rows: 5, 'aria-label': 'Project note', style: 'width:100%' }, note.text);
+    const src = h('input', { class: 'ta', 'aria-label': 'Source files', placeholder: 'Source files, comma-separated (optional)', style: 'width:100%' });
+    src.value = paths;
+    const moved = sources.some(s => s.state !== 'current');
+    body.append(h('div', { class: 'sug', style: 'margin-bottom:12px' },
+      h('div', { class: 'muted small' }, note.pinned ? h('span', { class: 'pill' }, 'pinned') : '', ' ', note.included ? 'In: ' : 'Out: ', note.reason), text,
+      sources.length ? h('div', { class: 'muted small' }, 'Sources: ', sources.map(s => s.path + (s.state === 'current' ? '' : ' (' + s.state + ')')).join(', '), note.more_sources ? ', +' + note.more_sources + ' more' : '') : '',
+      src,
+      h('div', { class: 'toolbar' },
+        h('button', { class: 'btn sm', onclick: () => save({ id: note.id, text: text.value, ...(src.value !== paths ? { refs: sourceList(src.value) } : {}) }, 'Note saved') }, 'Save note'),
+        h('button', { class: 'btn sm', onclick: () => save({ id: note.id, pin: !note.pinned }, note.pinned ? 'Note unpinned' : 'Note pinned') }, note.pinned ? 'Unpin' : 'Pin as convention'),
+        moved ? h('button', { class: 'btn sm', title: 'The note still holds: record its source files as they are now', onclick: () => save({ id: note.id, refresh: true }, 'Note re-confirmed') }, 'Re-confirm') : '',
+        h('button', { class: 'btn sm danger', onclick: () => { if (confirm('Remove this note from future task context?')) save({ id: note.id, delete: true }, 'Note removed'); } }, 'Remove'))));
+  }
+  if (!v.entries.length) body.append(h('p', { class: 'empty-list' }, 'No project notes yet.'));
+  const add = h('textarea', { class: 'ta', rows: 3, 'aria-label': 'New project note', placeholder: 'A decision, finding or convention future tasks should know…', style: 'width:100%' });
+  const addSrc = h('input', { class: 'ta', 'aria-label': 'New note source files', placeholder: 'Source files it describes, comma-separated (optional)', style: 'width:100%' });
+  const addNote = (pin) => {
+    const refs = sourceList(addSrc.value);
+    return save({ text: add.value, ...(refs.length ? { refs } : {}), ...(pin ? { pin: true } : {}) }, pin ? 'Convention pinned' : 'Note saved');
+  };
+  body.append(add, addSrc, h('div', { class: 'toolbar' },
+    h('button', { class: 'btn', onclick: () => addNote(false) }, 'Add note'),
+    h('button', { class: 'btn', onclick: () => addNote(true) }, 'Add pinned convention')));
+  body.append(h('details', { style: 'margin-top:16px' }, h('summary', null, task ? 'Preview the notes sent to agents for this task' : 'Preview the notes sent to agents'), h('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, v.prompt || 'No notes will be included.')));
+}
+
+async function drawRecovery(body) {
+  let items;
+  try { items = await api('GET', '/api/recovery'); } catch (e) { body.textContent = e.message; return; }
+  body.textContent = '';
+  body.append(h('div', { class: 'toolbar' }, h('p', { class: 'grow muted small' }, 'Resume skips completed steps. Retry runs unfinished steps. Undo previews the task’s changes and keeps unreported files.'), h('button', { class: 'btn sm', onclick: () => drawRecovery(body) }, 'Refresh')));
+  if (!items.length) body.append(h('p', { class: 'empty-list' }, 'No recorded work to recover in this project.'));
+  for (const t of items) {
+    const actions = recoveryActions(t, () => drawRecovery(body));
+    body.append(h('div', { class: 'sug', style: 'margin-bottom:12px' },
+      h('b', null, t.task), h('div', { class: 'muted small' }, `${t.status} · ${t.done}/${t.steps} steps · ${t.id}`),
+      t.summary ? h('p', { class: 'small' }, t.summary) : '',
+      (t.conflicts || []).map(x => h('p', { class: 'small', style: 'color:var(--warn)' }, x)),
+      (t.saved || []).map(x => h('p', { class: 'small' }, 'Saved work: ', h('code', null, x.branch), x.repo ? ' · ' + x.repo : '', ' · ' + x.why)),
+      (t.branches || []).map(x => h('p', { class: 'small' }, 'Preserved branch: ', h('code', null, x))), actions));
+  }
+}
+
+// Shared by Recovery and the task inspector; undo always previews first.
+function recoveryActions(t, refresh) {
+  const busy = !!(S.snap && S.snap.running);
+  const actions = h('div', { class: 'toolbar' });
+  if (t.can_resume) actions.append(h('button', { class: 'btn sm primary', disabled: busy, onclick: async () => { if (await act('POST', '/api/resume', { id: t.id }, 'ok')) closeDrawer(); } }, t.status === 'interrupted' ? 'Resume' : 'Retry unfinished'));
+  if (t.can_undo) actions.append(h('button', { class: 'btn sm', disabled: busy, onclick: async () => {
+    try {
+      const v = await api('POST', '/api/recovery/undo', { id: t.id });
+      const parts = [v.plan, ...(v.plan.Others || [])];
+      const changes = parts.map(p => {
+        const kept = new Set(p.Unreported || []);
+        const lines = (p.Changes || []).filter(c => !kept.has(c.slice(2)));
+        if (p.Repo) lines.unshift(p.Repo + ':');
+        if (kept.size) lines.push('Kept (unreported): ' + [...kept].join(', '));
+        const edited = (p.Edited || []).filter(f => !kept.has(f));
+        if (edited.length) lines.push('Later edits will be merged: ' + edited.join(', '));
+        if (p.Skipped?.length) lines.push('Submodules kept: ' + p.Skipped.join(', '));
+        if (p.Missing?.length) lines.push('Missing repositories: ' + p.Missing.join(', '));
+        return lines.join('\n');
+      }).join('\n\n');
+      if (!confirm('Undo agent-reported changes? Your later edits are merged; conflicts stop the undo. Unreported files are kept.\n\n' + changes)) return;
+      await api('POST', '/api/recovery/undo', { id: t.id, apply: true }); toast('Task changes undone', 'ok'); await refresh();
+    } catch (e) { toast(e.message, 'warn'); }
+  } }, 'Preview undo'));
+  return actions;
+}
+
+// acceptanceView shows a finished task's three levels apart (agents
+// finished, configured checks passed, requirements verified) and each
+// requirement with its test or evidence.
+const ACC_CLASS = { pass: 'done', verified: 'done', fail: 'failed', unmet: 'failed' };
+function acceptanceView(a) {
+  if (!a) return '';
+  const lvl = (label, l) => h('span', { class: 'pill ' + (ACC_CLASS[l.status] || ''), title: l.detail || '' }, label + ': ' + l.status);
+  const head = h('summary', { class: 'meta' }, lvl('agent finished', a.agents), lvl('checks passed', a.checks), lvl('requirements verified', a.requirements),
+    a.requirements.detail ? h('span', null, a.requirements.detail) : '');
+  const crit = (a.criteria || []).map(c => h('li', { class: 'small' },
+    h('span', { class: 'pill ' + (ACC_CLASS[c.status] || '') }, c.status), ' ', h('b', null, c.id), ' ', c.text,
+    c.test ? h('div', { class: 'muted' }, 'test: ', h('code', null, c.test)) : '',
+    c.evidence ? h('div', { class: 'muted' }, 'evidence: ' + c.evidence) : '',
+    c.note ? h('div', { class: 'faint' }, c.note) : ''));
+  return h('details', { class: 'acceptance', style: 'grid-column:1' }, head,
+    h('div', { class: 'small muted' }, `agent finished: ${a.agents.detail || ''} · checks: ${a.checks.detail || ''}`),
+    crit.length ? h('ul', { style: 'margin:6px 0 0;padding-left:18px' }, crit) : '',
+    crit.length && !a.explicit ? h('div', { class: 'faint small' }, 'No acceptance criteria were given: the final reviewer listed these from the task.') : '');
+}
+
+// Why a task ran the way it did (rw explain): opened from History or the
+// result card of the last task.
+function openExplain(id, from) {
+  S.explainId = id;
+  S.explainFrom = from || '';
+  openDrawer('explain');
+}
+async function drawExplain(body, id = S.explainId || 'last') {
+  let e;
+  try { e = await api('GET', '/api/explain/' + encodeURIComponent(id)); } catch (err) { body.textContent = err.message; return; }
+  body.textContent = '';
+  const tok = (n) => human(Math.round(n || 0));
+  const usd = (n) => '$' + (n || 0).toFixed(2);
+  const label = (t) => h('div', { class: 'section-label', style: 'margin-top:14px' }, t);
+  const top = h('div', { class: 'toolbar' }, h('div', { class: 'grow' },
+    h('div', { class: 't', title: e.Task }, oneLine(e.Task, 200)),
+    h('div', { class: 'meta small muted' }, h('span', { class: 'pill ' + e.Status }, e.Status), ' ',
+      e.Duration ? dur(e.Duration / 1e6) + ' ' : '', e.Mode && e.Mode !== 'routed' ? e.Mode + ' ' : '', h('code', { class: 'faint small' }, e.ID))));
+  if (S.explainFrom === 'history') top.append(h('button', { class: 'btn sm', onclick: () => openDrawer('history') }, 'Back to history'));
+  body.append(top);
+
+  body.append(label('Why ' + e.headline));
+  if (e.Shape) body.append(h('p', null, h('b', null, e.Shape + ': '), e.ShapeWhy));
+  const runs = e.Runs || [];
+  if (runs.length) body.append(h('p', { class: 'muted small' }, `${runs.length} agent run${runs.length === 1 ? '' : 's'}: ${e.agents}`));
+  for (const c of e.Reviews || []) body.append(h('p', { class: 'small' }, 'Final review ', h('b', null, c.Outcome), ': ', c.Why));
+  for (const c of e.ReqTests || []) body.append(h('p', { class: 'small' }, 'Independent tests ', h('b', null, c.Outcome), ` (round ${c.Round}): `, c.Why));
+
+  if (runs.length) {
+    body.append(label('Runs'));
+    const list = h('div', { class: 'list' });
+    runs.forEach((r, i) => {
+      const outcome = !r.Ran ? 'no result logged' : r.LimitHit ? 'limit hit' : (r.OK ? 'ok' : 'failed') + ' · ' + dur(r.Duration / 1e6);
+      let why = r.Rule || 'rule not recorded';
+      if (r.Reason) why += ' — ' + r.Reason;
+      if (r.Fallback && r.From && !String(r.Reason || '').includes(r.From)) why += ' (moved from ' + r.From + ')';
+      const est = r.Estimate || {};
+      const used = r.Ran && !r.LimitHit
+        ? `${r.Tokens && r.Tokens.incomplete ? 'at least ' : ''}${tok(fresh(r.Tokens))} fresh tokens · est ${tok(est.tokens && est.tokens.mid)} (${tok(est.tokens && est.tokens.low)}–${tok(est.tokens && est.tokens.high)}, ${est.source || 'no estimate'}${est.samples ? ', ' + est.samples + ' run' + (est.samples === 1 ? '' : 's') : ''})${e.run_deltas[i] ? ' ' + e.run_deltas[i] : ''}`
+        : '';
+      list.append(h('div', { class: 'item' },
+        h('div', { class: 't' }, `${i + 1}. ${r.Step}${r.Attempt > 1 ? ' (attempt ' + r.Attempt + ')' : ''}`),
+        h('div', { class: 'meta' }, h('span', { class: 'pill' }, r.Role || '?'), h('code', { class: 'small ' + (r.Provider || '') }, e.run_labels[i]),
+          r.Judged ? h('span', { class: 'pill' }, 'judged') : '', r.Fallback ? h('span', { class: 'pill warn' }, 'fallback') : '',
+          h('span', { class: 'pill ' + (!r.Ran ? '' : r.OK && !r.LimitHit ? 'done' : 'failed') }, outcome)),
+        h('div', { class: 'small' }, 'why: ', why),
+        used ? h('div', { class: 'small muted' }, 'used: ', used) : ''));
+    });
+    body.append(list);
+  }
+
+  if ((e.Providers || []).length) {
+    body.append(label('Providers'));
+    for (const p of e.Providers) body.append(h('div', { class: 'small' }, h('b', { class: p.Provider }, p.Provider), ` ${p.Runs} run${p.Runs === 1 ? '' : 's'}, ${tok(p.Tokens)} fresh tokens · ${(p.Rules || []).join(', ')}`));
+  }
+
+  if (runs.length) {
+    body.append(label('Estimated vs actual'));
+    body.append(h('div', { class: 'small' }, `Tokens: est ${tok(e.EstTokens.mid)} (${tok(e.EstTokens.low)}–${tok(e.EstTokens.high)}), actual ${tok(fresh(e.Tokens))}${e.token_delta ? ' · ' + e.token_delta : ''}`));
+    if (e.EstUSD.mid > 0 || (e.Tokens && e.Tokens.cost_usd > 0)) body.append(h('div', { class: 'small' }, `$: est ${usd(e.EstUSD.mid)} (${usd(e.EstUSD.low)}–${usd(e.EstUSD.high)}), actual ${usd(e.Tokens.cost_usd)}${e.usd_delta ? ' · ' + e.usd_delta : ''} (API-equivalent)`));
+    if (e.Tokens && e.Tokens.incomplete) body.append(h('div', { class: 'small muted' }, 'Some runs ended without final accounting: actual is a lower bound.'));
+    if (e.NoHistory) body.append(h('div', { class: 'small muted' }, `${e.NoHistory} of the estimates had no history and use fixed defaults.`));
+    if (e.CostLine) body.append(h('div', { class: 'small muted' }, 'Task: ' + e.CostLine));
+  }
+
+  body.append(label('Escalations'));
+  const esc = e.Escalations || [];
+  if (!esc.length) body.append(h('p', { class: 'muted small' }, 'None: every run kept its first route.'));
+  esc.forEach((x, i) => body.append(h('div', { class: 'small', style: 'margin:4px 0' },
+    e.escalate_at[i] ? h('code', null, e.escalate_at[i] + ': ') : '', h('b', null, x.What), ' — ', x.Cause)));
+  for (const n of e.Notes || []) body.append(h('p', { class: 'note small muted' }, 'Note: ' + n));
+}
+
+function openInspection(id, from) {
+  S.inspectionId = id;
+  S.inspectionFrom = from || '';
+  openDrawer('inspection');
+}
+
+async function drawInspection(body, id = S.inspectionId || 'last') {
+  // A request owns this render only until the drawer or selected task changes.
+  const request = {};
+  S.inspectionRequest = request;
+  body.textContent = 'Loading task result…';
+  let v;
+  try { v = await api('GET', '/api/results/' + encodeURIComponent(id)); }
+  catch (err) {
+    if (S.inspectionRequest === request && S.drawer === 'inspection') body.textContent = err.message;
+    return;
+  }
+  if (S.inspectionRequest !== request || S.drawer !== 'inspection') return;
+  // Pin "last" to the returned task, including refresh and recovery actions.
+  S.inspectionId = v.report.ID;
+  renderInspection(body, v);
+}
+
+function renderInspection(body, v) {
+  const d = v.report, recovery = v.recovery;
+  const steps = d.Steps || [], checks = d.Checks || [], criteria = d.Acceptance?.criteria || [];
+  const checkKey = c => [c.Kind, c.Scope || 'full', c.Command].join('\n');
+  const skipped = c => (c.Why || '').startsWith('nothing to run:');
+  const latestChecks = new Map();
+  checks.forEach((c, i) => { if (!skipped(c)) latestChecks.set(checkKey(c), i); });
+  const failures = steps.filter(s => s.Result !== 'ok').map(s => `${s.ID}: ${s.Result}${s.Err ? ' — ' + s.Err : ''}`);
+  criteria.filter(c => c.status === 'unmet').forEach(c => failures.push(`${c.id}: ${c.text}${c.note ? ' — ' + c.note : ''}`));
+  for (const i of latestChecks.values()) {
+    const c = checks[i];
+    if (!c.OK && !(c.Kind === 'verify' && d.Acceptance?.checks.status === 'pass')) failures.push(`${c.Kind}: ${c.Command}`);
+  }
+  const finalReview = (d.Reviews || []).filter(r => r.Checkpoint === 'final').at(-1);
+  if (d.Status !== 'done' && finalReview && !finalReview.Approve) failures.push('Final review: ' + (finalReview.Advice || 'changes requested'));
+  (recovery.conflicts || []).forEach(c => failures.push(c));
+  if (d.Acceptance) {
+    for (const [key, label] of [['agents', 'Agents'], ['checks', 'Checks'], ['requirements', 'Requirements']]) {
+      const level = d.Acceptance[key];
+      if (level?.status === 'fail') failures.push(label + ': ' + (level.detail || 'failed'));
+    }
+  }
+  const section = (title, wide = false) => {
+    const el = h('section', { class: 'inspection-section' + (wide ? ' inspection-wide' : ''), 'aria-label': title }, h('h3', null, title));
+    grid.append(el); return el;
+  };
+  const empty = text => h('p', { class: 'muted small' }, text);
+  const badge = status => h('span', { class: 'pill ' + (ACC_CLASS[status] || '') }, status);
+  body.textContent = '';
+  const top = h('div', { class: 'inspection-top' }, h('div', { class: 'meta' },
+    h('span', { class: 'pill ' + d.Status }, d.Status), recovery.status === 'undone' ? h('span', { class: 'pill' }, 'undone') : '', h('code', null, d.ID),
+    d.Duration ? dur(d.Duration / 1e6) : '', d.Mode || ''), h('h2', null, d.Task),
+    h('div', { class: 'muted small' }, d.Dir), d.Summary ? h('p', { class: 'inspection-summary' }, d.Summary) : '');
+  const nav = h('div', { class: 'toolbar' },
+    h('button', { class: 'btn sm', onclick: () => openDrawer('history') }, S.inspectionFrom === 'history' ? 'Back to history' : 'History'),
+    h('button', { class: 'btn sm', onclick: () => drawInspection(body, d.ID) }, 'Refresh result'));
+  body.append(top, nav);
+  const grid = h('div', { class: 'inspection-grid' });
+  body.append(grid);
+
+  const remaining = section('Remaining failures', true);
+  if (failures.length) remaining.append(h('ul', { class: 'inspection-failures' }, [...new Set(failures)].map(f => h('li', null, f))));
+  else remaining.append(empty(['failed', 'cancelled', 'interrupted'].includes(d.Status)
+    ? 'This task did not finish successfully. No specific failure was recorded; review its summary and recovery options.'
+    : d.Status === 'running' ? 'Task still running. This evidence is provisional.' : 'No remaining failures recorded. Missing or unchecked evidence is not a pass.'));
+  for (const note of d.Notes || []) remaining.append(empty(note));
+
+  const req = section('Requirements', true);
+  if (d.Acceptance) {
+    const a = acceptanceView(d.Acceptance);
+    a.setAttribute('open', ''); req.append(a);
+    req.append(empty('Evidence and cited tests support review; only verified requirements have recorded verification. Passing a command does not prove each cited test ran.'));
+  } else req.append(empty('Requirement verification was not recorded for this task.'));
+  if (!criteria.length) req.append(empty('No individual requirement assessments recorded. The original task is shown above.'));
+  for (const review of d.Reviews || []) req.append(h('details', null,
+    h('summary', null, `${review.Checkpoint || 'Review'} · ${review.Approve ? 'approved' : 'changes requested'}`),
+    h('p', { class: 'small inspection-summary' }, review.Advice || 'No review notes recorded.')));
+
+  const files = section('Changed files', true);
+  if (!d.Diff) files.append(empty('Snapshot diff unavailable. Planned or agent-mentioned files are not proof of a change.'));
+  else {
+    files.append(empty(`${(d.Diff.Files || []).length} files · +${d.Diff.Add} −${d.Diff.Del} · task snapshots${d.Diff.Undone ? ' · changes have been undone' : ''}`));
+    if (!(d.Diff.Files || []).length) files.append(empty('No file changes in the saved snapshots.'));
+    for (const f of d.Diff.Files || []) {
+      const detail = h('details', { class: 'inspection-file' }, h('summary', null,
+        h('span', { class: 'pill' }, f.Status), ' ', h('code', null, f.Path), `  +${f.Add} −${f.Del}${f.Binary ? ' · binary' : ''}`));
+      // Build bounded diff content on first expansion, not for every closed file.
+      let loaded = false;
+      detail.addEventListener('toggle', () => {
+        if (!detail.open || loaded) return;
+        loaded = true;
+        const pre = h('pre', { class: 'inspection-diff', tabindex: '0', 'aria-label': 'Diff of ' + f.Path });
+        for (const line of f.Lines || []) pre.append(h('div', { class: 'inspection-line ' + (['add', 'del', 'hunk'].includes(line.Kind) ? line.Kind : '') },
+          (line.Tokens || []).map(t => t.Text).join('')));
+        detail.append(pre);
+        if (f.Binary || !(f.Lines || []).length) detail.append(empty(f.Binary ? 'Binary content is not displayed.' : 'Diff content unavailable.'));
+        if (f.Truncated) detail.append(empty('Diff truncated; some lines are not shown.'));
+      });
+      files.append(detail);
+    }
+    if (d.Diff.Truncated || d.Diff.Hidden) files.append(empty(`Diff display is limited; ${d.Diff.Hidden || 0} files have no displayed content.`));
+  }
+
+  const checkSection = section('Checks', true);
+  if (!checks.length) checkSection.append(empty('No check results recorded.'));
+  checks.forEach((c, i) => checkSection.append(h('div', { class: 'inspection-row' },
+    h('div', { class: 'meta' }, badge(skipped(c) ? 'skipped' : c.OK ? 'pass' : 'fail'), h('span', null, c.Kind),
+      skipped(c) ? '' : latestChecks.get(checkKey(c)) !== i ? h('span', { class: 'muted small' }, 'earlier attempt') : h('span', { class: 'small' }, 'latest result'),
+      dur(c.Duration / 1e6)), h('code', null, c.Command),
+    c.Scope || c.Why ? empty([c.Scope, c.Why].filter(Boolean).join(' · ')) : '')));
+
+  const routes = section('Routing decisions');
+  const why = d.Why;
+  if (why?.Shape) routes.append(h('p', null, h('b', null, why.Shape + ': '), why.ShapeWhy));
+  for (const c of [...(why?.Checks || []), ...(why?.Reviews || []), ...(why?.ReqTests || [])]) routes.append(empty(`${c.What} · ${c.Outcome}: ${c.Why}`));
+  if (!(d.Routes || []).length) routes.append(empty('No routing decisions recorded.'));
+  for (const r of d.Routes || []) routes.append(h('details', { class: 'inspection-row' },
+    h('summary', null, `${r.Step || r.Agent} · ${r.Provider}:${r.Model}${r.Effort ? ' @' + r.Effort : ''}`),
+    h('p', { class: 'small' }, `${r.Role || 'role unrecorded'} · attempt ${r.Attempt || 1} · ${r.Rule || 'rule unrecorded'}`),
+    h('p', { class: 'small' }, r.Reason || 'Reason not recorded.'),
+    r.Fallback ? empty('Fallback from ' + (r.From || 'previous provider')) : '',
+    empty(!r.Ran ? 'No run result recorded.' : r.LimitHit ? 'Usage limit hit.' : r.OK ? 'Agent finished.' : 'Agent failed: ' + (r.Error || 'no error recorded'))));
+  for (const x of why?.Escalations || []) routes.append(empty(`${x.What}: ${x.Cause}`));
+
+  const cost = section('Cost');
+  cost.append(h('p', null, d.CostLine || 'No task cost summary recorded.'));
+  const tokens = fresh(d.Tokens) > 0 || d.Tokens?.cost_usd > 0 ? d.Tokens : why?.Tokens;
+  const incomplete = tokens?.incomplete || ['running', 'interrupted'].includes(d.Status);
+  if (fresh(tokens) > 0 || tokens?.cost_usd > 0) {
+    cost.append(empty(`${incomplete ? 'At least ' : ''}${human(fresh(tokens))} fresh tokens reported`));
+    if (tokens?.cost_usd > 0) cost.append(h('p', null, '$' + tokens.cost_usd.toFixed(2) + ' API-equivalent'));
+    else cost.append(empty('Dollar cost not recorded.'));
+  } else cost.append(empty('No token usage recorded.'));
+  if (incomplete) cost.append(empty('Some runs ended without final accounting; reported usage is a lower bound.'));
+  if (why?.EstTokens) cost.append(empty(`Estimated tokens: ${human(why.EstTokens.mid)} (${human(why.EstTokens.low)}–${human(why.EstTokens.high)}).`));
+  if (why?.EstUSD?.mid > 0) cost.append(empty(`Estimated cost: $${why.EstUSD.mid.toFixed(2)} ($${why.EstUSD.low.toFixed(2)}–$${why.EstUSD.high.toFixed(2)}), API-equivalent.`));
+  if (why?.NoHistory) cost.append(empty(`${why.NoHistory} run estimates use fixed defaults because no history was available.`));
+
+  const actions = section('Recovery actions', true);
+  if (!v.here) actions.append(empty('Open this task’s project to resume or undo its work.'));
+  if (recovery.status === 'undone') actions.append(empty('This task’s changes have already been undone.'));
+  actions.append(empty('Resume and retry skip completed steps, then run verification. Undo previews the changes before asking you to apply them.'));
+  if (S.snap?.running) actions.append(empty('A task is running. Recovery actions are unavailable until it stops.'));
+  actions.append(recoveryActions(recovery, () => {
+    if (S.drawer === 'inspection' && S.inspectionId === d.ID) return drawInspection(body, d.ID);
+  }));
+  if (!recovery.can_resume && !recovery.can_undo) actions.append(empty('No resume or undo action available for this result.'));
+  for (const x of recovery.saved || []) actions.append(empty(`Saved work: ${x.branch}${x.repo ? ' · ' + x.repo : ''} · ${x.why}`));
+  for (const branch of recovery.branches || []) actions.append(h('p', { class: 'small' }, 'Preserved branch: ', h('code', null, branch)));
+
+  const progress = section('Steps', true);
+  if (!steps.length) progress.append(empty('No saved plan steps.'));
+  for (const s of steps) progress.append(h('details', { class: 'inspection-row' },
+    h('summary', null, `${s.ID} · ${s.Title || s.Kind} · ${s.Result}`),
+    h('p', { class: 'small inspection-summary' }, s.Err || s.Final || 'No step output recorded.')));
 }
 
 async function drawHistory(body) {
@@ -1635,8 +2053,10 @@ async function drawHistory(body) {
       h('div', { class: 'meta' }, h('span', { class: 'pill ' + t.status }, t.status), when(t.created),
         t.steps ? `${t.done}/${t.steps} steps` : '', t.cost ? h('span', null, t.cost) : '', !t.here ? h('code', { class: 'small' }, t.dir) : '',
         h('code', { class: 'faint small' }, t.id)),
-      h('div', { class: 'side' }, canResume ? h('button', { class: 'btn sm ' + (t.status === 'interrupted' ? 'primary' : ''), disabled: running,
-        title: running ? 'A task is running' : (t.status === 'interrupted' ? 'Continue: finished steps are skipped' : 'Run the steps that did not succeed'),
+      acceptanceView(t.acceptance),
+      h('div', { class: 'side' }, h('button', { class: 'btn sm primary', onclick: () => openInspection(t.id, 'history') }, 'Inspect result'), h('button', { class: 'btn sm', title: 'Why it ran as one agent or several, each agent’s route and reason, estimate against use, escalations',
+        onclick: () => openExplain(t.id, 'history') }, 'Why'), canResume ? h('button', { class: 'btn sm ' + (t.status === 'interrupted' ? 'primary' : ''), disabled: running || !t.here,
+        title: !t.here ? 'Open this task’s project to resume it' : running ? 'A task is running' : (t.status === 'interrupted' ? 'Continue: finished steps are skipped' : 'Run the steps that did not succeed'),
         onclick: async () => { const r = await act('POST', '/api/resume', { id: t.id }, 'ok'); if (r) closeDrawer(); } }, icon('play'), t.status === 'interrupted' ? 'Resume' : 'Retry unfinished') : '')));
   });
   body.append(list);
@@ -1861,7 +2281,7 @@ function columnChart(days, o) {
     root.append(g);
   });
   root.append(sv('line', { class: 'base', x1: padL, x2: W - padR, y1: y(0), y2: y(0) }));
-  const step = n <= 7 ? 1 : n <= 31 ? 7 : 14;
+  const step = Math.max(n <= 7 ? 1 : n <= 31 ? 7 : 14, Math.ceil(42 / band));
   for (let i = n - 1; i >= 0; i -= step) root.append(sv('text', { class: 'axis', x: padL + band * (i + 0.5), y: H - 6, 'text-anchor': 'middle' }, dayLabel(days[i].date, n <= 7)));
   for (const l of lines) {
     const yy = y(l.v);
@@ -1906,6 +2326,10 @@ function dashTip(host) {
   };
   const hide = (e) => { if (!e.relatedTarget || !e.relatedTarget.closest || !e.relatedTarget.closest('.col')) tip.hidden = true; };
   host.addEventListener('mouseover', show);
+  host.addEventListener('click', (e) => {
+    if (e.target.closest && e.target.closest('.col')) show(e);
+    else tip.hidden = true;
+  });
   host.addEventListener('focusin', show);
   host.addEventListener('mouseout', hide);
   host.addEventListener('focusout', () => { tip.hidden = true; });
@@ -2140,9 +2564,9 @@ function renderDashboard(body, v) {
   const lp = provOrder(per);
   if (lp.length) {
     const na = lp.some((p) => per[p].unavailable);
-    lm.append(h('table', { class: 'tbl', style: 'margin-top:10px' }, h('tr', null, ['Provider', 'Limit hits', 'Switched before', 'Fell back after', ...(na ? ['Unavailable'] : [])].map((x, i) => h('th', { class: i ? 'num' : '', title: x === 'Unavailable' ? 'its CLI was logged out or missing: rw routed around it, but it was no limit' : null }, x))),
+    lm.append(h('div', { class: 'tbl-wrap', style: 'margin-top:10px' }, h('table', { class: 'tbl' }, h('tr', null, ['Provider', 'Limit hits', 'Switched before', 'Fell back after', ...(na ? ['Unavailable'] : [])].map((x, i) => h('th', { class: i ? 'num' : '', title: x === 'Unavailable' ? 'its CLI was logged out or missing: rw routed around it, but it was no limit' : null }, x))),
       lp.map((p) => h('tr', null, h('td', null, h('span', { class: 'prov-head', style: `--c:${provColor(p)}` }, h('i'), p)), h('td', { class: 'num' }, per[p].hits), h('td', { class: 'num' }, per[p].preempts), h('td', { class: 'num' }, per[p].fallbacks),
-        na ? h('td', { class: 'num' }, per[p].unavailable || 0) : ''))));
+        na ? h('td', { class: 'num' }, per[p].unavailable || 0) : '')))));
   } else lm.append(h('div', { class: 'muted small', style: 'margin-top:8px' }, `No limit hits or switches in the last ${ndays} days.`));
   const recent = [...(lim.hits || []).map((x) => ({ ...x, k: 'hit' })), ...(lim.unavailable || []).map((x) => ({ ...x, k: 'na' })), ...(lim.switches || []).map((x) => ({ ...x, k: 'switch' }))]
     .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 8);
@@ -2307,6 +2731,11 @@ function notify(title, body) {
 
 // ---------- wiring ----------
 function wire() {
+  $('#btn-menu').addEventListener('click', () => {
+    const expanded = $('#btn-menu').getAttribute('aria-expanded') !== 'true';
+    $('#btn-menu').setAttribute('aria-expanded', String(expanded));
+    $('#dashboard-actions').dataset.expanded = String(expanded);
+  });
   $('#btn-theme').addEventListener('click', () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark'));
   $('#btn-pause').addEventListener('click', () => act('POST', '/api/pause', { paused: !(S.snap && S.snap.paused) }));
   $('#btn-cancel').addEventListener('click', () => act('POST', '/api/cancel', {}, 'warn'));
@@ -2320,6 +2749,7 @@ function wire() {
   log.addEventListener('scroll', () => { S.follow = nearBottom(log); if (S.follow) $('#jump').hidden = true; });
   $('#jump').addEventListener('click', () => { log.scrollTop = log.scrollHeight; S.follow = true; $('#jump').hidden = true; });
   $('#btn-send').addEventListener('click', submit);
+  $('#workflow').addEventListener('change', (e) => { S.workflow = pickWorkflow(e.target); renderComposer(); prompt().focus(); });
   const p = prompt();
   p.addEventListener('input', () => { autosize(); updateAC(); });
   p.addEventListener('keydown', (e) => {
@@ -2354,7 +2784,7 @@ function wire() {
     }
     if (e.key === '/' && !inField && $('#modal').hidden) { e.preventDefault(); p.focus(); }
   });
-  window.addEventListener('focus', () => { S.dirtyGraph = true; });
+  window.addEventListener('focus', () => { S.dirtyGraph = true; if (SESSION) loadWorkflows(); });
   let rt;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (S.drawer === 'dashboard' && S.dash) renderDashboard($('#drawer-body'), S.dash); }, 150); });
   setInterval(() => {
@@ -2375,5 +2805,5 @@ renderLog();
 renderGraph(true);
 setFilter(S.filter);
 startSession().then((ok) => { if (ok) { connect(); p0(); } });
-function p0() { prompt().focus(); autosize(); }
+function p0() { prompt().focus(); autosize(); loadWorkflows(); }
 })();

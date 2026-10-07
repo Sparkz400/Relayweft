@@ -32,13 +32,13 @@ func TestRepoMap(t *testing.T) {
 func TestRepoNotes(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "a.go"), []byte("x"), 0o644)
-	if repoNotes(root) != "" {
+	if repoNotes(root, "") != "" {
 		t.Fatal("notes before any task")
 	}
 	for i := 0; i < notesKeep+3; i++ {
 		addRepoNote(root, fmt.Sprintf("task %d\nwith a second line", i), "ok", []string{"a.go"})
 	}
-	notes := repoNotes(root)
+	notes := repoNotes(root, "")
 	if strings.Count(notes, "- ") != notesInclude || !strings.Contains(notes, fmt.Sprintf("task %d with a second line", notesKeep+2)) {
 		t.Fatalf("notes:\n%s", notes)
 	}
@@ -46,7 +46,7 @@ func TestRepoNotes(t *testing.T) {
 	if n := len(splitNotes(string(data))); n != notesKeep {
 		t.Fatalf("kept %d entries", n)
 	}
-	if repoNotes(t.TempDir()) != "" {
+	if repoNotes(t.TempDir(), "") != "" {
 		t.Fatal("notes leaked to another repo")
 	}
 }
@@ -63,10 +63,15 @@ func TestStaleNotes(t *testing.T) {
 		{"- 2026-10-01: t\n  result: ok\n  files: gone.go", true},
 		{"- 2026-10-01: t\n  result: ok", false},
 		{"- 2026-01-01: t\n  result: ok\n  files: kept.go", true},
-		{"- 2026-10-01: t\n  result: ok\n  files: gone.go, +3 more", false},
+		{"- 2026-10-01: t\n  result: ok\n  files: gone.go, +3 more", true},
+		{"- 2026-10-01: t\n  result: ok\n  refs: kept.go#000000000000", true},
+		{"- 2026-10-01: t\n  result: ok\n  refs: kept.go#000000000000, gone.go#1", true},
+		{"Manual note without a date or files.", false},
+		{"- 2026-01-01: an old convention\n  refs: kept.go#000000000000\n  pinned: yes", false},
 	} {
-		if got := staleNote(root, c.e, now); got != c.stale {
-			t.Errorf("staleNote(%q) = %v", c.e, got)
+		p := selectNotes(root, "", []string{c.e}, now)[0]
+		if p.included == c.stale {
+			t.Errorf("%q: included %v, reason %q", c.e, p.included, p.reason)
 		}
 	}
 }

@@ -442,7 +442,7 @@ func (m *Model) handleEvent(e event.Event) {
 			m.addLog(logLine{ts: e.Timestamp, kind: event.Log, text: "cost: " + m.cost})
 		}
 		if !m.opt.Demo {
-			m.addLog(logLine{ts: e.Timestamp, kind: event.Log, text: "not happy with the result? /undo shows what undoing this task would change"})
+			m.addLog(logLine{ts: e.Timestamp, kind: event.Log, text: "not happy with the result? /undo shows what undoing this task would change · /explain says why it ran this way"})
 		}
 		m.notifyDone(e.OK, e.Text, time.Since(m.taskStart))
 		m.focus = focusPrompt

@@ -32,7 +32,7 @@ Out of the box Relayweft uses **subscriptions only**: it drives the official `co
    - Download `rw-windows-amd64.exe` from the [latest release](https://github.com/sparkz400/relayweft/releases/latest), rename it to `rw.exe` and put it on your PATH. Later, `rw update` replaces it with the newest release (checksum-verified).
    - Scoop: `scoop install https://raw.githubusercontent.com/sparkz400/relayweft/main/packaging/scoop/rw.json`. winget follows once the package is accepted into winget-pkgs; see `packaging/README.md`.
    - macOS and Linux: `brew tap sparkz400/relayweft https://github.com/Sparkz400/Relayweft && brew install relayweft`. From v0.3.0 each release also has `relayweft-linux-amd64.deb`, `.rpm` and `.apk` (`sudo apt install ./relayweft-linux-amd64.deb`, `sudo dnf install ./relayweft-linux-amd64.rpm`). From v0.4.0, the project site also has signed apt, dnf and apk repositories (one-time setup in `packaging/README.md`), and `packaging/aur` has the PKGBUILD of the AUR package `relayweft-bin` (not yet published). `rw update` tells you to use the package manager that installed `rw`.
-   - From source with **Go 1.24+**:
+   - From source with **Go 1.26+** (minimum Go 1.26.0; toolchain Go 1.26.8 in [`go.mod`](go.mod)):
      ```powershell
      git clone https://github.com/sparkz400/relayweft
      cd relayweft
@@ -84,17 +84,63 @@ plan (planner, read-only)
 
 Tasks shorter than 12 words skip the planner and run as one worker step (or one explorer step for questions).
 
-With the defaults, two more steps involve you or your repo's checks:
+With the defaults, three more steps involve you, your repo's checks or tests:
 - **You approve the plan** before any agent runs (`approve_plan`).
-- **Your checks run** (`verify.commands`, such as `go test ./...`) after the agents finish and before the final review. Failures go into the fix round together with the reviewer's advice.
+- **Your checks decide** (`verify.commands`, such as `go test ./...`). They run after the agents finish. A repo without `verify.commands` gets them detected from its build files at each task (`verify.auto`). 
+- **Tests replace the final review.** While the worker works, an agent on the other provider writes tests for the task's requirements from the task text alone, without seeing the change (`orchestrator.independent_tests`). rw runs them after the checks and removes them again. When the checks and these tests pass, the task is done. When they fail, the failing output goes into the fix round; no reviewer reads the change. On the bench the final review approved 7 of 10 failing results, while these tests caught 4 of the 7 it approved. Failing independent tests get one fix round and then only advise (`independent_tests_gate: soft`), since they sometimes ask for more than the task. Only a task without any checks still gets the final review (`orchestrator.review_when`: `untested` by default; `failing` reviews before each fix round, `large` all but small passing changes, `always` every round).
+
+### Acceptance criteria
+
+A finished task reports three separate results, because one does not prove the next:
+
+| Result | What it means |
+|---|---|
+| **Agent finished** | Every subtask's agent exited ok. Nothing more is known from this alone. |
+| **Configured checks passed** | rw itself ran `verify.commands` after the work and they passed. If no checks are configured, this result is `unchecked`. |
+| **Requirements verified** | Requirements are listed with the reviewer's evidence or tests written first. Current check results are command-level only, so rw cannot confirm that an individual cited test ran and passed; these references remain evidence, not verified requirements. |
+
+You can give the requirements yourself, either in the task text or with `--accept` (you can repeat the flag):
+
+```sh
+rw run "Add retries to the HTTP client" --accept "retries 3 times with backoff" --accept "gives up with a clear error"
+```
+
+```text
+Add retries to the HTTP client.
+
+Acceptance criteria:
+- retries 3 times with backoff
+- gives up with a clear error
+```
+
+rw also recognizes `Done when:`, `Definition of done:` and `Requirements:` as headings, and `-`, `*`, `1.` and `- [ ]` as list items. With `review_when: large` or `always`, a task that lists criteria always gets the final review, because only the review checks them. With the default `untested` (and with `failing`), the checks and tests decide: when they pass, explicit criteria stay `unchecked` without a review; passing independent tests do not verify them either. Tests written first (`rw run --tests-first`) can supply evidence for derived requirements, but do not certify them. Without a list, the reviewer lists the requirements it reads in the task.
+
+Each requirement gets one of four statuses:
+- `verified`: retained for saved reports; current command-level checks cannot assign this status to an individual requirement.
+- `evidence`: the reviewer cites code or a test, or a tests-first writer supplies a test reference, but there is no confirmed passing test. The reason is shown, for example "no test named", "the checks did not pass" or "individual test execution was not confirmed".
+- `unmet`: the reviewer found it missing. This starts a fix round, as a rejection does.
+- `unchecked`: no review judged it, for example because the review was skipped or is off.
+
+The terminal output after `rw run`, `rw report`, the `rw pr` description and the web dashboard's History list each show every requirement with its test or evidence:
+
+```text
+acceptance:
+  agent finished:        ✓ 1/1 subtasks finished
+  checks passed:         ✓ passed: go test ./...
+  requirements verified: ? 0/2 verified (2 with evidence but no passing test)
+    ~ R1 retries 3 times with backoff
+         test: client/retry_test.go: TestRetryBackoff; evidence: client/retry.go:41 (individual test execution was not confirmed)
+    ~ R2 gives up with a clear error
+         evidence: client/retry.go:58 (no test named)
+```
 
 ## Working with it every day
 
 - **Approve the plan.** The plan opens for you before anything runs. You can delete, reorder or reword subtasks, pin a subtask to a role, or cancel. Turn it off with `/approve off` or `orchestrator.approve_plan: false`. Small tasks (one step) skip it.
 - **Review changes before they land** (opt-in: `/review-changes on` or `orchestrator.review_changes: true`). Each writing agent's result is shown file by file with its diff. You can accept everything, accept only some files or only some hunks of a file, reject it, or send it back with feedback. With feedback, the agent continues in its own worktree and you see the new result. Rejected or partly-accepted work is kept on a `rw/...` branch.
 - **Edit the plan's order.** In the plan view, `x` edits a step's dependencies. Cycles are refused.
-- **Agents run your tests.** `rw init` detects your checks (`go test`, `npm test`/`pnpm`/`yarn`, `pytest`, `cargo test`, `dotnet test`, Maven, Gradle) and writes them to `verify.commands`. Claude workers may run exactly these commands without asking, Codex workers already can in their sandbox, and Relayweft runs them itself before the final review. Change them with `/verify`.
-  - **Faster fix rounds.** After a fix round that is not the last one (`orchestrator.max_fix_rounds` 2 or more; the last round's checks decide the task, so they always run in full), rw first runs only the tests the task's changes affect: for Go the changed packages and the packages that import them, for jest/vitest the related tests, for pytest the test files that import a changed module, for cargo, dotnet, Maven and Gradle the changed crates, projects or modules and those that depend on them. If those pass, the full checks run before the final review, so a narrowed pass never replaces the full run. When rw cannot tell (go.mod, shared test data, build settings, a lockfile or an unknown command), it runs the full checks. The activity log and `rw report` show which tests ran and why. Claude workers may run the narrowed forms too.
+- **Agents run your tests.** `rw init` detects your checks (`go test`, `npm test`/`pnpm`/`yarn`, `pytest`, `cargo test`, `dotnet test`, Maven, Gradle) and writes them to `verify.commands`. Without them, rw detects the same checks at the start of each task (`verify.auto: true`; `rw explain` shows what it found). Claude workers may run exactly these commands without asking, Codex workers already can in their sandbox, and Relayweft runs them itself after the work. Change them with `/verify`.
+  - **Faster fix rounds.** After a fix round that is not the last one (`orchestrator.max_fix_rounds` 2 or more; the last round's checks decide the task, so they always run in full), rw first runs only the tests the task's changes affect: for Go the changed packages and the packages that import them, for jest/vitest the related tests (also across vitest projects and workspaces, and several jest projects), for `npm test --workspaces` and `pnpm -r test` the changed workspace packages and those that depend on them, for pytest the test files that import a changed module, for cargo, dotnet, Maven and Gradle the changed crates, projects or modules and those that depend on them. If those pass, the full checks run before the final review, so a narrowed pass never replaces the full run. When rw cannot tell (go.mod, shared test data, build settings, a lockfile, an unknown command, or a layout the runner's own search cannot follow, such as a vite plugin rw does not know or a computed import), it runs the full checks. The activity log and `rw report` show which tests ran and why. Claude workers may run the narrowed forms too.
   - `verify.affected: off` always runs the full checks. For other commands, give the narrowed form yourself with `{files}`, `{packages}` or `{test_files}`, for example `verify.affected_commands: {"bundle exec rspec": "bundle exec rspec {test_files}"}` (`off` never narrows that command). rw passes only file names that are safe in a shell; any other name runs the full checks.
 - **Follow up.** `@worker-id also handle the empty case` (or `@ message` for the last agent) continues that agent's own CLI conversation (`codex exec resume` / `claude --resume`), so it remembers what it did.
   - An agent that worked in a pool worktree (Claude or Codex) is resumed in that worktree, moved to your tree's current state first; its changes are merged into your tree like a step's. Its history names the worktree's paths, so resuming it anywhere else would have it work in the wrong folder.
@@ -192,7 +238,7 @@ There are four ways to change any of this, at any time:
 - `/threads <n>`, `/parallel on|off`, `/review on|off`, `/judge on|off`, `/tiers on|off`
 - `/approve on|off` (plan approval), `/review-changes on|off` (per-file change review), `/verify [<cmd>|clear]`
 - `@<agent> message` (or `@ message` for the newest agent; `tab` completes ids) sends a follow-up, `/agents` lists who can take one
-- `/queue`, `/queue rm <n>`, `/queue clear`; `/history`; `/resume [<id>]` continues an interrupted task
+- `/queue`, `/queue rm <n>`, `/queue clear`; `/history`; `/resume [<id>]` continues an interrupted task; `/explain [<id>]` says why the last finished task (or `<id>`) was routed the way it was
 - `/pause`, `/unpause` (`/resume` also unpauses while paused), `/kill <agent>`, `/cancel`, `/clear`, `/usage`
 - `/undo` previews reverting the last task, `/undo yes` applies it; `/redo` and `/redo yes` put it back
 
@@ -211,11 +257,16 @@ rw watch [--every 15m] [--list] [--forget n]   follow up on the PRs rw opened: f
 rw notify [--test]                    where notifications go; --test posts to every webhook (Slack, Discord, ntfy)
 rw review <PR> [--provider codex|claude] [--post] [--yes]   second-opinion review of a pull request
 rw history [--all] [-n 20]            recent tasks: status, steps done, cost; marks interrupted ones
+rw recovery [--resume ID | --retry ID | --undo ID]   inspect and recover this project's work
+rw memory [--json] [--task text]     show, edit, pin or remove stored project context (docs/memory.md)
+rw workflow [--init | --show NAME | --save FILE]   saved prompts, checks and budgets
+rw run --workflow NAME "task"        run a saved workflow (docs/workflows.md); also --file, --at, rw web, TUI
 rw resume [task id] [--force]         continue an interrupted task (default: the last one in this directory)
 rw report [task id] [--out f] [--md] [--open]   one shareable HTML (or Markdown) page about a task
+rw explain [task id] [--json]         why a task was routed the way it was
 rw tune [--here] [--since 7d]         routing suggestions from your own logs, as ready-to-paste commands
 rw tune --apply | --learned | --reset   update, show or forget this repo's learned routes
-rw update [--check] [--yes]           update rw to the latest GitHub release (checksum-verified)
+rw update [--check] [--yes]           verify signed provenance with gh, then update rw
 rw web / rw app [--port N] [--demo]   the browser UI / the same in its own window
 rw mcp [--dir <path>]                 an MCP server: Claude Code or Codex hand tasks to rw (docs/mcp.md)
 rw init --repo                        write this repo's .relayweft.yaml (shared settings)
@@ -224,13 +275,14 @@ rw undo [--list] [--redo] [--yes] [task]   revert a task's changes (preview firs
 rw bench [--init] [--file bench.yaml] [--only a,b]   routed vs single agents on your own tasks
 rw bench --starter <dir>              a ready-made 5-task Python benchmark repo
 rw bench --from-history [--count 10]  bench tasks made from your own past multi-file commits
+rw bench --file docs/bench/realistic.yaml --validate   validate the 10-task corpus without models
 rw stats [--here] [--since 7d]        usage per model, rules fired, routed vs baseline, per day, recent task costs
 rw stats --json [--out f.json]        this machine's usage as a JSON export (no task texts unless --with-tasks)
 rw stats --merge a.json b.json | dir  combined tables of several machines' exports
 rw models [--refresh] [--all]         routes + catalogs; refresh Codex catalog
 rw doctor                             CLIs, logins, git, terminal, machine load, free disk, worktree pools
 rw bugreport [--out file.zip]         one zip with logs, crash logs, config and doctor output to send
-rw selftest [--onedrive] [--keep]    automated Windows checks with a scripted agent (no quota used)
+rw selftest [--onedrive] [--close off] [--keep]   automated Windows checks with a scripted agent (no quota used)
 rw health [--days 14] [--check]       crashes, hangs, unclean exits, load peaks and leftovers; is "2 weeks clean" met?
 rw init [--global] [--force] [--print]
 rw clean [--dir <path>] [--idle 72h]  remove this repo's pooled worktrees (or every repo's idle ones)
@@ -383,6 +435,23 @@ It has the task text, status, timing and mode; the plan (each subtask's kind, ro
 - A report holds only the task text, agent answers, routing log and the repo diff. It reads no environment variables or credentials. The diff is your repo's content, so check it before sharing a private repo's report.
 - Resumed tasks include the routing of every part. Without a session log (another machine, deleted logs) the report still has the plan, results and diff, with a note.
 
+### Routing explanations
+
+`rw explain [task id]` says in the terminal why a task was routed the way it was (default: the last task in this directory; `--json` for scripts). The same explanation is everywhere you look at a task:
+
+- **Browser** (`rw web`, `rw app`): **Inspect result** on the latest result card or in History brings routing decisions together with the task's evidence. **Why** in History opens the detailed routing explanation.
+- **TUI:** `/explain [id]` (or `/why`) prints it for the last finished task, or the one you name.
+- **Report** (`rw report`): a **Why it ran this way** section, and an estimate column in the routing table. The Markdown report (`--md`) has the section too.
+
+It covers:
+
+- **One agent or several.** Whether the task ran as one agent (a small task, or `orchestrator.auto_single` saw no sign of a multi-file, multi-part, broad, hard or sensitive task) or was planned, and which signals decided it. It also gives the agent runs per role, and why the final review ran or was skipped.
+- **Why each provider.** Every run's route, with the rule that picked it (default, read-only, plan, review-checkpoint, large-or-sensitive, error-repeats, limit-fallback, quota-preempt, judge, ...) and its reason, including the tier and learned-route notes. Per provider: its runs, tokens and rules.
+- **Estimated vs actual.** Each run's fresh tokens and $ against the estimate for its role, step kind and route: the median and 25th–75th percentile, its source (this repo, all repos, or fixed defaults) and the sample count. Then the task's totals. Estimates are recomputed from the runs logged before the task, the way plan approval and budget reservations compute them.
+- **Escalations and their causes.** A repeating error that moved a step to a stronger role (with the error), a fallback off a provider at its limit (with the limit message), a large or sensitive change sent to `worker_high`, a step the difficulty assessment moved to the strong tier, the judge, retries, and each fix round with what started it (failing checks, the reviewer's request).
+
+Older logs (before `rw explain`) have no recorded reasons for their shape, review and fix rounds. The explanation infers what it can and says so.
+
 ### Budgets
 
 Cap what one task and one day may use (`budget:` in `relayweft.yaml`, 0 = off; a repo's `.relayweft.yaml` can only make these stricter):
@@ -459,10 +528,11 @@ Build the image once with `docker build -t relayweft-sandbox packaging/sandbox` 
   - a repo with many files and, when git-lfs is installed, an LFS file;
   - OneDrive detection; `--onedrive` also runs a task in a repo inside your OneDrive folder;
   - Microsoft Defender's real-time protection and exclusions, and how fast a fresh copy of `rw` starts;
-  - a `rw run` killed hard while an agent works, as closing the window does: the agent must die with it, the finished steps must stay in your tree, and `rw history` must list the task as interrupted;
-  - then `rw resume` (the planner and finished steps must not run again), `rw undo --yes` and `rw undo --redo --yes`.
+  - a `rw run` killed hard while an agent works: the agent must die with it, the finished steps must stay in your tree, and `rw history` must list the task as interrupted;
+  - then `rw resume` (the planner and finished steps must not run again), `rw undo --yes` and `rw undo --redo --yes`;
+  - the window closed while an agent works, for `rw run` and the TUI, in the old console and in Windows Terminal (if installed): windows open and close by themselves. Every process of the window must end, the task must stay interrupted, and `rw resume`, `rw undo` and redo must work. `--close off` skips this, `--close only` runs just this.
 
-  Your repos and config are not touched. When a check fails, the work folder is kept, with every command's output and the test profile's debug logs. At the end it lists what is left to check by hand: sleep and resume during a task, and closing the window in Windows Terminal and in the old console.
+  Your repos and config are not touched. When a check fails, the work folder is kept, with every command's output and the test profile's debug logs. At the end it lists what is left to check by hand: sleep and resume during a task (and closing the window in a terminal where that check was skipped or failed).
 - **Health log.** Every `rw` process also writes a few lines to `rw-health.log` next to the debug log: its start and end, the machine's CPU peak, lowest free RAM and its own memory every 5 minutes, hangs, panics, agent timeouts and what it left behind. It is small, so it covers months where the debug log covers days.
 - **Hangs and fatal errors.** A watchdog checks that the TUI keeps responding; if it stops for a minute, `hang-<time>.log` gets every goroutine's stack. Errors no `recover` can catch (out of memory, concurrent map writes) are written to `fatal-<pid>-<time>.log`. A process that ends without an end line and without such a file was killed, lost its window or lost power: an *unclean exit*.
 - **`rw health`.** Reads these logs and shows the last 14 days: crashes, hangs, unclean exits, agent timeouts, CPU and RAM peaks, sleep or freeze pauses, and leftovers (agents still running in a pool worktree no `rw` holds, worktrees that could not be deleted, temp files older than a day). Its first line says whether the Phase 1 exit criterion is met: 14 days without a crash or hang, with use on at least 10 of them. Unclean exits and agent timeouts are listed but do not reset the clock. `--json` for scripts, `--check` exits 1 while the criterion is not met, `--logs <dir>` reads the logs folder of an unzipped bug report. The **Health** button in `rw web` shows the same report.
@@ -520,6 +590,7 @@ Build the image once with `docker build -t relayweft-sandbox packaging/sandbox` 
 - a filterable activity log;
 - the plan editor (drag to reorder, edit prompts, kinds, roles and dependencies);
 - change review with per-hunk checkboxes;
+- **Inspect result** from History or the latest result card: requirements and evidence, snapshot file diffs, checks (including earlier attempts), remaining failures, routing decisions, cost, and task-specific resume/retry or preview-undo actions. Missing evidence stays explicit; agent completion, passing checks, and verified requirements are separate claims;
 - routes and models, settings, history and resume, the queue, and stats with `rw tune` suggestions;
 - a **Dashboard** over 7, 30 or 90 days, for this project or all: tasks and success per day, fresh tokens and API-equivalent $ per day against your budgets, results per route and role with what `rw tune` flags, learned-route changes, Claude's 5-hour and 7-day use, limit hits and switches, and the `rw health` streak (screenshot: [docs/web/dashboard.png](docs/web/dashboard.png));
 - dark and light themes.

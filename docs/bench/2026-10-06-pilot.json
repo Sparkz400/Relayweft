@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "commit": "48e3e1da6276ca68257ccd2fb1e546df9f8e7e14",
+  "fair": true,
+  "repeat": 1,
+  "provenance": {
+    "kind": "Reconstructed from completed session records, not a native final export",
+    "session": "20261006-103948-bc64",
+    "started_tasks": 4,
+    "completed_checks": 4,
+    "task_base": "ed2104e2ebb7bf709876343c8c80da58a592efd7",
+    "protected_tests_from": "24ee2b4197df22d4ae05f233beca66ea1341b329",
+    "binary_sha256": "F73E3BE4B75713C76C1924C26F87712A33152B3EB92FAEC382CC99BA7D662937",
+    "stop": "User selected a four-mode pilot during the initial 40-run batch. Ctrl+C stopped it after the fourth completed check. The fifth preparation header printed, but no fifth task or agent started. The parent shell exited before native aggregate export.",
+    "conditions": [
+      "One task and one repetition; no general benefit claim.",
+      "200000 fresh-token and $10 API-equivalent stop thresholds; in-flight agents can overshoot.",
+      "Non-interactive Claude candidates reported Go-command approval denials.",
+      "A read-only disk inventory ran during the latter attempts at the user's request. No files were deleted.",
+      "Codex dollar cost is unreported. Provider quota-limit avoidance was not measured."
+    ]
+  },
+  "results": [
+    {
+      "task": "affected-module-index",
+      "mode": "single:codex:gpt-6.1-sol:high",
+      "repetition": 1,
+      "passed": false,
+      "agent_ok": true,
+      "wall_ms": 1148072,
+      "cost": {
+        "per_provider": {
+          "codex": {
+            "input": 2754547,
+            "cached": 2639744,
+            "output": 31645,
+            "reasoning": 15552
+          }
+        }
+      },
+      "note": "check failed: FAIL",
+      "pipeline_note": "Implemented the selector fixes while preserving supported narrowing paths.\n\n- Jest falls back to the configured full check when imports cross index boundaries or custom settings make coverage uncertain.\n- Gradle supports multiline literal includes and falls back for unresolved layouts.\n- Added regre ...",
+      "reported_usage_complete": true
+    },
+    {
+      "task": "affected-module-index",
+      "mode": "routed",
+      "repetition": 1,
+      "passed": false,
+      "agent_ok": false,
+      "wall_ms": 505453,
+      "cost": {
+        "per_provider": {
+          "claude": {
+            "input": 728369,
+            "cached": 671422,
+            "output": 9361,
+            "reasoning": 5794,
+            "cost_usd": 0.7770003999999999
+          },
+          "codex": {
+            "input": 1214120,
+            "cached": 1070080,
+            "output": 23156,
+            "reasoning": 6544
+          }
+        },
+        "cost_usd": 0.7770003999999999,
+        "quota_after": {
+          "claude": 0.03
+        }
+      },
+      "note": "check failed: FAIL",
+      "pipeline_note": "stopped by budget: this task's tokens 234k tokens reached the budget of 200k tokens",
+      "reported_usage_complete": true
+    },
+    {
+      "task": "affected-module-index",
+      "mode": "routed-tiers",
+      "repetition": 1,
+      "passed": false,
+      "agent_ok": false,
+      "wall_ms": 801105,
+      "cost": {
+        "per_provider": {
+          "claude": {
+            "input": 326660,
+            "cached": 311556,
+            "output": 3303,
+            "reasoning": 1344,
+            "cost_usd": 0.24915520000000002
+          },
+          "codex": {
+            "input": 1680352,
+            "cached": 1523712,
+            "output": 39434,
+            "reasoning": 15736
+          }
+        },
+        "cost_usd": 0.24915520000000002,
+        "quota_before": {
+          "claude": 0.03
+        }
+      },
+      "note": "check failed: FAIL",
+      "pipeline_note": "stopped by budget: this task's tokens 214k tokens reached the budget of 200k tokens",
+      "reported_usage_complete": true
+    },
+    {
+      "task": "affected-module-index",
+      "mode": "routed-bestof",
+      "repetition": 1,
+      "passed": false,
+      "agent_ok": false,
+      "wall_ms": 507774,
+      "cost": {
+        "per_provider": {
+          "claude": {
+            "input": 1820612,
+            "cached": 1735638,
+            "output": 49410,
+            "reasoning": 20520,
+            "cost_usd": 1.2388555999999997
+          },
+          "codex": {
+            "input": 874295,
+            "cached": 773120,
+            "output": 18492,
+            "reasoning": 5428
+          }
+        },
+        "cost_usd": 1.2388555999999997,
+        "quota_after": {
+          "claude": 0.03
+        }
+      },
+      "note": "check failed: FAIL",
+      "pipeline_note": "stopped by budget: this task's tokens 254k tokens reached the budget of 200k tokens",
+      "reported_usage_complete": false,
+      "usage_note": "The cancelled Claude Jest candidate returned no token usage. Totals are a reported minimum."
+    }
+  ]
+}

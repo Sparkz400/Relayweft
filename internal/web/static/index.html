@@ -26,10 +26,13 @@
     <div class="providers" id="providers"></div>
     <div class="cost" id="cost" title="Cost of the last task"></div>
     <div class="cost budget" id="budget" hidden></div>
-    <div class="actions">
+    <div class="actions" id="dashboard-actions">
       <button class="btn icon" id="btn-pause" title="Pause dispatching (running agents finish)"><svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></button>
       <button class="btn icon danger" id="btn-cancel" title="Cancel the task (Ctrl+X)"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <button class="btn mobile-menu" id="btn-menu" aria-controls="dashboard-actions" aria-expanded="false">Menu</button>
       <span class="sep"></span>
+      <button class="btn ghost nav" data-panel="recovery" title="Recover interrupted work and undo changes"><svg viewBox="0 0 24 24"><path d="M4 8v6h6M4 14a8 8 0 1 0 2-8"/></svg><span>Recovery</span></button>
+      <button class="btn ghost nav" data-panel="memory" title="Inspect and edit project memory"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5zM8 8h8M8 12h8M8 16h5"/></svg><span>Memory</span></button>
       <button class="btn ghost nav" data-panel="dashboard" title="Dashboard: tasks, cost, routes, limits and health over 7, 30 or 90 days"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="9" rx="1.5"/><rect x="13" y="4" width="7" height="5" rx="1.5"/><rect x="13" y="11" width="7" height="9" rx="1.5"/><rect x="4" y="15" width="7" height="5" rx="1.5"/></svg><span>Dashboard</span></button>
       <button class="btn ghost nav" data-panel="models" title="Models and routes"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg><span>Models</span></button>
       <button class="btn ghost nav" data-panel="queue" title="Queued tasks"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Queue</span><b class="badge" id="queue-badge" hidden>0</b></button>
@@ -75,6 +78,7 @@
   <footer class="composer">
     <div class="ac" id="ac" hidden></div>
     <div class="composer-box">
+      <select id="workflow" class="sel-in wf-pick" title="Run the task as a saved workflow: its checks, budget caps and approvals" hidden></select>
       <textarea id="prompt" rows="1" spellcheck="false" placeholder="Describe a task…  @agent to follow up · Enter to run · Shift+Enter for a new line"></textarea>
       <button class="btn primary" id="btn-send"><span id="send-label">Run</span><kbd>↵</kbd></button>
     </div>
