@@ -172,7 +172,8 @@ func FuzzParseVerdict(f *testing.F) {
 				t.Fatalf("unreadable reply did not approve: %+v", v)
 			}
 		}
-		_ = fixPrompt("task", v)
+		_ = fixPrompt("task", v, true)
+		_ = fixPrompt("task", v, false)
 		_ = runner.SummaryLine(reply)
 	})
 }

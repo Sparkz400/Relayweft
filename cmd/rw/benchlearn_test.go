@@ -23,6 +23,8 @@ func TestParseBenchMode(t *testing.T) {
 	}{
 		{"routed", benchMode{name: "routed"}},
 		{"routed-nohandoff", benchMode{name: "routed-nohandoff", noHandoff: true}},
+		{"routed-tests-first", benchMode{name: "routed-tests-first", testsFirst: true}},
+		{"routed-review", benchMode{name: "routed-review", review: true}},
 		{"single:claude:opus:high", benchMode{name: "single:claude:opus:high", provider: event.Claude, route: config.Route{Model: "opus", Effort: "high"}}},
 		{"routed:worker=claude:sonnet:medium", benchMode{name: "routed:worker=claude:sonnet:medium",
 			routes: []roleRoute{{event.RoleWorker, event.Claude, sonnet}}}},

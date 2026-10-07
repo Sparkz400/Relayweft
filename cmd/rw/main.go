@@ -28,6 +28,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/runner"
 	"github.com/sparkz400/relayweft/internal/sessionlog"
 	"github.com/sparkz400/relayweft/internal/tui"
+	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
 var version = "dev"
@@ -44,6 +45,9 @@ func main() {
 	switch sub {
 	case selftestAgentCmd:
 		cmdSelftestAgent()
+		return
+	case selftestConsoleCmd:
+		cmdSelftestConsole(args)
 		return
 	case completeCmd:
 		// Shell completion on every Tab: no logs, no migration, no
@@ -96,10 +100,17 @@ Usage:
   rw mcp [--dir <path>]      an MCP server on stdin/stdout: Claude Code or Codex hand tasks to rw
                              (set-up: docs/mcp.md)
   rw run [flags] "task"      run one task headless and print events
+  rw run --workflow NAME "task"  run a saved workflow with checks and budget caps
+                             also with --issue N or --issues label:NAME --pr
+  rw workflow [--init]      list or install reusable task workflows
+  rw recovery              interrupted tasks, branches, conflicts and recovery actions
+  rw memory                inspect, edit, pin or remove stored project notes
   rw run --single codex:gpt-6.1-sol:high "task"   single-agent baseline run
   rw run --file tasks.txt    run a list of tasks one after another, unattended
   rw run --approve "task"    ask on the terminal before the plan runs (and per change with review_changes)
   rw run --estimate "task"   plan only: print the plan with estimated tokens, time and $ per step, run nothing
+  rw run --plan "task"       always plan, even a task that looks like one step (orchestrator.auto_single)
+  rw run --tests-first "task" write acceptance tests before any code (another provider), then the code that passes them
   rw run --issue <N|URL> [--with-comments] [--pr]   run an issue as the task; --pr opens a PR (Closes #N)
   rw run --issues label:<name> [--limit 5] --pr     run open labelled issues one after another, unattended
                              (needs --pr and a clean working tree; each task's changes go to its PR branch and
@@ -119,10 +130,19 @@ Usage:
   rw run --at 02:30 | --in 3h | --when-reset <provider>|any  [--file tasks.txt | "task"]
                              start later, unattended (PC kept awake; --allow-sleep to opt out)
   rw schedule [--file tasks.txt] [--at 02:30] [--daily]   print a Task Scheduler / cron command (installs nothing)
+  rw dayplan [--file tasks.txt] [--until 07:00] [--fresh-at 09:00]   plan a task file over both subscriptions'
+                             5-hour windows: which task runs when, on which provider, where it waits for a reset
+  rw run --file tasks.txt --fill [--until 07:00] [--fresh-at 09:00]   run it that way overnight: plans again
+                             before each task, leans each on the window that resets first, waits when all are full
   rw notify [--test]         show where notifications go; --test posts to every webhook (Slack, Discord, ntfy)
+  rw morning [--since 12h|18:00] [--here] [--all] [--json]   what ran unattended overnight (queued, scheduled,
+                             task files): results, usage, limits hit and what needs you (rw resume, rw report)
+  rw morning --send | --schedule [--at 07:30]   post it to notify.webhooks, or print a daily system task for that
+                             (or set notify.morning: "07:30" and a running rw posts it)
   rw history [--all] [-n 20] [--json]   recent tasks in this directory, with status and cost
   rw resume [task id]        continue an interrupted task (default: the last one here)
   rw report [task id] [--out f.html] [--md] [--open]   one shareable page per task (default: the last one here)
+  rw explain [task id] [--json]   why one agent or several, why each provider, estimated vs actual use, escalations
   rw stats [--here] [--since 7d]   usage per model and route, per day, routed vs baseline
   rw stats --json [--since 7d] [--out f.json] [--name label] [--with-tasks]   this machine's usage as a JSON export
   rw stats --merge a.json b.json ... | <folder>   combined tables of several machines' exports, per machine too
@@ -175,6 +195,7 @@ func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
 type common struct {
+	workflow   *workflow.Definition
 	configPath string
 	dir        string
 	routes     multiFlag
@@ -322,6 +343,9 @@ func (c *common) setup() (*config.Store, string, error) {
 		if c.budgetDayUSD >= 0 {
 			cf.Budget.DayUSD = c.budgetDayUSD
 		}
+		if c.workflow != nil {
+			return c.workflow.Apply(cf)
+		}
 		return nil
 	})
 	if err != nil {
@@ -416,9 +440,23 @@ func cmdTUI(args []string) error {
 		DemoTask: map[bool]string{true: demoTask}[*demo], SessionLog: log.Path(), Version: version, Approver: ap,
 		AllowSleep: c.allowSleep,
 	})
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	mctx, mstop := context.WithCancel(context.Background())
+	defer mstop()
+	if !*demo {
+		startMorning(mctx, store.Get)
+	}
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithoutSignalHandler())
+	terminated, stopSignals := handleTUISignals(p)
 	_, runErr := p.Run()
+	stopSignals()
 	diag.Unwatch("tui")
+	if terminated() {
+		// The window was closed (or a logoff, shutdown or kill): not a
+		// cancel. The task stays interrupted for rw resume; the agents end
+		// with rw (tuisignals.go).
+		diag.Logf("tui: ended by SIGTERM (window closed, logoff, shutdown or kill): a running task stays interrupted")
+		return runErr
+	}
 	// Keep draining events so the orchestrator can finish shutting down.
 	go func() {
 		for range events {

@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"text/tabwriter"
@@ -38,27 +40,41 @@ const benchExample = `# rw bench: compare Relayweft (routed) with single agents 
 
 modes:
   - routed                          # Relayweft with your relayweft.yaml routes
+  # - routed-classic                # always plan, full-strength planner/reviewer, no review skip or budget fit, to measure those
+  # - routed-review                 # the final review in place of independent tests (review_when: failing, independent_tests off), to measure the swap
+  # - routed-tests                  # with independent requirement tests (orchestrator.independent_tests, opt-in), to measure them
+  # - routed-tiers                  # difficulty-based model tiers
   # - routed-nohandoff              # the same without the context hand-off (repo map, notes), to measure it
   # - routed-bestof                 # every writing step as best of N (routing.best_of), to measure it
+  # - routed-tests-first            # acceptance tests written first by the other provider (orchestrator.tests_first), to measure them
   # - routed:worker=claude:sonnet:medium   # routed with a role on another route: evidence for learned routes
   - single:codex:gpt-6.1-sol:high   # one agent, no planning or review
   - single:claude:opus:high
 
-setup: ""        # optional command run before every run, e.g. "npm ci" (ignored files are kept between runs)
+fair: true       # clean workspace and fixed routing defaults between runs; prevents carry-over
+repeat: 3        # repeat each task/mode; mode order rotates
+setup: ""        # optional command run before every run, e.g. "npm ci"
 timeout: 30m     # per run, including the check
-learn: false     # true: update this repo's learned routes from the results when the bench ends
+learn: false     # true requires fair: false; update this repo's learned routes afterwards
 
 tasks:
   - name: example-fix
     prompt: |
       Describe a real change here, the way you would ask for it.
     check: "go test ./..."          # "npm test", "pytest -q", ...
+    # Optional public checks that pass before edits. Claude must execute them
+    # before implementation; they also become the agents' allowed checks.
+    # agent_checks: ["go test ./pkg", "gofmt -l pkg"]
 `
 
 // benchRunners builds the agents for bench runs (tests swap in fakes).
 var benchRunners = runner.New
 
 type benchFile struct {
+	// Fair clears ignored workspace files and disables adaptive defaults so
+	// only the named mode changes tiers or best-of behavior.
+	Fair    bool            `yaml:"fair,omitempty"`
+	Repeat  int             `yaml:"repeat,omitempty"`
 	Modes   []string        `yaml:"modes"`
 	Setup   string          `yaml:"setup,omitempty"`
 	Timeout config.Duration `yaml:"timeout"`
@@ -72,6 +88,13 @@ type benchTask struct {
 	Name   string `yaml:"name"`
 	Prompt string `yaml:"prompt"`
 	Check  string `yaml:"check"`
+	// Disabled quarantines an invalid scoring contract before any model runs.
+	// --validate may still diagnose its historical solution and base.
+	Disabled string `yaml:"disabled,omitempty"`
+	// AgentChecks are public, non-mutating checks/formatter probes. Claude
+	// must execute them successfully before implementation; hidden scoring
+	// checks are never copied into this list.
+	AgentChecks []string `yaml:"agent_checks,omitempty"`
 	// Base is the commit the run starts from (default: HEAD); history
 	// tasks start from the parent of the commit they come from.
 	Base  string      `yaml:"base,omitempty"`
@@ -88,12 +111,14 @@ type benchTests struct {
 }
 
 type benchResult struct {
-	task, mode string
-	passed     bool
-	agentOK    bool
-	wall       time.Duration
-	cost       event.TaskCost
-	note       string
+	task, mode                                string
+	round                                     int
+	passed                                    bool
+	agentOK                                   bool
+	wall                                      time.Duration
+	cost                                      event.TaskCost
+	note                                      string
+	status, artifacts, base, testsFrom, check string
 }
 
 func cmdBench(args []string) error {
@@ -104,7 +129,13 @@ func cmdBench(args []string) error {
 	initFile := fs.Bool("init", false, "write an example bench.yaml and exit")
 	starter := fs.String("starter", "", "create the starter set (a small Python repo with 5 tasks) in this new directory and exit")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	validate := fs.Bool("validate", false, "validate each history task's known solution and failing base; no agents or quota")
 	only := fs.String("only", "", "comma-separated task names to run")
+	replay := fs.String("replay-tests", "", "comma-separated bench-results-*.json: write independent requirement tests once per task and run them against each saved run's change, the solution and the base; no workers run")
+	writers := fs.Int("writers", 1, "--replay-tests: test writers per task")
+	replayFix := fs.String("replay-fix", "", "a bench-replay-* folder: for each saved run whose independent tests failed there, run the task from its change with those tests (verify, review, fix rounds) and score the hidden check; no workers run")
+	replaySubjects := fs.String("replay-subjects", "", "--replay-fix: comma-separated substrings of task/subject to replay (default: all that failed)")
+	gate := fs.String("gate", config.ReqGateSoft, "--replay-fix: orchestrator.independent_tests_gate (soft or strict)")
 	learnFlag := fs.Bool("learn", false, "update this repo's learned routes from the results when the bench ends (default: the file's learn setting)")
 	noLearn := fs.Bool("no-learn", false, "do not update the learned routes, even if the file sets learn: true")
 	fromHistory := fs.Bool("from-history", false, "write bench-history.yaml (or --file) with tasks made from past multi-file commits of this repo, and exit")
@@ -119,7 +150,7 @@ func cmdBench(args []string) error {
 	fs.BoolVar(&ho.ownTests, "own-tests", false, "--from-history: each task's check runs only the commit's test files (go test, flutter/dart test, pytest, jest, vitest, npm test; or put {tests} or {test_dirs} in --check)")
 	fs.BoolVar(&ho.hidden, "hidden-tests", false, "--from-history: keep the commit's tests from the agents until the check (default: in place from the start)")
 	fs.BoolVar(&ho.noValidate, "no-validate", false, "--from-history: skip running the check on each commit and its parent")
-	fs.DurationVar(&ho.timeout, "check-timeout", 15*time.Minute, "--from-history: time limit per validation check")
+	fs.DurationVar(&ho.timeout, "check-timeout", 15*time.Minute, "--from-history/--validate: time limit per validation check")
 	parseFlags(fs, args)
 
 	if *starter != "" {
@@ -168,10 +199,19 @@ func cmdBench(args []string) error {
 	if bf.Timeout == 0 {
 		bf.Timeout = config.Duration(30 * time.Minute)
 	}
+	if bf.Repeat == 0 {
+		bf.Repeat = 1
+	}
+	if bf.Repeat < 1 || bf.Repeat > 20 {
+		return fmt.Errorf("repeat must be between 1 and 20")
+	}
 	if *learnFlag && *noLearn {
 		return fmt.Errorf("give --learn or --no-learn, not both")
 	}
 	learn := (bf.Learn || *learnFlag) && !*noLearn
+	if bf.Fair && learn {
+		return fmt.Errorf("fair benchmarks require learn: false (or --no-learn)")
+	}
 	var modes []benchMode
 	for _, m := range bf.Modes {
 		bm, err := parseBenchMode(m)
@@ -195,6 +235,13 @@ func cmdBench(args []string) error {
 			return fmt.Errorf("task %q: the check uses %s or %s, but the task has no tests.files", t.Name, phTests, phTestDirs)
 		}
 		if len(want) == 0 || want[t.Name] {
+			if t.Disabled != "" && !*validate {
+				if want[t.Name] {
+					return fmt.Errorf("task %q is disabled: %s; repair its scoring contract before running it", t.Name, t.Disabled)
+				}
+				fmt.Printf("skipping %s: %s\n", t.Name, t.Disabled)
+				continue
+			}
 			tasks = append(tasks, t)
 		}
 	}
@@ -205,6 +252,14 @@ func cmdBench(args []string) error {
 	store, dir, err := c.setup()
 	if err != nil {
 		return err
+	}
+	if bf.Fair {
+		cfg := store.Unlearned()
+		cfg.Routing.Tiers = config.TiersOff
+		cfg.Routing.BestOf.When = config.BestOfOff
+		cfg.Routing.Learn = config.LearnOff
+		cfg.Orchestrator.Handoff = false // no persisted notes from another run
+		store = config.NewStore(cfg, store.Path())
 	}
 	ws, err := orchestrator.NewBenchWorkspace(dir)
 	if err != nil {
@@ -244,12 +299,27 @@ func cmdBench(args []string) error {
 		return err
 	}
 	defer unlock()
-	runs := len(tasks) * len(modes)
+	if *validate {
+		return validateBenchSuite(ws, bf, tasks, ho.timeout)
+	}
+	if *replayFix != "" {
+		if *gate != config.ReqGateSoft && *gate != config.ReqGateStrict {
+			return fmt.Errorf("--gate must be soft or strict")
+		}
+		return replayBenchFix(c, ws, store, dir, head, bf, tasks, *replayFix, splitList(*replaySubjects), *gate, *yes)
+	}
+	if *replay != "" {
+		if *writers < 1 || *writers > 10 {
+			return fmt.Errorf("--writers must be between 1 and 10")
+		}
+		return replayBenchTests(c, ws, store, dir, head, bf, tasks, splitList(*replay), *writers, *yes)
+	}
+	runs := len(tasks) * len(modes) * bf.Repeat
 	from := head[:min(10, len(head))]
 	if history > 0 {
 		from += fmt.Sprintf(" (%d task(s) from their own base commit)", history)
 	}
-	fmt.Printf("%d task(s) x %d mode(s) = %d runs from %s, in %s\n", len(tasks), len(modes), runs, from, ws.Path)
+	fmt.Printf("%d task(s) x %d mode(s) x %d repetition(s) = %d runs from %s, in %s\n", len(tasks), len(modes), bf.Repeat, runs, from, ws.Path)
 	if learn {
 		fmt.Println("afterwards the results update this repo's learned routes (--no-learn skips that)")
 	}
@@ -276,94 +346,190 @@ func cmdBench(args []string) error {
 	go func() { watchInterrupt(ctx, stop, &closing, os.Stderr); close(watched) }()
 	defer func() { closing.Store(true); stop(); <-watched }()
 
+	evidence, err := newBenchEvidence(head, bf)
+	if err != nil {
+		return err
+	}
+	fmt.Println("live results:", evidence.path)
 	var results []benchResult
 	n := 0
-	for _, t := range tasks {
-		for _, m := range modes {
-			if ctx.Err() != nil {
-				break
-			}
-			n++
-			fmt.Printf("\n[%d/%d] %s · %s\n", n, runs, t.Name, m.name)
-			r := benchResult{task: t.Name, mode: m.name}
-			rctx, cancel := context.WithTimeout(ctx, bf.Timeout.D())
-			if note := prepareBenchRun(rctx, ws, head, bf.Setup, t); note != "" {
-				r.note = note
-				cancel()
-				results = append(results, r)
-				fmt.Println("  ", r.note)
-				continue
-			}
-			events := make(chan event.Event, 4096)
-			printed := make(chan struct{})
-			go func() {
-				defer close(printed)
-				for e := range events {
-					printEvent(e, true)
+	for round := 0; round < bf.Repeat; round++ {
+		for taskIndex, t := range tasks {
+			for _, m := range benchModeOrder(modes, round+taskIndex) {
+				if ctx.Err() != nil {
+					break
 				}
-			}()
-			// Same routes without the context hand-off, or a route variant.
-			runStore, err := m.store(store)
-			if err != nil {
-				cancel()
+				n++
+				fmt.Printf("\n[%d/%d] %s · %s\n", n, runs, t.Name, m.name)
+				artifactDir, err := evidence.runDir(n)
+				if err != nil {
+					return err
+				}
+				r := benchResult{task: t.Name, mode: m.name, round: round + 1, status: "running", artifacts: filepath.ToSlash(artifactDir), base: t.Base, check: t.Check}
+				if r.base == "" {
+					r.base = head
+				}
+				if t.Tests != nil {
+					r.testsFrom = t.Tests.From
+				}
+				results = append(results, r)
+				save := func() error { results[len(results)-1] = r; return evidence.save(results) }
+				if err := save(); err != nil {
+					return err
+				}
+				runBegan := time.Now()
+				rctx, cancel := context.WithTimeout(ctx, bf.Timeout.D())
+				if bf.Fair {
+					if err := ws.Clear(); err != nil {
+						cancel()
+						return err
+					}
+				}
+				if note := prepareBenchRunOutput(rctx, ws, head, bf.Setup, t, filepath.Join(artifactDir, "setup.txt")); note != "" {
+					r.note = note
+					r.status = "setup_failed"
+					r.wall = time.Since(runBegan)
+					cancel()
+					if err := save(); err != nil {
+						return err
+					}
+					fmt.Println("  ", r.note)
+					continue
+				}
+				base, err := ws.StartCommit()
+				if err != nil {
+					cancel()
+					return err
+				}
+				events := make(chan event.Event, 4096)
+				eventFile, err := os.Create(filepath.Join(artifactDir, "events.jsonl"))
+				if err != nil {
+					cancel()
+					return err
+				}
+				var eventErr error // read only after printed closes
+				printed := make(chan struct{})
+				go func() {
+					defer close(printed)
+					enc := json.NewEncoder(eventFile)
+					for e := range events {
+						if err := enc.Encode(e); err != nil && eventErr == nil {
+							eventErr = err
+						}
+						printEvent(e, true)
+					}
+					if err := eventFile.Sync(); err != nil && eventErr == nil {
+						eventErr = err
+					}
+					if err := eventFile.Close(); err != nil && eventErr == nil {
+						eventErr = err
+					}
+				}()
+				// Same routes without the context hand-off, or a route variant.
+				runStore, err := m.store(store)
+				if err != nil {
+					cancel()
+					close(events)
+					<-printed
+					return err
+				}
+				if len(t.AgentChecks) > 0 {
+					runCfg := runStore.Get()
+					runCfg.Verify.Preflight = append([]string(nil), t.AgentChecks...)
+					runCfg.Verify.Commands = append([]string(nil), t.AgentChecks...)
+					runStore = config.NewStore(runCfg, runStore.Path())
+				}
+				orc := orchestrator.New(orchestrator.Options{
+					Dir: ws.Path, Store: runStore, Runners: benchRunners, Tracker: tracker, Log: log,
+					Events: events, ForceProvider: c.provider, Mode: map[bool]string{true: "routed", false: "single"}[m.provider == ""],
+					Bench: t.Name, TaskIDPrefix: fmt.Sprintf("bench%d-", n),
+				})
+				var res orchestrator.TaskResult
+				if m.provider == "" {
+					res = orc.Run(rctx, t.Prompt)
+				} else {
+					res = orc.RunSingle(rctx, t.Prompt, m.provider, m.route)
+				}
 				close(events)
 				<-printed
-				return err
-			}
-			orc := orchestrator.New(orchestrator.Options{
-				Dir: ws.Path, Store: runStore, Runners: benchRunners, Tracker: tracker, Log: log,
-				Events: events, ForceProvider: c.provider, Mode: map[bool]string{true: "routed", false: "single"}[m.provider == ""],
-				Bench: t.Name, TaskIDPrefix: fmt.Sprintf("bench%d-", n),
-			})
-			var res orchestrator.TaskResult
-			if m.provider == "" {
-				res = orc.Run(rctx, t.Prompt)
-			} else {
-				res = orc.RunSingle(rctx, t.Prompt, m.provider, m.route)
-			}
-			close(events)
-			<-printed
-			r.agentOK, r.wall, r.cost = res.OK, res.Duration, res.Cost
-			if err := rctx.Err(); err != nil {
-				// Cancelled or out of time: the check cannot tell anything.
+				if eventErr != nil {
+					cancel()
+					return fmt.Errorf("save benchmark events: %w", eventErr)
+				}
+				r.agentOK, r.wall, r.cost = res.OK, res.Duration, res.Cost
+				if !res.OK {
+					r.note = res.Summary
+				}
+				if err := ws.Evidence(base, artifactDir); err != nil {
+					cancel()
+					r.status, r.note = "evidence_failed", err.Error()
+					if saveErr := save(); saveErr != nil {
+						return saveErr
+					}
+					return fmt.Errorf("save solution evidence (workspace kept): %w", err)
+				}
+				if strings.HasPrefix(res.Summary, "preflight") {
+					cancel()
+					r.status, r.wall = "preflight_failed", time.Since(runBegan)
+					if err := save(); err != nil {
+						return err
+					}
+					fmt.Println("  =>", r.note)
+					continue
+				}
+				if err := rctx.Err(); err != nil {
+					// Cancelled or out of time: the check cannot tell anything.
+					cancel()
+					r.note = map[bool]string{true: "timed out", false: "cancelled"}[err == context.DeadlineExceeded]
+					r.status = r.note
+					r.wall = time.Since(runBegan)
+					if err := save(); err != nil {
+						return err
+					}
+					fmt.Println("  =>", r.note)
+					continue
+				}
+				r.status = "checking"
+				if err := save(); err != nil {
+					cancel()
+					return err
+				}
+				ok, out := benchCheck(rctx, ws, t, runStore.Get())
+				checkErr := rctx.Err()
 				cancel()
-				r.note = map[bool]string{true: "timed out", false: "cancelled"}[err == context.DeadlineExceeded]
-				results = append(results, r)
-				fmt.Println("  =>", r.note)
-				continue
+				if err := benchAtomicWrite(filepath.Join(artifactDir, "check.txt"), []byte(out)); err != nil {
+					return err
+				}
+				r.wall = time.Since(runBegan)
+				r.passed = ok
+				r.status = "completed"
+				if !ok {
+					if r.note != "" {
+						r.note += "; "
+					}
+					r.note += "check failed: " + lastLine(out)
+				}
+				if checkErr != nil {
+					r.passed = false
+					r.note = map[bool]string{true: "timed out", false: "cancelled"}[checkErr == context.DeadlineExceeded]
+					r.status = r.note
+				}
+				log.Write(sessionlog.Record{Type: "bench", Task: t.Prompt, Bench: t.Name, Mode: m.name,
+					Passed: sessionlog.Bool(r.passed), DurationMS: r.wall.Milliseconds(), Cost: &r.cost, Text: r.note})
+				mark := "PASS"
+				if !r.passed {
+					mark = "FAIL"
+				}
+				fmt.Printf("  => %s in %s · %s\n", mark, r.wall.Round(time.Second), res.Cost.Summary())
+				if err := save(); err != nil {
+					return err
+				}
 			}
-			ok, out := benchCheck(rctx, ws, t, runStore.Get())
-			cancel()
-			r.passed = ok
-			if !ok {
-				r.note = "check failed: " + lastLine(out)
-			}
-			log.Write(sessionlog.Record{Type: "bench", Task: t.Prompt, Bench: t.Name, Mode: m.name,
-				Passed: sessionlog.Bool(ok), DurationMS: res.Duration.Milliseconds(), Cost: &r.cost, Text: r.note})
-			mark := "PASS"
-			if !ok {
-				mark = "FAIL"
-			}
-			fmt.Printf("  => %s in %s · %s\n", mark, res.Duration.Round(time.Second), res.Cost.Summary())
-			results = append(results, r)
 		}
 	}
 	report := benchReport(results, modes2names(bf.Modes))
 	fmt.Println("\n" + report)
-	out := "bench-results-" + time.Now().Format("20060102-150405") + ".md"
-	hdr := "Commit " + head + "\n"
-	for _, t := range tasks {
-		if t.Base != "" {
-			hdr += fmt.Sprintf("- %s starts at %s", t.Name, t.Base)
-			if t.Tests != nil {
-				hdr += ", tests from " + t.Tests.From
-			}
-			hdr += "\n"
-		}
-	}
-	if err := os.WriteFile(out, []byte("# rw bench results\n\n"+hdr+"\n```\n"+report+"```\n"), 0o644); err == nil {
-		fmt.Println("saved", out)
-	}
+	fmt.Println("saved", evidence.path)
 	diag.Logf("bench finished: %d runs", len(results))
 	switch {
 	case !learn:
@@ -375,15 +541,65 @@ func cmdBench(args []string) error {
 			fmt.Fprintln(os.Stderr, "learned routes: not updated:", err)
 		}
 	}
-	return nil
+	return ctx.Err()
+}
+
+func writeBenchResults(path, commit string, bf benchFile, results []benchResult) error {
+	type row struct {
+		Task      string         `json:"task"`
+		Mode      string         `json:"mode"`
+		Round     int            `json:"repetition"`
+		Passed    bool           `json:"passed"`
+		AgentOK   bool           `json:"agent_ok"`
+		WallMS    int64          `json:"wall_ms"`
+		Cost      event.TaskCost `json:"cost"`
+		Note      string         `json:"note,omitempty"`
+		Status    string         `json:"status,omitempty"`
+		Artifacts string         `json:"artifacts,omitempty"`
+		Base      string         `json:"base,omitempty"`
+		TestsFrom string         `json:"tests_from,omitempty"`
+		Check     string         `json:"check,omitempty"`
+	}
+	rows := make([]row, 0, len(results))
+	for _, r := range results {
+		rows = append(rows, row{r.task, r.mode, r.round, r.passed, r.agentOK, r.wall.Milliseconds(), r.cost, r.note, r.status, r.artifacts, r.base, r.testsFrom, r.check})
+	}
+	data, err := json.MarshalIndent(struct {
+		Version int    `json:"version"`
+		Commit  string `json:"commit"`
+		Fair    bool   `json:"fair"`
+		Repeat  int    `json:"repeat"`
+		Results []row  `json:"results"`
+	}{2, commit, bf.Fair, bf.Repeat, rows}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return benchAtomicWrite(path, append(data, '\n'))
 }
 
 func modes2names(m []string) []string { return m }
+
+// Rotate the first mode across tasks and repetitions to spread warm caches,
+// changing provider load and quota pressure instead of always favoring one mode.
+func benchModeOrder(modes []benchMode, offset int) []benchMode {
+	if len(modes) == 0 {
+		return nil
+	}
+	out := make([]benchMode, len(modes))
+	for i := range out {
+		out[i] = modes[(i+offset)%len(modes)]
+	}
+	return out
+}
 
 // prepareBenchRun gives a run its clean start: the task's base commit (HEAD
 // when it has none), the setup command and visible tests. It returns why
 // the run cannot start, or "".
 func prepareBenchRun(ctx context.Context, ws *orchestrator.BenchWorkspace, head, setup string, t benchTask) string {
+	return prepareBenchRunOutput(ctx, ws, head, setup, t, "")
+}
+
+func prepareBenchRunOutput(ctx context.Context, ws *orchestrator.BenchWorkspace, head, setup string, t benchTask, output string) string {
 	base := head
 	if t.Base != "" {
 		base = t.Base
@@ -392,7 +608,13 @@ func prepareBenchRun(ctx context.Context, ws *orchestrator.BenchWorkspace, head,
 		return "workspace: " + err.Error()
 	}
 	if setup != "" {
-		if ok, out := shell(ctx, ws.Path, setup); !ok {
+		ok, out := shell(ctx, ws.Path, setup)
+		if output != "" {
+			if err := benchAtomicWrite(output, []byte(out)); err != nil {
+				return "save setup output: " + err.Error()
+			}
+		}
+		if !ok {
 			return "setup failed: " + lastLine(out)
 		}
 	}
@@ -451,13 +673,23 @@ func benchReport(rs []benchResult, modes []string) string {
 	for _, r := range rs {
 		mark := "pass"
 		switch {
-		case r.note == "cancelled" || r.note == "timed out":
+		case r.status == "running" || r.status == "checking" || r.note == "cancelled" || r.note == "timed out":
 			mark = "-"
 		case !r.passed:
 			mark = "FAIL"
 		}
+		note := r.note
+		for _, u := range r.cost.PerProvider {
+			if u.Incomplete {
+				note = "usage incomplete; " + note
+				break
+			}
+		}
+		if r.status != "" && r.status != "completed" {
+			note = r.status + "; " + note
+		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.task, r.mode, mark, r.wall.Round(time.Second),
-			toks(func(p string) int64 { return r.cost.PerProvider[p].Total() }), oneLine(r.note, 60))
+			toks(func(p string) int64 { return r.cost.PerProvider[p].Total() }), oneLine(note, 90))
 	}
 	tw.Flush()
 	b.WriteString("\n")
@@ -469,7 +701,7 @@ func benchReport(rs []benchResult, modes []string) string {
 		per := map[string]int64{}
 		var usd float64
 		for _, r := range rs {
-			if r.mode != m || r.note == "cancelled" {
+			if r.mode != m || r.note == "cancelled" || r.status == "running" || r.status == "checking" {
 				continue
 			}
 			total++

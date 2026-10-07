@@ -48,6 +48,10 @@ type Data struct {
 	Duration                                    time.Duration
 	Version                                     string
 
+	// Acceptance is the task's three-level result: agents finished,
+	// checks passed, requirements verified (nil for older tasks).
+	Acceptance *orchestrator.Acceptance
+
 	PlanSummary string
 	Steps       []Step
 	Routes      []Route
@@ -60,6 +64,9 @@ type Data struct {
 	HasCost  bool
 	CostLine string
 	Tokens   event.TokenUsage
+
+	// Why explains the routing (rw explain): nil without a session log.
+	Why *Explanation
 
 	Diff    *Diff
 	UndoKey string
@@ -86,12 +93,29 @@ type Route struct {
 	Rule, Reason                  string
 	Confidence                    float64
 	Judged, Fallback              bool
-	Ran                           bool // an agent_end record exists
+	Kind                          string    // the step's kind (edit, explore, review, ...)
+	From                          string    // the provider a fallback moved away from
+	Tier                          string    // the tier routing.tiers picked
+	At                            time.Time // when it was routed
+	Ran                           bool      // an agent_end record exists
 	OK, LimitHit                  bool
 	Error, Final                  string
 	Tokens                        event.TokenUsage
 	Duration                      time.Duration
 	Files                         []string
+}
+
+// RouteRows are the routing decisions with their estimates when the
+// explanation has them.
+func (d *Data) RouteRows() []RunWhy {
+	if d.Why != nil && len(d.Why.Runs) == len(d.Routes) {
+		return d.Why.Runs
+	}
+	rows := make([]RunWhy, len(d.Routes))
+	for i, r := range d.Routes {
+		rows[i] = RunWhy{Route: r}
+	}
+	return rows
 }
 
 // Label is provider:model@effort.
@@ -141,6 +165,7 @@ type Limit struct{ Agent, Provider, Model, Text string }
 type Merge struct {
 	Step, Text string
 	OK         bool
+	Saved      bool
 }
 
 // Build assembles the report data for a task.
@@ -152,7 +177,7 @@ func Build(st *orchestrator.TaskState, o Options) *Data {
 	d := &Data{
 		ID: st.ID, Task: st.Task, Status: st.Status, Mode: st.Mode, Phase: st.Phase, Dir: st.Dir,
 		Summary: st.Summary, Created: st.Created, Updated: st.Updated, Generated: now(),
-		Version: o.Version, CostLine: st.CostLine, UndoKey: st.UndoKey,
+		Version: o.Version, CostLine: st.CostLine, UndoKey: st.UndoKey, Acceptance: st.Acceptance,
 	}
 	if st.Status == "running" && st.Interrupted() {
 		d.Status = "interrupted"
@@ -166,6 +191,9 @@ func Build(st *orchestrator.TaskState, o Options) *Data {
 		d.Duration = st.Updated.Sub(st.Created)
 	}
 	d.fromPlan(st)
+	if parts > 0 {
+		d.Why = explain(st, o, d, recs, parts)
+	}
 	if st.UndoKey != "" && st.Dir != "" {
 		diff, err := loadDiff(st.Dir, st.UndoKey, o)
 		switch {
@@ -234,9 +262,11 @@ func taskRecords(dir string, st *orchestrator.TaskState) ([]sessionlog.Record, i
 		if own {
 			parts[partKey{session, st.ID[len(session)+1:]}] = true
 		} else {
-			// A resume logs a new task_start with the same text and dir.
+			// A resume logs a new task_start with the same text and dir. A
+			// task with a state of its own is another run of the same text,
+			// not a resume (a resume saves into the resumed task's state).
 			for _, r := range recs {
-				if r.Type == sessionlog.TypeTask && r.Task == st.Task && r.Mode != "followup" && sameDir(r.Cwd, st.Dir) {
+				if r.Type == sessionlog.TypeTask && r.Task == st.Task && r.Mode != "followup" && sameDir(r.Cwd, st.Dir) && !ownTask(r.Session+"-"+r.TaskID) {
 					parts[partKey{r.Session, r.TaskID}] = true
 				}
 			}
@@ -249,6 +279,12 @@ func taskRecords(dir string, st *orchestrator.TaskState) ([]sessionlog.Record, i
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].TS.Before(out[j].TS) })
 	return out, len(parts)
+}
+
+// ownTask reports whether a task state with this id exists.
+func ownTask(id string) bool {
+	_, err := orchestrator.LoadTask(id)
+	return err == nil
 }
 
 // mayResume reports whether a session started while the task was still
@@ -302,14 +338,14 @@ func (d *Data) fromRecords(recs []sessionlog.Record) {
 		case sessionlog.TypeDecision:
 			d.Routes = append(d.Routes, Route{Agent: r.Agent, Step: r.Step, Attempt: r.Attempt, Role: r.Role,
 				Provider: r.Provider, Model: r.Model, Effort: r.Effort, Rule: r.Rule, Reason: r.Reason,
-				Confidence: r.Confidence, Judged: r.Judged, Fallback: r.Fallback})
+				Confidence: r.Confidence, Judged: r.Judged, Fallback: r.Fallback, Kind: r.Kind, From: r.From, Tier: r.Tier, At: r.TS})
 			open[runKey{r.Session, r.Agent, r.Step, r.Attempt}] = len(d.Routes) - 1
 		case sessionlog.TypeAgentEnd:
 			k := runKey{r.Session, r.Agent, r.Step, r.Attempt}
 			i, ok := open[k]
 			if !ok {
 				d.Routes = append(d.Routes, Route{Agent: r.Agent, Step: r.Step, Attempt: r.Attempt, Role: r.Role,
-					Provider: r.Provider, Model: r.Model, Effort: r.Effort})
+					Provider: r.Provider, Model: r.Model, Effort: r.Effort, Kind: r.Kind, At: r.TS})
 				i = len(d.Routes) - 1
 			}
 			delete(open, k)
@@ -329,7 +365,7 @@ func (d *Data) fromRecords(recs []sessionlog.Record) {
 		case sessionlog.TypeLimit:
 			d.Limits = append(d.Limits, Limit{Agent: r.Agent, Provider: r.Provider, Model: r.Model, Text: r.Text})
 		case sessionlog.TypeMerge:
-			d.Merges = append(d.Merges, Merge{Step: r.Step, Text: r.Text, OK: r.OK == nil || *r.OK})
+			d.Merges = append(d.Merges, Merge{Step: r.Step, Text: r.Text, OK: sessionlog.SavedMerge(r) || r.OK != nil && *r.OK, Saved: sessionlog.SavedMerge(r)})
 		case sessionlog.TypeBestOf:
 			if r.OK != nil && *r.OK {
 				if d.bestOfWinner == nil {

@@ -288,8 +288,59 @@ type OrchestratorCfg struct {
 	MaxFixRounds int `yaml:"max_fix_rounds"`
 	MaxAttempts  int `yaml:"max_attempts"`
 	// AgentTimeout stops an agent that runs longer than this.
-	AgentTimeout      Duration `yaml:"agent_timeout"`
-	SmallTaskWords    int      `yaml:"small_task_words"`
+	AgentTimeout   Duration `yaml:"agent_timeout"`
+	SmallTaskWords int      `yaml:"small_task_words"`
+	// SingleWorker runs new single-repository tasks with one worker and no
+	// planner, regardless of task wording. Snapshots, configured checks and
+	// bounded repairs still run. --plan explicitly requests a plan; resumed
+	// tasks retain their saved plan and multi-repo tasks still need planning.
+	SingleWorker bool `yaml:"single_worker"`
+	// AutoSingle is the legacy heuristic when SingleWorker is off. It runs
+	// a task as one worker step, without the planner, when
+	// its text does not look multi-file, multi-part, broad or hard (on the
+	// bench a single agent was 2-3x faster on such tasks). Checks and the
+	// final review still run.
+	AutoSingle bool `yaml:"auto_single"`
+	// LightPlanning has the planner and reviewer use the worker route on
+	// their provider for a task that does not look hard or sensitive (the
+	// planner and reviewer were most of a routed task's cost).
+	LightPlanning bool `yaml:"light_planning"`
+	// ReviewWhen controls an enabled final review (review_before_done).
+	// untested: only without checks; failing: after failed checks when a fix
+	// follows, or always without checks; large: unless checks pass on a small
+	// nonsensitive change; always: every round. It does not enable review.
+	ReviewWhen string `yaml:"review_when"`
+	// ReviewSkipMaxLines is review_when: large's limit: the final review
+	// is skipped when the checks pass and the change is at most this many
+	// added plus removed lines, no file is sensitive and no earlier review
+	// asked for changes (0 = always review).
+	ReviewSkipMaxLines int `yaml:"review_skip_max_lines"`
+	// FitBudget plans within a task, day or team budget: the planner is told
+	// what is left, and a plan estimated over it drops the plan review and
+	// best-of candidates, then merges single-repo work into one step.
+	// Multi-repo plans keep their repository assignments and dependencies.
+	// Without budget limits it does nothing.
+	FitBudget bool `yaml:"fit_budget"`
+	// IndependentTests has an agent on another provider write tests for
+	// the task's requirements while the worker works, in a worktree at the
+	// task's start, so it never sees the change. rw runs them after the
+	// work like the checks; a failure starts a fix round. Needs a git repo
+	// and verify.commands. Off by default: generated expectations can be
+	// wrong and a repair can reduce correctness.
+	IndependentTests bool `yaml:"independent_tests"`
+	// IndependentTestsGate says what failing independent tests do. soft:
+	// they fail a round only once, and only when a fix round can follow;
+	// after that fix round, tests that still fail are reported with the
+	// result (and any reason the fix agent gave against them), not held
+	// against the task. strict: they fail every round like a check, so
+	// tests that still fail after the last fix round fail the task. In a
+	// replay the known solution failed a writer test in 3 of 5 tasks, so
+	// by default they get one fix round and then advise.
+	IndependentTestsGate string `yaml:"independent_tests_gate"`
+	// TestsFirst has an agent write acceptance tests for the task's
+	// requirements before any code is written, on another provider than
+	// the implementer's (rw run --tests-first sets it for one task).
+	TestsFirst        bool     `yaml:"tests_first"`
 	ApprovePlan       bool     `yaml:"approve_plan"`
 	ReviewChanges     bool     `yaml:"review_changes"`
 	Handoff           bool     `yaml:"handoff"`
@@ -323,6 +374,56 @@ const (
 	MaxResolveRounds = 5
 )
 
+// Classic turns off the task-shape shortcuts (auto_single, light_planning,
+// review_when, fit_budget) and the independent tests: every task is
+// planned and reviewed on the full planner and reviewer routes, as before
+// they existed (rw bench mode routed-classic).
+func (o *OrchestratorCfg) Classic() {
+	o.SingleWorker = false
+	o.ReviewBeforeDone = true
+	o.AutoSingle, o.LightPlanning, o.FitBudget, o.ReviewSkipMaxLines = false, false, false, 0
+	o.ReviewWhen, o.IndependentTests = ReviewAlways, false
+}
+
+// When the final review runs (orchestrator.review_when).
+const (
+	// ReviewUntested: only on a task without checks; with checks, the
+	// checks and the independent tests decide.
+	ReviewUntested = "untested"
+	// ReviewFailing: when checks exist, only when they fail and a fix
+	// round follows (the reviewer advises it); without checks, always.
+	ReviewFailing = "failing"
+	// ReviewLarge: unless the checks pass on a small change
+	// (review_skip_max_lines).
+	ReviewLarge = "large"
+	// ReviewAlways: after every round.
+	ReviewAlways = "always"
+)
+
+// FinalReview is review_when with its default.
+func (o OrchestratorCfg) FinalReview() string {
+	if o.ReviewWhen == "" {
+		return ReviewUntested
+	}
+	return o.ReviewWhen
+}
+
+// What failing independent tests do (orchestrator.independent_tests_gate).
+const (
+	// ReqGateSoft: one fix round, then they are advisory.
+	ReqGateSoft = "soft"
+	// ReqGateStrict: they fail every round like a check.
+	ReqGateStrict = "strict"
+)
+
+// ReqTestsGate is independent_tests_gate with its default.
+func (o OrchestratorCfg) ReqTestsGate() string {
+	if o.IndependentTestsGate == "" {
+		return ReqGateSoft
+	}
+	return o.IndependentTestsGate
+}
+
 // ConflictMode is orchestrator.conflicts ("" = auto).
 func (o OrchestratorCfg) ConflictMode() string {
 	if o.Conflicts == "" {
@@ -349,9 +450,23 @@ func conflictsLoosened(before, after OrchestratorCfg) bool {
 // VerifyCfg lists the repo's own checks (tests, build, lint). Agents may
 // run them without asking, and Relayweft runs them before the final review.
 type VerifyCfg struct {
+	// Preflight lists short checks that must succeed through each enabled
+	// Claude writing provider before planning or implementation. Use commands
+	// that pass on the starting tree (e.g. compile-only tests and formatter
+	// probes). Empty disables the probe. It uses provider quota, counted in
+	// the task budget. Explicit tool results are required, not agent claims.
+	// A task that runs as one step without the planner probes only the
+	// provider of that step (none when it is not Claude).
+	Preflight []string `yaml:"preflight,omitempty"`
 	// Commands are the checks, run through the system shell in the
 	// project folder, e.g. ["go test ./...", "go vet ./..."].
 	Commands []string `yaml:"commands"`
+	// Auto detects the checks of a repo with no commands from its build
+	// files at the start of each task: go build and go test, cargo test,
+	// the package.json test script, pytest, dotnet test, mvn or gradle
+	// test. They run like configured commands (in the sandbox when agents
+	// use one).
+	Auto bool `yaml:"auto"`
 	// Timeout is the time limit for each command.
 	Timeout Duration `yaml:"timeout"`
 	// Affected: "auto" (or "") runs only the tests the changes affect
@@ -392,9 +507,16 @@ type NotifyCfg struct {
 	Enabled bool     `yaml:"enabled"`
 	MinTask Duration `yaml:"min_task"` // only tasks that ran at least this long
 	// Webhooks (Slack, Discord, ntfy or plain JSON) get done, failed,
-	// limit, waiting and watch messages: overnight runs, scheduled tasks
-	// and rw watch post here (rw notify --test sends a test message).
+	// limit, waiting, watch and summary messages: overnight runs,
+	// scheduled tasks, the morning summary and rw watch post here (rw
+	// notify --test sends a test message).
 	Webhooks []notify.Webhook `yaml:"webhooks,omitempty"`
+	// Morning is a time of day ("07:30"): the summary of the unattended
+	// tasks since the same time the day before (queued, scheduled, task
+	// files) goes to the webhooks (event summary) and as a desktop
+	// notification, from an rw web, TUI or long rw run that is running
+	// then. "" = off; rw morning --schedule sets up a system task instead.
+	Morning string `yaml:"morning,omitempty"`
 }
 
 // Redacted returns a copy for display (rw bugreport): webhook URLs and
@@ -415,6 +537,12 @@ func (n NotifyCfg) Redacted() NotifyCfg {
 // limit is reached, an attended task asks whether to go on; unattended
 // tasks (queued, scheduled, --file) and tasks without anyone to ask stop.
 type BudgetCfg struct {
+	// Reserve enables admission estimates: reserve each running agent's
+	// median token/cost estimate and keep 20% of each limit for review/fixes
+	// in routed tasks with final review enabled. Waiting candidates cannot
+	// all spend the same remaining budget. Estimates are not hard CLI caps;
+	// incomplete usage keeps its unused estimate held for this task.
+	Reserve    bool    `yaml:"reserve,omitempty" json:"reserve,omitempty"`
 	TaskTokens int64   `yaml:"task_tokens" json:"task_tokens"` // fresh tokens one task may use (0 = no limit)
 	TaskUSD    float64 `yaml:"task_usd" json:"task_usd"`       // API-equivalent $ one task may cost (0 = no limit)
 	DayTokens  int64   `yaml:"day_tokens" json:"day_tokens"`   // fresh tokens today's tasks may use (0 = no limit)
@@ -762,6 +890,19 @@ func (c *Config) Validate() error {
 	if c.Orchestrator.MaxThreads < 1 {
 		errs = append(errs, "orchestrator.max_threads must be >= 1")
 	}
+	switch c.Orchestrator.ReviewWhen {
+	case "", ReviewUntested, ReviewFailing, ReviewLarge, ReviewAlways:
+	default:
+		errs = append(errs, fmt.Sprintf("orchestrator.review_when must be untested, failing, large or always (got %q)", c.Orchestrator.ReviewWhen))
+	}
+	switch c.Orchestrator.IndependentTestsGate {
+	case "", ReqGateSoft, ReqGateStrict:
+	default:
+		errs = append(errs, fmt.Sprintf("orchestrator.independent_tests_gate must be soft or strict (got %q)", c.Orchestrator.IndependentTestsGate))
+	}
+	if c.Orchestrator.ReviewSkipMaxLines < 0 {
+		errs = append(errs, "orchestrator.review_skip_max_lines must be >= 0 (0 = always review)")
+	}
 	errs = append(errs, c.MCP.validate()...)
 	errs = append(errs, c.validateSandbox()...)
 	if b := c.Budget; b.TaskTokens < 0 || b.TaskUSD < 0 || b.DayTokens < 0 || b.DayUSD < 0 {
@@ -775,6 +916,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Watch.MaxRounds < 0 {
 		errs = append(errs, "watch.max_rounds must be >= 0")
+	}
+	if m := c.Notify.Morning; m != "" {
+		if _, err := time.Parse("15:04", m); err != nil {
+			errs = append(errs, fmt.Sprintf("notify.morning %q: want a time of day like 07:30", m))
+		}
 	}
 	for i, w := range c.Notify.Webhooks {
 		if err := w.Validate(); err != nil {

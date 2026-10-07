@@ -500,7 +500,7 @@ func (o *Orchestrator) runBestOf(ctx context.Context, t *task, st Subtask, deps 
 			continue
 		}
 		if c.branch != "" {
-			o.mergeEvent(t, c.id, false, fmt.Sprintf("not used (%s kept %s); this work is kept on %s", st.ID, winner.id, c.branch))
+			o.savedEvent(t, c.id, fmt.Sprintf("not used (%s kept %s); this work is kept on %s", st.ID, winner.id, c.branch))
 		}
 		// Its work is not in the tree: a follow-up would resume a session
 		// that thinks it is.

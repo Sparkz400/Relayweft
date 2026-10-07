@@ -30,8 +30,21 @@ type benchMode struct {
 	name, provider string       // provider set: a single-agent run
 	route          config.Route // the single agent's route
 	noHandoff      bool
-	bestOf         bool        // every writing step runs as best of N (routing.best_of.when: always)
-	routes         []roleRoute // route variant: these roles on these routes
+	bestOf         bool // every writing step runs as best of N (routing.best_of.when: always)
+	tiers          bool
+	// classic plans every task with full-strength planner and reviewer
+	// routes, as before auto_single, light_planning, review skipping and
+	// budget fitting: to measure them.
+	classic bool
+	// reqTests turns on orchestrator.independent_tests (routed-tests).
+	reqTests bool
+	// review is the final review in place of the independent tests, the
+	// default before tests replaced it (review_when: failing,
+	// independent_tests off; routed-review): to measure the swap.
+	review bool
+	// testsFirst turns on orchestrator.tests_first (routed-tests-first).
+	testsFirst bool
+	routes     []roleRoute // route variant: these roles on these routes
 }
 
 // roleRoute is one role's route in a route variant.
@@ -42,13 +55,14 @@ type roleRoute struct {
 
 func (r roleRoute) spec() string { return r.role + "=" + config.RouteSpec(r.provider, r.route) }
 
-// parseBenchMode reads routed, routed-nohandoff, routed-bestof,
+// parseBenchMode reads routed, routed-classic, routed-review, routed-tests, routed-tests-first, routed-nohandoff, routed-bestof,
 // routed:<role>=<route>[,...]
 // and single:<provider>:<model>[:effort].
 func parseBenchMode(m string) (benchMode, error) {
-	const want = "want routed, routed-nohandoff, routed-bestof, routed:<role>=<provider>:<model>[:effort] or single:<provider>:<model>[:effort]"
-	if m == "routed" || m == "routed-nohandoff" || m == "routed-bestof" {
-		return benchMode{name: m, noHandoff: m == "routed-nohandoff", bestOf: m == "routed-bestof"}, nil
+	const want = "want routed, routed-classic, routed-review, routed-tests, routed-tests-first, routed-nohandoff, routed-tiers, routed-bestof, routed:<role>=<provider>:<model>[:effort] or single:<provider>:<model>[:effort]"
+	if m == "routed" || m == "routed-classic" || m == "routed-review" || m == "routed-tests" || m == "routed-tests-first" || m == "routed-nohandoff" || m == "routed-bestof" || m == "routed-tiers" {
+		return benchMode{name: m, noHandoff: m == "routed-nohandoff", bestOf: m == "routed-bestof", tiers: m == "routed-tiers", classic: m == "routed-classic",
+			review: m == "routed-review", reqTests: m == "routed-tests", testsFirst: m == "routed-tests-first"}, nil
 	}
 	if spec, ok := strings.CutPrefix(m, "routed:"); ok {
 		bm := benchMode{name: m}
@@ -98,15 +112,31 @@ func knownRole(role string) bool {
 // with the variant's routes (set the way --route sets them, so a learned
 // route of that role does not apply).
 func (m benchMode) store(base *config.Store) (*config.Store, error) {
-	if !m.noHandoff && !m.bestOf && len(m.routes) == 0 {
+	if !m.noHandoff && !m.bestOf && !m.tiers && !m.classic && !m.review && !m.reqTests && !m.testsFirst && len(m.routes) == 0 {
 		return base, nil
 	}
 	cfg := base.Get()
+	if m.classic {
+		cfg.Orchestrator.Classic()
+	}
 	if m.noHandoff {
 		cfg.Orchestrator.Handoff = false
 	}
+	if m.review {
+		cfg.Orchestrator.ReviewBeforeDone = true
+		cfg.Orchestrator.ReviewWhen, cfg.Orchestrator.IndependentTests = config.ReviewFailing, false
+	}
+	if m.reqTests {
+		cfg.Orchestrator.IndependentTests = true
+	}
 	if m.bestOf {
 		cfg.Routing.BestOf.When = config.BestOfAlways
+	}
+	if m.tiers {
+		cfg.Routing.Tiers = config.TiersAuto
+	}
+	if m.testsFirst {
+		cfg.Orchestrator.TestsFirst = true
 	}
 	st := config.NewStore(cfg, base.Path())
 	for _, r := range m.routes {

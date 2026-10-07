@@ -70,6 +70,9 @@ func (t *selftest) sandboxScenario() {
 	}
 	cfgPath := filepath.Join(t.work, "sandbox.yaml")
 	writeCfg := func(orch map[string]any) error {
+		// This fixture tests pooled parallel writers, not the default one-worker path.
+		orch["single_worker"] = false
+		orch["review_before_done"] = true
 		cfg := map[string]any{
 			"providers": map[string]any{
 				// "claude" exists only in the image, not on this machine.

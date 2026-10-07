@@ -1,0 +1,170 @@
+{
+  "version": 2,
+  "commit": "48e3e1da6276ca68257ccd2fb1e546df9f8e7e14",
+  "fair": true,
+  "repeat": 1,
+  "results": [
+    {
+      "task": "affected-module-index",
+      "mode": "single:codex:gpt-6.1-sol:high",
+      "repetition": 1,
+      "passed": false,
+      "agent_ok": true,
+      "wall_ms": 598237,
+      "cost": {
+        "per_provider": {
+          "codex": {
+            "input": 1372336,
+            "cached": 1283968,
+            "output": 20304,
+            "reasoning": 8012
+          }
+        }
+      },
+      "note": "check failed: FAIL",
+      "status": "completed",
+      "artifacts": "./bench-results-20261006-124755-2060716218/run-001",
+      "base": "ed2104e2ebb7bf709876343c8c80da58a592efd7",
+      "tests_from": "24ee2b4197df22d4ae05f233beca66ea1341b329",
+      "check": "go test -p 2 -count=1 -timeout 120s -run \"^(TestJestShowConfigCommand|TestSelectGradleIncludeLines|TestSelectJestIndex|TestSelectJestRoots)$\" {test_dirs}"
+    },
+    {
+      "task": "affected-module-index",
+      "mode": "routed",
+      "repetition": 1,
+      "passed": false,
+      "agent_ok": false,
+      "wall_ms": 90844,
+      "cost": {
+        "per_provider": {
+          "claude": {
+            "input": 253134,
+            "cached": 149218,
+            "output": 1968,
+            "reasoning": 383,
+            "cost_usd": 0.6953355999999999
+          },
+          "codex": {
+            "input": 206448,
+            "cached": 171520,
+            "output": 1476,
+            "reasoning": 311
+          }
+        },
+        "cost_usd": 0.6953355999999999,
+        "quota_after": {
+          "claude": 0.04
+        }
+      },
+      "note": "stopped by budget: reservation cannot fit gradle-layout: task_tokens: reported 142288.00 + running/unknown 0.00 + next estimate 60000.00 + review/fix reserve 40000.00 exceeds 200000.00; check failed: FAIL",
+      "status": "completed",
+      "artifacts": "./bench-results-20261006-124755-2060716218/run-002",
+      "base": "ed2104e2ebb7bf709876343c8c80da58a592efd7",
+      "tests_from": "24ee2b4197df22d4ae05f233beca66ea1341b329",
+      "check": "go test -p 2 -count=1 -timeout 120s -run \"^(TestJestShowConfigCommand|TestSelectGradleIncludeLines|TestSelectJestIndex|TestSelectJestRoots)$\" {test_dirs}"
+    },
+    {
+      "task": "affected-module-index",
+      "mode": "routed-tiers",
+      "repetition": 1,
+      "passed": false,
+      "agent_ok": false,
+      "wall_ms": 780032,
+      "cost": {
+        "per_provider": {
+          "claude": {
+            "input": 256066,
+            "cached": 242818,
+            "output": 2800,
+            "reasoning": 982,
+            "cost_usd": 0.1964576
+          },
+          "codex": {
+            "input": 1198233,
+            "cached": 1083904,
+            "output": 26172,
+            "reasoning": 11612
+          }
+        },
+        "cost_usd": 0.1964576,
+        "quota_before": {
+          "claude": 0.04
+        },
+        "quota_after": {
+          "claude": 0.04
+        }
+      },
+      "note": "stopped by budget: reservation cannot fit jest-coverage: task_tokens: reported 156549.00 + running/unknown 0.00 + next estimate 60000.00 + review/fix reserve 40000.00 exceeds 200000.00; check failed: FAIL",
+      "status": "completed",
+      "artifacts": "./bench-results-20261006-124755-2060716218/run-003",
+      "base": "ed2104e2ebb7bf709876343c8c80da58a592efd7",
+      "tests_from": "24ee2b4197df22d4ae05f233beca66ea1341b329",
+      "check": "go test -p 2 -count=1 -timeout 120s -run \"^(TestJestShowConfigCommand|TestSelectGradleIncludeLines|TestSelectJestIndex|TestSelectJestRoots)$\" {test_dirs}"
+    },
+    {
+      "task": "affected-module-index",
+      "mode": "routed-bestof",
+      "repetition": 1,
+      "passed": false,
+      "agent_ok": false,
+      "wall_ms": 384062,
+      "cost": {
+        "per_provider": {
+          "claude": {
+            "input": 1665230,
+            "cached": 1569367,
+            "output": 36152,
+            "reasoning": 17307,
+            "cost_usd": 1.2831874
+          },
+          "codex": {
+            "input": 157404,
+            "cached": 128128,
+            "output": 1257,
+            "reasoning": 219
+          }
+        },
+        "cost_usd": 1.2831874,
+        "quota_before": {
+          "claude": 0.04
+        },
+        "quota_after": {
+          "claude": 0.06
+        }
+      },
+      "note": "stopped by budget: reservation cannot fit fix-1: task_tokens: reported 162548.00 + running/unknown 0.00 + next estimate 60000.00 + review/fix reserve 0.00 exceeds 200000.00; check failed: FAIL",
+      "status": "completed",
+      "artifacts": "./bench-results-20261006-124755-2060716218/run-004",
+      "base": "ed2104e2ebb7bf709876343c8c80da58a592efd7",
+      "tests_from": "24ee2b4197df22d4ae05f233beca66ea1341b329",
+      "check": "go test -p 2 -count=1 -timeout 120s -run \"^(TestJestShowConfigCommand|TestSelectGradleIncludeLines|TestSelectJestIndex|TestSelectJestRoots)$\" {test_dirs}"
+    }
+  ],
+  "provenance": {
+    "kind": "Native completed checkpoint rows with added provenance; original export retained",
+    "native_report": "D:\\Entwicklung\\Switchyard-pilot-20261006-1249\\bench-results-20261006-124755-2060716218.json",
+    "native_report_sha256": "BE415286195526E0CE7A698E6080A81FC561A55864CB635D62D4E1F14B5DE94A",
+    "artifacts_root": "D:\\Entwicklung\\Switchyard-pilot-20261006-1249",
+    "binary_sha256": "4E2FEDC5C869F2EECF5621DFC4E763574CC8E6D6C5591AB7F6E8ADF1720F3826",
+    "manifest_sha256": "73A6FCC559E85846D1C39E645B246555F6930B23F16B30D76D47BC19C7711B79",
+    "config_sha256": "697E1D5FB5101B7B9D4B3D93373BA7730CE9754900D3D6AF1B7019C1CD20A3E3",
+    "session": "20261006-124755-064d",
+    "started": "2026-10-06T12:47:55.3104230+02:00",
+    "ended": "2026-10-06T13:18:48.9175524+02:00",
+    "cli_exit": 0,
+    "task_starts": 4,
+    "completed_checks": 4,
+    "accounting_assertions_passed": 38,
+    "patch_replays_reproduced": 4,
+    "doctor": "Initial unsupported --dir invocation exited 2; corrected invocation passed with exit 0",
+    "conditions": [
+      "One task, one repetition, one mode order; no general benefit claim.",
+      "Reported fresh-token counts all below 200000; estimates remain soft.",
+      "All three exact-command Claude preflights passed; alternate shell command permission denials still occurred.",
+      "All final usage records present; totals reconcile with individual agent records.",
+      "Provider and compiler caches/load were not controlled.",
+      "Codex dollar price is unreported; Claude cost is API-equivalent, not subscription billing.",
+      "Existing source files unchanged by pilot; no user-repository commit or PR."
+    ]
+  }
+}

@@ -805,9 +805,9 @@ func (w *watcher) land(e watchEntry, co *orchestrator.Checkout, res orchestrator
 // folder, and the usual pipeline and Azure DevOps folders; a pipeline may
 // name a YAML file anywhere, so branch policies still matter there).
 var (
-	ciDirs   = []string{".github/", ".gitlab/", ".gitea/", ".forgejo/", ".woodpecker/", ".azuredevops/", ".azure-pipelines/", ".pipelines/", ".vsts/"}
+	ciDirs   = []string{".github/", ".gitlab/", ".gitea/", ".forgejo/", ".woodpecker/", ".azuredevops/", ".azure-pipelines/", ".pipelines/", ".vsts/", ".relayweft-ci/"}
 	ciNames  = []string{".gitlab-ci.yml", ".gitlab-ci.yaml", ".woodpecker.yml", ".woodpecker.yaml", ".drone.yml", ".drone.yaml", "bitbucket-pipelines.yml"}
-	ciPlaces = ".github/, .gitlab-ci.yml, .gitlab/, .gitea/, .forgejo/, .woodpecker, .drone.yml, bitbucket-pipelines.yml, azure-pipelines*.yml, .azuredevops/, .azure-pipelines/, .pipelines/"
+	ciPlaces = ".github/, .gitlab-ci.yml, .gitlab/, .gitea/, .forgejo/, .woodpecker, .drone.yml, bitbucket-pipelines.yml, azure-pipelines*.yml, .azuredevops/, .azure-pipelines/, .pipelines/, .relayweft-ci/"
 )
 
 // isAzurePipeline reports whether p's file name is an Azure Pipelines one

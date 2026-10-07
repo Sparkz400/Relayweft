@@ -1,0 +1,173 @@
+# Ten real multi-file changes. See realistic.md for validation and limitations.
+fair: true
+repeat: 3
+modes:
+- single:codex:gpt-6.1-sol:high
+- routed
+- routed-tiers
+- routed-bestof
+timeout: 20m
+learn: false
+tasks:
+- name: affected-module-index
+  disabled: Exact fallback-reason wording can fail correct selection; repair the scoring assertion first.
+  # Public checks only; the hidden scoring command below is never given to agents.
+  agent_checks:
+  - go test -p 2 -count=1 -timeout 60s ./internal/affected
+  - gofmt -l internal/affected
+  prompt: 'Affected-test selection can miss tests when a JavaScript import crosses Jest roots or ignored module
+    paths, and Gradle settings can describe layouts the selector cannot resolve. Inspect the existing selector,
+    preserve supported fast paths, and fall back to the full configured check when dependency coverage is uncertain.
+    Cover custom Jest index settings and multiline Gradle includes. Do not alter the correctness tests.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestJestShowConfigCommand|TestSelectGradleIncludeLines|TestSelectJestIndex|TestSelectJestRoots)$"
+    {test_dirs}
+  base: ed2104e2ebb7bf709876343c8c80da58a592efd7
+  tests:
+    from: 24ee2b4197df22d4ae05f233beca66ea1341b329
+    files:
+    - internal/affected/eco_test.go
+    visible: false
+- name: resume-undo-coverage
+  prompt: 'After resuming an interrupted task, undo and PR generation must still include files changed by successful
+    steps before the interruption. Preserve the earlier agent-file provenance when recording the resumed task, including
+    additional repositories. A failed snapshot must not silently pretend the old files never belonged to the task.
+    Add focused regression coverage.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestResumeKeepsEarlierAgentFiles|TestSnapshotReadsTheTreeAgain)$"
+    {test_dirs}
+  base: d9c5792a2315a413e6ff76f5fa8c0686a93724b6
+  tests:
+    from: 7ca640ca73592c9d84a7c099e69aef4ae7be17fa
+    files:
+    - internal/orchestrator/load_test.go
+    - internal/orchestrator/lockretry_test.go
+    visible: false
+- name: azure-api-edge-cases
+  disabled: Hidden tests require internal API names absent from the prompt; repair the contract first.
+  prompt: 'Make Azure DevOps issue, PR and review handling robust. Preserve the complete description within service
+    limits, identify the authenticated user correctly, interpret policy/build failures consistently, and keep credentials
+    scoped to the intended Azure API. Support repository names and legacy URLs without weakening URL validation
+    or CI-file protection. Add tests using a fake service.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestAzureChecksAndFeedback|TestAzureDiffAndReview|TestAzureIssues|TestAzurePulls|TestAzureRejectedToken|TestAzureServerReview|TestAzureTokenScope|TestCIFilesAzure|TestParseAzureRemotes)$"
+    {test_dirs}
+  base: 9e4ba4e55c9397d9a0a8bb43bd907f5b1e2e4efd
+  tests:
+    from: bc2af2600fcb0fb9cae56ef8a627df37a46e998e
+    files:
+    - cmd/rw/azure_test.go
+    - internal/forge/azure_test.go
+    visible: false
+- name: dashboard-auth-failures
+  disabled: The historical known solution has failed its fixture in a later environment; revalidate and repair it first.
+  prompt: 'The dashboard currently reports a missing or logged-out agent CLI as a provider usage-limit hit. Distinguish
+    unavailable CLIs from actual quota limits in dashboard aggregation and generated display data. Read older log
+    records correctly, preserve genuine rate limits, and keep CLI and dashboard totals consistent.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestBuildDashboardEmpty|TestDashboardMatchesCLI|TestDashboardUnavailableCLI|TestTeamHistoryCoverage)$"
+    {test_dirs}
+  base: 4784b0918aeb91bd2f6dfc35e508b268fcf39589
+  tests:
+    from: a19a17893fb7e40a12a7ba8faaa1b99616458494
+    files:
+    - cmd/rw/dashgen_test.go
+    - internal/sessionlog/dashboard_test.go
+    visible: false
+- name: bitbucket-api-edge-cases
+  prompt: 'Harden Bitbucket Cloud integration across issues, PR lookup, review feedback and authentication. Follow
+    pagination without sending tokens to a different API, reject unsupported/misleading remotes, handle access-token
+    identity failures safely, and neutralize issue/Jira commands in generated text except explicitly intended closing
+    references. Preserve useful errors and test with fake APIs.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestBitbucketIssuesAndPulls|TestBitbucketLogin|TestBitbucketPullHeadLookup|TestBitbucketPullRequestAndWatch|TestBitbucketRemotesAndRefs|TestBitbucketReviewAndIssue|TestBitbucketTokenAndHosts|TestBitbucketTokenNotSentToOtherAPI|TestBitbucketTrustFailsSafe|TestCIFilesBitbucket|TestDefuseBitbucketRefs)$"
+    {test_dirs}
+  base: 9f1eb9d09fc20352be7783e30f4b9a36f4cfa254
+  tests:
+    from: c160dd0c4962d72f79f716855d559e9e21144c40
+    files:
+    - cmd/rw/bitbucket_test.go
+    - internal/forge/bitbucket_test.go
+    visible: false
+- name: process-ancestry
+  disabled: Hidden tests require Ancestors, ProgramName and caseFold absent from the prompt; repair the contract first.
+  prompt: 'Ensure every launched agent can identify that it runs under Relayweft, and make process ancestry inspection
+    robust enough to recognize nested agent invocations through wrappers. Normalize executable names consistently
+    and handle vanished or inaccessible ancestors without assuming an unrelated process belongs to this task. Keep
+    Windows, Linux and macOS behavior compatible.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestAncestors|TestProgramName)$" {test_dirs}
+  base: 4784b0918aeb91bd2f6dfc35e508b268fcf39589
+  tests:
+    from: ff532852739eb20b8175c1b64c7be96cdba40c75
+    files:
+    - internal/proc/ancestors_test.go
+    visible: false
+- name: pool-lock-probes
+  prompt: 'Concurrent probes of a task lock must not make an expired worktree hold appear permanently busy. Reclaiming
+    an expired hold must first save its unfinished tracked and untracked edits on a branch. Fix the lock-probing
+    race without letting a cleaner evict a genuinely running task; preserve useful recovery metadata and add concurrency
+    regression tests.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestExpiredHoldSavesEdits|TestTaskLockProbesDoNotCollide)$"
+    {test_dirs}
+  base: e8ea295a0e35152ed6dd4141e85c5ffe0c896547
+  tests:
+    from: 51ea0c86de09ce4e336a3f85d9fb34108d3d2170
+    files:
+    - internal/orchestrator/saved_test.go
+    visible: false
+- name: package-manager-paths
+  prompt: 'The updater must recognize package-managed installations without misidentifying unrelated paths. Anchor
+    Scoop and other package-manager directory matching to real installation layouts, handle user/system/custom Scoop
+    roots, and parse package-owner queries robustly. Correctly distinguish a package-owned executable from a standalone
+    download before self-update.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestPackageManagerByOwner|TestPackageManagerByPath|TestPackageManagerScoopRoots)$"
+    {test_dirs}
+  base: 9a78b8e47694628a4f9744b878bfd5a150bc07c2
+  tests:
+    from: e09ffb721bdc1edbcac667850af2b188456235e6
+    files:
+    - cmd/sy/update_test.go
+    visible: false
+- name: setup-safe-backups
+  prompt: 'Make automatic setup safe on existing machines. Never overwrite an earlier backup, preserve restrictive
+    configuration permissions, report unreadable configuration and broken CLIs accurately, handle executable paths
+    with spaces, and treat login timeouts as unknown rather than authenticated. A stopped or disabled setup must
+    leave the project untouched and let the intended flow continue appropriately.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestAutoSetupGoesOnWhenStopped|TestAutoSetupLeavesRepoAlone|TestAutoSetupOff|TestCodexLoginTimeoutIsUnknown|TestLoginWithKeysAndOldCLIs|TestProbeBrokenCLI|TestProbeBrokenGemini|TestProbeBrokenQwen|TestSetupBackupsNeverOverwritten|TestSetupConfigMode|TestSetupExecShimWithSpaces|TestSetupUnreadableConfig)$"
+    {test_dirs}
+  base: 600b9289af25b8223b68d5aae9c0f6dbeff0eaaa
+  tests:
+    from: 93653e194108923d833e1a58cda2bf30c5e6212c
+    files:
+    - cmd/sy/setup_review_test.go
+    - cmd/sy/setup_test.go
+    visible: false
+- name: routing-evidence-thresholds
+  prompt: 'Routing recommendations must account for sample size on both sides of a comparison, and confidence bounds
+    must stay within valid probabilities. Count escalations per writing step, use final reviews consistently, and
+    handle failing or limited routes without inflated evidence. Keep routed-versus-single and tier comparisons consistent
+    across filters and difficulty groups.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestClearlyAbove|TestEscalationsCountSteps|TestFailingRoutes|TestFinalReviews|TestLimitPressure|TestRoutedVsSingle|TestSuggestFilterAndOrder|TestTiersByDifficulty)$"
+    {test_dirs}
+  base: 1f58c921d5303ed26da0408c4722fca054d084f9
+  tests:
+    from: 3a4d98f0c163c3da73252b6fd0bf84e398aad2aa
+    files:
+    - internal/router/tiers_test.go
+    - internal/sessionlog/tune_test.go
+    visible: false

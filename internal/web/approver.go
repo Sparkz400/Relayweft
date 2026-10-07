@@ -308,6 +308,18 @@ func (a *Approver) AnswerBudget(id string, ok bool) error {
 // AnswerPlan approves (ok, with the possibly edited plan) or rejects a plan.
 // An approved plan is normalized first; a plan that cannot run is an error
 // and the request stays open.
+// ProposedPlan is a waiting plan as the planner proposed it.
+func (a *Approver) ProposedPlan(id string) (orchestrator.Plan, error) {
+	r, err := a.find(id, "plan")
+	if err != nil {
+		return orchestrator.Plan{}, err
+	}
+	if r.Plan == nil {
+		return orchestrator.Plan{}, errNoRequest
+	}
+	return *r.Plan, nil
+}
+
 func (a *Approver) AnswerPlan(id string, p orchestrator.Plan, ok bool) (orchestrator.Plan, error) {
 	r, err := a.find(id, "plan")
 	if err != nil {

@@ -123,6 +123,9 @@ func Difficulty(s Step, role string) (float64, []string) {
 	return round2(math.Max(0, math.Min(1, score))), why
 }
 
+// IsHard reports whether a difficulty score reaches the strong tier.
+func IsHard(score float64) bool { return round2(score) >= strongFrom }
+
 // round2 keeps scores on hundredths, so a step that lands on a tier
 // boundary lands there exactly, not a float error to either side.
 func round2(v float64) float64 { return math.Round(v*100) / 100 }

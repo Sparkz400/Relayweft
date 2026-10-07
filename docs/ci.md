@@ -5,6 +5,7 @@
 - **GitHub Actions:** the action in this repository (`uses: Sparkz400/relayweft@…`) with the example workflow [`ci/github-workflow.yml`](../ci/github-workflow.yml).
 - **GitLab CI:** the job template [`ci/relayweft.gitlab-ci.yml`](../ci/relayweft.gitlab-ci.yml), for gitlab.com and self-managed GitLab.
 - **Forgejo / Gitea Actions:** the workflow [`ci/forgejo-workflow.yml`](../ci/forgejo-workflow.yml), for Codeberg and self-hosted Forgejo or Gitea.
+- **Azure Pipelines and Bitbucket Pipelines:** [templates, account setup and local verification](ci-azure-bitbucket.md).
 
 `rw watch` then follows up on those pull requests from your PC, as before. In CI, each run starts with no history and no learned routes.
 

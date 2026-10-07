@@ -50,6 +50,9 @@ type Spec struct {
 	// AllowedCommands are shell command prefixes a writing agent may run
 	// without asking (verify/test commands); Claude needs them listed.
 	AllowedCommands []string
+	// CheckOnly requests shell checks without implementation. Supported by
+	// Claude; successful tool results, not the final prose, prove execution.
+	CheckOnly bool
 	// MCP is the run's MCP servers. Exec fills it from its MCP config for
 	// the spec's role; callers leave it nil.
 	MCP *MCPRun
@@ -69,14 +72,16 @@ type Spec struct {
 
 // Result is what an agent run produced.
 type Result struct {
-	Final    string // the agent's last message
-	Tokens   event.TokenUsage
-	Err      error // nil on success
-	LimitHit bool
-	ResetAt  time.Time // when the limit resets, if the CLI said so
-	Files    []string  // files the agent reported editing
-	Duration time.Duration
-	Killed   bool // cancelled by the user or the orchestrator
+	Commands         []string // exact shell commands with successful tool results
+	PermissionDenied bool     // CLI-reported permission denial
+	Final            string   // the agent's last message
+	Tokens           event.TokenUsage
+	Err              error // nil on success
+	LimitHit         bool
+	ResetAt          time.Time // when the limit resets, if the CLI said so
+	Files            []string  // files the agent reported editing
+	Duration         time.Duration
+	Killed           bool // cancelled by the user or the orchestrator
 	// SessionID identifies the CLI session so a follow-up can resume it.
 	SessionID string
 }
@@ -341,6 +346,9 @@ func (x *Exec) Run(ctx context.Context, s Spec, emit func(event.Event)) Result {
 		sr.Stderr(stderr.String())
 	}
 	p.Finish(&res)
+	if ctx.Err() != nil || (waitErr != nil && (res.Tokens.Total() > 0 || len(res.Files) > 0 || res.Final != "")) {
+		res.Tokens.Incomplete = true
+	}
 	for i, f := range res.Files {
 		res.Files[i] = box.HostPath(f)
 	}

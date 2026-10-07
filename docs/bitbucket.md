@@ -65,5 +65,5 @@ The issue tracker is optional per repository, and many teams use Jira instead. r
 
 ## Not yet
 
-- A Bitbucket Pipelines template like the ones in `ci/` for GitHub, GitLab and Forgejo. Until then, run `rw` from your PC or adapt the GitLab job.
+- Hosted validation of the [Bitbucket Pipelines template](ci-azure-bitbucket.md).
 - A run against bitbucket.org.

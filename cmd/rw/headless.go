@@ -27,6 +27,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/proc"
 	"github.com/sparkz400/relayweft/internal/runner"
 	"github.com/sparkz400/relayweft/internal/sessionlog"
+	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
 // headless runs tasks without the TUI and prints their events.
@@ -142,6 +143,9 @@ func (h *headless) report(res orchestrator.TaskResult) {
 		status = "FAILED"
 	}
 	fmt.Printf("\n%s in %s · %s\n", status, res.Duration.Round(time.Second), res.Summary)
+	if lines := res.Acceptance.Lines(); len(lines) > 0 {
+		fmt.Printf("acceptance:\n  %s\n", strings.Join(lines, "\n  "))
+	}
 	fmt.Printf("cost: %s\n", res.Cost.Summary())
 	if res.UndoKey != "" {
 		fmt.Printf("undo: rw undo %s   (preview first; your later edits are kept)\n", res.UndoKey)
@@ -164,14 +168,28 @@ func cmdRun(args []string) error {
 	var c common
 	c.register(fs)
 	single := fs.String("single", "", "provider:model[:effort] - one agent, no planning or review (baseline)")
+	preset := fs.String("workflow", "", "saved task workflow (rw workflow lists them)")
 	quiet := fs.Bool("quiet", false, "only print routing, results and errors")
 	file := fs.String("file", "", "run the tasks in this file one after another, unattended (one per line, or blocks separated by a line with ---)")
 	approve := fs.Bool("approve", false, "ask on the terminal before a plan runs (and per change when orchestrator.review_changes is on)")
 	estimate := fs.Bool("estimate", false, "plan only: print the plan with its estimated tokens, time and $, then stop (nothing runs, the tree is untouched)")
+	forcePlan := fs.Bool("plan", false, "opt into planning instead of the default single worker (overrides single_worker, auto_single and small_task_words)")
+	testsFirst := fs.Bool("tests-first", false, "write acceptance tests for the task before any code, on another provider than the implementer; asks you for tests when none can be written (orchestrator.tests_first)")
+	var accepts multiFlag
+	fs.Var(&accepts, "accept", "an acceptance criterion the task must meet (repeatable): the result shows each one with its test or evidence")
+	fill := fs.Bool("fill", false, "day plan: spend both subscriptions' usage windows - each task leans on the provider whose window resets first, and when none has room rw waits for the next reset (see rw dayplan)")
 	iss := registerIssueFlags(fs)
 	var sf scheduleFlags
 	sf.register(fs)
+	var df dayFlags
+	df.register(fs)
 	parseFlags(fs, args)
+	if df.set() && !*fill {
+		return errors.New("--until and --fresh-at go with --fill")
+	}
+	if *fill && (iss.active() || *single != "") {
+		return errors.New("--fill runs a task file or a task, not issues or --single")
+	}
 	var tasks []string
 	if iss.active() {
 		if *file != "" {
@@ -202,11 +220,36 @@ func cmdRun(args []string) error {
 	} else {
 		return errors.New(`usage: rw run [flags] "task"   or   rw run --file tasks.txt`)
 	}
+	if *preset != "" {
+		if *single != "" {
+			return errors.New("--workflow does not combine with --single (one agent, no plan to approve)")
+		}
+		d, err := workflow.Load(*preset)
+		if err != nil {
+			return err
+		}
+		c.workflow = &d
+		for i := range tasks {
+			tasks[i], err = d.Render(tasks[i])
+			if err != nil {
+				return err
+			}
+		}
+		if d.ApprovePlan || d.ReviewChanges {
+			*approve = true
+		}
+	}
 	if err := firstRun(c.configPath, c.dir, false); err != nil {
 		return err
 	}
+	if *forcePlan && (*single != "" || *estimate) {
+		return errors.New("--plan runs the planner of a routed task; it does not combine with --single or --estimate")
+	}
+	if *testsFirst && (*single != "" || *estimate) {
+		return errors.New("--tests-first writes tests for a routed task; it does not combine with --single or --estimate")
+	}
 	if *estimate {
-		if *file != "" || *single != "" || sf.set() || iss.active() || len(tasks) != 1 {
+		if *file != "" || *single != "" || sf.set() || *fill || iss.active() || len(tasks) != 1 {
 			return errors.New(`--estimate takes one task: rw run --estimate "task"`)
 		}
 		return runEstimate(&c, *quiet, tasks[0])
@@ -224,16 +267,41 @@ func cmdRun(args []string) error {
 	}
 	// Task files and scheduled runs are unattended: nobody is there to
 	// answer, so they never ask (a budget limit stops them).
-	unattended := *file != "" || sf.set() || iss.batch()
+	// A workflow's approvals are the exception: they hold, and the task
+	// waits at them on this terminal (see gatedApprover).
+	unattended := *file != "" || sf.set() || iss.batch() || *fill
+	gated := c.workflow != nil && c.workflow.Gated()
 	var ap orchestrator.Approver
-	if *approve && !unattended {
+	var gate *gatedApprover
+	switch {
+	case *approve && !unattended:
 		ap = newTermApprover(os.Stdin, os.Stdout)
+	case gated:
+		gate = &gatedApprover{termApprover: newTermApprover(os.Stdin, os.Stdout)}
+		ap = gate
 	}
 	h, err := startHeadless(&c, *quiet, ap)
 	if err != nil {
 		return err
 	}
 	defer h.close()
+	if gate != nil {
+		gate.alert = h.waiting
+	}
+	// Tests first asks you for tests when none can be written (and shows
+	// the tests with --approve): on this terminal, when someone is there.
+	// One reader of stdin: the approver's, if there is one.
+	var asker orchestrator.TestsApprover
+	if (*testsFirst || h.cfg.Orchestrator.TestsFirst) && !unattended && isTerminal(os.Stdin) {
+		if ta, ok := ap.(orchestrator.TestsApprover); ok {
+			asker = ta
+		} else {
+			asker = newTermApprover(os.Stdin, os.Stdout)
+		}
+	}
+	if unattended {
+		startMorning(h.ctx, func() *config.Config { return h.cfg }) // an overnight run posts the summary at notify.morning
+	}
 	if iss.active() {
 		if err := iss.checkWorkspace(c.workspace); err != nil {
 			return err
@@ -255,12 +323,31 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer release()
+	if *fill {
+		if !sf.set() && !c.allowSleep {
+			defer proc.KeepAwake()() // waits for resets: the PC must not sleep through them
+		}
+		return runFillCmd(h, tasks, df)
+	}
 	runOne := func(task string) orchestrator.TaskResult {
+		// Issues arrive after the scheduled wait, or after a team claim.
+		// Render each with the workflow loaded before the wait, just as
+		// task files do above. Keep issue metadata for PRs unchanged.
+		if iss.active() && c.workflow != nil {
+			var err error
+			task, err = c.workflow.Render(task)
+			if err != nil {
+				res := orchestrator.TaskResult{Summary: "workflow: " + err.Error()}
+				h.report(res)
+				return res
+			}
+		}
+		task = orchestrator.WithCriteria(task, accepts)
 		var res orchestrator.TaskResult
 		if single0.prov != "" {
 			res = h.orc.RunSingle(h.ctx, task, single0.prov, single0.route)
 		} else {
-			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: unattended})
+			res = h.orc.RunWith(h.ctx, task, orchestrator.TaskOptions{Unattended: unattended, Plan: *forcePlan, Workflow: c.workflow, TestsFirst: *testsFirst, TestsAsker: asker})
 		}
 		h.report(res)
 		return res
@@ -494,7 +581,7 @@ func cmdResume(args []string) error {
 	}
 	fmt.Printf("resuming %s: %s\n", st.ID, oneLine(st.Task, 100))
 	var ap orchestrator.Approver
-	if *approve {
+	if *approve || st.Workflow != nil && st.Workflow.Gated() {
 		ap = newTermApprover(os.Stdin, os.Stdout)
 	}
 	h, err := startHeadless(&c, *quiet, ap)
@@ -817,8 +904,63 @@ func (a *termApprover) ApproveResolve(ctx context.Context, q orchestrator.Confli
 	}
 }
 
+// ApproveTests asks for acceptance tests when none could be written (the
+// person writes them, then names the command), or shows the tests written
+// before any code (rw run --tests-first --approve).
+func (a *termApprover) ApproveTests(ctx context.Context, q orchestrator.TestsQuestion) orchestrator.TestsAnswer {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if q.Why != "" {
+		fmt.Fprintf(a.out, "\nNo acceptance tests were written: %s\n", q.Why)
+		fmt.Fprintln(a.out, "Write the tests for this task now, without the code, then type the command that runs them.")
+		ans, ok := a.ask(ctx, "Command (empty: the repo's checks run them; q: stop): ")
+		if !ok || strings.EqualFold(ans, "q") {
+			return orchestrator.TestsAnswer{}
+		}
+		return orchestrator.TestsAnswer{OK: true, Command: ans}
+	}
+	fmt.Fprintln(a.out, "\nAcceptance tests, written before any code:")
+	for _, t := range q.Tests {
+		fmt.Fprintf(a.out, "  - %s\n      %s\n", t.Requirement, strings.TrimSpace(t.File+" "+t.Name))
+	}
+	if len(q.Tests) == 0 {
+		for _, f := range q.Files {
+			fmt.Fprintf(a.out, "  - %s\n", f)
+		}
+	}
+	run := q.Command
+	if run == "" {
+		run = "the repo's checks (verify.commands)"
+	}
+	fmt.Fprintf(a.out, "Run with: %s\n", run)
+	switch q.Red {
+	case "fail":
+		fmt.Fprintln(a.out, "They fail now, as they should.")
+	case "pass":
+		fmt.Fprintln(a.out, "Warning: they already pass, before any code: they may not test what the task asks.")
+	}
+	fmt.Fprintln(a.out, "You may edit the tests before you answer.")
+	for {
+		ans, ok := a.ask(ctx, "Write the code against these tests? [Y/n], or type another command to run them: ")
+		if !ok {
+			return orchestrator.TestsAnswer{}
+		}
+		switch strings.ToLower(ans) {
+		case "", "y", "yes":
+			return orchestrator.TestsAnswer{OK: true}
+		case "n", "no", "q":
+			return orchestrator.TestsAnswer{}
+		}
+		if len(strings.Fields(ans)) > 1 {
+			return orchestrator.TestsAnswer{OK: true, Command: ans}
+		}
+		fmt.Fprintln(a.out, "answer y, n or a command")
+	}
+}
+
 var (
 	_ orchestrator.Approver         = (*termApprover)(nil)
 	_ orchestrator.EstimateApprover = (*termApprover)(nil)
 	_ orchestrator.ConflictApprover = (*termApprover)(nil)
+	_ orchestrator.TestsApprover    = (*termApprover)(nil)
 )

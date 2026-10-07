@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sparkz400/relayweft/internal/event"
+	"github.com/sparkz400/relayweft/internal/orchestrator"
 )
 
 // HTML writes the report as one self-contained page: inline CSS, light and
@@ -34,6 +35,7 @@ var CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src '" + script
 
 var funcs = template.FuncMap{
 	"tok":  func(n int64) string { return event.HumanTokens(n) },
+	"tokf": func(f float64) string { return event.HumanTokens(int64(f)) },
 	"dur":  humanDur,
 	"when": func(t time.Time) string { return t.Format("2006-01-02 15:04:05") },
 	"pct":  func(f float64) string { return fmt.Sprintf("%.0f%%", f*100) },
@@ -61,6 +63,17 @@ var funcs = template.FuncMap{
 			return "ok"
 		case "failed", "cancelled":
 			return "fail"
+		}
+		return "warn"
+	},
+	"levelClass": func(s string) string {
+		switch s {
+		case orchestrator.LevelPass, orchestrator.CritVerified:
+			return "ok"
+		case orchestrator.LevelFail, orchestrator.CritUnmet:
+			return "fail"
+		case orchestrator.LevelUnchecked: // also CritUnchecked
+			return ""
 		}
 		return "warn"
 	},
@@ -95,6 +108,7 @@ main{max-width:1100px;margin:0 auto;padding:28px 20px 60px}
 header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-bottom:6px}
 .brand{font-weight:750;letter-spacing:.02em}.brand b{color:var(--codex)}.brand i{font-style:normal;color:var(--claude)}
 h1{font-size:20px;line-height:1.35;margin:6px 0 14px;font-weight:650;white-space:pre-wrap;overflow-wrap:anywhere}
+h3{font-size:13px;font-weight:650;margin:14px 0 6px;color:var(--text-2)}
 h2{font-size:12px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
 section{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px 16px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.06)}
 .meta{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--muted);font-size:13px}.meta b{color:var(--text-2);font-weight:600}
@@ -153,6 +167,18 @@ const pageHTML = `<!doctype html>
 
 {{if .Summary}}<section><h2>Result</h2><pre>{{.Summary}}</pre></section>{{end}}
 
+{{with .Acceptance}}<section><h2>Acceptance</h2>
+<table><tbody>
+<tr><td>Agent finished</td><td><span class="pill {{levelClass .Agents.Status}}">{{.Agents.Status}}</span></td><td class="small">{{.Agents.Detail}}</td></tr>
+<tr><td>Configured checks passed</td><td><span class="pill {{levelClass .Checks.Status}}">{{.Checks.Status}}</span></td><td class="small">{{.Checks.Detail}}</td></tr>
+<tr><td>Requirements verified</td><td><span class="pill {{levelClass .Requirements.Status}}">{{.Requirements.Status}}</span></td><td class="small">{{.Requirements.Detail}}</td></tr>
+</tbody></table>
+{{if .Criteria}}<table><thead><tr><th>Requirement</th><th>Status</th><th>Test</th><th>Evidence</th></tr></thead><tbody>
+{{range .Criteria}}<tr><td><b class="mono">{{.ID}}</b> {{.Text}}</td><td><span class="pill {{levelClass .Status}}">{{.Status}}</span>{{if .Note}}<div class="muted small">{{.Note}}</div>{{end}}</td><td class="mono small">{{.Test}}</td><td class="small">{{.Evidence}}</td></tr>{{end}}
+</tbody></table>
+<p class="muted small">{{if .Explicit}}Criteria as given with the task.{{else}}The task gave no acceptance criteria: the final reviewer listed these from the task.{{end}} Verified means the reviewer found the code, named a test rw found in the repo, and the configured checks passed.</p>{{end}}
+</section>{{end}}
+
 {{if .Steps}}<section><h2>Plan</h2>
 {{if .PlanSummary}}<p class="muted">{{.PlanSummary}}</p>{{end}}
 <table><thead><tr><th>Step</th><th>Kind</th><th>Role</th><th>Route</th><th>Depends on</th><th>Result</th></tr></thead><tbody>
@@ -166,9 +192,31 @@ const pageHTML = `<!doctype html>
 </tr>{{end}}
 </tbody></table></section>{{end}}
 
+{{with .Why}}<section><h2>Why it ran this way</h2>
+<p><b>{{.Headline}}</b>{{if .Shape}} · {{.Shape}}: {{.ShapeWhy}}{{end}}</p>
+{{if .Runs}}<p class="small muted">{{len .Runs}} agent run(s): {{.Agents}}</p>{{end}}
+{{range .Reviews}}<p class="small">final review <b>{{.Outcome}}</b>: {{.Why}}</p>{{end}}
+{{range .ReqTests}}<p class="small">independent tests <b>{{.Outcome}}</b> (round {{.Round}}): {{.Why}}</p>{{end}}
+{{if .Providers}}<h3>Providers</h3>
+<table><thead><tr><th>Provider</th><th class="n">Runs</th><th class="n">Fresh tokens</th><th>Rules</th></tr></thead><tbody>
+{{range .Providers}}<tr><td class="{{.Provider}}">{{.Provider}}</td><td class="n">{{.Runs}}</td><td class="n">{{tok .Tokens}}</td><td class="small mono">{{join .Rules ", "}}</td></tr>{{end}}
+</tbody></table>{{end}}
+{{if .Runs}}<h3>Estimated vs actual</h3>
+<table><thead><tr><th></th><th class="n">Estimate</th><th class="n">Range</th><th class="n">Actual</th><th>Difference</th></tr></thead><tbody>
+<tr><td>Fresh tokens</td><td class="n">{{tokf .EstTokens.Mid}}</td><td class="n">{{tokf .EstTokens.Low}}–{{tokf .EstTokens.High}}</td><td class="n">{{tok .Tokens.Total}}</td><td class="small">{{.TokenDelta}}</td></tr>
+{{if .HasUSD}}<tr><td>$ (API-equivalent)</td><td class="n">{{usd .EstUSD.Mid}}</td><td class="n">{{usd .EstUSD.Low}}–{{usd .EstUSD.High}}</td><td class="n">{{usd .Tokens.CostUSD}}</td><td class="small">{{.USDDelta}}</td></tr>{{end}}
+</tbody></table>
+{{if .Tokens.Incomplete}}<p class="muted small">Some runs ended without final accounting: actual is a lower bound.</p>{{end}}
+{{if .NoHistory}}<p class="muted small">{{.NoHistory}} of the estimates had no history and use fixed defaults.</p>{{end}}{{end}}
+<h3>Escalations</h3>
+{{if .Escalations}}<table><tbody>{{range .Escalations}}<tr><td class="mono small">{{.Where}}</td><td><b>{{.What}}</b></td><td class="small">{{.Cause}}</td></tr>{{end}}</tbody></table>
+{{else}}<p class="muted small">None: every run kept its first route.</p>{{end}}
+{{range .Notes}}<p class="note small">{{.}}</p>{{end}}
+</section>{{end}}
+
 {{if .Routes}}<section><h2>Routing decisions</h2>
-<table><thead><tr><th>Agent / step</th><th>Role</th><th>Route</th><th>Rule</th><th>Reason</th><th>Conf.</th><th>Outcome</th><th class="n">Tokens</th><th class="n">Time</th></tr></thead><tbody>
-{{range .Routes}}<tr>
+<table><thead><tr><th>Agent / step</th><th>Role</th><th>Route</th><th>Rule</th><th>Reason</th><th>Conf.</th><th>Outcome</th><th class="n">Tokens</th><th class="n">Est.</th><th class="n">Time</th></tr></thead><tbody>
+{{range .RouteRows}}<tr>
   <td class="mono small">{{.Agent}}<div class="muted">{{.Step}}{{if gt .Attempt 1}} #{{.Attempt}}{{end}}</div></td>
   <td>{{.Role}}</td>
   <td class="mono small"><span class="{{.Provider}}">{{.Provider}}</span>:{{.Model}}{{if .Effort}} @{{.Effort}}{{end}}</td>
@@ -176,7 +224,9 @@ const pageHTML = `<!doctype html>
   <td class="small">{{.Reason}}{{if .Final}}<details><summary class="small">answer</summary><pre>{{.Final}}</pre></details>{{end}}{{if .Error}}<details><summary class="small">error</summary><pre>{{.Error}}</pre></details>{{end}}</td>
   <td class="n">{{if .Confidence}}{{conf .Confidence}}{{end}}</td>
   <td>{{if .LimitHit}}<span class="pill fail">limit</span>{{else if not .Ran}}<span class="pill">not run</span>{{else if .OK}}<span class="pill ok">ok</span>{{else}}<span class="pill fail">failed</span>{{end}}</td>
-  <td class="n">{{if .Ran}}{{tok .Tokens.Total}}{{end}}</td><td class="n">{{if .Ran}}{{dur .Duration}}{{end}}</td>
+  <td class="n">{{if .Ran}}{{tok .Tokens.Total}}{{end}}</td>
+  <td class="n">{{if .Estimate.Source}}<span title="{{.Estimate.Source}}">{{tokf .Estimate.Tokens.Mid}}</span>{{with .EstDelta}}<div class="muted small">{{.}}</div>{{end}}{{end}}</td>
+  <td class="n">{{if .Ran}}{{dur .Duration}}{{end}}</td>
 </tr>{{end}}
 </tbody></table></section>{{end}}
 
@@ -191,7 +241,7 @@ const pageHTML = `<!doctype html>
 
 {{if or .Limits .Merges}}<section><h2>Limits and merges</h2>
 {{range .Limits}}<div class="small"><span class="pill fail">limit</span> <span class="{{.Provider}}">{{.Provider}}</span>:{{.Model}} <span class="muted mono">{{.Agent}}</span> {{.Text}}</div>{{end}}
-{{range .Merges}}<div class="small"><span class="pill {{if .OK}}ok{{else}}fail{{end}}">merge</span> <span class="mono">{{.Step}}</span> {{.Text}}</div>{{end}}
+{{range .Merges}}<div class="small"><span class="pill {{if .OK}}ok{{else}}fail{{end}}">{{if .Saved}}saved{{else}}merge{{end}}</span> <span class="mono">{{.Step}}</span> {{.Text}}</div>{{end}}
 </section>{{end}}
 
 <section><h2>Cost</h2>

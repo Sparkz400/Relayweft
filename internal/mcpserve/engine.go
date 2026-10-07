@@ -29,6 +29,7 @@ import (
 	"github.com/sparkz400/relayweft/internal/orchestrator"
 	"github.com/sparkz400/relayweft/internal/router"
 	"github.com/sparkz400/relayweft/internal/web"
+	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
 // Options configure an engine.
@@ -96,6 +97,7 @@ type job struct {
 
 	resume  *orchestrator.TaskState   // KindResume
 	session orchestrator.AgentSession // KindFollowUp
+	wf      *workflow.Definition      // KindTask under a saved workflow
 
 	status  string // starting, running, done, failed, cancelled
 	phase   string
@@ -169,6 +171,9 @@ type RunOptions struct {
 	// BudgetUSD and BudgetTokens lower this task's budget (0 = config).
 	BudgetUSD    float64
 	BudgetTokens int64
+	// Workflow runs Prompt as the task of this saved workflow: its checks,
+	// budget caps and approvals apply (ApprovePlan false cannot drop them).
+	Workflow string
 }
 
 // errBusy is returned while a task runs: one task at a time.
@@ -197,7 +202,24 @@ func (e *Engine) Run(ctx context.Context, o RunOptions) (string, error) {
 	if o.ReadOnly {
 		kind = KindReadOnly
 	}
-	return e.launch(ctx, &job{kind: kind, prompt: o.Prompt, opts: o})
+	j := &job{kind: kind, prompt: o.Prompt, opts: o}
+	if o.Workflow != "" {
+		if o.ReadOnly {
+			return "", errors.New("a workflow runs a planned task; it does not combine with read_only")
+		}
+		d, err := workflow.Load(o.Workflow)
+		if err != nil {
+			return "", fmt.Errorf("workflow %s: %w", o.Workflow, err)
+		}
+		if j.prompt, err = d.Render(o.Prompt); err != nil {
+			return "", err
+		}
+		if err = d.Apply(e.store.Get()); err != nil { // Get is a copy
+			return "", fmt.Errorf("workflow %s: %w", d.Name, err)
+		}
+		j.wf = &d
+	}
+	return e.launch(ctx, j)
 }
 
 // Resume continues an interrupted, failed or cancelled task of this
@@ -314,6 +336,7 @@ func (e *Engine) launch(ctx context.Context, j *job) (string, error) {
 			if j.resume != nil {
 				opts.Resume, opts.Force = j.resume, j.resume.Status != "running"
 			}
+			opts.Workflow = j.wf
 			res = e.orc.RunWith(jctx, j.prompt, opts)
 		}
 		once.Do(func() { close(gotID) }) // ended before it started (refused)

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -142,12 +141,22 @@ var jsCode = map[string]bool{".js": true, ".jsx": true, ".ts": true, ".tsx": tru
 // and non-code files make it full.
 func selectJS(ctx context.Context, cmd string, f []string, c *change) Plan {
 	js := jsShape(f, c.dir)
+	if js.kind == "vitest" {
+		for _, flag := range js.flags {
+			if flag == "-c" || strings.HasPrefix(flag, "-c=") || flag == "--config" || strings.HasPrefix(flag, "--config=") || strings.HasPrefix(flag, "--workspace") || strings.HasPrefix(flag, "--project") ||
+				flag == "-r" || strings.HasPrefix(flag, "-r=") || flag == "--root" || strings.HasPrefix(flag, "--root=") {
+				return full(cmd, "vitest runs with a configuration, project or root named on the command line, which rw does not read")
+			}
+		}
+	}
 	var files []string
 	for _, file := range c.files {
 		base := strings.ToLower(path.Base(file))
 		ext := path.Ext(base)
 		parts := strings.Split(file, "/")
 		switch {
+		case yarnRuntimeFile(file):
+			return full(cmd, file+" changed (dependencies or configuration)")
 		case containsStr(parts, "node_modules"):
 			return full(cmd, file+" is a dependency")
 		case base == "package.json" || base == "package-lock.json" || base == "yarn.lock" || base == "pnpm-lock.yaml" || base == "bun.lock" || base == "bun.lockb" ||
@@ -173,16 +182,41 @@ func selectJS(ctx context.Context, cmd string, f []string, c *change) Plan {
 	if bad != "" {
 		return full(cmd, unsafeWhy(bad))
 	}
-	var why string
 	if js.kind == "jest" {
-		why = jestSeesAll(ctx, js, c, files)
-	} else {
-		why = vitestRelatedWorks(c)
+		if why := jestSeesAll(ctx, js, c, files); why != "" {
+			return full(cmd, why)
+		}
+		return Plan{Command: cmd, Run: []string{jsNarrow(cmd, js) + " " + q}, Why: "jest tests related to the " + c.changedWhy()}
 	}
+	vr, why := vitestRelatedWorks(c)
 	if why != "" {
 		return full(cmd, why)
 	}
-	return Plan{Command: cmd, Run: []string{jsNarrow(cmd, js) + " " + q}, Why: js.kind + " tests related to the " + c.changedWhy()}
+	why = "vitest tests related to the " + c.changedWhy()
+	for _, f := range vr.extra {
+		files = append(files, dotSlash(f))
+	}
+	if len(vr.extra) > 0 {
+		why += ", plus what loads them with require() or vi.importActual: " + list(vr.extra, 4)
+	}
+	if vr.root != "" {
+		// vitest resolves the named files against its root.
+		for i, f := range files {
+			rel, err := filepath.Rel(c.abs(vr.root), c.abs(f))
+			if err != nil {
+				return full(cmd, fmt.Sprintf("rw cannot name %s relative to the vitest root %s", f, vr.root))
+			}
+			if rel = filepath.ToSlash(rel); !strings.HasPrefix(rel, "../") {
+				rel = dotSlash(rel)
+			}
+			files[i] = rel
+		}
+		why += ", named relative to the vitest root " + vr.root
+	}
+	if q, bad = quoteAll(sortedSet(files)); bad != "" {
+		return full(cmd, unsafeWhy(bad))
+	}
+	return Plan{Command: cmd, Run: []string{jsNarrow(cmd, js) + " " + q}, Why: why}
 }
 
 // jest only finds related tests among the files it indexes: under its
@@ -239,6 +273,14 @@ func jestSeesAll(ctx context.Context, js jsCmd, c *change, files []string) strin
 	}
 	for k := range shown.Configs {
 		p := &shown.Configs[k]
+		if p.Resolver != "" || len(p.ModulePaths) != 0 {
+			return "jest uses a custom resolver or modulePaths, which rw cannot follow"
+		}
+		for _, d := range p.ModuleDirectories {
+			if d != "node_modules" {
+				return "jest uses custom moduleDirectories, which rw cannot follow"
+			}
+		}
 		if p.Cwd == "" { // where jest ran: the check folder, in the sandbox too
 			if c.exec != nil {
 				return "this jest does not say which folder it ran in"
@@ -252,50 +294,65 @@ func jestSeesAll(ctx context.Context, js jsCmd, c *change, files []string) strin
 			}
 			p.ignore = append(p.ignore, re)
 		}
+		if why := p.readMappers(); why != "" {
+			return why
+		}
 	}
+	// Each project finds related tests in its own index: a changed file
+	// must be in one, and then that project's tests find it.
 	for _, f := range files {
 		f = strings.TrimPrefix(f, "./")
+		var why string
 		for _, p := range shown.Configs {
-			if why := p.unseen(f); why != "" {
-				return fmt.Sprintf("jest does not see %s (%s), so it cannot find the tests that use it", f, why)
+			if why = p.unseen(f); why == "" {
+				break
 			}
 		}
+		if why != "" {
+			if len(shown.Configs) > 1 {
+				return fmt.Sprintf("no jest project sees %s (%s), so jest cannot find the tests that use it", f, why)
+			}
+			return fmt.Sprintf("jest does not see %s (%s), so it cannot find the tests that use it", f, why)
+		}
 	}
-	// jest follows imports only through the files it sees: a test that
-	// imports ../index.js, outside roots: ["<rootDir>/src"], which imports
-	// a changed src/a.js, is not related to src/a.js. So no file jest sees
-	// may import, by a relative path, a file it does not see.
-	unseen := func(f string) string {
+	// jest follows imports only through the files a project indexes: a
+	// test that imports ../index.js, outside roots: ["<rootDir>/src"],
+	// which imports a changed src/a.js, is not related to src/a.js; nor is
+	// a test of one project that imports another project's file (by a
+	// relative path, a workspace package's name or a moduleNameMapper
+	// alias). So no file a project sees may import one it does not see.
+	t, why := readJSTree(c)
+	if why != "" {
+		return why
+	}
+	if why := pnpVirtualWorkspace(c, t); why != "" {
+		return why
+	}
+	for _, f := range t.computed {
 		for _, p := range shown.Configs {
-			if why := p.unseen(f); why != "" {
-				return why
+			if p.unseen(f) == "" {
+				return f + " imports a computed path, which jest's related-test search cannot follow"
 			}
 		}
-		return ""
 	}
-	code, ok := walk(c.dir, maxJSFiles, func(rel string, d os.DirEntry) bool { return jsCode[strings.ToLower(path.Ext(rel))] })
-	if !ok {
-		return "too many files to check what jest sees"
-	}
-	for _, f := range code {
-		if unseen(f) != "" {
-			continue
+	for _, p := range shown.Configs {
+		who := "jest"
+		if len(shown.Configs) > 1 {
+			who = "its jest project (" + p.RootDir + ")"
 		}
-		data, err := os.ReadFile(c.abs(f))
-		if err != nil {
-			return "could not read " + f
-		}
-		for _, m := range reJSRelImport.FindAllSubmatch(data, -1) {
-			target := path.Join(path.Dir(f), string(m[1]))
-			if target == ".." || strings.HasPrefix(target, "../") {
-				return fmt.Sprintf("%s imports %s, outside the check folder", f, m[1])
+		for _, f := range t.files {
+			if p.unseen(f) != "" {
+				continue
 			}
-			for _, cand := range jsImportCandidates(target) {
-				if st, err := os.Stat(c.abs(cand)); err != nil || st.IsDir() {
-					continue
+			for _, imp := range t.imports[f] {
+				targets, why := p.resolve(t, f, imp.spec)
+				if why != "" {
+					return fmt.Sprintf("%s imports %s, %s", f, imp.spec, why)
 				}
-				if why := unseen(cand); why != "" {
-					return fmt.Sprintf("%s imports %s, which jest does not see (%s), so it may miss tests that reach a change through it", f, cand, why)
+				for _, tg := range targets {
+					if why := p.unseen(tg); why != "" {
+						return fmt.Sprintf("%s imports %s, which %s does not see (%s), so it may miss tests that reach a change through it", f, tg, who, why)
+					}
 				}
 			}
 		}
@@ -305,26 +362,28 @@ func jestSeesAll(ctx context.Context, js jsCmd, c *change, files []string) strin
 
 const maxJSFiles = 50000
 
-// reJSRelImport finds an import of a relative path (import, export ...
-// from, require, dynamic import); group 1 is the path.
-var reJSRelImport = regexp.MustCompile(`(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)['"` + "`" + `](\.\.?/[^'"` + "`" + `\n]*)`)
-
 // jsImportCandidates are the files an import of target can load.
 func jsImportCandidates(target string) []string {
 	out := []string{target}
-	for ext := range jsCode {
+	for _, ext := range sortedKeys(jsCode) {
 		out = append(out, target+ext, target+"/index"+ext)
 	}
-	return append(out, target+".json")
+	return append(out, target+".json", target+"/index.json")
 }
 
 // jestProject is one project of `jest --showConfig`.
 type jestProject struct {
-	Cwd                      string   `json:"cwd"`
-	Roots                    []string `json:"roots"`
-	ModulePathIgnorePatterns []string `json:"modulePathIgnorePatterns"`
-	ModuleFileExtensions     []string `json:"moduleFileExtensions"`
+	ModuleNameMapper         []json.RawMessage `json:"moduleNameMapper"`
+	Resolver                 string            `json:"resolver"`
+	ModulePaths              []string          `json:"modulePaths"`
+	ModuleDirectories        []string          `json:"moduleDirectories"`
+	Cwd                      string            `json:"cwd"`
+	Roots                    []string          `json:"roots"`
+	ModulePathIgnorePatterns []string          `json:"modulePathIgnorePatterns"`
+	ModuleFileExtensions     []string          `json:"moduleFileExtensions"`
+	RootDir                  string            `json:"rootDir"`
 	ignore                   []*regexp.Regexp
+	mappers                  []jestMapper
 }
 
 // unseen says why jest's index of this project leaves out the
@@ -369,54 +428,4 @@ func underRoot(base, root, f string) bool {
 		return strings.HasPrefix(f+"/", r[len(b):]) // r[len(b):] is "src/" or "packages/a/"
 	}
 	return false
-}
-
-// vitest before 1.2.2 misses related tests that reach a changed file
-// through other files: on a real project, 0.34.6 and 1.2.1 ran no test for
-// a module that only other modules import, 1.2.2 ran all three. With
-// --passWithNoTests that is a pass.
-var vitestFixed = [3]int{1, 2, 2}
-
-// vitestRelatedWorks says why `vitest related` cannot be trusted here, or "".
-func vitestRelatedWorks(c *change) string {
-	v, ok := vitestVersion(c)
-	if !ok {
-		return "rw cannot find the vitest version (node_modules/vitest/package.json), and vitest before 1.2.2 misses related tests"
-	}
-	var n [3]int
-	for i, part := range strings.SplitN(strings.SplitN(v, "-", 2)[0], ".", 3) {
-		x, err := strconv.Atoi(part)
-		if err != nil {
-			return "rw cannot read the vitest version " + strconv.Quote(clipStr(v, 40))
-		}
-		n[i] = x
-	}
-	// A pre-release of 1.2.2 may lack the fix.
-	if slices.Compare(n[:], vitestFixed[:]) < 0 || (n == vitestFixed && strings.Contains(v, "-")) {
-		return "vitest " + strconv.Quote(clipStr(v, 40)) + " misses related tests that reach a changed file through other files (fixed in 1.2.2)"
-	}
-	return ""
-}
-
-// vitestVersion reads the version of the vitest node finds from the check
-// folder: in its node_modules or in one of a folder above, up to the repo.
-func vitestVersion(c *change) (string, bool) {
-	dir := c.dir
-	for {
-		data, err := os.ReadFile(filepath.Join(dir, "node_modules", "vitest", "package.json"))
-		if err == nil {
-			var pkg struct {
-				Version string `json:"version"`
-			}
-			if json.Unmarshal(data, &pkg) != nil || pkg.Version == "" {
-				return "", false
-			}
-			return pkg.Version, true
-		}
-		up := filepath.Dir(dir)
-		if _, ok := relDir(c.root, up); !ok || up == dir {
-			return "", false
-		}
-		dir = up
-	}
 }

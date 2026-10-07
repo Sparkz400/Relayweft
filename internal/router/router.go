@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 
 	"github.com/sparkz400/relayweft/internal/config"
 	"github.com/sparkz400/relayweft/internal/event"
@@ -48,6 +49,10 @@ type Step struct {
 	// Pin is a route picked before the step runs (a best-of candidate's):
 	// Route returns it as it is.
 	Pin *event.Decision
+	// Light moves a planner or reviewer step to the worker route on its
+	// provider (orchestrator.light_planning, for a task that does not
+	// look hard); other steps ignore it.
+	Light bool
 }
 
 // State is what the router needs to know about providers.
@@ -74,6 +79,11 @@ const (
 	RuleForced      = "forced"
 	RuleBestOf      = "best-of"
 	RuleResolve     = "conflict-resolve"
+	// RuleIndependentTests routes the independent test writer.
+	RuleIndependentTests = "independent-tests"
+	// RuleTestsFirst routes the acceptance test writer of rw run
+	// --tests-first.
+	RuleTestsFirst = "tests-first"
 )
 
 // Router applies the rules to the live config.
@@ -85,6 +95,43 @@ type Router struct {
 	// Pinned reports roles set explicitly (repo file, flags, session
 	// edits); tiers never move them. nil = none.
 	Pinned func(role string) bool
+
+	lean atomic.Pointer[Lean] // SetLean
+}
+
+// Lean is the provider the day planner sends a task's work to (rw run
+// --fill, dayplan): it wins over a role's named or auto preference, and
+// with Strict over prefer: other too (the other provider must be spared).
+// Roles set explicitly (Pinned) keep their provider, and a limit or
+// switch_at_utilization still moves work away from it.
+type Lean struct {
+	Provider string
+	Strict   bool
+}
+
+// SetLean sets the provider to lean on until the next call; a zero Lean
+// clears it.
+func (r *Router) SetLean(l Lean) {
+	if l.Provider == "" {
+		r.lean.Store(nil)
+		return
+	}
+	r.lean.Store(&l)
+}
+
+// leanFor is the provider the lean moves role to ("" = none): only one
+// that can run the role and may stand in for another.
+func (r *Router) leanFor(cfg *config.Config, role string, rc config.RoleCfg, usable func(string) bool) string {
+	l := r.lean.Load()
+	switch {
+	case l == nil || r.ForceProvider != "" || !usable(l.Provider) || cfg.Providers[l.Provider].OnlyPreferred:
+		return ""
+	case rc.Prefer == config.PreferOther && !l.Strict:
+		return ""
+	case r.Pinned != nil && r.Pinned(role):
+		return ""
+	}
+	return l.Provider
 }
 
 var readOnlyWords = regexp.MustCompile(`(?i)\b(where is|find|search|explain|summari[sz]e|describe|list|what does|how does|look up|read|overview|document how)\b`)
@@ -125,10 +172,33 @@ func (r *Router) Route(s Step) event.Decision {
 			// to save, and it is the route set up to stand by.
 			return d
 		}
-		return r.applyTier(cfg, s, d, rule)
+		return r.applyLight(cfg, s, r.applyTier(cfg, s, d, rule))
 	}
+	lean := d.Reason // resolve's note, only set when the day plan leaned
 	d.Rule, d.Reason = rule, reason
-	return Finalize(r.applyTier(cfg, s, learned(cfg, d), rule))
+	if lean != "" {
+		d.Reason += "; " + lean
+	}
+	return Finalize(r.applyLight(cfg, s, r.applyTier(cfg, s, learned(cfg, d), rule)))
+}
+
+// applyLight moves a light planner or reviewer step (Step.Light) to the
+// worker route on the same provider. A role set explicitly, or one without
+// a worker route there, keeps its own.
+func (r *Router) applyLight(cfg *config.Config, s Step, d event.Decision) event.Decision {
+	if !s.Light || (d.Role != event.RolePlanner && d.Role != event.RoleReviewer) {
+		return d
+	}
+	if r.Pinned != nil && r.Pinned(d.Role) {
+		return d
+	}
+	route := cfg.Roles[event.RoleWorker].For(d.Provider)
+	if route.Model == "" || (route.Model == d.Model && route.Effort == d.Effort) {
+		return d
+	}
+	d.Model, d.Effort = route.Model, route.Effort
+	d.Reason += "; light: worker route, the task does not look hard"
+	return d
 }
 
 // Hard reports whether a writing step looks hard enough to run as best of
@@ -231,6 +301,10 @@ func (r *Router) resolve(cfg *config.Config, s Step, role string) event.Decision
 		return pc.CanReadOnly(p)
 	}
 	pref := r.preferred(cfg, s, rc, usable)
+	lean := r.leanFor(cfg, role, rc, usable)
+	if lean != "" {
+		pref = lean
+	}
 	if !usable(pref) {
 		// No route on the preferred provider (or it is off): the first
 		// provider that has one and may stand in.
@@ -276,6 +350,9 @@ func (r *Router) resolve(cfg *config.Config, s Step, role string) event.Decision
 	}
 	if r.State != nil && r.ForceProvider == "" {
 		r.standby(cfg, role, &d, usable)
+	}
+	if lean != "" && d.Provider == lean && d.Rule == "" {
+		d.Reason = "the day plan leans on " + lean // Route appends it
 	}
 	route := rc.For(d.Provider)
 	d.Model, d.Effort = route.Model, route.Effort
@@ -428,8 +505,18 @@ func ParseJudge(reply string) (string, bool) {
 	return "", false
 }
 
+// MentionsWrite reports whether a text asks for a change (add, fix, write,
+// create, ...).
+func MentionsWrite(text string) bool { return writeWords.MatchString(text) }
+
 func looksReadOnly(prompt string) bool {
 	return readOnlyWords.MatchString(prompt) && !writeWords.MatchString(prompt)
+}
+
+// Sensitive returns the routing.sensitive_paths entry that the files or
+// text hit ("" = none).
+func (r *Router) Sensitive(files []string, text string) string {
+	return sensitive(r.Cfg().Routing.SensitivePaths, files, text)
 }
 
 func sensitive(words, files []string, text string) string {

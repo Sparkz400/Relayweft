@@ -52,6 +52,7 @@ func (r *recorder) all() []event.Event {
 func newOrc(t *testing.T, dir string, set runner.Set, edit func(*config.Config)) (*Orchestrator, *recorder) {
 	t.Helper()
 	cfg := config.Default()
+	classic(cfg)
 	if edit != nil {
 		edit(cfg)
 	}

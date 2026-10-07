@@ -31,6 +31,23 @@ func (d *Data) Markdown(w io.Writer) error {
 	if d.Summary != "" {
 		p("## Result\n\n%s\n", fence(d.Summary, "text"))
 	}
+	if a := d.Acceptance; a != nil {
+		p("## Acceptance\n\n| Level | Status | Detail |\n|---|---|---|\n")
+		p("| Agent finished | %s | %s |\n", md(a.Agents.Status), md(a.Agents.Detail))
+		p("| Configured checks passed | %s | %s |\n", md(a.Checks.Status), md(a.Checks.Detail))
+		p("| Requirements verified | %s | %s |\n\n", md(a.Requirements.Status), md(a.Requirements.Detail))
+		if len(a.Criteria) > 0 {
+			p("| Requirement | Status | Test | Evidence |\n|---|---|---|---|\n")
+			for _, c := range a.Criteria {
+				status := c.Status
+				if c.Note != "" {
+					status += " (" + c.Note + ")"
+				}
+				p("| %s %s | %s | %s | %s |\n", md(c.ID), md(c.Text), md(status), md(c.Test), md(c.Evidence))
+			}
+			p("\n")
+		}
+	}
 	if len(d.Steps) > 0 {
 		p("## Plan\n\n")
 		if d.PlanSummary != "" {
@@ -58,8 +75,43 @@ func (d *Data) Markdown(w io.Writer) error {
 			}
 		}
 	}
+	if e := d.Why; e != nil {
+		p("## Why it ran this way\n\n**%s**", md(e.Headline()))
+		if e.Shape != "" {
+			p(" · %s: %s", md(e.Shape), md(e.ShapeWhy))
+		}
+		p("\n\n")
+		if len(e.Runs) > 0 {
+			p("- %d agent run(s): %s\n", len(e.Runs), md(e.Agents()))
+			p("- fresh tokens: est %s (%s–%s), actual %s %s\n", fmtTok(int64(e.EstTokens.Mid)), fmtTok(int64(e.EstTokens.Low)), fmtTok(int64(e.EstTokens.High)),
+				fmtTok(e.Tokens.Total()), md(e.TokenDelta()))
+			if e.HasUSD() {
+				p("- $ (API-equivalent): est $%.2f, actual $%.2f %s\n", e.EstUSD.Mid, e.Tokens.CostUSD, md(e.USDDelta()))
+			}
+		}
+		for _, c := range e.Reviews {
+			p("- final review %s: %s\n", md(c.Outcome), md(c.Why))
+		}
+		for _, c := range e.ReqTests {
+			p("- independent tests %s (round %d): %s\n", md(c.Outcome), c.Round, md(c.Why))
+		}
+		for _, pw := range e.Providers {
+			p("- %s: %d run(s), %s fresh tokens · %s\n", md(pw.Provider), pw.Runs, fmtTok(pw.Tokens), md(strings.Join(pw.Rules, ", ")))
+		}
+		if len(e.Escalations) == 0 {
+			p("- escalations: none, every run kept its first route\n")
+		}
+		for _, x := range e.Escalations {
+			if where := x.Where(); where != "" {
+				p("- escalation at %s: %s — %s\n", md(where), md(x.What), md(x.Cause))
+			} else {
+				p("- escalation: %s — %s\n", md(x.What), md(x.Cause))
+			}
+		}
+		p("\n")
+	}
 	if len(d.Routes) > 0 {
-		p("## Routing decisions\n\n| Agent | Step | Role | Route | Rule | Reason | Confidence | Outcome | Tokens | Time |\n|---|---|---|---|---|---|---|---|---|---|\n")
+		p("## Routing decisions\n\n| Agent| Step | Role | Route | Rule | Reason | Confidence | Outcome | Tokens | Time |\n|---|---|---|---|---|---|---|---|---|---|\n")
 		for _, r := range d.Routes {
 			out := "not run"
 			switch {

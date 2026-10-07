@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -50,7 +51,9 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 	args = append(args, cfg.ExtraArgs...)
 	// Variadic too, but the permission mode always follows it.
 	args = append(args, claudeMCPArgs(s.MCP)...)
-	if s.ReadOnly {
+	if s.CheckOnly {
+		args = append(args, "--permission-mode", "dontAsk", "--tools", strings.Join(shellTools, ","))
+	} else if s.ReadOnly {
 		// dontAsk denies anything not allowed; --tools removes the write tools entirely.
 		args = append(args, "--permission-mode", "dontAsk", "--tools", ReadOnlyTools)
 	} else {
@@ -61,6 +64,9 @@ func ClaudeArgs(cfg config.ProviderCfg, s Spec) []string {
 		args = append(args, "--permission-mode", mode)
 	}
 	allowed := append([]string(nil), cfg.WriteAllowedTools...)
+	if s.CheckOnly {
+		allowed = nil
+	}
 	for _, c := range s.AllowedCommands {
 		// Exact command and with arguments (e.g. "go test ./pkg/..."), for
 		// both shell tools: Claude Code on Windows also has a PowerShell
@@ -105,17 +111,22 @@ type claudeParser struct {
 	// part inside input_tokens (Ollama does). Anthropic never reports
 	// input_tokens >= cache_read_input_tokens with a cache hit that large,
 	// so such a reading is taken as including the cache.
-	cacheGuess bool
-	session    string
-	final      string
-	lastMsg    string
-	tokens     event.TokenUsage
-	fatal      string
-	limit      bool
-	files      fileSet
-	gotDone    bool
-	calls      map[string]string // tool_use id -> "Tool arg", to name denied calls
-	denied     map[string]bool   // tool_use ids already reported as denied
+	cacheGuess       bool
+	session          string
+	final            string
+	lastMsg          string
+	tokens           event.TokenUsage
+	fatal            string
+	limit            bool
+	files            fileSet
+	gotDone          bool
+	calls            map[string]string // tool_use id -> "Tool arg", to name denied calls
+	denied           map[string]bool   // tool_use ids already reported as denied
+	messageUsage     map[string]event.TokenUsage
+	finalUsage       bool
+	commands         map[string]string // tool use id -> exact shell command
+	executed         map[string]bool
+	permissionDenied bool
 }
 
 type claudeLine struct {
@@ -150,15 +161,18 @@ type claudeLine struct {
 }
 
 type claudeMessage struct {
+	ID      string       `json:"id"`
+	Usage   *claudeUsage `json:"usage"`
 	Content []struct {
-		Type     string          `json:"type"`
-		ID       string          `json:"id"`
-		Text     string          `json:"text"`
-		Thinking string          `json:"thinking"`
-		Name     string          `json:"name"`
-		Input    json.RawMessage `json:"input"`
-		IsError  bool            `json:"is_error"`
-		Content  json.RawMessage `json:"content"`
+		Type      string          `json:"type"`
+		ID        string          `json:"id"`
+		ToolUseID string          `json:"tool_use_id"`
+		Text      string          `json:"text"`
+		Thinking  string          `json:"thinking"`
+		Name      string          `json:"name"`
+		Input     json.RawMessage `json:"input"`
+		IsError   bool            `json:"is_error"`
+		Content   json.RawMessage `json:"content"`
 	} `json:"content"`
 }
 
@@ -249,6 +263,16 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 			return nil
 		}
 		var out []event.Event
+		if m.ID != "" && m.Usage != nil {
+			if p.messageUsage == nil {
+				p.messageUsage = map[string]event.TokenUsage{}
+			}
+			u, prev := p.usage(m.Usage, 0), p.messageUsage[m.ID]
+			// Some snapshots omit fields already reported for this message.
+			u.Input, u.Cached = max(u.Input, prev.Input), max(u.Cached, prev.Cached)
+			u.Output, u.Reasoning = max(u.Output, prev.Output), max(u.Reasoning, prev.Reasoning)
+			p.messageUsage[m.ID] = u
+		}
 		for _, c := range m.Content {
 			switch c.Type {
 			case "text":
@@ -267,6 +291,17 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 						p.calls = map[string]string{}
 					}
 					p.calls[c.ID] = strings.TrimSpace(c.Name + " " + arg)
+					if c.Name == "Bash" || c.Name == "PowerShell" {
+						var input struct {
+							Command string `json:"command"`
+						}
+						if json.Unmarshal(c.Input, &input) == nil && input.Command != "" {
+							if p.commands == nil {
+								p.commands = map[string]string{}
+							}
+							p.commands[c.ID] = input.Command
+						}
+					}
 				}
 				if editTools[c.Name] {
 					p.files.add(arg)
@@ -277,6 +312,19 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 			}
 		}
 		return out
+	case "user":
+		var m claudeMessage
+		if json.Unmarshal(l.Message, &m) != nil {
+			return nil
+		}
+		for _, c := range m.Content {
+			if c.Type == "tool_result" && !c.IsError && p.commands[c.ToolUseID] != "" {
+				if p.executed == nil {
+					p.executed = map[string]bool{}
+				}
+				p.executed[c.ToolUseID] = true
+			}
+		}
 	case "result":
 		p.gotDone = true
 		var out []event.Event
@@ -285,20 +333,7 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 			out = append(out, p.deny(d.ToolUseID, d.ToolName, toolArg(d.ToolInput), "")...)
 		}
 		if l.Usage != nil {
-			u := l.Usage
-			p.tokens = event.TokenUsage{
-				Input:     u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens,
-				Cached:    u.CacheReadInputTokens,
-				Output:    u.OutputTokens,
-				Reasoning: u.OutputTokensDetails.ThinkingTokens,
-				CostUSD:   l.TotalCostUSD,
-			}
-			if p.inputHasCache || (p.cacheGuess && u.CacheReadInputTokens > 0 && u.InputTokens >= u.CacheReadInputTokens) {
-				p.tokens.Input = u.InputTokens + u.CacheCreationInputTokens
-			}
-			if p.noCost {
-				p.tokens.CostUSD = 0
-			}
+			p.tokens, p.finalUsage = p.usage(l.Usage, l.TotalCostUSD), true
 		}
 		if l.IsError || strings.HasPrefix(l.Subtype, "error") {
 			msg := strings.TrimSpace(l.Result)
@@ -326,6 +361,7 @@ func (p *claudeParser) Line(line []byte) []event.Event {
 // still succeed, but the user should see what the agent was not allowed
 // to do.
 func (p *claudeParser) deny(id, tool, arg, why string) []event.Event {
+	p.permissionDenied = true
 	if id != "" {
 		if p.denied[id] {
 			return nil
@@ -369,6 +405,20 @@ func (p *claudeParser) Finish(r *Result) {
 		r.Final = p.lastMsg
 	}
 	r.Tokens = p.tokens
+	if !p.finalUsage {
+		for _, u := range p.messageUsage {
+			r.Tokens = r.Tokens.Add(u)
+		}
+		r.Tokens.Incomplete = true
+	}
+	r.PermissionDenied = p.permissionDenied
+	r.Commands = nil
+	for id := range p.executed {
+		if !p.denied[id] {
+			r.Commands = append(r.Commands, p.commands[id])
+		}
+	}
+	slices.Sort(r.Commands)
 	r.Files = p.files.list()
 	if p.limit {
 		r.LimitHit = true
@@ -376,6 +426,18 @@ func (p *claudeParser) Finish(r *Result) {
 	if p.fatal != "" {
 		r.Err = errors.New(p.fatal)
 	}
+}
+
+func (p *claudeParser) usage(u *claudeUsage, usd float64) event.TokenUsage {
+	t := event.TokenUsage{Input: u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens,
+		Cached: u.CacheReadInputTokens, Output: u.OutputTokens, Reasoning: u.OutputTokensDetails.ThinkingTokens, CostUSD: usd}
+	if p.inputHasCache || (p.cacheGuess && u.CacheReadInputTokens > 0 && u.InputTokens >= u.CacheReadInputTokens) {
+		t.Input = u.InputTokens + u.CacheCreationInputTokens
+	}
+	if p.noCost {
+		t.CostUSD = 0
+	}
+	return t
 }
 
 func (p *claudeParser) sessionID() string { return p.session }

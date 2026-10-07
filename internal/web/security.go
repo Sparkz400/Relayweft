@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,7 +18,9 @@ import (
 // Security model (no cookies, no secret in any URL that reaches a server
 // or another process for longer than a moment):
 //
-//   - The server listens on 127.0.0.1 only.
+//   - The server listens on 127.0.0.1 only, unless phone access is on
+//     (phone.go): then also on one Tailscale or private address, where only
+//     phone sessions with fewer rights work.
 //   - rw prints (and opens) http://127.0.0.1:P/#b=<BOOTSTRAP>. The fragment
 //     is never sent to the server or in a Referer. A bootstrap is single
 //     use and expires after bootstrapTTL; rw prints a fresh one on Enter.
@@ -51,12 +54,17 @@ type auth struct {
 	mu         sync.Mutex
 	bootstraps map[string]time.Time // hash -> expiry (unused ones)
 	used       map[string]bool      // hashes of bootstraps already traded
-	sessions   map[string]time.Time // hash -> created
+	sessions   map[string]session   // hash -> session
 	now        func() time.Time
 }
 
+type session struct {
+	created time.Time
+	phone   bool // traded on the phone listener (phone.go)
+}
+
 func newAuth() *auth {
-	return &auth{bootstraps: map[string]time.Time{}, used: map[string]bool{}, sessions: map[string]time.Time{}, now: time.Now}
+	return &auth{bootstraps: map[string]time.Time{}, used: map[string]bool{}, sessions: map[string]session{}, now: time.Now}
 }
 
 func hashSecret(s string) string {
@@ -93,8 +101,9 @@ var (
 	errBootstrapUnknown = errors.New("this link is not valid for this rw (was rw restarted?)")
 )
 
-// trade spends a bootstrap and returns a new session secret.
-func (a *auth) trade(bootstrap string) (string, error) {
+// trade spends a bootstrap and returns a new session secret; phone says it
+// was traded on the phone listener.
+func (a *auth) trade(bootstrap string, phone bool) (string, error) {
 	if bootstrap == "" {
 		return "", errBootstrapUnknown
 	}
@@ -120,24 +129,30 @@ func (a *auth) trade(bootstrap string) (string, error) {
 	if len(a.sessions) >= maxSessions {
 		oldest, at := "", time.Time{}
 		for k, t := range a.sessions {
-			if oldest == "" || t.Before(at) {
-				oldest, at = k, t
+			if oldest == "" || t.created.Before(at) {
+				oldest, at = k, t.created
 			}
 		}
 		delete(a.sessions, oldest)
 	}
-	a.sessions[hashSecret(sess)] = a.now()
+	a.sessions[hashSecret(sess)] = session{created: a.now(), phone: phone}
 	return sess, nil
 }
 
 func (a *auth) sessionOK(s string) bool {
+	ok, _ := a.session(s)
+	return ok
+}
+
+// session reports whether s is a live session and whether it is a phone's.
+func (a *auth) session(s string) (ok, phone bool) {
 	if s == "" {
-		return false
+		return false, false
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	_, ok := a.sessions[hashSecret(s)]
-	return ok
+	v, ok := a.sessions[hashSecret(s)]
+	return ok, v.phone
 }
 
 // hostOK reports whether host (a Host header or an Origin's host) is this
@@ -146,6 +161,9 @@ func (s *Server) hostOK(host string) bool {
 	_, port, err := net.SplitHostPort(s.addr)
 	if err != nil || host == "" {
 		return false
+	}
+	if pa := s.PhoneAddr(); pa != "" && strings.EqualFold(host, pa) {
+		return true // the phone listener's address, as an IP literal
 	}
 	h, p, err := net.SplitHostPort(host)
 	if err != nil || p != port {
@@ -215,9 +233,19 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 		// The page and its assets are public; the API needs a session,
 		// except the call that trades a bootstrap for one.
-		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/session" && !s.auth.sessionOK(sessionOf(r)) {
-			fail(w, http.StatusUnauthorized, errors.New("no session - open the link printed by rw (press Enter in its terminal for a new one)"))
-			return
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/session" {
+			ok, phone := s.auth.session(sessionOf(r))
+			if !ok || (phoneConn(r) && !phone) {
+				fail(w, http.StatusUnauthorized, errors.New("no session - open the link printed by rw (press Enter in its terminal for a new one)"))
+				return
+			}
+			if phone {
+				if !phoneAllowed(r.Method, r.URL.Path) {
+					fail(w, http.StatusForbidden, errPhoneOnly)
+					return
+				}
+				r = r.WithContext(context.WithValue(r.Context(), ctxPhoneSession, true))
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -232,7 +260,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	sess, err := s.auth.trade(req.Bootstrap)
+	sess, err := s.auth.trade(req.Bootstrap, phoneConn(r))
 	if err != nil {
 		if errors.Is(err, errBootstrapUsed) && s.opt.Warn != nil {
 			s.opt.Warn("warning: a rw web link was used twice. If you did not open it twice, someone else on this machine may have read it - restart rw web.")
@@ -240,7 +268,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusUnauthorized, err)
 		return
 	}
-	writeJSON(w, map[string]string{"session": sess})
+	writeJSON(w, map[string]any{"session": sess, "phone": phoneConn(r)})
 }
 
 // reTaskID matches the task ids rw writes (no path separators).

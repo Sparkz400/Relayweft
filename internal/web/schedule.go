@@ -19,6 +19,9 @@ var scheduleTick = time.Second
 // a job without a start time, or a scheduled one whose time has come.
 func (s *Server) popDueLocked(now time.Time) *job {
 	for i, j := range s.queue {
+		if s.fill.on && j.plannable() {
+			continue // the day plan picks these (planQueue)
+		}
 		if j.at.IsZero() || !now.Before(j.at) {
 			s.queue = append(s.queue[:i:i], s.queue[i+1:]...)
 			return j
@@ -46,11 +49,12 @@ func (s *Server) scheduleLoop() {
 				s.launchLocked(next)
 			}
 		}
-		pending := s.current != nil && !s.current.at.IsZero()
+		pending := s.current != nil && !s.current.at.IsZero() || s.fillWaitingLocked()
 		for _, j := range s.queue {
 			pending = pending || !j.at.IsZero()
 		}
 		s.mu.Unlock()
+		s.planQueue(time.Now())
 		s.setAwake(pending && !s.opt.AllowSleep && !s.opt.Demo)
 		if next != nil {
 			s.notice("info", "starting scheduled task: "+oneLine(next.label(), 80))
@@ -81,7 +85,8 @@ func (s *Server) resetTime(provider string) (time.Time, string) {
 }
 
 // scheduleJob queues j to start at j.at (unattended, like every queued
-// task), or as soon as nothing runs when j.at is zero.
+// task, except for a workflow's approvals), or as soon as nothing runs
+// when j.at is zero.
 func (s *Server) scheduleJob(j *job) submitResult {
 	s.mu.Lock()
 	s.jobSeq++
@@ -94,14 +99,15 @@ func (s *Server) scheduleJob(j *job) submitResult {
 	if !j.at.IsZero() {
 		when = "at " + schedule.Clock(j.at, time.Now()) + " (in " + schedule.Left(time.Until(j.at)) + ")"
 	}
-	return submitResult{Status: "scheduled", JobID: j.ID, Message: "scheduled " + when + ", unattended: " + oneLine(j.label(), 60)}
+	return submitResult{Status: "scheduled", JobID: j.ID, Message: "scheduled " + when + ", " + j.approvalsNote() + ": " + oneLine(j.label(), 60)}
 }
 
-// handleSchedule: POST {"when": "02:30" | "in 2h" | "reset claude" | "2026-10-04 02:30", "text": "task"}.
+// handleSchedule: POST {"when": "02:30" | "in 2h" | "reset claude" | "2026-10-04 02:30", "text": "task", "workflow": "name"}.
 func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		When string `json:"when"`
-		Text string `json:"text"`
+		When     string `json:"when"`
+		Text     string `json:"text"`
+		Workflow string `json:"workflow"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -111,7 +117,14 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, errors.New("type a task first"))
 		return
 	}
-	if strings.HasPrefix(text, "@") {
+	j := &job{text: text}
+	if req.Workflow != "" {
+		var err error
+		if j, err = s.workflowJob(req.Workflow, text); err != nil {
+			fail(w, http.StatusBadRequest, err)
+			return
+		}
+	} else if strings.HasPrefix(text, "@") {
 		fail(w, http.StatusBadRequest, errors.New("follow-ups cannot be scheduled; schedule a task"))
 		return
 	}
@@ -124,7 +137,8 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, err)
 		return
 	}
-	res := s.scheduleJob(&job{text: text, at: at})
+	j.at = at
+	res := s.scheduleJob(j)
 	if note != "" {
 		res.Message = note + " - " + res.Message
 	}

@@ -255,6 +255,8 @@ func newMCPProfile(t *testing.T, extraEnv ...string) mcpProfile {
 			"codex":  map[string]any{"disabled": true},
 		},
 		"notify": map[string]any{"enabled": false},
+		// Scripted steps exercise planning, change review and resumption.
+		"orchestrator": map[string]any{"single_worker": false, "review_before_done": true},
 	}
 	data, _ := yaml.Marshal(cfg)
 	cfgFile := filepath.Join(profileConfigDir(profile), "relayweft", "relayweft.yaml")

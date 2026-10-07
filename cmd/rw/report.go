@@ -27,8 +27,9 @@ func cmdReport(args []string) error {
 		fmt.Fprint(os.Stderr, `Usage: rw report [task-id] [--out file.html] [--md] [--open]
 
 Writes one shareable page about a task: the task, plan and results, every
-routing decision with its rule and reason, reviews, checks, the diff and
-the cost. Default: the last task in this directory (rw history lists them).
+routing decision with its rule and reason, why the task ran as one agent
+or several with estimates against use and escalations (rw explain),
+reviews, checks, the diff and the cost. Default: the last task in this directory (rw history lists them).
 The page holds the task text, agent answers and the repo diff; no
 environment values or credentials.
 `)

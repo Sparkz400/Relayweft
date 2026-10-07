@@ -129,6 +129,9 @@ func decay(now, ts time.Time) float64 {
 // routedStep reports whether an agent run is a routed step: single-agent
 // baselines and follow-ups are whole conversations, not steps.
 func routedStep(r Record) bool {
+	if r.Kind == "preflight" || (r.Tokens != nil && r.Tokens.Incomplete) {
+		return false
+	}
 	return r.Type == TypeAgentEnd && !r.LimitHit && r.Role != "" && r.Model != "" && r.Step != "single" && r.Step != "followup"
 }
 

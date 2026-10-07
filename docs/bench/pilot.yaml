@@ -1,0 +1,32 @@
+# One task, four modes, one repetition. Uses real quota unless --validate.
+# See 2026-10-06-benchmark-followup.md and realistic.md for scope and limits.
+fair: true
+repeat: 1
+modes:
+- single:codex:gpt-6.1-sol:high
+- routed
+- routed-tiers
+- routed-bestof
+timeout: 20m
+learn: false
+tasks:
+- name: affected-module-index
+  disabled: Exact fallback-reason wording can fail correct selection; repair the scoring assertion first.
+  # Public checks only; the hidden scoring command below is never given to agents.
+  agent_checks:
+  - go test -p 2 -count=1 -timeout 60s ./internal/affected
+  - gofmt -l internal/affected
+  prompt: 'Affected-test selection can miss tests when a JavaScript import crosses Jest roots or ignored module
+    paths, and Gradle settings can describe layouts the selector cannot resolve. Inspect the existing selector,
+    preserve supported fast paths, and fall back to the full configured check when dependency coverage is uncertain.
+    Cover custom Jest index settings and multiline Gradle includes. Do not alter the correctness tests.
+
+    '
+  check: go test -p 2 -count=1 -timeout 120s -run "^(TestJestShowConfigCommand|TestSelectGradleIncludeLines|TestSelectJestIndex|TestSelectJestRoots)$"
+    {test_dirs}
+  base: ed2104e2ebb7bf709876343c8c80da58a592efd7
+  tests:
+    from: 24ee2b4197df22d4ae05f233beca66ea1341b329
+    files:
+    - internal/affected/eco_test.go
+    visible: false

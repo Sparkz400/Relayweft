@@ -80,7 +80,7 @@ func TestSelftest(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 	isolate(t)
-	args := []string{"selftest", "--files", "50", "--in", dir, "--sandbox", "off"} // TestSandboxSelftest
+	args := []string{"selftest", "--files", "50", "--in", dir, "--sandbox", "off", "--close", "off"} // TestSandboxSelftest, TestSelftestClose
 	oneDrive := filepath.Join(dir, "OneDrive - Test")
 	if runtime.GOOS == "windows" {
 		os.MkdirAll(oneDrive, 0o755)
@@ -123,6 +123,51 @@ func TestSelftest(t *testing.T) {
 	// Passed: the work folder is removed.
 	if ms, _ := filepath.Glob(filepath.Join(dir, "rw selftest *")); len(ms) != 0 {
 		t.Errorf("work folder left behind: %v", ms)
+	}
+}
+
+// TestSelftestClose runs `rw selftest --close only` (Windows): rw run and
+// the TUI in a console window of their own, in the old console and in
+// Windows Terminal when it is installed, and the window is closed while an
+// agent works. Nothing may be left running, and the task must stay
+// interrupted for rw resume, rw undo and redo. It opens and closes windows
+// on the desktop, so it runs only with RW_TEST_CLOSE=1.
+func TestSelftestClose(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("closing a console window is a Windows check")
+	}
+	if os.Getenv("RW_TEST_CLOSE") != "1" {
+		t.Skip("opens console windows on the desktop and closes them; set RW_TEST_CLOSE=1")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("needs git")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "rw.exe")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	isolate(t)
+	cmd := exec.Command(bin, "selftest", "--close", "only", "--files", "20", "--in", dir)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	got := string(out)
+	if err != nil || strings.Contains(got, "FAIL") {
+		t.Fatalf("rw selftest --close only: %v\n%s", err, got)
+	}
+	// The old console is always there: rw run and the TUI were closed in it.
+	if n := strings.Count(got, "ok   close"); n < 2 {
+		t.Errorf("%d window(s) closed, want at least 2 (rw run and the TUI in conhost):\n%s", n, got)
+	}
+	for _, want := range []string{"ok   orphans", "ok   history", "ok   resume", "ok   redo"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+	for _, l := range strings.Split(got, "\n") {
+		if strings.Contains(l, "close") || strings.Contains(l, "skip") {
+			t.Log(strings.TrimSpace(l))
+		}
 	}
 }
 

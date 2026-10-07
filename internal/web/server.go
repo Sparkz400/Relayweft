@@ -16,9 +16,12 @@ import (
 	"time"
 
 	"github.com/sparkz400/relayweft/internal/config"
+	"github.com/sparkz400/relayweft/internal/dayplan"
 	"github.com/sparkz400/relayweft/internal/event"
 	"github.com/sparkz400/relayweft/internal/notify"
 	"github.com/sparkz400/relayweft/internal/orchestrator"
+	"github.com/sparkz400/relayweft/internal/router"
+	"github.com/sparkz400/relayweft/internal/workflow"
 )
 
 // Options configure a server.
@@ -68,7 +71,9 @@ type Server struct {
 	interrupted *orchestrator.TaskState
 	last        *resultView
 	awake       func()               // releases the keep-awake while scheduled work is pending
+	phoneAddr   string               // the phone listener's host:port ("" = off; phone.go)
 	limitUntil  map[string]time.Time // per provider: the limit last posted to webhooks
+	fill        fillState            // the day planner (fill.go)
 	dash        dashCache
 
 	stateKick chan struct{}
@@ -115,6 +120,9 @@ func New(o Options) (*Server, error) {
 	return s, nil
 }
 
+// Config is the live config.
+func (s *Server) Config() *config.Config { return s.store.Get() }
+
 // Listen binds 127.0.0.1:port (0 = a free port). The server never listens
 // on other interfaces.
 func (s *Server) Listen(port int) (net.Listener, error) {
@@ -151,7 +159,9 @@ func (s *Server) Serve(ln net.Listener) error {
 		return nil
 	default:
 	}
-	s.httpSrv = s.newHTTPServer()
+	if s.httpSrv == nil {
+		s.httpSrv = s.newHTTPServer() // one server for the desktop and phone listeners
+	}
 	hs := s.httpSrv
 	s.mu.Unlock()
 	err := hs.Serve(ln)
@@ -171,6 +181,7 @@ func (s *Server) newHTTPServer() *http.Server {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
+		ConnContext:       s.markPhone,
 	}
 }
 
@@ -333,6 +344,9 @@ func (s *Server) webhook(ev, title, body string) {
 		return
 	}
 	msg := notify.Message{Event: ev, Title: title, Body: body, Source: filepath.Base(s.opt.Dir)}
+	if ev == notify.EventWaiting {
+		msg.Link = s.PhoneURL() // a paired phone opens it with its kept session
+	}
 	post := sendWebhooks
 	go func() {
 		if err := post(context.Background(), hooks, msg); err != nil {
@@ -390,6 +404,11 @@ type jobView struct {
 	Label string     `json:"label"`
 	Kind  string     `json:"kind"`
 	At    *time.Time `json:"at,omitempty"` // scheduled start
+	// Workflow names the saved workflow the job runs under; Gated: it
+	// waits for approval when it runs, though it was queued.
+	Workflow string    `json:"workflow,omitempty"`
+	Gated    bool      `json:"gated,omitempty"`
+	Plan     *slotView `json:"plan,omitempty"`
 }
 
 type stateView struct {
@@ -405,6 +424,7 @@ type stateView struct {
 	Paused      bool                      `json:"paused"`
 	Phase       string                    `json:"phase"`
 	Task        string                    `json:"task,omitempty"`
+	Workflow    string                    `json:"workflow,omitempty"` // the running task's
 	TaskStart   *time.Time                `json:"task_start,omitempty"`
 	Queue       []jobView                 `json:"queue"`
 	Approvals   []*Request                `json:"approvals"`
@@ -416,6 +436,7 @@ type stateView struct {
 	Last        *resultView               `json:"last,omitempty"`
 	Now         time.Time                 `json:"now"`
 	Budget      orchestrator.BudgetStatus `json:"budget"`
+	Fill        fillView                  `json:"fill"`
 }
 
 func (s *Server) snapshot() stateView {
@@ -450,18 +471,28 @@ func (s *Server) snapshot() stateView {
 	v.Running, v.Cancelling, v.Phase, v.Dirty, v.Interrupted, v.Last = s.running, s.cancelling, s.phase, s.dirty, s.interrupted, s.last
 	if s.current != nil {
 		v.Task = s.current.label()
+		if s.current.wf != nil {
+			v.Workflow = s.current.wf.Name
+		}
 		t := s.taskStart
 		v.TaskStart = &t
 	}
 	v.Queue = []jobView{}
 	for _, j := range s.queue {
 		jv := jobView{ID: j.ID, Label: j.label(), Kind: j.kind()}
+		if j.wf != nil {
+			jv.Workflow, jv.Gated = j.wf.Name, j.wf.Gated()
+		}
 		if !j.at.IsZero() {
 			at := j.at
 			jv.At = &at
 		}
+		if sl, ok := s.fill.slots[j.ID]; ok && s.fill.on && j.plannable() {
+			jv.Plan = &sl
+		}
 		v.Queue = append(v.Queue, jv)
 	}
+	v.Fill = s.fillViewLocked()
 	s.mu.Unlock()
 	v.Budget = s.orc.BudgetStatus()
 	return v
@@ -482,6 +513,14 @@ type job struct {
 	single     *singleRoute
 	unattended bool
 	at         time.Time // scheduled start (zero = as soon as possible)
+	// wf is the saved workflow the task runs under (text is its {{task}});
+	// its approvals hold even when the job is queued or scheduled.
+	wf *workflow.Definition
+	// The day plan (fill.go): the provider it leans on, whether the plan
+	// started it, and how often a limit-stopped task was resumed.
+	lean    router.Lean
+	planned bool
+	retries int
 }
 
 type singleRoute struct {
@@ -499,6 +538,8 @@ func (j *job) label() string {
 		return "resume: " + j.resume.Task
 	case j.single != nil:
 		return "single " + j.single.provider + ":" + j.single.route.Model + ": " + j.text
+	case j.wf != nil:
+		return j.wf.Name + ": " + j.text
 	}
 	return j.text
 }
@@ -596,6 +637,16 @@ func (s *Server) startJob(j *job) (submitResult, error) {
 	s.mu.Lock()
 	s.jobSeq++
 	j.ID = s.jobSeq
+	if s.fill.on && j.plannable() {
+		j.unattended = true
+		s.queue = append(s.queue, j)
+		s.fill.check = time.Time{}
+		n := len(s.queue)
+		s.mu.Unlock()
+		go s.planQueue(time.Now())
+		return submitResult{Status: "queued", JobID: j.ID,
+			Message: fmt.Sprintf("queued (%d) for the day plan: runs unattended when a window has room", n)}, nil
+	}
 	if s.running {
 		if j.resume != nil {
 			s.mu.Unlock()
@@ -607,7 +658,7 @@ func (s *Server) startJob(j *job) (submitResult, error) {
 		s.mu.Unlock()
 		s.kick()
 		return submitResult{Status: "queued", JobID: j.ID,
-			Message: fmt.Sprintf("queued (%d): runs unattended (no approvals) after the current task", n)}, nil
+			Message: fmt.Sprintf("queued (%d): runs after the current task, %s", n, j.approvalsNote())}, nil
 	}
 	if s.orc.Running() {
 		s.mu.Unlock()
@@ -635,11 +686,18 @@ func (s *Server) launchLocked(j *job) {
 		s.orc.SetPaused(false) // a resumed task must not start paused
 	}
 	orc := s.orc
+	hits := 0
+	if j.planned {
+		hits = dayplan.LimitHits(orc.Tracker(), s.store.Get())
+	}
 	go func() {
+		var res orchestrator.TaskResult
+		var id string
 		defer func() {
+			cancelled := ctx.Err() != nil
 			cancel()
 			close(done)
-			s.jobFinished()
+			s.jobFinished(j, res, id, cancelled, hits)
 		}()
 		switch {
 		case j.followUp:
@@ -647,17 +705,27 @@ func (s *Server) launchLocked(j *job) {
 		case j.single != nil:
 			orc.RunSingle(ctx, j.text, j.single.provider, j.single.route)
 		default:
-			orc.RunWith(ctx, j.text, orchestrator.TaskOptions{Unattended: j.unattended, Resume: j.resume, Force: j.force})
+			text := j.text
+			if j.wf != nil {
+				text, _ = j.wf.Render(text) // checked when the job was made
+			}
+			res = orc.RunWith(ctx, text, orchestrator.TaskOptions{Unattended: j.unattended, Resume: j.resume, Force: j.force,
+				Workflow: j.wf, Lean: j.lean, Started: func(s string) { id = s }})
 		}
 	}()
 }
 
-// jobFinished runs the next queued job, if any.
-func (s *Server) jobFinished() {
+// jobFinished runs the next queued job, if any (with fill on, the day
+// plan picks the next task).
+func (s *Server) jobFinished(j *job, res orchestrator.TaskResult, id string, cancelled bool, hits int) {
 	s.mu.Lock()
 	s.running, s.cancelling = false, false
 	s.cancel = nil
 	s.current = nil
+	note := ""
+	if j.planned {
+		note = s.fillAfterLocked(j, res, id, cancelled, hits)
+	}
 	next := s.popDueLocked(time.Now()) // scheduled jobs wait for their time
 	left := len(s.queue)
 	if next != nil {
@@ -668,9 +736,15 @@ func (s *Server) jobFinished() {
 			s.launchLocked(next)
 		}
 	}
+	fill := s.fill.on
 	s.mu.Unlock()
+	if note != "" {
+		s.notice("warn", note)
+	}
 	if next != nil {
 		s.notice("info", fmt.Sprintf("starting queued task (%d left): %s", left, oneLine(next.label(), 80)))
+	} else if fill {
+		s.planQueue(time.Now())
 	}
 	s.kick()
 }

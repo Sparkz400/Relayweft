@@ -86,5 +86,5 @@ Several servers are separated by commas. When `AZURE_DEVOPS_HOST` is set, the to
 
 ## Not yet
 
-- A CI template (`azure-pipelines.yml`) like the GitLab and Forgejo ones in `ci/`.
+- Hosted validation of the [Azure Pipelines template](ci-azure-bitbucket.md).
 - Group members of teams, and custom processes whose closed states have other names.

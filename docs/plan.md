@@ -5,7 +5,7 @@
 **Name:** Relayweft (until v0.2.0: Switchyard, a rail yard where trains get routed onto the right track; renamed because that name was taken on the VS Code Marketplace)
 **Command:** `rw` (until v0.2.0: `sy`)
 **Language:** Go
-**Auth:** subscriptions only — no API keys, no token extraction
+**Auth:** subscriptions by default through the providers' CLIs; optional providers manage their own credentials. No token extraction.
 
 ---
 
@@ -17,11 +17,10 @@
 4. **Look great:** a live, animated agent tree in the terminal.
 5. **Survive limits:** when one subscription hits its usage limit, shift work to the other provider automatically.
 
-### Non-goals (for now)
+### Current scope
 
-- No direct API calls or API keys.
-- No custom model client. Relayweft only drives the official `codex` and `claude` CLIs.
-- No cross-platform polish beyond Windows (macOS/Linux should mostly work, but aren't tested).
+- Relayweft drives agent CLIs rather than implementing a model client. Codex and Claude are the defaults; [extra providers](providers.md) are opt-in and may use provider-specific API keys.
+- Windows remains the primary desktop target. Windows, Linux and macOS have automated CI coverage; each local batch records which systems were actually run. Native desktop and sustained-use evidence remain separate gates in [the roadmap](../ROADMAP.md).
 
 ---
 
@@ -260,6 +259,13 @@ All milestones M0–M8 are implemented. The README covers usage. The open questi
 | Legacy conhost | Detected when no `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI`, ... is set on Windows; the ASCII theme is used. `--ascii`/`--unicode` override it. |
 | Killing agent trees | Unix: process groups. Windows: `taskkill /T /F` per agent, plus a kill-on-close job object around `rw` itself so nothing outlives it. |
 | Pause | Holds dispatching of new agents. Running agents finish (suspending a CLI mid-request risks API timeouts). |
-| Small tasks | Fewer than `small_task_words` (12) words skips the planner and parallelism. |
+| Small tasks | Fewer than `small_task_words` (12) words skips the planner and parallelism. With `auto_single` (default), so does a longer task that names at most 2 files, has at most 2 list items, at most 150 words, no broad word (refactor, migrate, across, every file, ...), no sensitive path and a difficulty below the strong tier; `rw run --plan` always plans. |
+| Default execution | `single_worker: true` runs new single-repository tasks with one worker, snapshots, project checks and bounded repairs. `--plan` explicitly requests planning; multi-repository and resumed tasks keep their planning boundaries. |
+| Light planning | With `light_planning` (default), a task that does not look hard or sensitive is planned and reviewed on the worker route of the planner's and reviewer's providers. |
+| Final review | Off by default (`review_before_done: false`). When enabled, `review_when` decides when it runs. `untested` (the default): only on a task without checks; with checks, the checks and the independent tests decide, a failure's output (not a reviewer's advice) goes into the fix round, and a step that failed fails the task without a review. `failing`: with checks, only after they fail and a fix round follows, so its advice goes into that round; when the checks pass the task ends without one; without checks, after every round. `large`: skipped when `verify.commands` ran and pass, every step succeeded, no review asked for changes and the diff has at most `review_skip_max_lines` (80) added plus removed lines, no binary file, no sensitive path and no listed criteria. `always`: after every round. |
+| Detected checks | With no `verify.commands` and `verify.auto` on (the default), rw detects the repo's checks from its build files when a task starts, the way `rw init` does (go build and test, cargo, the package.json test script, pytest, dotnet, Maven, Gradle), and runs them like configured ones. |
+| Budget-fitted plans | With `fit_budget` (default) and a budget limit, the planner gets the remaining budget and a suggested step count. A plan whose estimate plus the final review (or the independent test writer in its place) and one fix round exceeds what is left first drops the plan review, then best-of candidates, then merges single-repo work into one step carrying every step's prompt. Multi-repo plans retain their repository assignments and dependencies; budget admission still applies. A single-repo task whose budget cannot fund the planner, one writer and the finish runs as one step. Estimates come from the reservation history (fixed defaults in `rw bench`). |
+| Tests first | With `rw run --tests-first` (or `tests_first`), the worker route on the next provider other than the implementer's writes acceptance tests before the plan, from the task text alone. It may run the test runner each configured check starts with (`go test`, `pytest`, `npm test`, …) with any arguments, so it can run just its new tests and see them fail. rw undoes its changes outside test files, runs its command once (it must fail; a command that is not a plain test runner or a configured check is not run), adds it in front of `verify.commands` for this task, advances the worktree snapshot so every writer sees the tests, and puts the tests back before each verify run. With no tests written, a terminal asks the person to write them; otherwise the task stops before any code. With `--approve` the tests are shown for approval first. Unlike `independent_tests`, the writers see these tests and they stay in your tree; a task with both runs only these. |
+| Independent tests | With `independent_tests` (off by default; generated expectations can be wrong), a task that changes files in a git repo with `verify.commands` gets a test writer next to its worker: the worker route on the next provider that can write (the worker's own provider if none can), in a pool worktree at the task's start, so it never sees the change. Its prompt has the task text, the repo docs and the checks, and asks for one test per requirement the task names, through names the task gives or the repo already has. rw keeps only new files with `rwreq` in their name (at most 20 files, 1 MB) and the writer's `COMMAND:` line if it is a check or starts with a narrowed check prefix and has no shell syntax (else the checks run the files). After the checks, rw puts the files in your tree, runs them and removes them. A failure fails the round like a check: the fix agent gets the output and the writer's requirement list, and the files sit in its tree while it works (unless it works in a pool worktree). It may answer `DISPUTE: <test>: <why>` for a test that asks for more than the task; rw records that as a choice. With `independent_tests_gate: soft` (the default) the tests fail a round only once, and only when a fix round can follow; tests that still fail after it are reported in the summary and in `rw explain` (with the dispute, if any) instead of failing the task. `strict` fails every round, as before. The tests never land, a file whose path the change already has is skipped, and a resumed task gets none. `rw bench --replay-tests` measures it on saved runs, `rw bench --replay-fix` what the fix round it starts does to them; mode `routed-review` runs the final review in its place, to compare live. |
 | Read-only safety | Codex `--sandbox read-only`. Claude `--permission-mode dontAsk --tools Read,Grep,Glob,WebSearch,WebFetch`. |
 | Token accounting | "Tokens" in the UI and stats are fresh tokens (uncached input + output). Cached reads are shown separately in `rw stats`. |

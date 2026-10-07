@@ -43,6 +43,7 @@ type RunTaskIn struct {
 	ReadOnly      bool    `json:"read_only,omitempty" jsonschema:"true: one read-only agent answers the prompt (explain, find, review); nothing is changed"`
 	BudgetUSD     float64 `json:"budget_usd,omitempty" jsonschema:"stop the task at this API-equivalent cost in USD; can only lower the user's budget"`
 	BudgetTokens  int64   `json:"budget_tokens,omitempty" jsonschema:"stop the task at this many fresh tokens; can only lower the user's budget"`
+	Workflow      string  `json:"workflow,omitempty" jsonschema:"run the prompt as the task of this saved workflow (rw workflow lists them): its checks, budget caps and approvals apply, and approve_plan or review_changes false cannot drop its approvals"`
 }
 
 // TaskIn names a task.

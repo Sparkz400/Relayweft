@@ -180,10 +180,16 @@ func (o *Orchestrator) estimatePlan(t *task, hist *sessionlog.History, p Plan) P
 		wall[st.ID] = se.Seconds
 	}
 	e.Seconds = planWall(p, wall, cfg.Orchestrator.Parallel && cfg.Orchestrator.MaxThreads > 1)
-	if cfg.Orchestrator.ReviewBeforeDone && hasEdits(p) {
+	if hasEdits(p) && reviewExpected(t, cfg.Orchestrator) {
 		// The final review runs after every step.
-		se := add(FinalReviewID, "final review", router.Step{ID: FinalReviewID, Title: "final review", Kind: router.KindReview, MainProvider: t.mainProv})
+		se := add(FinalReviewID, "final review", router.Step{ID: FinalReviewID, Title: "final review", Kind: router.KindReview, MainProvider: t.mainProv, Light: t.shape.light})
 		e.Seconds = e.Seconds.Add(se.Seconds)
+	}
+	if reqTestsExpected(t, p) {
+		// The test writer works next to the steps: its tokens add up, its
+		// wall time does not.
+		d := o.testerRoute(t, o.planWorker(p))
+		add(ReqTestsID, "independent tests", router.Step{ID: ReqTestsID, Title: reqTestsTitle, Kind: router.KindEdit, Pin: &d})
 	}
 	o.checkEstimate(t, &e)
 	return e
@@ -364,7 +370,7 @@ func (o *Orchestrator) Estimate(ctx context.Context, text string) (Plan, PlanEst
 	if cfg.Orchestrator.Handoff {
 		for _, r := range t.allRepos() {
 			if r.root != "" {
-				r.repoMap, r.repoNotes = repoMap(r.root), repoNotes(r.root)
+				r.repoMap, r.repoNotes = repoMap(r.root), repoNotes(r.root, text)
 			}
 		}
 	}
@@ -376,15 +382,17 @@ func (o *Orchestrator) Estimate(ctx context.Context, text string) (Plan, PlanEst
 	o.emit(event.Event{Kind: event.Phase, Text: "plan"})
 	var plan Plan
 	ok := true
-	if words := len(strings.Fields(text)); cfg.Orchestrator.SmallTaskWords > 0 && words < cfg.Orchestrator.SmallTaskWords && len(t.repos) == 0 {
+	t.shape = o.shapeTask(t)
+	if p, why, short, _ := o.shortcutPlan(t); short {
 		// The same shortcut as a real run: one step, no planner.
-		plan = Plan{Summary: "small task: one worker step", Subtasks: []Subtask{{ID: "work", Title: firstWords(text, 6), Kind: router.KindEdit, Prompt: text}}}
-		if looksRead(text) {
-			plan.Subtasks[0].Kind, plan.Subtasks[0].ID = router.KindExplore, "explore"
-		}
+		plan = p
+		o.logf("%s", why)
 		t.mainProv = o.router.Route(router.Step{ID: "plan", Kind: router.KindPlan}).Provider
 	} else {
 		plan, ok = o.plan(bctx, t, "", nil)
+		if ok {
+			plan, _ = o.fitPlan(t, plan, false)
+		}
 	}
 	plan.Repos = t.workspaceNames()
 	var e PlanEstimate

@@ -239,6 +239,8 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 	} else if o.opts.Tracker.Limited(s.Provider) {
 		res.Err = fmt.Errorf("%s is at its usage limit; try again after it resets", s.Provider)
 		res.LimitHit = true
+	} else if err := o.preflight(bctx, t, s.Provider); err != nil {
+		res.Err = err
 	} else {
 		d := event.Decision{StepID: "followup", StepTitle: label, Role: s.Role, Provider: s.Provider, Model: s.Model, Effort: s.Effort,
 			Rule: router.RuleForced, Reason: label, Confidence: 1}
@@ -273,13 +275,15 @@ func (o *Orchestrator) FollowUpSession(ctx context.Context, s AgentSession, text
 			}
 		}
 		run := func(title string) runner.Result {
-			if !o.checkBudget(bctx, t, "start "+title) {
+			account, admitted := o.admitAgent(bctx, t, router.Step{ID: "followup", Title: title, Kind: router.KindEdit}, d, s.AgentID)
+			if !admitted {
 				return runner.Result{Err: errBudget, Killed: true}
 			}
+			defer account(event.TokenUsage{Incomplete: true})
 			o.emit(event.Event{Kind: event.AgentQueued, AgentID: s.AgentID, Provider: s.Provider, Model: s.Model, Role: s.Role, Text: title})
 			r := rn.Run(bctx, spec, o.emit)
 			o.opts.Tracker.AddUsage(s.Provider, r.Tokens)
-			t.addTokens(s.Provider, r.Tokens)
+			account(r.Tokens)
 			o.noteBudget(t, s.AgentID)
 			return r
 		}
@@ -483,6 +487,7 @@ func (o *Orchestrator) deliverTold(ctx context.Context, rn runner.Runner, spec r
 }
 
 func addUsage(a, b event.TokenUsage) event.TokenUsage {
+	a.Incomplete = a.Incomplete || b.Incomplete
 	a.Input += b.Input
 	a.Output += b.Output
 	a.Reasoning += b.Reasoning

@@ -27,7 +27,9 @@ func newModelWith(t *testing.T, ascii bool, ap *Approver) (*Model, *orchestrator
 	t.Helper()
 	isolateState(t)
 	ch := make(chan event.Event, 4096)
-	store := config.NewStore(config.Default(), filepath.Join(t.TempDir(), "relayweft.yaml"))
+	cfg := config.Default()
+	cfg.Orchestrator.Classic() // these tests drive the planner and its approval
+	store := config.NewStore(cfg, filepath.Join(t.TempDir(), "relayweft.yaml"))
 	fake := runner.NewFakeSet(0)
 	opts := orchestrator.Options{
 		Dir: t.TempDir(), Store: store, Runners: func(*config.Config) runner.Set { return fake },

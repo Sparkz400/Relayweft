@@ -41,18 +41,19 @@ type ModeStats struct {
 
 // Stats is the result of Aggregate.
 type Stats struct {
-	Sessions  int
-	Since     time.Time
-	Routes    []*RouteStats
-	Rules     map[string]int
-	Fallbacks int
-	Modes     []*ModeStats
-	Reviews   int
-	Approved  int
-	Merges    int
-	MergeFail int
-	Recent    []Record    // newest task_end records (with cost), newest first
-	Days      []*DayStats // last 7 local calendar days that had tasks, newest first
+	Sessions      int
+	Since         time.Time
+	Routes        []*RouteStats
+	Rules         map[string]int
+	Fallbacks     int
+	Modes         []*ModeStats
+	Reviews       int
+	Approved      int
+	Merges        int
+	MergeFail     int
+	SavedBranches int
+	Recent        []Record    // newest task_end records (with cost), newest first
+	Days          []*DayStats // last 7 local calendar days that had tasks, newest first
 	// DayLimitUSD and DayLimitTokens are the daily budget (config budget.day_*;
 	// 0 = none), set by the caller to show it in the per-day table.
 	DayLimitUSD    float64 `json:"day_limit_usd,omitempty"`
@@ -238,6 +239,10 @@ func Aggregate(recs []Record, f Filter) Stats {
 				s.Approved++
 			}
 		case TypeMerge:
+			if SavedMerge(r) {
+				s.SavedBranches++
+				continue
+			}
 			s.Merges++
 			if r.OK == nil || !*r.OK {
 				s.MergeFail++
@@ -356,6 +361,9 @@ func (s Stats) Print(w io.Writer) {
 	tw.Flush()
 	fmt.Fprintf(w, "  limit fallbacks: %d   reviews: %d (%d approved)   merges: %d (%d failed)\n",
 		s.Fallbacks, s.Reviews, s.Approved, s.Merges, s.MergeFail)
+	if s.SavedBranches > 0 {
+		fmt.Fprintf(w, "  saved alternatives: %d\n", s.SavedBranches)
+	}
 
 	if len(s.Modes) > 0 {
 		fmt.Fprintln(w, "\nTasks: Relayweft (routed) vs single-agent baseline (`rw run --single ...`)")

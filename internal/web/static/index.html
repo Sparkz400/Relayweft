@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1014">
 <title>Relayweft</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2312151a'/%3E%3Cpath d='M7 11h14l-4-4M25 21H11l4 4' stroke='%2310A37F' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M25 21H11l4 4' stroke='%23D97757' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/assets/app.css">
@@ -26,16 +27,21 @@
     <div class="providers" id="providers"></div>
     <div class="cost" id="cost" title="Cost of the last task"></div>
     <div class="cost budget" id="budget" hidden></div>
-    <div class="actions">
+    <div class="actions" id="dashboard-actions">
       <button class="btn icon" id="btn-pause" title="Pause dispatching (running agents finish)"><svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></button>
       <button class="btn icon danger" id="btn-cancel" title="Cancel the task (Ctrl+X)"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <button class="btn mobile-menu" id="btn-menu" aria-controls="dashboard-actions" aria-expanded="false">Menu</button>
       <span class="sep"></span>
+      <button class="btn ghost nav" data-panel="recovery" title="Recover interrupted work and undo changes"><svg viewBox="0 0 24 24"><path d="M4 8v6h6M4 14a8 8 0 1 0 2-8"/></svg><span>Recovery</span></button>
+      <button class="btn ghost nav" data-panel="memory" title="Inspect and edit project memory"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5zM8 8h8M8 12h8M8 16h5"/></svg><span>Memory</span></button>
       <button class="btn ghost nav" data-panel="dashboard" title="Dashboard: tasks, cost, routes, limits and health over 7, 30 or 90 days"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="9" rx="1.5"/><rect x="13" y="4" width="7" height="5" rx="1.5"/><rect x="13" y="11" width="7" height="9" rx="1.5"/><rect x="4" y="15" width="7" height="5" rx="1.5"/></svg><span>Dashboard</span></button>
       <button class="btn ghost nav" data-panel="models" title="Models and routes"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg><span>Models</span></button>
       <button class="btn ghost nav" data-panel="queue" title="Queued tasks"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Queue</span><b class="badge" id="queue-badge" hidden>0</b></button>
+      <button class="btn ghost nav" data-panel="overnight" title="Overnight: what ran unattended, and what needs you (rw morning)"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg><span>Overnight</span></button>
       <button class="btn ghost nav" data-panel="history" title="Task history and resume"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v4h4M12 7v5l3 2"/></svg><span>History</span><b class="badge warn" id="history-badge" hidden>!</b></button>
       <button class="btn ghost nav" data-panel="stats" title="Usage statistics and routing suggestions"><svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></svg><span>Stats</span></button>
       <button class="btn ghost nav" data-panel="health" title="Reliability: crashes, hangs, load peaks and leftovers (rw health)"><svg viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg><span>Health</span><b class="badge warn" id="health-badge" hidden>!</b></button>
+      <button class="btn ghost nav" data-panel="phone" id="nav-phone" title="Approve from your phone: pair it with a QR code" hidden><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/></svg><span>Phone</span></button>
       <button class="btn ghost nav" data-panel="settings" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
       <button class="btn icon ghost" id="btn-theme" title="Toggle light / dark theme"><svg viewBox="0 0 24 24" class="i-moon"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><svg viewBox="0 0 24 24" class="i-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
     </div>
@@ -75,6 +81,7 @@
   <footer class="composer">
     <div class="ac" id="ac" hidden></div>
     <div class="composer-box">
+      <select id="workflow" class="sel-in wf-pick" title="Run the task as a saved workflow: its checks, budget caps and approvals" hidden></select>
       <textarea id="prompt" rows="1" spellcheck="false" placeholder="Describe a task…  @agent to follow up · Enter to run · Shift+Enter for a new line"></textarea>
       <button class="btn primary" id="btn-send"><span id="send-label">Run</span><kbd>↵</kbd></button>
     </div>
@@ -100,7 +107,7 @@
     <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 11h17l-5-5" class="logo-a"/><path d="M26 21H9l5 5" class="logo-b"/></svg>
     <h2>Open the link printed by rw</h2>
     <p id="locked-why">This page needs the private link that <code>rw web</code> printed in its terminal.</p>
-    <p class="muted">Press <kbd>Enter</kbd> in that terminal for a fresh link. Each link works once and for two minutes.</p>
+    <p class="muted" id="locked-how">Press <kbd>Enter</kbd> in that terminal for a fresh link. Each link works once and for two minutes.</p>
   </div>
 </div>
 

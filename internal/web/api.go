@@ -59,6 +59,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/approvals/{id}/budget", s.handleBudget)
 	mux.HandleFunc("POST /api/approvals/{id}/conflict", s.handleConflict)
 	mux.HandleFunc("POST /api/schedule", s.handleSchedule)
+	mux.HandleFunc("GET /api/workflows", s.handleWorkflows)
+	mux.HandleFunc("POST /api/workflows/init", s.handleWorkflowsInit)
+	mux.HandleFunc("GET /api/fill", s.handleFill)
+	mux.HandleFunc("POST /api/fill", s.handleFill)
+	mux.HandleFunc("GET /api/whoami", s.handleWhoami)
+	mux.HandleFunc("GET /api/phone", s.handlePhone)
+	mux.HandleFunc("GET /api/morning", s.handleMorning)
 	mux.HandleFunc("GET /api/routes", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.routes()) })
 	mux.HandleFunc("POST /api/routes", s.handleSetRoute)
 	mux.HandleFunc("POST /api/config/save", func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +81,13 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /api/settings", s.handleSettings)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
+	mux.HandleFunc("GET /api/explain/{id}", s.handleExplain)
+	mux.HandleFunc("GET /api/results/{id}", s.handleInspection)
 	mux.HandleFunc("POST /api/resume", s.handleResume)
+	mux.HandleFunc("GET /api/memory", s.handleMemory)
+	mux.HandleFunc("POST /api/memory", s.handleMemory)
+	mux.HandleFunc("GET /api/recovery", s.handleRecovery)
+	mux.HandleFunc("POST /api/recovery/undo", s.handleRecoveryUndo)
 	mux.HandleFunc("GET /api/queue", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.snapshot().Queue) })
 	mux.HandleFunc("POST /api/queue/remove", s.handleQueueRemove)
 	mux.HandleFunc("POST /api/queue/clear", func(w http.ResponseWriter, r *http.Request) {
@@ -199,6 +212,8 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Text   string `json:"text"`
 		Single string `json:"single"` // provider:model[:effort]: one agent only
+		// Workflow runs the text as a saved workflow's task (not with Single).
+		Workflow string `json:"workflow"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -207,7 +222,18 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		res submitResult
 		err error
 	)
-	if req.Single != "" {
+	if req.Workflow != "" {
+		if req.Single != "" {
+			fail(w, http.StatusBadRequest, errors.New("a workflow runs a planned task; it does not combine with a single agent"))
+			return
+		}
+		j, jerr := s.workflowJob(req.Workflow, req.Text)
+		if jerr != nil {
+			fail(w, http.StatusBadRequest, jerr)
+			return
+		}
+		res, err = s.startJob(j)
+	} else if req.Single != "" {
 		prov, route, perr := config.ParseRouteSpec(req.Single)
 		if perr != nil {
 			fail(w, http.StatusBadRequest, perr)
@@ -272,6 +298,15 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	if phoneSession(r) && req.OK {
+		// A phone approves the plan as proposed: edits are new instructions.
+		proposed, err := s.ap.ProposedPlan(r.PathValue("id"))
+		if err != nil {
+			fail(w, http.StatusGone, err)
+			return
+		}
+		req.Plan = proposed
+	}
 	p, err := s.ap.AnswerPlan(r.PathValue("id"), req.Plan, req.OK)
 	if err != nil {
 		code := http.StatusBadRequest
@@ -315,6 +350,10 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		Feedback string           `json:"feedback"`
 	}
 	if !readJSON(w, r, &req) {
+		return
+	}
+	if phoneSession(r) && strings.TrimSpace(req.Feedback) != "" {
+		fail(w, http.StatusForbidden, errors.New("feedback to the agent needs the PC: from a phone, apply or reject"))
 		return
 	}
 	d, err := s.ap.AnswerChanges(r.PathValue("id"), orchestrator.ChangeDecision{Apply: req.Apply, Hunks: req.Hunks, Feedback: strings.TrimSpace(req.Feedback)})
@@ -578,6 +617,8 @@ type historyRow struct {
 	Done        int       `json:"done"`
 	Dir         string    `json:"dir"`
 	Here        bool      `json:"here"`
+	// Acceptance: agents finished, checks passed, requirements verified.
+	Acceptance *orchestrator.Acceptance `json:"acceptance,omitempty"`
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -592,7 +633,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	rows := []historyRow{}
 	for _, t := range orchestrator.History(dir, n) {
 		h := historyRow{ID: t.ID, Task: t.Task, Status: t.Status, Interrupted: t.Interrupted(), Created: t.Created, Updated: t.Updated,
-			Summary: t.Summary, Cost: t.CostLine, Dir: t.Dir, Here: sameDir(t.Dir, s.opt.Dir)}
+			Summary: t.Summary, Cost: t.CostLine, Dir: t.Dir, Here: sameDir(t.Dir, s.opt.Dir), Acceptance: t.Acceptance}
 		if t.Plan != nil {
 			h.Steps = len(t.Plan.Subtasks)
 			for _, st := range t.Plan.Subtasks {
@@ -610,7 +651,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func sameDir(a, b string) bool {
-	return strings.EqualFold(strings.TrimRight(a, `/\`), strings.TrimRight(b, `/\`))
+	return orchestrator.SamePath(a, b)
 }
 
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
@@ -651,13 +692,14 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 			force = true // failed, cancelled or done: run the steps that did not succeed
 		}
 	}
+	if t.Dir != "" && !sameDir(t.Dir, s.opt.Dir) {
+		fail(w, http.StatusConflict, errors.New("open this task's project before resuming it"))
+		return
+	}
 	res, err := s.startJob(&job{text: t.Task, resume: t, force: force})
 	if err != nil {
 		fail(w, http.StatusConflict, err)
 		return
-	}
-	if t.Dir != "" && !sameDir(t.Dir, s.opt.Dir) {
-		s.notice("warn", fmt.Sprintf("note: task %s ran in %s, this rw works in %s", t.ID, t.Dir, s.opt.Dir))
 	}
 	writeJSON(w, res)
 }

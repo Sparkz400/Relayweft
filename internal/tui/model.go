@@ -203,6 +203,7 @@ type Model struct {
 	queue       []job          // tasks typed while one ran, and scheduled ones (schedule.go)
 	current     job            // the job running now (when running)
 	awake       func()         // releases the keep-awake while scheduled work is pending
+	fill        fillState      // the day planner (/fill, fill.go)
 	interrupted *orchestrator.TaskState
 	complete    struct { // tab completion of @agent ids
 		active       bool
@@ -442,7 +443,7 @@ func (m *Model) handleEvent(e event.Event) {
 			m.addLog(logLine{ts: e.Timestamp, kind: event.Log, text: "cost: " + m.cost})
 		}
 		if !m.opt.Demo {
-			m.addLog(logLine{ts: e.Timestamp, kind: event.Log, text: "not happy with the result? /undo shows what undoing this task would change"})
+			m.addLog(logLine{ts: e.Timestamp, kind: event.Log, text: "not happy with the result? /undo shows what undoing this task would change · /explain says why it ran this way"})
 		}
 		m.notifyDone(e.OK, e.Text, time.Since(m.taskStart))
 		m.focus = focusPrompt

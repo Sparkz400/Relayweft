@@ -83,7 +83,8 @@ func (f *fakeRelease) start(t *testing.T) *httptest.Server {
 				{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/dl/checksums.txt"},
 			}
 			if f.signed {
-				// Never downloaded: rw update does not verify it.
+				// The verifier checks signed SLSA attestations independently;
+				// this asset is the release's signing metadata marker.
 				assets = append(assets, ghAsset{Name: signatureAsset, BrowserDownloadURL: srv.URL + "/dl/" + signatureAsset})
 			}
 			json.NewEncoder(w).Encode(ghRelease{
@@ -116,9 +117,14 @@ func withUpdater(t *testing.T, srv *httptest.Server, cur, stdin string) (string,
 	}
 	out := &bytes.Buffer{}
 	oldAPI, oldTarget, oldIn, oldOut, oldVer, oldQuery := updateAPI, updateTarget, updateIn, updateOut, version, updateOwnerQuery
+	oldVerify := updateVerify
 	t.Cleanup(func() {
 		updateAPI, updateTarget, updateIn, updateOut, version, updateOwnerQuery = oldAPI, oldTarget, oldIn, oldOut, oldVer, oldQuery
+		updateVerify = oldVerify
 	})
+	// Installer tests isolate the verifier; its policy and failures are tested
+	// below without accessing the network or replacing this test executable.
+	updateVerify = func(*ghRelease, string, []byte, []byte) error { return nil }
 	updateOwnerQuery = func(string, ...string) (string, error) { return "", errors.New("not owned") }
 	updateAPI = srv.URL + "/latest"
 	updateTarget = func() (string, error) { return exe, nil }
@@ -218,7 +224,7 @@ func TestUpdateReplacesBinary(t *testing.T) {
 	}
 }
 
-func TestUpdateSignedReleaseHint(t *testing.T) {
+func TestUpdateVerifiedReleaseMessage(t *testing.T) {
 	f := &fakeRelease{tag: "v2.0.0", binary: []byte("signed release"), signed: true}
 	srv := f.start(t)
 	exe, out := withUpdater(t, srv, "1.0.0", "y\n")
@@ -228,9 +234,8 @@ func TestUpdateSignedReleaseHint(t *testing.T) {
 	if got := readFile(t, exe); got != "signed release" {
 		t.Fatalf("binary = %q", got)
 	}
-	// The command checks the installed file, with the path as it is (no
-	// doubled backslashes on Windows).
-	want := `gh attestation verify "` + exe + `" --repo Sparkz400/Relayweft`
+	// Installation is reported as verified only after the verifier succeeds.
+	want := "signed build provenance verified"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output lacks %q:\n%s", want, out)
 	}
@@ -243,7 +248,7 @@ func TestUpdateSignedReleaseHint(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	if readFile(t, exe2) != "old binary" || strings.Contains(out2.String(), "attestation") {
-		t.Errorf("a mismatch replaced the binary or printed the hint:\n%s", out2)
+		t.Errorf("a mismatch replaced the binary or reported verification:\n%s", out2)
 	}
 }
 

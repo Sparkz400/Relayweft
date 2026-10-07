@@ -4,27 +4,25 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // Context hand-off: agents start with no memory, so every planner and step
 // prompt gets
 //   - a repo map (top-level layout from git ls-files), so agents spend
 //     fewer tokens finding their way around;
-//   - notes from earlier tasks in this repo (what was done, which files),
-//     kept per repo next to the task states;
+//   - project memory: the user's pinned conventions and the notes from
+//     earlier tasks in this repo that match the task (memory.go);
 // and edit steps also get what read-only steps of the same task found,
 // even when the planner did not declare the dependency.
 
 const (
 	repoMapMax   = 2500 // bytes
 	notesKeep    = 20   // entries per repo
-	notesInclude = 6    // entries shown to the planner
+	notesInclude = 6    // unpinned entries per prompt
 )
 
 // repoMap summarizes a repo's tracked files: root files and, per top-level
@@ -105,51 +103,6 @@ func notesPath(root string) string {
 // noteEntry separates entries in the notes file.
 const noteSep = "\n<!-- rw-note -->\n"
 
-// repoNotes returns the newest notes for a repo ("" if none).
-func repoNotes(root string) string {
-	data, err := os.ReadFile(notesPath(root))
-	if err != nil {
-		return ""
-	}
-	var fresh []string
-	for _, e := range splitNotes(string(data)) {
-		if !staleNote(root, e, time.Now()) {
-			fresh = append(fresh, e)
-		}
-	}
-	if len(fresh) > notesInclude {
-		fresh = fresh[len(fresh)-notesInclude:]
-	}
-	return strings.Join(fresh, "\n")
-}
-
-// notesMaxAge drops notes older than this from the prompts.
-const notesMaxAge = 60 * 24 * time.Hour
-
-// staleNote reports whether a note no longer describes the repo: it is
-// old, or none of the files it lists exist any more (a refactor moved
-// them).
-func staleNote(root, e string, now time.Time) bool {
-	if len(e) >= 12 {
-		if d, err := time.Parse("2006-01-02", e[2:12]); err == nil && now.Sub(d) > notesMaxAge {
-			return true
-		}
-	}
-	_, files, ok := strings.Cut(e, "\n  files: ")
-	if !ok {
-		return false
-	}
-	for _, f := range strings.Split(strings.TrimSpace(files), ", ") {
-		if strings.HasPrefix(f, "+") {
-			return false // "+N more": can't tell
-		}
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(f))); err == nil {
-			return false
-		}
-	}
-	return true
-}
-
 func splitNotes(s string) []string {
 	var out []string
 	for _, e := range strings.Split(s, noteSep) {
@@ -158,31 +111,6 @@ func splitNotes(s string) []string {
 		}
 	}
 	return out
-}
-
-// addRepoNote records a finished task for later tasks in the same repo.
-func addRepoNote(root, task, summary string, files []string) {
-	p := notesPath(root)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return
-	}
-	data, _ := os.ReadFile(p)
-	entries := splitNotes(string(data))
-	if len(files) > 12 {
-		files = append(files[:12:12], fmt.Sprintf("+%d more", len(files)-12))
-	}
-	e := fmt.Sprintf("- %s: %s\n  result: %s", time.Now().Format("2006-01-02"), oneLineClip(task, 160), oneLineClip(summary, 200))
-	if len(files) > 0 {
-		e += "\n  files: " + strings.Join(files, ", ")
-	}
-	entries = append(entries, e)
-	if len(entries) > notesKeep {
-		entries = entries[len(entries)-notesKeep:]
-	}
-	tmp := p + ".tmp"
-	if os.WriteFile(tmp, []byte(strings.Join(entries, noteSep)+"\n"), 0o644) == nil {
-		_ = os.Rename(tmp, p)
-	}
 }
 
 func oneLineClip(s string, n int) string {
@@ -195,9 +123,7 @@ func (t *task) handoff() string {
 	if t.repoMap != "" {
 		b.WriteString("\nREPOSITORY MAP (tracked files):\n" + t.repoMap)
 	}
-	if t.repoNotes != "" {
-		b.WriteString("\nEARLIER RELAYWEFT TASKS IN THIS REPO (newest last; the code may have changed since):\n" + t.repoNotes + "\n")
-	}
+	b.WriteString(t.repoNotes)
 	return b.String()
 }
 

@@ -245,7 +245,9 @@ func (g *gate) Run(ctx context.Context, s runner.Spec, emit func(event.Event)) r
 func newModelRunner(t *testing.T, dir string, r runner.Runner) (*Model, *orchestrator.Orchestrator, chan event.Event) {
 	t.Helper()
 	ch := make(chan event.Event, 4096)
-	store := config.NewStore(config.Default(), filepath.Join(t.TempDir(), "relayweft.yaml"))
+	cfg := config.Default()
+	cfg.Orchestrator.Classic()
+	store := config.NewStore(cfg, filepath.Join(t.TempDir(), "relayweft.yaml"))
 	set := runner.Set{event.Codex: r, event.Claude: r}
 	orc := orchestrator.New(orchestrator.Options{
 		Dir: dir, Store: store, Runners: func(*config.Config) runner.Set { return set },

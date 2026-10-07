@@ -304,6 +304,10 @@ func gradleShape(f []string) int {
 	for i := 1; i < len(f); i++ {
 		a := f[i]
 		switch {
+		case strings.HasPrefix(a, "-I") || a == "--init-script" || strings.HasPrefix(a, "--init-script="):
+			return -1 // init scripts can add dependencies outside this build
+		case strings.HasPrefix(a, "-p") || strings.HasPrefix(a, "-b") || strings.HasPrefix(a, "-c"):
+			return -1 // short options also accept an attached path
 		case a == "-p" || a == "--project-dir" || a == "-b" || a == "--build-file" || a == "-c" || a == "--settings-file" ||
 			strings.HasPrefix(a, "--project-dir=") || strings.HasPrefix(a, "--build-file=") || strings.HasPrefix(a, "--settings-file="):
 			return -1
@@ -324,8 +328,9 @@ var (
 	// Every place that looks like an include statement (not includeBuild
 	// or includeFlat), wherever it is.
 	reGradleIncludeWord = regexp.MustCompile(`\binclude\s*[('"]`)
-	reGradleProject     = regexp.MustCompile(`project\(\s*(?:path\s*[:=]\s*)?["'](:[^"']*)["']`)
-	reGradleUnsure      = regexp.MustCompile(`projectDir|includeBuild|includeFlat|\.each\b|forEach|for\s*\(|file\(|rootProject\.children|projects\.\w`)
+	reGradleProject     = regexp.MustCompile(`\bproject\s*\(\s*(?:path\s*[:=]\s*)?["'](:[A-Za-z0-9_.:-]+)["']\s*\)`)
+	reGradleProjectCall = regexp.MustCompile(`\b(?:project|findProject)\b`)
+	reGradleUnsure      = regexp.MustCompile(`projectDir|includeBuild|includeFlat|\.each\b|forEach|for\s*\(|\bfile\s*\(|rootProject\.children|projects\.\w|\bapply\s*(?:\(|from\b)`)
 )
 
 // gradleProjects reads the subprojects (":a:b" -> "a/b") from the settings
@@ -342,21 +347,31 @@ func gradleProjects(dir string) (map[string]string, string) {
 	if name == "" {
 		return nil, "the project has no settings.gradle"
 	}
-	if reGradleUnsure.Match(data) {
-		return nil, name + " places projects in a way rw does not follow"
-	}
 	projects := map[string]string{}
 	src := strings.TrimPrefix(string(data), bom)
-	includes, why := gradleIncludes(src)
+	st, why := gradleIncludes(src)
 	if why != "" {
 		return nil, name + " " + why
 	}
+	// What is left besides the projectDir lines rw read must not place
+	// projects in any other way.
+	rest := []byte(src)
+	for _, sp := range st.spans {
+		for i := sp[0]; i < sp[1]; i++ {
+			if rest[i] != '\n' {
+				rest[i] = ' '
+			}
+		}
+	}
+	if reGradleUnsure.Match(rest) || reGradleSettingsUnsure.Match(rest) {
+		return nil, name + " places projects in a way rw does not follow"
+	}
 	// Every include rw did not read (in a comment or a string, after a
 	// dot) makes it unsure.
-	if len(reGradleIncludeWord.FindAllStringIndex(src, -1)) != len(includes) {
+	if len(reGradleIncludeWord.FindAllStringIndex(src, -1)) != len(st.includes) {
 		return nil, name + " includes projects in a way rw does not follow"
 	}
-	for _, names := range includes {
+	for _, names := range st.includes {
 		for _, n := range names {
 			p := ":" + strings.TrimPrefix(n, ":")
 			if !plainGradleName(p) {
@@ -367,10 +382,44 @@ func gradleProjects(dir string) (map[string]string, string) {
 			projects[p] = strings.ReplaceAll(strings.TrimPrefix(p, ":"), ":", "/")
 		}
 	}
+	for p, d := range st.dirs {
+		if _, ok := projects[p]; !ok {
+			return nil, fmt.Sprintf("%s sets the folder of %s, which it does not include", name, p)
+		}
+		projects[p] = d
+	}
 	if len(projects) == 0 {
 		return nil, "the project has no subprojects"
 	}
+	byDir := map[string]string{}
+	for _, p := range sortedKeys(projects) {
+		d := projects[p]
+		// Do not pick an arbitrary owner when two projects share a folder.
+		for oldDir, old := range byDir {
+			if hasPrefixFold(d+"/", oldDir+"/") && len(d) == len(oldDir) {
+				return nil, fmt.Sprintf("%s places %s and %s in the same folder", name, old, p)
+			}
+		}
+		byDir[d] = p
+	}
 	return projects, ""
+}
+
+// reGradleProjectDir is a settings line that moves one project:
+// project(':a').projectDir = file('x') (Groovy or Kotlin), or
+// new File(rootDir, 'x'), File(settingsDir, "x"). Group 1 is the project,
+// group 2 or 3 the folder relative to the settings file.
+var reGradleProjectDir = regexp.MustCompile(`^project\s*\(\s*["'](:[^"'$\\\n]+)["']\s*\)\s*\.\s*projectDir\s*=\s*(?:file\s*\(\s*["']([^"'$\\\n]+)["']\s*\)|(?:new\s+)?File\s*\(\s*(?:rootDir|settingsDir|rootProject\.projectDir)\s*,\s*["']([^"'$\\\n]+)["']\s*\))[ \t]*(;|\r?\n|$|//|/\*)`)
+
+// reGradleSettingsUnsure: anything else in a settings script that names or
+// changes a project (its name, its build file) and that rw does not read.
+var reGradleSettingsUnsure = regexp.MustCompile(`\b(?:project|findProject)\s*\(|buildFileName|\bprojectDescriptor`)
+
+// gradleSettings is what rw read from a settings script.
+type gradleSettings struct {
+	includes [][]string
+	dirs     map[string]string // project -> its folder, from projectDir lines
+	spans    [][2]int          // where those lines are
 }
 
 // bom is UTF-8's byte order mark, which some editors put first in a file.
@@ -380,8 +429,9 @@ const bom = "\xef\xbb\xbf"
 // skipping comments and strings, or says why it cannot. An include inside
 // a block may not run (mockito includes its Android projects only with an
 // SDK), and a task of a project that is not there fails the run.
-func gradleIncludes(src string) ([][]string, string) {
-	var out [][]string
+func gradleIncludes(src string) (gradleSettings, string) {
+	var out gradleSettings
+	out.dirs = map[string]string{}
 	depth := 0
 	ident := func(b byte) bool {
 		return b == '_' || b == '$' || b == '.' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
@@ -395,14 +445,14 @@ func gradleIncludes(src string) ([][]string, string) {
 		case strings.HasPrefix(rest, "/*"):
 			j := strings.Index(rest[2:], "*/")
 			if j < 0 {
-				return nil, "has an unclosed comment"
+				return out, "has an unclosed comment"
 			}
 			i += j + 4
 			continue
 		case strings.HasPrefix(rest, `"""`) || strings.HasPrefix(rest, "'''"):
 			j := strings.Index(rest[3:], rest[:3])
 			if j < 0 {
-				return nil, "has an unclosed string"
+				return out, "has an unclosed string"
 			}
 			i += j + 6
 			continue
@@ -422,14 +472,38 @@ func gradleIncludes(src string) ([][]string, string) {
 			depth--
 		case strings.HasPrefix(rest, "include") && (i == 0 || !ident(src[i-1])) && (len(rest) == 7 || !ident(rest[7])):
 			if depth > 0 {
-				return nil, "includes projects inside a block, which rw cannot evaluate"
+				return out, "includes projects inside a block, which rw cannot evaluate"
 			}
 			names, n, ok := gradleIncludeArgs(rest[7:])
 			if !ok {
-				return nil, "includes projects in a way rw does not follow"
+				return out, "includes projects in a way rw does not follow"
 			}
-			out = append(out, names)
+			out.includes = append(out.includes, names)
 			i += 7 + n
+			continue
+		case strings.HasPrefix(rest, "project") && (i == 0 || !ident(src[i-1])):
+			m := reGradleProjectDir.FindStringSubmatch(rest)
+			if m == nil {
+				break // the check of what is left makes it unsure
+			}
+			if depth > 0 {
+				return out, "sets a project's folder inside a block, which rw cannot evaluate"
+			}
+			d := m[2] + m[3]
+			clean := path.Clean(d)
+			if path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(d, ":") {
+				return out, fmt.Sprintf("places %s outside the build folder (%s)", m[1], d)
+			}
+			if _, dup := out.dirs[m[1]]; dup {
+				return out, "sets the folder of " + m[1] + " twice"
+			}
+			out.dirs[m[1]] = clean
+			n := len(m[0])
+			if m[4] == "//" || m[4] == "/*" {
+				n -= 2 // the comment is read as one
+			}
+			out.spans = append(out.spans, [2]int{i, i + n})
+			i += n
 			continue
 		}
 		i++
@@ -558,7 +632,7 @@ func selectGradle(cmd string, f []string, c *change) Plan {
 		return full(cmd, why)
 	}
 	for _, n := range []string{"build.gradle.kts", "build.gradle"} {
-		if b, err := os.ReadFile(c.abs(n)); err == nil && (reGradleProject.Match(b) || reGradleUnsure.Match(b)) {
+		if b, err := os.ReadFile(c.abs(n)); err == nil && (reGradleProjectCall.Match(b) || reGradleUnsure.Match(b)) {
 			return full(cmd, n+" adds project dependencies for every subproject")
 		}
 	}
@@ -576,7 +650,13 @@ func selectGradle(cmd string, f []string, c *change) Plan {
 			if reGradleUnsure.Match(b) {
 				return full(cmd, path.Join(d, n)+" names projects in a way rw does not follow")
 			}
+			if reGradleProjectCall.Match(reGradleProject.ReplaceAll(b, nil)) {
+				return full(cmd, path.Join(d, n)+" has a project dependency rw cannot resolve")
+			}
 			for _, m := range reGradleProject.FindAllSubmatch(b, -1) {
+				if _, ok := projects[string(m[1])]; !ok {
+					return full(cmd, path.Join(d, n)+" refers to a project rw cannot place: "+string(m[1]))
+				}
 				deps[p] = append(deps[p], string(m[1]))
 			}
 		}

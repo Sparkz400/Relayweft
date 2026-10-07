@@ -259,7 +259,7 @@ func (o *Orchestrator) runChecks(ctx context.Context, t *task, vc config.VerifyC
 // checks, and their narrowed forms (package affected), so an agent can
 // run the tests its change affects like rw does.
 func verifyAllowed(vc config.VerifyCfg, dir string) []string {
-	out := append([]string(nil), vc.Commands...)
+	out := append(append([]string(nil), vc.Commands...), vc.Preflight...)
 	if vc.Affected == affected.Off {
 		return out
 	}

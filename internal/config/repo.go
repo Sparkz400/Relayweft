@@ -274,6 +274,7 @@ func stricterBudget(mine, repo BudgetCfg) BudgetCfg {
 		return a
 	}
 	out := mine
+	out.Reserve = mine.Reserve || repo.Reserve
 	out.TaskTokens = tighterI(mine.TaskTokens, repo.TaskTokens)
 	out.DayTokens = tighterI(mine.DayTokens, repo.DayTokens)
 	out.TaskUSD = tighterF(mine.TaskUSD, repo.TaskUSD)

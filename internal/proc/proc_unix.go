@@ -35,12 +35,14 @@ func prepare(cmd *exec.Cmd) {
 // ends its watcher and exits with the command's status.
 var (
 	guardMu sync.Mutex
-	// watchW is the write end. It is never closed, and kept here so the
-	// garbage collector never closes it either.
-	watchW *os.File
-	// watch is the read end the wrappers get (nil before Guard).
-	watch atomic.Pointer[os.File]
+	// watch is the pipe (nil before Guard).
+	watch atomic.Pointer[watchPipe]
 )
+
+// watchPipe: r is the read end the wrappers get. w is the write end; it
+// is never closed, and kept here so the garbage collector never closes it
+// either.
+type watchPipe struct{ r, w *os.File }
 
 // shPath runs the wrapper: /bin/sh, not sh from PATH, which the user and
 // the agents' environment may change.
@@ -72,8 +74,8 @@ exit "$s"`
 // command whose path did not resolve (Start reports that) and one that
 // passes files of its own (the wrapper's pipe must be fd 3).
 func wrap(cmd *exec.Cmd) {
-	r := watch.Load()
-	if r == nil || cmd.Err != nil || cmd.Path == "" || len(cmd.ExtraFiles) > 0 {
+	p := watch.Load()
+	if p == nil || cmd.Err != nil || cmd.Path == "" || len(cmd.ExtraFiles) > 0 {
 		return
 	}
 	path := cmd.Path
@@ -85,13 +87,13 @@ func wrap(cmd *exec.Cmd) {
 		args = append(args, cmd.Args[1:]...)
 	}
 	cmd.Path, cmd.Args = shPath, args
-	cmd.ExtraFiles = []*os.File{r}
+	cmd.ExtraFiles = []*os.File{p.r}
 }
 
 func guard() error {
 	guardMu.Lock()
 	defer guardMu.Unlock()
-	if watchW != nil {
+	if watch.Load() != nil {
 		return nil
 	}
 	if _, err := os.Stat(shPath); err != nil {
@@ -103,8 +105,7 @@ func guard() error {
 	if err != nil {
 		return err
 	}
-	watchW = w
-	watch.Store(r)
+	watch.Store(&watchPipe{r: r, w: w})
 	return nil
 }
 

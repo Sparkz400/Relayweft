@@ -139,9 +139,13 @@ func TestSelectJestRoots(t *testing.T) {
 	jestConfig = jestShows([][]string{{"src", "test"}})
 	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js", "test/a.test.js"), "npm test -- --findRelatedTests --passWithNoTests ./src/a.js ./test/a.test.js")
 	want(t, dir, "npm test", sel(t, dir, "npm test", "lib/b.js"), "")
-	// Every project must see the file: another project's tests may use it.
+	// Each project finds related tests in its own index: a file one
+	// project sees narrows unless a file another project sees imports it.
 	jestConfig = jestShows([][]string{{"src"}, {"lib"}})
+	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js"), "npm test -- --findRelatedTests --passWithNoTests ./src/a.js")
+	os.WriteFile(filepath.Join(dir, "lib/b.js"), []byte("import a from '../src/a.js'\n"), 0o644)
 	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js"), "")
+	os.WriteFile(filepath.Join(dir, "lib/b.js"), []byte("x"), 0o644)
 	// A root above the check folder sees all of it.
 	jestConfig = jestShows([][]string{{".."}})
 	want(t, dir, "npm test", sel(t, dir, "npm test", "src/a.js"), "npm test -- --findRelatedTests --passWithNoTests ./src/a.js")
