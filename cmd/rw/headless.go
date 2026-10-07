@@ -299,6 +299,9 @@ func cmdRun(args []string) error {
 			asker = newTermApprover(os.Stdin, os.Stdout)
 		}
 	}
+	if unattended {
+		startMorning(h.ctx, func() *config.Config { return h.cfg }) // an overnight run posts the summary at notify.morning
+	}
 	if iss.active() {
 		if err := iss.checkWorkspace(c.workspace); err != nil {
 			return err

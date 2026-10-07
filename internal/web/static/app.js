@@ -110,14 +110,26 @@ const PLAN_KINDS = ['explore', 'research', 'edit'];
 // The link rw prints carries a single-use bootstrap in the URL fragment
 // (#b=...), which never reaches a server. The page trades it for a session
 // secret, kept in this tab's sessionStorage (it survives a reload of this
-// tab only). There are no cookies.
+// tab only). There are no cookies. On the phone address (rw web --phone)
+// the session goes to localStorage instead: a phone's tab is reloaded or
+// evicted while you are away, and pairing again needs the PC.
 const SESSION_KEY = 'rw-session';
+const ON_PHONE_ADDR = !/^(127\.0\.0\.1|localhost|\[::1\])$/i.test(location.hostname);
 let SESSION = null;
+const sessStore = () => (ON_PHONE_ADDR ? localStorage : sessionStorage);
 const sess = {
-  get() { try { return sessionStorage.getItem(SESSION_KEY); } catch (e) { return SESSION; } },
-  set(v) { SESSION = v; try { sessionStorage.setItem(SESSION_KEY, v); } catch (e) { /* in memory only */ } },
-  clear() { SESSION = null; try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ } },
+  get() { try { return sessStore().getItem(SESSION_KEY); } catch (e) { return SESSION; } },
+  set(v) { SESSION = v; try { sessStore().setItem(SESSION_KEY, v); } catch (e) { /* in memory only */ } },
+  clear() { SESSION = null; try { sessStore().removeItem(SESSION_KEY); } catch (e) { /* ignore */ } },
 };
+// whoami asks whether this is a phone session (fewer rights: answer
+// approvals, pause, cancel) and whether phone access is on.
+async function whoami() {
+  try { S.who = await api('GET', '/api/whoami'); } catch (e) { S.who = {}; }
+  document.documentElement.classList.toggle('phone-session', !!S.who.phone);
+  $('#nav-phone').hidden = !S.who.phone_on || !!S.who.phone;
+}
+const isPhone = () => !!(S.who && S.who.phone);
 async function startSession() {
   // Some openers (VS Code's openExternal) percent-encode the "=".
   const m = /(?:^#|&)b=([0-9a-f]+)/.exec((location.hash || '').replace(/%3D/gi, '='));
@@ -152,6 +164,7 @@ function lock(why) {
   if (es) { es.close(); es = null; }
   sess.clear();
   if (why) { why = String(why); $('#locked-why').textContent = why.charAt(0).toUpperCase() + why.slice(1) + (/[.?!)]$/.test(why) ? '' : '.'); }
+  if (ON_PHONE_ADDR) $('#locked-how').textContent = 'Scan the QR code rw web --phone printed on your PC (p + Enter there for a new one). Each code works once and for two minutes.';
   $('#locked').hidden = false;
 }
 
@@ -645,7 +658,7 @@ function renderBanner() {
     b.classList.add('info');
     b.append(h('span', { class: 'dot', style: 'background:var(--warn)' }),
       h('div', { class: 'grow' }, h('b', null, 'A task was interrupted '), h('span', { class: 'muted' }, when(t.updated) + ' · '), oneLine(t.task, 120)),
-      h('button', { class: 'btn primary sm', onclick: () => act('POST', '/api/resume', {}) }, 'Resume'),
+      h('button', { class: 'btn primary sm needs-pc', onclick: () => act('POST', '/api/resume', {}) }, 'Resume'),
       h('button', { class: 'btn ghost sm', onclick: () => { S.dismissed.add('int:' + t.id); renderBanner(); } }, 'Dismiss'));
     b.hidden = false;
     return;
@@ -1336,13 +1349,14 @@ function planEditor(a, card) {
     }
   }
   renderSteps();
+  if (isPhone()) card.classList.add('readonly');
   card.append(
     h('div', { class: 'm-head' },
       h('div', { class: 'm-kicker' }, h('span', { class: 'pip' }), 'Approve the plan'),
       h('div', { class: 'm-title' }, oneLine(a.task, 160)),
-      h('div', { class: 'm-sub' }, count)),
+      h('div', { class: 'm-sub' }, count, isPhone() ? ' · from a phone you approve the plan as proposed; edit it at the PC' : '')),
     h('div', { class: 'm-body' }, plan.summary ? h('div', { class: 'plan-summary' }, plan.summary) : '', estBox, list,
-      h('button', { class: 'btn sm', style: 'margin-top:10px', onclick: addStep }, icon('plus'), 'Add subtask')),
+      h('button', { class: 'btn sm needs-pc', style: 'margin-top:10px', onclick: addStep }, icon('plus'), 'Add subtask')),
     h('div', { class: 'm-foot' }, err, h('span', { class: 'grow' }),
       h('button', { class: 'btn ghost', onclick: hideApproval, title: 'Hide (the plan keeps waiting)' }, 'Later'),
       h('button', { class: 'btn danger', onclick: () => answer(false) }, 'Cancel task'),
@@ -1361,7 +1375,8 @@ function reviewPanel(a, card) {
   const diffEl = h('div', { class: 'diff-wrap' });
   const applyBtn = h('button', { class: 'btn primary' });
   const fb = h('textarea', { class: 'ta feedback', rows: '1', placeholder: 'Feedback for the agent…', title: 'Sends the agent back to work with this message instead of applying' });
-  const fbBtn = h('button', { class: 'btn claude', disabled: true, onclick: () => send({ feedback: fb.value.trim() }) }, icon('msg'), 'Send back');
+  const fbBtn = h('button', { class: 'btn claude needs-pc', disabled: true, onclick: () => send({ feedback: fb.value.trim() }) }, icon('msg'), 'Send back');
+  fb.classList.add('needs-pc');
   const err = h('div', { class: 'm-err' });
   fb.addEventListener('input', () => { fbBtn.disabled = !fb.value.trim(); });
 
@@ -1549,6 +1564,8 @@ const DRAWERS = {
   dashboard: { title: 'Dashboard', render: drawDashboard, wide: true },
   models: { title: 'Models & routes', render: drawModels, wide: true },
   queue: { title: 'Queue', render: drawQueue, narrow: true },
+  overnight: { title: 'Overnight', render: drawOvernight, narrow: true },
+  phone: { title: 'Approve from your phone', render: drawPhone, narrow: true },
   history: { title: 'History', render: drawHistory },
   stats: { title: 'Stats & tuning', render: drawStats },
   health: { title: 'Reliability', render: drawHealth },
@@ -2082,6 +2099,75 @@ function drawFill(body) {
   return { until, fresh };
 }
 
+// drawOvernight shows what ran unattended (queued, scheduled, task files)
+// since a time, what needs you and what it used: rw morning in the page.
+async function drawOvernight(body) {
+  const o = S.night || (S.night = { since: '12h', all: false });
+  let s;
+  try { s = await api('GET', '/api/morning?since=' + encodeURIComponent(o.since) + (o.all ? '&all=1' : '')); } catch (e) { body.textContent = e.message; return; }
+  body.textContent = '';
+  const pick = h('select', { class: 'sel-in', onchange: (e) => { o.since = e.target.value; drawOvernight(body); } },
+    [['12h', 'last 12 hours'], ['18:00', 'since 18:00'], ['24h', 'last 24 hours'], ['3d', 'last 3 days']].map(([v, t]) => h('option', { value: v, selected: v === o.since }, t)));
+  body.append(h('div', { class: 'toolbar' }, pick,
+    h('label', { class: 'small muted', style: 'display:flex;gap:6px;align-items:center' },
+      h('input', { type: 'checkbox', checked: o.all, onchange: (e) => { o.all = e.target.checked; drawOvernight(body); } }), 'also tasks I watched'),
+    h('span', { class: 'grow' }),
+    h('button', { class: 'btn sm', onclick: () => drawOvernight(body) }, 'Refresh')));
+  const lvl = s.failed || s.interrupted ? 'bad' : s.tasks.length ? 'ok' : '';
+  body.append(h('div', { class: 'night-head ' + lvl }, h('b', null, s.tasks.length ? cap(nightTitle(s)) : 'Nothing ran ' + (o.all ? '' : 'unattended ') + 'in this time.'),
+    h('div', { class: 'muted small' }, 'since ' + when(s.since) + (s.tasks.length ? ' · ' + s.tasks.length + ' task(s)' : ''))));
+  if (s.actions.length) {
+    body.append(h('h3', null, 'Needs you'));
+    body.append(h('div', { class: 'list' }, s.actions.map((a) => h('div', { class: 'item need' },
+      h('div', { class: 't' }, a.what),
+      a.command ? h('div', { class: 'meta' }, h('code', null, a.command)) : ''))));
+  }
+  if (s.tasks.length) {
+    body.append(h('h3', null, 'Tasks'));
+    body.append(h('div', { class: 'list' }, s.tasks.slice().reverse().map((t, i) => h('div', { class: 'item', style: `animation-delay:${Math.min(i, 12) * 25}ms` },
+      h('div', { class: 't', title: t.text }, t.text),
+      h('div', { class: 'meta' }, h('span', { class: 'pill ' + t.status }, t.status), when(t.started), t.project ? h('span', null, t.project) : '',
+        t.ended ? dur(Date.parse(t.ended) - Date.parse(t.started)) : '', t.cost ? h('span', null, t.cost) : ''),
+      t.summary && t.status !== 'done' ? h('div', { class: 'meta night-sum' }, t.summary) : ''))));
+  }
+  const used = Object.entries(s.tokens || {}).filter(([, n]) => n > 0).map(([p, n]) => p + ' ' + human(n));
+  if (used.length || s.limits.length) {
+    body.append(h('h3', null, 'Used'));
+    if (used.length) body.append(h('div', { class: 'small' }, used.join(' · ') + ' fresh tokens' + (s.usd > 0 ? ' · ≈$' + s.usd.toFixed(2) + ' API-equivalent' : '')));
+    for (const l of s.limits) body.append(h('div', { class: 'small', style: 'color:var(--warn)' }, l.provider + ' hit its limit ' + when(l.at) + (l.until ? ' (until ' + clock(l.until) + ')' : '')));
+  }
+  body.append(h('p', { class: 'muted small', style: 'margin-top:18px' }, 'The same as rw morning in a terminal. notify.morning: "07:30" posts it to your webhooks every morning.'));
+}
+function nightTitle(s) {
+  const parts = [`${s.done} of ${s.tasks.length} done`];
+  if (s.failed) parts.push(s.failed + ' failed');
+  if (s.interrupted) parts.push(s.interrupted + ' interrupted');
+  if (s.cancelled) parts.push(s.cancelled + ' cancelled');
+  if (s.running) parts.push(s.running + ' still running');
+  return parts.join(', ');
+}
+function cap(t) { return t.charAt(0).toUpperCase() + t.slice(1); }
+
+// drawPhone shows a QR code that pairs a phone (rw web --phone): a fresh
+// single-use link each time the panel opens.
+async function drawPhone(body, refresh) {
+  if (refresh) return;
+  let r;
+  try { r = await api('GET', '/api/phone'); } catch (e) { body.textContent = e.message; return; }
+  body.textContent = '';
+  const n = r.qr.length, q = 2, size = n + 2 * q;
+  const svg = sv('svg', { class: 'qr', viewBox: `0 0 ${size} ${size}`, role: 'img', 'aria-label': 'QR code of the phone link' },
+    sv('rect', { class: 'bg', x: 0, y: 0, width: size, height: size }));
+  r.qr.forEach((row, y) => { for (let x = 0; x < n; x++) if (row[x] === '1') svg.append(sv('rect', { class: 'm', x: x + q, y: y + q, width: 1.02, height: 1.02 })); });
+  body.append(
+    h('p', null, 'Scan this with your phone\'s camera. The page opens there, already signed in, and stays signed in until rw web stops.'),
+    h('div', { class: 'qr-box' }, svg),
+    h('p', { class: 'muted small' }, 'The code works once and for two minutes; reopen this panel for a new one.'),
+    h('p', { class: 'small' }, r.tailscale ? 'Over Tailscale: the way is encrypted.' : 'Over your local network: plain HTTP. Pair and approve on a network you trust, or use Tailscale.'),
+    h('p', { class: 'small' }, 'From the phone you can approve or reject plans and changes, answer budget and conflict questions, pause and cancel. New tasks, plan edits, feedback and settings stay on this PC.'),
+    h('details', null, h('summary', null, 'Link'), h('code', { class: 'small', style: 'word-break:break-all' }, r.url)));
+}
+
 async function drawHistory(body) {
   const all = store.get('rw-hist-all') === '1';
   let rows;
@@ -2102,7 +2188,7 @@ async function drawHistory(body) {
         h('code', { class: 'faint small' }, t.id)),
       acceptanceView(t.acceptance),
       h('div', { class: 'side' }, h('button', { class: 'btn sm primary', onclick: () => openInspection(t.id, 'history') }, 'Inspect result'), h('button', { class: 'btn sm', title: 'Why it ran as one agent or several, each agent’s route and reason, estimate against use, escalations',
-        onclick: () => openExplain(t.id, 'history') }, 'Why'), canResume ? h('button', { class: 'btn sm ' + (t.status === 'interrupted' ? 'primary' : ''), disabled: running || !t.here,
+        onclick: () => openExplain(t.id, 'history') }, 'Why'), canResume ? h('button', { class: 'btn sm needs-pc ' + (t.status === 'interrupted' ? 'primary' : ''), disabled: running || !t.here,
         title: !t.here ? 'Open this task’s project to resume it' : running ? 'A task is running' : (t.status === 'interrupted' ? 'Continue: finished steps are skipped' : 'Run the steps that did not succeed'),
         onclick: async () => { const r = await act('POST', '/api/resume', { id: t.id }, 'ok'); if (r) closeDrawer(); } }, icon('play'), t.status === 'interrupted' ? 'Resume' : 'Retry unfinished') : '')));
   });
@@ -2851,6 +2937,6 @@ wire();
 renderLog();
 renderGraph(true);
 setFilter(S.filter);
-startSession().then((ok) => { if (ok) { connect(); p0(); } });
-function p0() { prompt().focus(); autosize(); loadWorkflows(); }
+startSession().then(async (ok) => { if (ok) { await whoami(); connect(); p0(); } });
+function p0() { if (!matchMedia('(max-width: 720px)').matches) prompt().focus(); autosize(); loadWorkflows(); }
 })();

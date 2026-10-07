@@ -26,11 +26,12 @@ const (
 	EventLimit   = "limit"   // a provider hit its usage limit
 	EventWaiting = "waiting" // rw waits for you (an approval, a budget question)
 	EventWatch   = "watch"   // rw watch ran a follow-up round, or a watched PR was merged or closed
+	EventSummary = "summary" // the morning summary of the night's unattended tasks (notify.morning, rw morning --send)
 	EventTest    = "test"    // rw notify --test (always sent)
 )
 
 // Events lists the events a webhook can choose.
-var Events = []string{EventDone, EventFailed, EventLimit, EventWaiting, EventWatch}
+var Events = []string{EventDone, EventFailed, EventLimit, EventWaiting, EventWatch, EventSummary}
 
 // Webhook kinds: the payload format.
 const (
@@ -50,7 +51,7 @@ type Webhook struct {
 	URL    string   `yaml:"url" json:"url"`                                // the webhook; ${VAR} is read from your environment
 	Kind   string   `yaml:"kind,omitempty" json:"kind,omitempty"`          // "" = from the URL's host
 	Token  string   `yaml:"token,omitempty" json:"token,omitempty"`        // ntfy access token, or json's bearer token
-	Events []string `yaml:"events,omitempty,flow" json:"events,omitempty"` // done, failed, limit, waiting, watch (default: all)
+	Events []string `yaml:"events,omitempty,flow" json:"events,omitempty"` // done, failed, limit, waiting, watch, summary (default: all)
 }
 
 // Message is one notification.

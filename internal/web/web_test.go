@@ -390,7 +390,7 @@ func TestSessionsAreBounded(t *testing.T) {
 	a := newAuth()
 	var first string
 	for i := 0; i < maxSessions+3; i++ {
-		s, err := a.trade(a.newBootstrap())
+		s, err := a.trade(a.newBootstrap(), false)
 		if err != nil {
 			t.Fatal(err)
 		}

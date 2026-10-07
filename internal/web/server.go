@@ -71,6 +71,7 @@ type Server struct {
 	interrupted *orchestrator.TaskState
 	last        *resultView
 	awake       func()               // releases the keep-awake while scheduled work is pending
+	phoneAddr   string               // the phone listener's host:port ("" = off; phone.go)
 	limitUntil  map[string]time.Time // per provider: the limit last posted to webhooks
 	fill        fillState            // the day planner (fill.go)
 	dash        dashCache
@@ -119,6 +120,9 @@ func New(o Options) (*Server, error) {
 	return s, nil
 }
 
+// Config is the live config.
+func (s *Server) Config() *config.Config { return s.store.Get() }
+
 // Listen binds 127.0.0.1:port (0 = a free port). The server never listens
 // on other interfaces.
 func (s *Server) Listen(port int) (net.Listener, error) {
@@ -155,7 +159,9 @@ func (s *Server) Serve(ln net.Listener) error {
 		return nil
 	default:
 	}
-	s.httpSrv = s.newHTTPServer()
+	if s.httpSrv == nil {
+		s.httpSrv = s.newHTTPServer() // one server for the desktop and phone listeners
+	}
 	hs := s.httpSrv
 	s.mu.Unlock()
 	err := hs.Serve(ln)
@@ -175,6 +181,7 @@ func (s *Server) newHTTPServer() *http.Server {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
+		ConnContext:       s.markPhone,
 	}
 }
 
@@ -337,6 +344,9 @@ func (s *Server) webhook(ev, title, body string) {
 		return
 	}
 	msg := notify.Message{Event: ev, Title: title, Body: body, Source: filepath.Base(s.opt.Dir)}
+	if ev == notify.EventWaiting {
+		msg.Link = s.PhoneURL() // a paired phone opens it with its kept session
+	}
 	post := sendWebhooks
 	go func() {
 		if err := post(context.Background(), hooks, msg); err != nil {

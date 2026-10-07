@@ -6,8 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -97,12 +100,66 @@ func (w *webServer) stop() {
 }
 
 // printNewLinks prints a fresh link for every line read (Enter), until
-// the input ends.
-func printNewLinks(in io.Reader, out io.Writer, newLink func() string) {
+// the input ends; "p" prints a fresh phone link as a QR code (phone nil:
+// phone access is off).
+func printNewLinks(in io.Reader, out io.Writer, newLink func() string, phone func() string) {
 	sc := bufio.NewScanner(in)
 	for sc.Scan() {
+		if phone != nil && strings.EqualFold(strings.TrimSpace(sc.Text()), "p") {
+			printPhoneLink(out, phone())
+			continue
+		}
 		fmt.Fprintf(out, "open: %s\n", newLink())
 	}
+}
+
+// printPhoneLink prints a phone pairing link as a QR code to scan.
+func printPhoneLink(out io.Writer, link string) {
+	q, err := web.QRText(link)
+	if err != nil {
+		fmt.Fprintf(out, "phone: %s\n", link)
+		return
+	}
+	fmt.Fprintf(out, "\nScan with your phone's camera (works once, within 2 minutes; p + Enter for a new one):\n%s%s\n\n", q, link)
+}
+
+// startPhone opens the phone listener (rw web --phone) and prints how to
+// pair a phone.
+func startPhone(w *webServer, addr string, out io.Writer) error {
+	var ip net.IP
+	if addr != "" {
+		if ip = net.ParseIP(addr); ip == nil {
+			return fmt.Errorf("--phone-addr %q: want an IP address", addr)
+		}
+	} else {
+		addrs, err := net.InterfaceAddrs()
+		if err != nil {
+			return err
+		}
+		if ip, err = web.PickPhoneIP(addrs); err != nil {
+			return err
+		}
+	}
+	ln, err := w.srv.ListenPhone(ip)
+	if err != nil {
+		return fmt.Errorf("phone access: %w", err)
+	}
+	go func() {
+		if err := w.srv.Serve(ln); err != nil {
+			fmt.Fprintln(os.Stderr, "phone access stopped:", err)
+		}
+	}()
+	how := "over your local network: plain HTTP, so use it on a network you trust (Tailscale encrypts the way)"
+	if web.IsTailscale(ip) {
+		how = "over Tailscale (encrypted)"
+	}
+	fmt.Fprintf(out, "phone: %s %s\n", w.srv.PhoneURL(), how)
+	fmt.Fprintln(out, "  A phone can answer approvals, pause and cancel; tasks, plan edits and settings stay on this PC.")
+	if runtime.GOOS == "windows" {
+		fmt.Fprintln(out, "  If Windows Firewall asks, allow rw on private networks.")
+	}
+	printPhoneLink(out, w.srv.NewPhoneLink())
+	return nil
 }
 
 func runWeb(name string, args []string, app bool) error {
@@ -117,6 +174,8 @@ func runWeb(name string, args []string, app bool) error {
 	noOpen := fs.Bool("no-open", false, "do not open a browser; just print the URL")
 	demo := fs.Bool("demo", false, "demo mode with fake agents")
 	speed := fs.Float64("speed", 1, "demo speed multiplier")
+	phone := fs.Bool("phone", false, "also serve the page to your phone on this machine's Tailscale or private network address (approve from your phone; prints a QR code)")
+	phoneAddr := fs.String("phone-addr", "", "with --phone: the address to listen on (a Tailscale or private network address; default: Tailscale first, else the LAN)")
 	client := false
 	if !app {
 		fs.BoolVar(&client, "client", false, "editor client mode: no browser; print one JSON hello line (address, bootstrap) on stdout, stop when stdin closes")
@@ -135,6 +194,11 @@ func runWeb(name string, args []string, app bool) error {
 		return err
 	}
 	defer w.stop()
+	mctx, mstop := context.WithCancel(context.Background())
+	defer mstop()
+	if !*demo {
+		startMorning(mctx, w.srv.Config)
+	}
 	if client {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
@@ -144,7 +208,14 @@ func runWeb(name string, args []string, app bool) error {
 	fmt.Printf("Relayweft %s on http://%s\n", map[bool]string{true: "app", false: "web UI"}[app], w.srv.Addr())
 	fmt.Printf("open: %s\n", url)
 	fmt.Println("(a private link: it works once, within 2 minutes. Press Enter here for a new one, e.g. for another tab; Ctrl+C stops rw)")
-	go printNewLinks(os.Stdin, os.Stdout, w.srv.NewLink)
+	var phoneLink func() string
+	if *phone || *phoneAddr != "" {
+		if err := startPhone(w, *phoneAddr, os.Stdout); err != nil {
+			return err
+		}
+		phoneLink = w.srv.NewPhoneLink
+	}
+	go printNewLinks(os.Stdin, os.Stdout, w.srv.NewLink, phoneLink)
 	if !*noOpen {
 		if app {
 			how, err := web.OpenAppWindow(url)

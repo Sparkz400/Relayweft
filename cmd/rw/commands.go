@@ -46,6 +46,7 @@ func init() {
 		{name: "schedule", run: cmdSchedule, desc: "print a Task Scheduler / cron command"},
 		{name: "dayplan", run: cmdDayplan, desc: "plan a task file over both subscriptions' usage windows"},
 		{name: "notify", run: cmdNotify, desc: "where notifications go"},
+		{name: "morning", run: cmdMorning, desc: "what ran unattended overnight, and what needs you"},
 		{name: "history", run: cmdHistory, desc: "recent tasks"},
 		{name: "memory", run: cmdMemory, desc: "inspect, edit, pin or remove project notes"},
 		{name: "recovery", run: cmdRecovery, desc: "interrupted work, branches, conflicts and recovery actions"},

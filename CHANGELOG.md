@@ -26,6 +26,8 @@ At release time, [Unreleased] becomes the new version (packaging/README.md).
 
 ### Added
 
+- `rw morning` summarizes what ran unattended overnight: results, what needs you (with the `rw report`, `rw resume` or `git diff` to run), tokens used and limits hit. `notify.morning: "07:30"` posts it to your webhooks (event `summary`) every morning, `rw morning --schedule` prints a daily system task for it, and `rw web` shows it in the Overnight panel. See `docs/unattended.md`.
+- `rw web` works on a phone: the page fits phone screens. `rw web --phone` also serves it on your Tailscale or private network address and pairs a phone with a QR code. A phone can answer approvals, pause and cancel, but cannot start tasks, edit plans, send feedback or change settings. A `waiting` webhook links to the page.
 - Day planner: `rw run --file tasks.txt --fill` spends both subscriptions' 5-hour usage windows overnight. Each task leans on the provider whose window resets first, rw waits for the next reset when every window is full, and a task a limit stopped resumes after it. `--until` and `--fresh-at` keep the morning free and both windows full; `rw dayplan` prints the plan. The TUI's queue (`/fill`) and `rw web`'s Queue panel (**Fill windows**) can use the same planner. See `docs/dayplan.md`.
 
 - **Inspect result** in the browser/app brings requirements, changed-file diffs, checks, remaining failures, routing decisions, cost, and recovery actions into one task screen, accessible from History and the latest result.

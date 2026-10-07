@@ -306,6 +306,7 @@ var flagValues = map[string]valueHint{
 	"selftest close":   {kind: valChoice, choices: []string{"auto", "off", "only"}},
 	"schedule os":      {kind: valChoice, choices: []string{"windows", "darwin", "linux"}},
 	"bench gate":       {kind: valChoice, choices: []string{"soft", "strict"}},
+	"morning os":       {kind: valChoice, choices: []string{"windows", "darwin", "linux"}},
 }
 
 // completeFreeFlags are the value flags that take free text (numbers,
@@ -318,6 +319,7 @@ var completeFreeFlags = []string{
 	"threads", "title", "writers", "replay-subjects",
 	"id", "revision", "task",
 	"fresh-at", "until",
+	"phone-addr",
 }
 
 func hintFor(cmd command, name string) valueHint {

@@ -63,6 +63,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/workflows/init", s.handleWorkflowsInit)
 	mux.HandleFunc("GET /api/fill", s.handleFill)
 	mux.HandleFunc("POST /api/fill", s.handleFill)
+	mux.HandleFunc("GET /api/whoami", s.handleWhoami)
+	mux.HandleFunc("GET /api/phone", s.handlePhone)
+	mux.HandleFunc("GET /api/morning", s.handleMorning)
 	mux.HandleFunc("GET /api/routes", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.routes()) })
 	mux.HandleFunc("POST /api/routes", s.handleSetRoute)
 	mux.HandleFunc("POST /api/config/save", func(w http.ResponseWriter, r *http.Request) {
@@ -295,6 +298,15 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	if phoneSession(r) && req.OK {
+		// A phone approves the plan as proposed: edits are new instructions.
+		proposed, err := s.ap.ProposedPlan(r.PathValue("id"))
+		if err != nil {
+			fail(w, http.StatusGone, err)
+			return
+		}
+		req.Plan = proposed
+	}
 	p, err := s.ap.AnswerPlan(r.PathValue("id"), req.Plan, req.OK)
 	if err != nil {
 		code := http.StatusBadRequest
@@ -338,6 +350,10 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		Feedback string           `json:"feedback"`
 	}
 	if !readJSON(w, r, &req) {
+		return
+	}
+	if phoneSession(r) && strings.TrimSpace(req.Feedback) != "" {
+		fail(w, http.StatusForbidden, errors.New("feedback to the agent needs the PC: from a phone, apply or reject"))
 		return
 	}
 	d, err := s.ap.AnswerChanges(r.PathValue("id"), orchestrator.ChangeDecision{Apply: req.Apply, Hunks: req.Hunks, Feedback: strings.TrimSpace(req.Feedback)})

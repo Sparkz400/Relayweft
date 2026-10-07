@@ -121,6 +121,8 @@ type TaskState struct {
 	// Saved are half-done edits of interrupted steps, saved on a branch
 	// when the pool worktree that held them was given up (holds.go).
 	Saved []SavedEdits `json:"saved,omitempty"`
+	// Unattended tasks appear in the morning summary.
+	Unattended bool `json:"unattended,omitempty"`
 	// Kept lists branches retained because the task could not land its work.
 	Kept []string `json:"kept,omitempty"`
 	// Branches also includes saved alternatives and full pre-review changes.

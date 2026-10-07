@@ -567,9 +567,114 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin:
   .review { grid-template-columns: 240px 1fr; }
   .search { width: 120px; } .search:focus { width: 160px; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
-  .topbar { gap: 10px; }
+  .topbar { gap: 6px 10px; flex-wrap: wrap; }
+  .actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
   .brand-text { display: none; }
 }
+
+/* ---------- phones (<= 720px) ----------
+   One column: the header wraps into rows (task, providers, a scrolling
+   strip of panels), the agents sit above the activity, drawers and
+   approvals take the whole screen with large buttons at the bottom. */
+@media (max-width: 720px) {
+  body { font-size: 14px; }
+  .topbar { flex-wrap: wrap; gap: 8px 10px; padding: 8px 10px; padding-top: max(8px, env(safe-area-inset-top)); min-height: 0; }
+  .brand .logo { width: 30px; height: 30px; padding: 5px; }
+  .taskinfo { flex: 1 1 0; min-width: 0; gap: 8px; }
+  .elapsed { display: none; }
+  .providers { order: 3; flex: 1 1 100%; gap: 6px; }
+  .prov { flex: 1 1 0; width: auto; min-width: 0; padding: 6px 8px; }
+  .cost { display: none; }
+  .cost.budget:not([hidden]) { display: block; order: 4; flex: 1 1 100%; max-width: none; text-align: left; }
+  .cost.budget b { display: inline; margin-right: 6px; }
+  .actions { order: 5; flex: 1 1 100%; overflow-x: auto; gap: 2px; padding-bottom: 2px; scrollbar-width: none; }
+  .actions::-webkit-scrollbar { display: none; }
+  .actions .sep { flex: none; }
+  .nav { width: auto; min-width: 40px; height: 40px; padding: 0 9px; flex: none; }
+  .nav span { display: none; }
+  .btn.icon { width: 40px; height: 40px; flex: none; }
+  .nav .badge { position: absolute; top: 0; right: 0; }
+  .banner { margin: 0 10px 8px; padding: 10px 12px; flex-wrap: wrap; }
+  .banner .btn { height: 40px; }
+  .main { display: flex; flex-direction: column; gap: 8px; padding: 0 10px; }
+  .graph-pane { flex: 0 1 auto; max-height: 40%; min-height: 0; }
+  .graph-pane .graph { padding: 10px; }
+  .graph-pane .empty { padding: 14px 8px; }
+  .graph-pane .empty svg.big { width: 40px; height: 40px; }
+  .log-pane { flex: 1 1 0; min-height: 180px; }
+  .log-head { flex-wrap: nowrap; padding: 8px 10px; min-height: 0; }
+  .log-head h2 { display: none; }
+  .filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .filters::-webkit-scrollbar { display: none; }
+  .chip { flex: none; height: 30px; }
+  .search { display: none; }
+  .row { grid-template-columns: 50px 1fr; gap: 2px 8px; padding: 4px 10px; }
+  .row .k { display: none; }
+  .row .who { grid-column: 2; }
+  .row .tx { grid-column: 1 / -1; }
+  .row .ts { font-size: 10.5px; }
+  .composer { padding: 8px 10px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .composer textarea { font-size: 16px; } /* no zoom on focus in iOS */
+  .hints { display: none; }
+  .ac { left: 10px; width: calc(100vw - 20px); }
+  .toasts { left: 10px; right: 10px; bottom: 84px; width: auto; }
+  .drawer, .drawer.narrow, .drawer.wide { inset: 0; width: 100%; border-radius: 0; border: 0; padding-top: env(safe-area-inset-top); }
+  .drawer-head { padding: 10px 12px 10px 16px; }
+  .drawer-head .btn.icon { width: 44px; height: 44px; }
+  .drawer-body { padding: 14px 12px calc(20px + env(safe-area-inset-bottom)); }
+  .item { grid-template-columns: 1fr; }
+  .item .side { grid-row: auto; grid-column: 1; }
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .sched-form .when { width: 100%; }
+  .modal { padding: 0; place-items: stretch; }
+  .modal-card, .modal-card.wide { width: 100%; height: 100%; max-height: none; border-radius: 0; border: 0; padding-top: env(safe-area-inset-top); }
+  .m-head { padding: 12px 14px 10px; }
+  .m-title { font-size: 16px; }
+  .m-body { padding: 12px; }
+  .m-foot { flex-wrap: wrap; padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); gap: 8px; }
+  .m-foot .grow { flex-basis: 100%; }
+  .m-foot > .btn { flex: 1 1 0; height: 46px; justify-content: center; font-size: 14px; }
+  .m-foot > .m-err { flex-basis: 100%; }
+  .m-foot kbd { display: none; }
+  .step { grid-template-columns: 1fr; padding: 10px; }
+  .step .grip { flex-direction: row; justify-content: flex-start; padding: 0; }
+  .step .grip svg { display: none; }
+  .step .grip .n { margin: 0; }
+  .step .title-in { min-width: 0; flex-basis: 100%; }
+  .review { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .files { border-right: 0; border-bottom: 1px solid var(--border); max-height: 32vh; }
+  .file { padding: 9px 8px; }
+  .file input { width: 20px; height: 20px; }
+  .diff-head { padding: 8px 10px; }
+  .hunk { margin: 8px 6px; }
+  .dl { grid-template-columns: 30px 30px 12px 1fr; font-size: 11.5px; }
+  .dl .ln { padding-right: 4px; font-size: 10px; }
+  .budget-q { font-size: 14px; }
+  .locked-card { padding: 26px 20px 22px; }
+}
+@media (hover: none) {
+  .card .kill { opacity: 1; }
+}
+
+/* ---------- phone sessions (rw web --phone) ----------
+   A phone answers approvals, pauses and cancels; anything that gives
+   agents new instructions stays on the PC (the server refuses it too). */
+.phone-session .composer, .phone-session .needs-pc,
+.phone-session [data-panel="models"], .phone-session [data-panel="settings"],
+.phone-session .sched-form, .phone-session .card .kill { display: none !important; }
+.modal-card.readonly .steps .tools, .modal-card.readonly .steps .grip svg { display: none; }
+.modal-card.readonly .steps :is(input, textarea, select) { pointer-events: none; background: transparent; border-color: transparent; resize: none; appearance: none; }
+.modal-card.readonly .deps .dep { pointer-events: none; }
+
+/* Overnight and phone pairing drawers */
+.night-head { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-2); margin-bottom: 6px; display: grid; gap: 4px; border-left: 3px solid var(--faint); }
+.night-head.ok { border-left-color: var(--ok); } .night-head.bad { border-left-color: var(--fail); }
+.item.need { border-left: 3px solid var(--warn); }
+.item.need code { font-size: 12px; background: var(--panel-3); padding: 2px 7px; border-radius: 6px; word-break: break-all; }
+.night-sum { color: var(--text-2); }
+.qr-box { display: grid; place-items: center; padding: 8px 0 4px; }
+.qr { width: min(280px, 80vw); height: auto; border-radius: 10px; shape-rendering: crispEdges; stroke: none; }
+.qr .bg { fill: #fff; } .qr .m { fill: #000; }
 
 /* ---------- no session ---------- */
 .locked { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: var(--bg-grad), var(--bg); padding: 20px; animation: fade .2s ease; }
