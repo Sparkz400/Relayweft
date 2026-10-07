@@ -189,9 +189,15 @@ func (s *sources) sum(p string) string {
 		return v
 	}
 	v := ""
-	if data, err := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(p))); err == nil {
-		h := sha256.Sum256(data)
-		v = hex.EncodeToString(h[:6])
+	// References can also come from edited notes, not just validated UI input.
+	// OpenRoot confines traversal and symlink resolution to this project,
+	// including concurrent path changes; lexical cleaning alone cannot do that.
+	if root, err := os.OpenRoot(s.root); err == nil {
+		defer root.Close()
+		if data, err := root.ReadFile(filepath.FromSlash(p)); err == nil {
+			h := sha256.Sum256(data)
+			v = hex.EncodeToString(h[:6])
+		}
 	}
 	s.sums[p] = v
 	return v

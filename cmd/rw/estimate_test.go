@@ -68,14 +68,14 @@ func TestRunEstimateLeavesTheTreeAlone(t *testing.T) {
 	status, head := gitOut(t, dir, "status", "--porcelain"), gitOut(t, dir, "rev-parse", "HEAD")
 
 	out, err := captureStdout(t, func() error {
-		return cmdRun([]string{"--estimate", "--plan", "--quiet", "fix the parser so that it keeps trailing empty fields, then document the new behaviour"})
+		return cmdRun([]string{"--estimate", "--quiet", "fix the parser so that it keeps trailing empty fields, then document the new behaviour"})
 	})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	// Explicit planning estimates both workers; the optional final review is off.
-	for _, want := range []string{"Plan: two edits", "1. [edit, auto] fix the parser", "~ worker on codex:gpt-6.1-sol:medium:",
-		"Estimate: ~", "2 of 2 steps without history", "estimate only: nothing was run"} {
+	// The default estimate needs one worker and no extra review or planning call.
+	for _, want := range []string{"Plan: one worker step", "1. [edit, auto] fix the parser", "~ worker on codex:gpt-6.1-sol:medium:",
+		"Estimate: ~", "1 of 1 steps without history", "estimate only: nothing was run"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

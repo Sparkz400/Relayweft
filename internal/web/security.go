@@ -1,10 +1,10 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"context"
 	"errors"
 	"net"
 	"net/http"
